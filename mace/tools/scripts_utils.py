@@ -1045,11 +1045,13 @@ def get_params_options(
             lr_params_factors["embedding_lr_factor"] = 0.0
             freeze_module(model.node_embedding, True)
 
+    # Materialise every group to a list. Generators would be consumed by the coverage
+    # check below before the optimizer ever saw them.
     param_options = dict(
         params=[
             {
                 "name": "embedding",
-                "params": model.node_embedding.parameters(),
+                "params": list(model.node_embedding.parameters()),
                 "weight_decay": 0.0,
                 "lr": lr_params_factors.get("embedding_lr_factor", 1.0) * args.lr,
             },
@@ -1067,13 +1069,13 @@ def get_params_options(
             },
             {
                 "name": "products",
-                "params": model.products.parameters(),
+                "params": list(model.products.parameters()),
                 "weight_decay": args.weight_decay,
                 "lr": lr_params_factors.get("products_lr_factor", 1.0) * args.lr,
             },
             {
                 "name": "readouts",
-                "params": model.readouts.parameters(),
+                "params": list(model.readouts.parameters()),
                 "weight_decay": 0.0,
                 "lr": lr_params_factors.get("readouts_lr_factor", 1.0) * args.lr,
             },
@@ -1086,7 +1088,7 @@ def get_params_options(
         param_options["params"].append(
             {
                 "name": "joint_embedding",
-                "params": model.joint_embedding.parameters(),
+                "params": list(model.joint_embedding.parameters()),
                 "weight_decay": 0.0,
             }
         )
@@ -1094,7 +1096,7 @@ def get_params_options(
         param_options["params"].append(
             {
                 "name": "embedding_readout",
-                "params": model.embedding_readout.parameters(),
+                "params": list(model.embedding_readout.parameters()),
                 "weight_decay": 0.0,
             }
         )
@@ -1102,20 +1104,58 @@ def get_params_options(
         param_options["params"].append(
             {
                 "name": "les_readouts",
-                "params": model.les_readouts.parameters(),
+                "params": list(model.les_readouts.parameters()),
                 "weight_decay": 0.0,
             }
         )
-    if (
-        hasattr(model, "onebody_magmombasis_coeffs")
-        and args.train_one_body_contribution
-    ):
+    if hasattr(model, "onebody_magmombasis_coeffs"):
+        # Held at lr 0 rather than dropped when the contribution is not being trained:
+        # an omitted parameter is indistinguishable from a forgotten one, which is the
+        # failure the coverage check below exists to catch.
         param_options["params"].append(
             {
                 "name": "onebody_magmombasis_coeffs",
                 "params": [model.onebody_magmombasis_coeffs],
                 "weight_decay": 0.0,
+                "lr": args.lr if args.train_one_body_contribution else 0.0,
             }
+        )
+    # Carrier correction heads of MACEDefect. Without these the whole correction branch
+    # sits at its initialisation for the entire run -- and because MLP_u is initialised
+    # at zero, a frozen branch predicts exactly zero, which is indistinguishable from a
+    # correctly initialised one on every identity test that exists.
+    for module_name in (
+        "counter_embedding",
+        "carrier_pooling",
+        "defect_feature_readouts",
+        "latent_charges",
+    ):
+        module = getattr(model, module_name, None)
+        if module is not None:
+            param_options["params"].append(
+                {
+                    "name": module_name,
+                    "params": list(module.parameters()),
+                    "weight_decay": 0.0,
+                }
+            )
+
+    # Every group above is opt-in, so a model with a submodule nobody added here trains
+    # with that submodule frozen and reports nothing unusual. Fail loudly instead.
+    covered = {
+        id(param) for group in param_options["params"] for param in group["params"]
+    }
+    orphans = [
+        name
+        for name, param in model.named_parameters()
+        if param.requires_grad and id(param) not in covered
+    ]
+    if orphans:
+        raise RuntimeError(
+            f"{len(orphans)} trainable parameters are in no optimizer group and would "
+            f"never be updated: {orphans[:8]}"
+            + (" ..." if len(orphans) > 8 else "")
+            + ". Add them to get_params_options."
         )
     return param_options
 

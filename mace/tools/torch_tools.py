@@ -80,6 +80,29 @@ def init_device(device_str: str) -> torch.device:
 dtype_dict = {"float32": torch.float32, "float64": torch.float64}
 
 
+def supports_float64(device: torch.device) -> bool:
+    """Whether a device can hold float64 tensors at all.
+
+    Apple's MPS backend cannot: converting a tensor to float64 there raises rather than
+    falling back, so an unconditional upcast is a hard error on that device.
+    """
+    return device.type != "mps"
+
+
+def to_high_precision(tensor: torch.Tensor) -> torch.Tensor:
+    """Upcast to float64 where the device supports it, otherwise leave it alone.
+
+    Used for accumulations that want more headroom than the working dtype gives -- the
+    per-node energy decomposition, and the segment softmax of the defect models. On MPS
+    the upcast is skipped, so those accumulations run at the working precision. That is a
+    real reduction in accuracy, not a free pass: prefer float64 on CPU or CUDA whenever
+    the numbers matter.
+    """
+    if tensor.device.type == "mps":
+        return tensor
+    return tensor.to(torch.float64)
+
+
 def set_default_dtype(dtype: str) -> None:
     torch.set_default_dtype(dtype_dict[dtype])
 

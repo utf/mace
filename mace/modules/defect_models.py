@@ -31,6 +31,7 @@ from mace.modules.latent_ewald import LatentEwald
 from mace.modules.models import ScaleShiftMACE
 from mace.modules.utils import get_atomic_virials_stresses, get_outputs, prepare_graph
 from mace.tools.scatter import scatter_sum
+from mace.tools.torch_tools import to_high_precision
 
 
 def _readout_input_irreps(block: torch.nn.Module) -> o3.Irreps:
@@ -256,7 +257,9 @@ class MACEDefect(ScaleShiftMACE):
         inter_e = scatter_sum(node_inter_es, data["batch"], dim=-1, dim_size=num_graphs)
 
         base_energy = e0 + inter_e
-        node_energy = node_e0.clone().double() + node_inter_es.clone().double()
+        node_energy = to_high_precision(node_e0.clone()) + to_high_precision(
+            node_inter_es.clone()
+        )
 
         # Carrier correction. The counters are canonicalised at data loading and at every
         # inference entry point, so the network never sees a non-canonical vector.

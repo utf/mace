@@ -5,6 +5,9 @@ randomised away from their zero initialisation first. Nothing here needs LES: th
 long-range branch is tested separately.
 """
 
+import argparse
+import json
+
 import numpy as np
 import pytest
 import torch
@@ -13,8 +16,11 @@ from e3nn import o3
 
 from mace import data, modules, tools
 from mace.data.defects import prepare_defect_configurations
+from mace.modules.defect_blocks import NUM_CARRIER_CHANNELS, segment_softmax
 from mace.modules.defect_models import MACEDefect
 from mace.tools import torch_geometric
+from mace.tools.scripts_utils import get_params_options
+from mace.tools.torch_tools import supports_float64, to_high_precision
 
 torch.set_default_dtype(torch.float64)
 
@@ -159,6 +165,89 @@ class TestReferenceStateIdentity:
             assert torch.allclose(energy, energies[0], atol=0.0, rtol=0.0)
 
 
+class TestOptimizerCoverage:
+    """Every trainable parameter must reach the optimizer.
+
+    ``get_params_options`` builds its groups from an explicit whitelist of submodules,
+    so a model with a submodule nobody added there trains with that branch frozen and
+    reports nothing unusual. For MACEDefect this was silent and total: ``MLP_u`` is
+    initialised at zero, so a frozen correction branch predicts exactly zero, the
+    ``E_total(R, 0) == E_base(R)`` identity holds trivially, and the reported ``RMSE dE``
+    sits exactly on the target standard deviation -- a green error table with 69% of the
+    model never updated.
+    """
+
+    @staticmethod
+    def _args():
+        return argparse.Namespace(
+            lr=0.005,
+            weight_decay=5e-7,
+            amsgrad=True,
+            beta=0.9,
+            lr_params_factors=json.dumps({}),
+            freeze=None,
+            train_one_body_contribution=False,
+        )
+
+    @pytest.mark.parametrize("use_long_range", [False, True])
+    def test_every_defect_parameter_is_optimised(self, use_long_range):
+        model = build_model(use_long_range=use_long_range)
+        options = get_params_options(self._args(), model)
+        covered = {id(p) for group in options["params"] for p in group["params"]}
+        missing = [n for n, p in model.named_parameters() if id(p) not in covered]
+        assert not missing
+        # The correction heads specifically, not merely "some group exists".
+        names = {group["name"] for group in options["params"]}
+        assert {
+            "counter_embedding",
+            "carrier_pooling",
+            "defect_feature_readouts",
+        } <= names
+
+    @pytest.mark.parametrize("train_one_body", [True, False])
+    def test_untrained_parameters_stay_covered_at_zero_lr(self, train_one_body):
+        """Not training a parameter must not mean dropping it from the optimizer.
+
+        ``onebody_magmombasis_coeffs`` exists on the magnetic models whether or not
+        ``--train_one_body_contribution`` is set, so excluding it when the flag is off
+        would make a legitimate config indistinguishable from a forgotten submodule.
+        """
+        model = build_model()
+        model.onebody_magmombasis_coeffs = torch.nn.Parameter(torch.randn(2, 3, 1))
+        args = self._args()
+        args.train_one_body_contribution = train_one_body
+
+        options = get_params_options(args, model)
+        group = next(
+            g for g in options["params"] if g["name"] == "onebody_magmombasis_coeffs"
+        )
+        assert group["lr"] == (args.lr if train_one_body else 0.0)
+
+    def test_an_unregistered_submodule_is_rejected(self):
+        """The guard has to fire, or it is decoration."""
+        model = build_model()
+        model.stowaway = torch.nn.Linear(4, 4)
+        with pytest.raises(RuntimeError, match="no optimizer group"):
+            get_params_options(self._args(), model)
+
+
+class TestPrecisionHelpers:
+    """MPS has no float64, so an unconditional upcast is a hard error there."""
+
+    def test_upcasts_on_cpu(self):
+        tensor = torch.zeros(3, dtype=torch.float32)
+        assert supports_float64(tensor.device)
+        assert to_high_precision(tensor).dtype == torch.float64
+
+    @pytest.mark.skipif(
+        not torch.backends.mps.is_available(), reason="requires an MPS device"
+    )
+    def test_is_a_noop_on_mps(self):
+        tensor = torch.zeros(3, dtype=torch.float32, device="mps")
+        assert not supports_float64(tensor.device)
+        assert to_high_precision(tensor).dtype == torch.float32
+
+
 class TestPooling:
     def test_attention_weights_sum_to_one_per_cell_and_channel(self):
         model = build_model()
@@ -173,6 +262,38 @@ class TestPooling:
         totals = torch.zeros(3, 4, dtype=torch.float64)
         totals.index_add_(0, batch.batch, out["carrier_alpha"].double())
         assert torch.allclose(totals, torch.ones_like(totals), atol=1e-12)
+
+    @pytest.mark.parametrize("high_precision", [True, False])
+    def test_softmax_normalisation_without_the_float64_accumulation(
+        self, high_precision
+    ):
+        """Bound the accuracy lost when the float64 upcast is unavailable.
+
+        ``to_high_precision`` is a no-op on MPS, which has no float64 at all, so a model
+        running there takes the ``high_precision=False`` path whatever the flag says.
+        Exercising that path explicitly keeps the deviation measured on every machine
+        rather than only on a Mac. The invariant itself must survive: no epsilon is added
+        to the denominator, so ``sum_i alpha_i == 1`` holds up to rounding, not
+        approximately.
+        """
+        generator = torch.Generator().manual_seed(0)
+        # Deliberately wide logits: the gap is where a low-precision softmax would drift.
+        logits = 12.0 * torch.randn(
+            64, NUM_CARRIER_CHANNELS, generator=generator, dtype=torch.float32
+        )
+        batch = torch.repeat_interleave(torch.arange(4), 16)
+
+        alpha, _ = segment_softmax(
+            logits, batch, num_graphs=4, high_precision=high_precision
+        )
+        assert alpha.dtype == torch.float32
+
+        totals = torch.zeros(4, NUM_CARRIER_CHANNELS, dtype=torch.float64)
+        totals.index_add_(0, batch, alpha.double())
+        # float64 accumulation lands within float32's own representable spacing of 1;
+        # without it the error grows with the number of summands but stays tiny.
+        tolerance = 1e-7 if high_precision else 1e-5
+        assert torch.allclose(totals, torch.ones_like(totals), atol=tolerance)
 
     def test_batching_does_not_couple_cells(self):
         """A batch-wide softmax would pass the single-cell tests and fail this one."""

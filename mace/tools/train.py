@@ -151,6 +151,33 @@ def valid_err_log(
         logging.info(
             f"{inintial_phrase}: head: {valid_loader_name}, loss={valid_loss:8.8f}, RMSE_E_per_atom={error_e:8.2f} meV, RMSE_F={error_f:8.2f} meV / A, RMSE_Mu_per_atom={error_mu:8.2f} mDebye",
         )
+    elif log_errors == "DefectRMSE":
+        error_e = eval_metrics["rmse_e_per_atom"] * 1e3
+        error_f = eval_metrics["rmse_f"] * 1e3
+        # The charge-state difference metrics are the headline observables, but they are
+        # absent when a loader happens to hold no paired frames at all, so report rather
+        # than raise: a validation split with no pairs is a legitimate configuration.
+        delta_e = eval_metrics.get("rmse_delta_e")
+        delta_f = eval_metrics.get("rmse_delta_f")
+        delta_e_str = f"{delta_e * 1e3:8.2f} meV" if delta_e is not None else "     n/a"
+        delta_f_str = (
+            f"{delta_f * 1e3:8.2f} meV / A" if delta_f is not None else "     n/a"
+        )
+        logging.info(
+            f"{inintial_phrase}: head: {valid_loader_name}, loss={valid_loss:8.8f}, "
+            f"RMSE_E_per_atom={error_e:8.2f} meV, RMSE_F={error_f:8.2f} meV / A, "
+            f"RMSE_dE={delta_e_str}, RMSE_dF={delta_f_str}",
+        )
+    else:
+        # Every branch above is conditional, so an unrecognised error_table -- or a
+        # recognised one whose metrics are missing -- used to emit nothing at all for the
+        # epoch. Falling back to the loss keeps training observable in that case.
+        logging.info(
+            f"{inintial_phrase}: head: {valid_loader_name}, loss={valid_loss:8.8f}",
+        )
+        logging.debug(
+            f"no per-epoch error format matched for error_table '{log_errors}'"
+        )
 
 
 def train(

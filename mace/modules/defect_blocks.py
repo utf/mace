@@ -16,6 +16,7 @@ import torch
 from e3nn.util.jit import compile_mode
 
 from mace.tools.scatter import scatter_mean, scatter_sum
+from mace.tools.torch_tools import to_high_precision
 
 NUM_CARRIER_CHANNELS = 4
 
@@ -37,7 +38,9 @@ def segment_softmax(
     exactly where the logit gap is large, which is where the extensivity bound lives.
     """
     dtype = logits.dtype
-    values = logits.to(torch.float64) if high_precision else logits
+    # On MPS the upcast is a no-op, so the accumulation runs at the working dtype and
+    # sum_i alpha_i == 1 holds only to float32 rounding. See test_defects.py.
+    values = to_high_precision(logits) if high_precision else logits
 
     index = batch.unsqueeze(-1).expand_as(values)
     maxima = torch.full(
