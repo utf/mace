@@ -125,6 +125,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
             "DipoleMAE",
             "DipolePolarRMSE",
             "EnergyDipoleRMSE",
+            "DefectRMSE",
         ],
         default="PerAtomRMSE",
     )
@@ -140,6 +141,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
             "ScaleShiftMACE",
             "PolarMACE",
             "MACELES",
+            "MACEDefect",
             "ScaleShiftBOTNet",
             "AtomicDipolesMACE",
             "AtomicDielectricMACE",
@@ -535,6 +537,14 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         required=False,
     )
     parser.add_argument(
+        "--band_edges_file",
+        help="JSON file mapping host name to {'e_cbm_cell', 'e_vbm_cell'}, used to "
+        "reference charged-cell energy labels (MACEDefect)",
+        type=str,
+        default=None,
+        required=False,
+    )
+    parser.add_argument(
         "--E0s",
         help="Dictionary of isolated atom energies",
         type=str,
@@ -668,6 +678,65 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     )
 
     # Keys
+    # Charge-aware defect keys (MACEDefect). Reading them costs nothing for ordinary
+    # datasets, where the properties are simply absent and their weights stay at zero.
+    parser.add_argument(
+        "--carrier_counts_key",
+        help="Key of the carrier counter vector (n_e_maj n_e_min n_h_maj n_h_min) in "
+        "the training xyz",
+        type=str,
+        default=DefaultKeys.CARRIER_COUNTS.value,
+    )
+    parser.add_argument(
+        "--host_key",
+        help="Key of the host label, used for band-edge lookup and consistency checks",
+        type=str,
+        default=DefaultKeys.HOST.value,
+    )
+    parser.add_argument(
+        "--pair_id_key",
+        help="Key grouping configurations computed at the same geometry, which is what "
+        "enables the paired charge-state difference loss",
+        type=str,
+        default=DefaultKeys.PAIR_ID.value,
+    )
+    parser.add_argument(
+        "--multiplicity_key",
+        help="Key of the spin multiplicity, cross-checked against the counter vector",
+        type=str,
+        default=DefaultKeys.MULTIPLICITY.value,
+    )
+    parser.add_argument(
+        "--e_cbm_cell_key",
+        help="Key of the supercell CBM reference energy",
+        type=str,
+        default=DefaultKeys.E_CBM_CELL.value,
+    )
+    parser.add_argument(
+        "--e_vbm_cell_key",
+        help="Key of the supercell VBM reference energy",
+        type=str,
+        default=DefaultKeys.E_VBM_CELL.value,
+    )
+    parser.add_argument(
+        "--base_energy_key",
+        help="Key of an explicitly supplied reference-state (n = 0) energy; normally "
+        "produced by the pair join instead",
+        type=str,
+        default=DefaultKeys.BASE_ENERGY.value,
+    )
+    parser.add_argument(
+        "--base_forces_key",
+        help="Key of an explicitly supplied reference-state (n = 0) force array",
+        type=str,
+        default=DefaultKeys.BASE_FORCES.value,
+    )
+    parser.add_argument(
+        "--base_stress_key",
+        help="Key of an explicitly supplied reference-state (n = 0) stress",
+        type=str,
+        default=DefaultKeys.BASE_STRESS.value,
+    )
     parser.add_argument(
         "--energy_key",
         help="Key of reference energies in training xyz",
@@ -793,6 +862,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
             "universal",
             "energy_forces_dipole",
             "l1l2energyforces",
+            "defect",
         ],
     )
     parser.add_argument(
@@ -830,6 +900,98 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         type=float,
         default=1000.0,
         dest="swa_energy_weight",
+    )
+    # Charge-aware defect model (MACEDefect / --loss defect)
+    parser.add_argument(
+        "--delta_energy_weight",
+        help="weight of the paired charge-state energy difference loss",
+        type=float,
+        default=10.0,
+    )
+    parser.add_argument(
+        "--delta_forces_weight",
+        help="weight of the paired charge-state force difference loss",
+        type=float,
+        default=100.0,
+    )
+    parser.add_argument(
+        "--total_energy_weight",
+        help="weight of the unpaired charged total energy loss (detached base branch)",
+        type=float,
+        default=0.1,
+    )
+    parser.add_argument(
+        "--pressure_weight",
+        help="weight of the hydrostatic charged-cell pressure loss; leave at zero "
+        "until the finite-difference check of the DFT code in use passes",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--defect_u_l2",
+        help="L2 penalty on the per-channel carrier energy readouts. Load-bearing for "
+        "extensivity: it is what makes the model buy localisation rather than large "
+        "cancelling readouts",
+        type=float,
+        default=1e-4,
+    )
+    parser.add_argument(
+        "--defect_p_l2",
+        help="L2 penalty on the polarisation channel of the latent charge",
+        type=float,
+        default=1e-4,
+    )
+    parser.add_argument(
+        "--defect_qhost_l2",
+        help="L2 penalty on the host latent charges",
+        type=float,
+        default=1e-4,
+    )
+    parser.add_argument(
+        "--eps_inf",
+        help="High-frequency dielectric constant of the host (DFPT). Sets the initial "
+        "gauge of the screening amplitude and, with --eps_inf_prior_weight, an optional "
+        "weak prior on it",
+        type=float,
+        default=None,
+    )
+    parser.add_argument(
+        "--eps_inf_prior_weight",
+        help="Weight of the optional prior on the screening amplitude. Keep it small "
+        "enough that genuine data can overrule it, and always report the fitted value",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--carrier_feature_dim",
+        help="Width of the invariant features fed to the carrier correction heads",
+        type=int,
+        default=32,
+    )
+    parser.add_argument(
+        "--counter_embedding_dim",
+        help="Width of the carrier counter embedding",
+        type=int,
+        default=32,
+    )
+    parser.add_argument(
+        "--carrier_mlp_hidden",
+        help="Hidden width of the per-channel carrier readouts",
+        type=int,
+        default=64,
+    )
+    parser.add_argument(
+        "--share_logits_across_spin",
+        help="Share the attention logit network between the two spin channels of a "
+        "carrier type",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--use_long_range",
+        help="Enable the latent-Ewald long-range branch (requires the LES library)",
+        type=str2bool,
+        default=True,
     )
     parser.add_argument(
         "--virials_weight", help="weight of virials loss", type=float, default=1.0

@@ -60,8 +60,22 @@ def update_keyspec_from_kwargs(
         "total_charge_key",
         "polarizability_key",
         "total_spin_key",
+        "carrier_counts_key",
+        "host_key",
+        "pair_id_key",
+        "multiplicity_key",
+        "e_cbm_cell_key",
+        "e_vbm_cell_key",
+        "base_energy_key",
+        "base_stress_key",
     ]
-    arrays = ["forces_key", "charges_key", "magmom_key", "magforces_key"]
+    arrays = [
+        "forces_key",
+        "charges_key",
+        "magmom_key",
+        "magforces_key",
+        "base_forces_key",
+    ]
     info_keys = {}
     arrays_keys = {}
     for key in infos:
@@ -244,6 +258,7 @@ def load_from_xyz(
     extract_atomic_energies: bool = False,
     keep_isolated_atoms: bool = False,
     no_data_ok: bool = False,
+    band_edges: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Dict[int, float], Configurations]:
     atoms_list = ase.io.read(file_path, index=":")
     energy_key = key_specification.info_keys["energy"]
@@ -352,6 +367,17 @@ def load_from_xyz(
         key_specification=key_specification,
         head_name=head_name,
     )
+
+    # Charge-aware defect data: canonicalise counters, reference the energy labels to the
+    # band edges and build the base/delta targets before anything downstream sees them.
+    from .defects import (  # pylint: disable=import-outside-toplevel
+        has_carrier_data,
+        prepare_defect_configurations,
+    )
+
+    if has_carrier_data(configs) or band_edges:
+        prepare_defect_configurations(configs, band_edges=band_edges)
+
     key_specification.info_keys["energy"] = original_energy_key
     key_specification.arrays_keys["forces"] = original_forces_key
     key_specification.info_keys["stress"] = original_stress_key

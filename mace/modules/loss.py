@@ -4,6 +4,7 @@
 # This program is distributed under the MIT License (see MIT.md)
 ###########################################################################################
 
+import math
 from typing import Optional
 
 import torch
@@ -656,4 +657,209 @@ class WeightedEnergyForcesL1L2Loss(torch.nn.Module):
         return (
             f"{self.__class__.__name__}(energy_weight={self.energy_weight:.3f}, "
             f"forces_weight={self.forces_weight:.3f})"
+        )
+
+
+# ------------------------------------------------------------------------------
+# Charge-aware defect loss (see charge_aware_defect_mlip_implementation.md)
+# ------------------------------------------------------------------------------
+
+
+def _per_atom_counts(ref: Batch) -> torch.Tensor:
+    return ref.ptr[1:] - ref.ptr[:-1]
+
+
+def _spread_to_atoms(values: torch.Tensor, ref: Batch) -> torch.Tensor:
+    return torch.repeat_interleave(values, _per_atom_counts(ref)).unsqueeze(-1)
+
+
+def weighted_mean_squared_error_field(
+    ref: Batch,
+    pred: TensorDict,
+    field: str,
+    weight_field: str,
+    per_atom: bool = True,
+    ddp: Optional[bool] = None,
+) -> torch.Tensor:
+    """Per-configuration squared error on a scalar field with its own weight column."""
+    scale = _per_atom_counts(ref) if per_atom else torch.ones_like(ref.weight)
+    raw_loss = (
+        ref.weight
+        * ref[weight_field]
+        * torch.square((ref[field] - pred[field]) / scale)
+    )
+    return reduce_loss(raw_loss, ddp)
+
+
+def mean_squared_error_forces_field(
+    ref: Batch,
+    pred: TensorDict,
+    field: str,
+    weight_field: str,
+    ddp: Optional[bool] = None,
+) -> torch.Tensor:
+    raw_loss = (
+        _spread_to_atoms(ref.weight, ref)
+        * _spread_to_atoms(ref[weight_field], ref)
+        * torch.square(ref[field] - pred[field])
+    )
+    return reduce_loss(raw_loss, ddp)
+
+
+class DefectLoss(torch.nn.Module):
+    """Loss for carrier-conditioned defect models.
+
+    Three terms on three subsets, selected by the data rather than by config type
+    (plan section 4):
+
+    (a) ``L_base`` on configurations that supervise the base branch -- one per paired
+        geometry -- against the reference-state labels;
+    (b) ``L_delta`` on paired configurations. This term carries the headline
+        observables, since fixed-geometry charge-state differences are algebraically
+        free of base-model error, so it is weighted highest;
+    (c) ``L_tot`` on charged configurations with no reference-state partner, with the
+        base branch **detached**: without that, unpaired charged data reshapes the base
+        potential and the residual decomposition stops meaning what it is supposed to.
+        It is down-weighted, since base-model error at those geometries is absorbed into
+        the correction.
+
+    The delta terms are *not* normalised per atom: a charge-state difference is
+    intensive, of order the carrier binding energy, and dividing it by the atom count
+    would make it vanish from the objective exactly in the large cells that matter.
+
+    Regularisation. The L2 on ``u`` is load-bearing rather than housekeeping: fitting a
+    bound carrier with a small attention weight would otherwise need a huge readout, and
+    it is the penalty on that which makes the optimiser buy localisation -- and hence
+    the logit gap that keeps the correction extensive (plan section 3.2). Record the
+    value used with the model, and re-check the extensivity bound whenever it changes.
+    """
+
+    def __init__(
+        self,
+        energy_weight: float = 1.0,
+        forces_weight: float = 100.0,
+        delta_energy_weight: float = 10.0,
+        delta_forces_weight: float = 100.0,
+        total_energy_weight: float = 0.1,
+        stress_weight: float = 0.0,
+        pressure_weight: float = 0.0,
+        u_l2: float = 1e-4,
+        p_l2: float = 1e-4,
+        qhost_l2: float = 1e-4,
+        eps_inf: Optional[float] = None,
+        eps_inf_prior_weight: float = 0.0,
+    ) -> None:
+        super().__init__()
+        for name, value in (
+            ("energy_weight", energy_weight),
+            ("forces_weight", forces_weight),
+            ("delta_energy_weight", delta_energy_weight),
+            ("delta_forces_weight", delta_forces_weight),
+            ("total_energy_weight", total_energy_weight),
+            ("stress_weight", stress_weight),
+            ("pressure_weight", pressure_weight),
+        ):
+            self.register_buffer(
+                name, torch.tensor(value, dtype=torch.get_default_dtype())
+            )
+        self.u_l2 = u_l2
+        self.p_l2 = p_l2
+        self.qhost_l2 = qhost_l2
+        self.eps_inf = eps_inf
+        self.eps_inf_prior_weight = eps_inf_prior_weight
+
+    def _totals_mask(self, ref: Batch) -> torch.Tensor:
+        """Charged configurations with no paired reference state."""
+        has_carriers = ref["carrier_counts"].sum(dim=-1) > 0
+        unpaired = ref["delta_energy_weight"] == 0
+        return (has_carriers & unpaired).to(ref.weight.dtype)
+
+    def forward(
+        self, ref: Batch, pred: TensorDict, ddp: Optional[bool] = None
+    ) -> torch.Tensor:
+        loss = self.energy_weight * weighted_mean_squared_error_field(
+            ref, pred, "base_energy", "base_energy_weight", per_atom=True, ddp=ddp
+        )
+        loss = loss + self.forces_weight * mean_squared_error_forces_field(
+            ref, pred, "base_forces", "base_forces_weight", ddp=ddp
+        )
+        loss = loss + self.delta_energy_weight * weighted_mean_squared_error_field(
+            ref, pred, "delta_energy", "delta_energy_weight", per_atom=False, ddp=ddp
+        )
+        loss = loss + self.delta_forces_weight * mean_squared_error_forces_field(
+            ref, pred, "delta_forces", "delta_forces_weight", ddp=ddp
+        )
+
+        # (c) Unpaired totals, with the base branch detached.
+        mask = self._totals_mask(ref)
+        if bool(mask.any()):
+            num_atoms = _per_atom_counts(ref)
+            detached_total = pred["base_energy"].detach() + pred["delta_energy"]
+            raw_energy = (
+                ref.weight
+                * ref.energy_weight
+                * mask
+                * torch.square((ref["energy"] - detached_total) / num_atoms)
+            )
+            loss = loss + self.total_energy_weight * reduce_loss(raw_energy, ddp)
+            # Forces carry no referencing constant, so the raw total force is a valid
+            # label here even though the energy scale differs.
+            raw_forces = (
+                _spread_to_atoms(ref.weight, ref)
+                * _spread_to_atoms(ref.forces_weight * mask, ref)
+                * torch.square(ref["forces"] - pred["forces"])
+            )
+            loss = loss + self.forces_weight * reduce_loss(raw_forces, ddp)
+
+        if self.stress_weight > 0:
+            loss = loss + self.stress_weight * weighted_mean_squared_stress(
+                ref, pred, ddp
+            )
+        if self.pressure_weight > 0 and pred.get("stress") is not None:
+            # Hydrostatic component only: its purpose is identification of the screening
+            # amplitude, and it is quadratic in q, which separates it from the
+            # deformation-potential response. Shear stays masked in charged cells.
+            pressure_pred = -pred["stress"].diagonal(dim1=-2, dim2=-1).mean(dim=-1)
+            pressure_ref = -ref["stress"].diagonal(dim1=-2, dim2=-1).mean(dim=-1)
+            raw_pressure = (
+                ref.weight * ref.stress_weight * torch.square(pressure_ref - pressure_pred)
+            )
+            loss = loss + self.pressure_weight * reduce_loss(raw_pressure, ddp)
+
+        loss = loss + self.regularisation(pred)
+        return loss
+
+    def regularisation(self, pred: TensorDict) -> torch.Tensor:
+        """Penalties on the correction readouts, plus the optional prior on ``a``."""
+        total = torch.zeros((), dtype=torch.get_default_dtype())
+        for weight, key in (
+            (self.u_l2, "carrier_readouts"),
+            (self.p_l2, "polarisation"),
+            (self.qhost_l2, "latent_charges_host"),
+        ):
+            value = pred.get(key)
+            if weight > 0 and value is not None:
+                total = total.to(value.device) + weight * torch.mean(
+                    torch.square(value)
+                )
+        amplitude = pred.get("screening_amplitude")
+        if (
+            self.eps_inf_prior_weight > 0
+            and self.eps_inf is not None
+            and amplitude is not None
+        ):
+            target = 1.0 / math.sqrt(self.eps_inf)
+            total = total.to(amplitude.device) + self.eps_inf_prior_weight * torch.mean(
+                torch.square(amplitude - target)
+            )
+        return total
+
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}(energy_weight={self.energy_weight:.3f}, "
+            f"forces_weight={self.forces_weight:.3f}, "
+            f"delta_energy_weight={self.delta_energy_weight:.3f}, "
+            f"delta_forces_weight={self.delta_forces_weight:.3f}, "
+            f"total_energy_weight={self.total_energy_weight:.3f}, "
+            f"u_l2={self.u_l2}, p_l2={self.p_l2}, qhost_l2={self.qhost_l2})"
         )

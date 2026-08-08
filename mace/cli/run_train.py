@@ -11,7 +11,7 @@ import logging
 import os
 from copy import deepcopy
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import torch.distributed
 from e3nn.util import jit
@@ -96,6 +96,12 @@ def run(args) -> None:
     # default keyspec to update using heads dictionary
     args.key_specification = KeySpecification()
     update_keyspec_from_kwargs(args.key_specification, vars(args))
+
+    # Per-host supercell band edges, used to reference charged-cell energy labels.
+    # Per-frame e_cbm_cell / e_vbm_cell keys override this table where present.
+    band_edges = None
+    if getattr(args, "band_edges_file", None) is not None:
+        band_edges = data.load_band_edges(args.band_edges_file)
 
     if args.device == "xpu":
         try:
@@ -245,9 +251,9 @@ def run(args) -> None:
                 )
             args.multiheads_finetuning = False
         if args.multiheads_finetuning:
-            assert (
-                args.E0s != "average"
-            ), "average atomic energies cannot be used for multiheads finetuning"
+            assert args.E0s != "average", (
+                "average atomic energies cannot be used for multiheads finetuning"
+            )
             if not args.force_mh_ft_lr:
                 logging.info(
                     "Multihead finetuning mode, setting learning rate to 0.0001 and EMA to True. To use a different learning rate, set --force_mh_ft_lr=True."
@@ -347,9 +353,9 @@ def run(args) -> None:
             ["matpes_r2scan"],
             ["omat"],
         ):
-            assert (
-                head_config.head_name == "pt_head"
-            ), "Only pt_head should use mp as train_file"
+            assert head_config.head_name == "pt_head", (
+                "Only pt_head should use mp as train_file"
+            )
             logging.info(
                 f"Using filtered Materials Project data for replay ({args.num_samples_pt}, {args.filter_type_pt}, {args.subselect_pt}). "
                 "You can also construct a different subset using `fine_tuning_select.py` script."
@@ -392,6 +398,7 @@ def run(args) -> None:
                     and head_config.head_name == "pt_head"
                 ),
                 prefix=args.name,
+                band_edges=band_edges,
             )
             head_config.collections = SubsetCollection(
                 train=collections.train,
@@ -802,6 +809,25 @@ def run(args) -> None:
     model, output_args = configure_model(args, train_loader, atomic_energies, model_foundation, heads, z_table, head_configs)
     model.to(device)
 
+    if model.__class__.__name__ == "MACEDefect":
+        # Ship the band edges that referenced the labels with the model, so inference
+        # can undo the referencing with exactly the constants training used rather than
+        # with re-derived ones (plan section 7.2).
+        registry: Dict[str, Dict[str, float]] = {}
+        for head_config in head_configs:
+            collections = getattr(head_config, "collections", None)
+            if collections is None:
+                continue
+            registry.update(data.collect_band_edge_registry(collections.train))
+        model.band_edge_registry = registry
+        if registry:
+            logging.info(f"Recorded band edges for {len(registry)} (host, size) pairs")
+        else:
+            logging.warning(
+                "No band edges recorded with the model; inference will need them "
+                "supplied explicitly to report raw-scale energies"
+            )
+
     if args.lora:
         lora_rank = args.lora_rank
         lora_alpha = args.lora_alpha
@@ -836,6 +862,13 @@ def run(args) -> None:
     logging.info(loss_fn)
 
     # Cueq and OEQ conversion
+    if (args.enable_cueq or args.enable_oeq) and model.__class__.__name__ == (
+        "MACEDefect"
+    ):
+        raise NotImplementedError(
+            "cuEquivariance / OpenEquivariance conversion of the MACEDefect correction "
+            "heads is untested; run with --enable_cueq=False --enable_oeq=False"
+        )
     if args.enable_cueq and args.enable_oeq:
         logging.warning(
             "Both CUEQ and OEQ are enabled, using CUEQ for training. "

@@ -21,6 +21,7 @@ from torch.optim.swa_utils import SWALR, AveragedModel
 
 from mace import data, modules, tools
 from mace.data import KeySpecification
+from mace.tools import torch_geometric
 from mace.tools.train import SWAContainer
 
 
@@ -58,6 +59,7 @@ def get_dataset_from_xyz(
     head_name: str = "Default",
     no_data_ok: bool = False,
     prefix: Optional[str] = None,
+    band_edges: Optional[Dict[str, Any]] = None,
 ) -> Tuple[SubsetCollection, Optional[Dict[int, float]]]:
     """
     Load training, validation, and test datasets from xyz files.
@@ -75,6 +77,8 @@ def get_dataset_from_xyz(
         keep_isolated_atoms: Whether to keep isolated atoms in the dataset
         head_name: Name of the head for multi-head models
         no_data_ok: accept files that have no energy/force/stress data
+        band_edges: per-host supercell band edges used to reference charged-cell
+            energy labels (MACEDefect)
 
     Returns:
         Tuple containing:
@@ -114,6 +118,7 @@ def get_dataset_from_xyz(
             keep_isolated_atoms=keep_isolated_atoms,
             head_name=head_name,
             no_data_ok=no_data_ok,
+            band_edges=band_edges,
         )
         all_train_configs.extend(train_configs)
 
@@ -127,7 +132,7 @@ def get_dataset_from_xyz(
                 atomic_energies_values[element].append(energy)
                 atomic_energies_counts[element] += 1
 
-        log_dataset_contents(train_configs, f"Training set {i+1}/{len(train_paths)}")
+        log_dataset_contents(train_configs, f"Training set {i + 1}/{len(train_paths)}")
 
     # Log total training set info
     log_dataset_contents(all_train_configs, "Total Training set")
@@ -141,10 +146,11 @@ def get_dataset_from_xyz(
                 key_specification=key_specification,
                 extract_atomic_energies=False,
                 head_name=head_name,
+                band_edges=band_edges,
             )
             all_valid_configs.extend(valid_configs)
             log_dataset_contents(
-                valid_configs, f"Validation set {i+1}/{len(valid_paths)}"
+                valid_configs, f"Validation set {i + 1}/{len(valid_paths)}"
             )
 
         # Log total validation set info
@@ -169,10 +175,11 @@ def get_dataset_from_xyz(
                 key_specification=key_specification,
                 extract_atomic_energies=False,
                 head_name=head_name,
+                band_edges=band_edges,
             )
             all_test_configs.extend(test_configs)
 
-            log_dataset_contents(test_configs, f"Test set {i+1}/{len(test_paths)}")
+            log_dataset_contents(test_configs, f"Test set {i + 1}/{len(test_paths)}")
 
         # Create list of tuples (config_type, list(Atoms))
         test_configs_by_type = data.test_config_types(all_test_configs)
@@ -231,12 +238,13 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
     if model.__class__.__name__ not in [
         "ScaleShiftMACE",
         "MACELES",
+        "MACEDefect",
         "PolarMACE",
         "MagneticScaleShiftMACE",
         "AtomicDielectricMACE",
     ]:
         return {
-            "error": "Model is not a ScaleShiftMACE, MACELES, PolarMACE, MagneticScaleShiftMACE, or AtomicDielectricMACE model"
+            "error": "Model is not a ScaleShiftMACE, MACELES, MACEDefect, PolarMACE, MagneticScaleShiftMACE, or AtomicDielectricMACE model"
         }
 
     def radial_to_name(radial_type):
@@ -343,8 +351,16 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
     if hasattr(model, "scale_shift"):
         config["atomic_inter_scale"] = scale.cpu().numpy()
         config["atomic_inter_shift"] = shift.cpu().numpy()
-    if model.__class__.__name__ in ["ScaleShiftMACE", "MACELES"]:
+    if model.__class__.__name__ in ["ScaleShiftMACE", "MACELES", "MACEDefect"]:
         config["MLP_irreps"] = o3.Irreps(f"{mlp_scalars_per_head}x0e")
+    if model.__class__.__name__ == "MACEDefect":
+        config["carrier_feature_dim"] = int(model.carrier_feature_dim)
+        config["counter_embedding_dim"] = int(model.counter_embedding_dim)
+        config["carrier_mlp_hidden"] = int(model.carrier_mlp_hidden)
+        config["share_logits_across_spin"] = bool(model.share_logits_across_spin)
+        config["use_long_range"] = bool(model.use_long_range)
+        config["eps_inf_init"] = float(model.eps_inf_init)
+        config["les_arguments"] = model.les_arguments
     if model.__class__.__name__ == "AtomicDielectricMACE":
         config["use_polarizability"] = model.use_polarizability
         config["only_dipole"] = False  # model.only_dipole
@@ -701,7 +717,7 @@ def get_atomic_energies(E0s, train_collection, z_table) -> dict:
             try:
                 assert train_collection is not None
                 atomic_energies_dict = data.compute_average_E0s(
-                    train_collection, z_table
+                    reference_state_configurations(train_collection), z_table
                 )
             except Exception as e:
                 raise RuntimeError(
@@ -769,6 +785,61 @@ def get_avg_num_neighbors(head_configs, args, train_loader, device):
     return avg_num_neighbors_out
 
 
+def reference_state_configurations(configs):
+    """Configurations at n = 0, the only ones that define the base surface.
+
+    The base branch is trained on the reference state alone (plan sections 2.2 and 4a),
+    so charged configurations must not enter the E0 fit or the energy scale: they would
+    push carrier binding energy into the base branch's baseline.
+    """
+    filtered = [
+        config
+        for config in configs
+        if config.properties.get("carrier_counts") is None
+        or int(np.asarray(config.properties["carrier_counts"]).sum()) == 0
+    ]
+    if not filtered:
+        logging.warning(
+            "No reference-state (n = 0) configurations found; falling back to the "
+            "full training set for the atomic energy fit"
+        )
+        return configs
+    if len(filtered) != len(configs):
+        logging.info(
+            f"Using {len(filtered)} of {len(configs)} configurations (n = 0) for the "
+            "atomic energy fit"
+        )
+    return filtered
+
+
+def reference_state_data_loader(train_loader):
+    """A loader over the n = 0 subset, used for the energy scale of a defect model."""
+    dataset = train_loader.dataset
+    indices = [
+        index
+        for index in range(len(dataset))
+        if not hasattr(dataset[index], "carrier_counts")
+        or float(dataset[index].carrier_counts.abs().sum()) == 0.0
+    ]
+    if not indices:
+        logging.warning(
+            "No reference-state (n = 0) configurations found; falling back to the "
+            "full training set for the energy scale"
+        )
+        return train_loader
+    if len(indices) != len(dataset):
+        logging.info(
+            f"Using {len(indices)} of {len(dataset)} configurations (n = 0) for the "
+            "energy scale"
+        )
+    return torch_geometric.dataloader.DataLoader(
+        dataset=torch.utils.data.Subset(dataset, indices),
+        batch_size=train_loader.batch_size,
+        shuffle=False,
+        drop_last=False,
+    )
+
+
 def get_loss_fn(
     args: argparse.Namespace,
     dipole_only: bool,
@@ -807,15 +878,30 @@ def get_loss_fn(
             magforces_weight=args.magforces_weight,
             huber_delta=args.huber_delta,
         )
+    elif args.loss == "defect":
+        loss_fn = modules.DefectLoss(
+            energy_weight=args.energy_weight,
+            forces_weight=args.forces_weight,
+            delta_energy_weight=args.delta_energy_weight,
+            delta_forces_weight=args.delta_forces_weight,
+            total_energy_weight=args.total_energy_weight,
+            stress_weight=args.stress_weight if args.compute_stress else 0.0,
+            pressure_weight=args.pressure_weight,
+            u_l2=args.defect_u_l2,
+            p_l2=args.defect_p_l2,
+            qhost_l2=args.defect_qhost_l2,
+            eps_inf=args.eps_inf,
+            eps_inf_prior_weight=args.eps_inf_prior_weight,
+        )
     elif args.loss == "l1l2energyforces":
         loss_fn = modules.WeightedEnergyForcesL1L2Loss(
             energy_weight=args.energy_weight,
             forces_weight=args.forces_weight,
         )
     elif args.loss == "dipole":
-        assert (
-            dipole_only is True
-        ), "dipole loss can only be used with AtomicDipolesMACE model"
+        assert dipole_only is True, (
+            "dipole loss can only be used with AtomicDipolesMACE model"
+        )
         loss_fn = modules.DipoleSingleLoss(
             dipole_weight=args.dipole_weight,
         )

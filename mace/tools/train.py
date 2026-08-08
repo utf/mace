@@ -647,6 +647,17 @@ class MACELoss(Metric):
         self.add_state("MagFs", default=[], dist_reduce_fx="cat")
         self.add_state("delta_MagFs", default=[], dist_reduce_fx="cat")
 
+        # Charge-state differences (MACEDefect). These are the headline observables:
+        # fixed-geometry charge-state differences are free of base-model error.
+        self.add_state(
+            "defect_dE_computed", default=torch.tensor(0.0), dist_reduce_fx="sum"
+        )
+        self.add_state("defect_delta_es", default=[], dist_reduce_fx="cat")
+        self.add_state(
+            "defect_dF_computed", default=torch.tensor(0.0), dist_reduce_fx="sum"
+        )
+        self.add_state("defect_delta_fs", default=[], dist_reduce_fx="cat")
+
     def update(self, batch, output):  # pylint: disable=arguments-differ
         loss = self.loss_fn(pred=output, ref=batch)
         self.total_loss += loss
@@ -681,6 +692,22 @@ class MACELoss(Metric):
                 batch.magforces_weight,
                 spread_atoms=True,
             )
+        if output.get("delta_energy") is not None and hasattr(batch, "delta_energy"):
+            mask = batch.delta_energy_weight > 0
+            if bool(mask.any()):
+                self.defect_delta_es.append(
+                    (batch.delta_energy - output["delta_energy"])[mask]
+                )
+                self.defect_dE_computed += float(mask.sum())
+        if output.get("delta_forces") is not None and hasattr(batch, "delta_forces"):
+            node_mask = torch.repeat_interleave(
+                batch.delta_forces_weight > 0, batch.ptr[1:] - batch.ptr[:-1]
+            )
+            if bool(node_mask.any()):
+                self.defect_delta_fs.append(
+                    (batch.delta_forces - output["delta_forces"])[node_mask]
+                )
+                self.defect_dF_computed += float(node_mask.sum())
         if output.get("stress") is not None and batch.stress is not None:
             self.delta_stress.append(batch.stress - output["stress"])
             self.stress_computed += filter_nonzero_weight(
@@ -774,6 +801,15 @@ class MACELoss(Metric):
             aux["rmse_magf"] = compute_rmse(delta_MagFs)
             aux["rel_rmse_magf"] = compute_rel_rmse(delta_MagFs, MagFs)
             aux["q95_magf"] = compute_q95(delta_MagFs)
+        if self.defect_dE_computed:
+            defect_delta_es = self.convert(self.defect_delta_es)
+            aux["mae_delta_e"] = compute_mae(defect_delta_es)
+            aux["rmse_delta_e"] = compute_rmse(defect_delta_es)
+            aux["q95_delta_e"] = compute_q95(defect_delta_es)
+        if self.defect_dF_computed:
+            defect_delta_fs = self.convert(self.defect_delta_fs)
+            aux["mae_delta_f"] = compute_mae(defect_delta_fs)
+            aux["rmse_delta_f"] = compute_rmse(defect_delta_fs)
         if self.stress_computed:
             delta_stress = self.convert(self.delta_stress)
             aux["mae_stress"] = compute_mae(delta_stress)

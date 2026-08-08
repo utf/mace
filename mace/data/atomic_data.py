@@ -61,6 +61,18 @@ class AtomicData(torch_geometric.data.Data):
     volume: torch.Tensor
     fermi_level: torch.Tensor
     external_field: torch.Tensor
+    carrier_counts: torch.Tensor
+    raw_energy: torch.Tensor
+    base_energy: torch.Tensor
+    base_forces: torch.Tensor
+    base_stress: torch.Tensor
+    delta_energy: torch.Tensor
+    delta_forces: torch.Tensor
+    base_energy_weight: torch.Tensor
+    base_forces_weight: torch.Tensor
+    base_stress_weight: torch.Tensor
+    delta_energy_weight: torch.Tensor
+    delta_forces_weight: torch.Tensor
 
     def __init__(
         self,
@@ -98,6 +110,18 @@ class AtomicData(torch_geometric.data.Data):
         volume: Optional[torch.Tensor] = None,  # [,]
         fermi_level: Optional[torch.Tensor] = None,  # [,]
         external_field: Optional[torch.Tensor] = None,  # [1,3]
+        carrier_counts: Optional[torch.Tensor] = None,  # [1,4]
+        raw_energy: Optional[torch.Tensor] = None,  # [,]
+        base_energy: Optional[torch.Tensor] = None,  # [,]
+        base_forces: Optional[torch.Tensor] = None,  # [n_nodes, 3]
+        base_stress: Optional[torch.Tensor] = None,  # [1,3,3]
+        delta_energy: Optional[torch.Tensor] = None,  # [,]
+        delta_forces: Optional[torch.Tensor] = None,  # [n_nodes, 3]
+        base_energy_weight: Optional[torch.Tensor] = None,  # [,]
+        base_forces_weight: Optional[torch.Tensor] = None,  # [,]
+        base_stress_weight: Optional[torch.Tensor] = None,  # [,]
+        delta_energy_weight: Optional[torch.Tensor] = None,  # [,]
+        delta_forces_weight: Optional[torch.Tensor] = None,  # [,]
         **extra_data: torch.Tensor,
     ):
         # Check shapes
@@ -138,6 +162,13 @@ class AtomicData(torch_geometric.data.Data):
         assert volume is None or len(volume.shape) == 0
         assert fermi_level is None or len(fermi_level.shape) == 0
         assert external_field is None or external_field.shape == (1, 3)
+        assert carrier_counts is None or carrier_counts.shape == (1, 4)
+        assert raw_energy is None or len(raw_energy.shape) == 0
+        assert base_energy is None or len(base_energy.shape) == 0
+        assert base_forces is None or base_forces.shape == (num_nodes, 3)
+        assert base_stress is None or base_stress.shape == (1, 3, 3)
+        assert delta_energy is None or len(delta_energy.shape) == 0
+        assert delta_forces is None or delta_forces.shape == (num_nodes, 3)
 
         # Aggregate data
         data = {
@@ -176,6 +207,18 @@ class AtomicData(torch_geometric.data.Data):
             "volume": volume,
             "fermi_level": fermi_level,
             "external_field": external_field,
+            "carrier_counts": carrier_counts,
+            "raw_energy": raw_energy,
+            "base_energy": base_energy,
+            "base_forces": base_forces,
+            "base_stress": base_stress,
+            "delta_energy": delta_energy,
+            "delta_forces": delta_forces,
+            "base_energy_weight": base_energy_weight,
+            "base_forces_weight": base_forces_weight,
+            "base_stress_weight": base_stress_weight,
+            "delta_energy_weight": delta_energy_weight,
+            "delta_forces_weight": delta_forces_weight,
         }
         data.update(extra_data)
         super().__init__(**data)
@@ -437,6 +480,49 @@ class AtomicData(torch_geometric.data.Data):
             else torch.zeros(num_atoms, 1, dtype=torch.get_default_dtype())
         )
 
+        # Charge-aware defect fields. An absent label means "not supervised here", so
+        # these weights default to zero rather than to one.
+        def defect_scalar(name: str) -> torch.Tensor:
+            value = config.properties.get(name)
+            return torch.tensor(
+                float(value) if value is not None else 0.0,
+                dtype=torch.get_default_dtype(),
+            )
+
+        def defect_forces(name: str) -> torch.Tensor:
+            value = config.properties.get(name)
+            return (
+                torch.tensor(value, dtype=torch.get_default_dtype())
+                if value is not None
+                else torch.zeros(num_atoms, 3, dtype=torch.get_default_dtype())
+            )
+
+        def defect_weight(name: str) -> torch.Tensor:
+            value = config.property_weights.get(name)
+            return torch.tensor(
+                float(value) if value is not None else 0.0,
+                dtype=torch.get_default_dtype(),
+            )
+
+        carrier_counts = (
+            torch.tensor(
+                config.properties.get("carrier_counts"),
+                dtype=torch.get_default_dtype(),
+            ).view(1, 4)
+            if config.properties.get("carrier_counts") is not None
+            else torch.zeros(1, 4, dtype=torch.get_default_dtype())
+        )
+        base_stress = (
+            voigt_to_matrix(
+                torch.tensor(
+                    config.properties.get("base_stress"),
+                    dtype=torch.get_default_dtype(),
+                )
+            ).unsqueeze(0)
+            if config.properties.get("base_stress") is not None
+            else torch.zeros(1, 3, 3, dtype=torch.get_default_dtype())
+        )
+
         cls_kwargs = dict(
             edge_index=torch.tensor(edge_index, dtype=torch.long),
             positions=positions,
@@ -472,6 +558,18 @@ class AtomicData(torch_geometric.data.Data):
             volume=volume,
             fermi_level=fermi_level,
             external_field=external_field,
+            carrier_counts=carrier_counts,
+            raw_energy=defect_scalar("raw_energy"),
+            base_energy=defect_scalar("base_energy"),
+            base_forces=defect_forces("base_forces"),
+            base_stress=base_stress,
+            delta_energy=defect_scalar("delta_energy"),
+            delta_forces=defect_forces("delta_forces"),
+            base_energy_weight=defect_weight("base_energy"),
+            base_forces_weight=defect_weight("base_forces"),
+            base_stress_weight=defect_weight("base_stress"),
+            delta_energy_weight=defect_weight("delta_energy"),
+            delta_forces_weight=defect_weight("delta_forces"),
         )
 
         # Pass through any extra properties not already handled above.

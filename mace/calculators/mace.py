@@ -81,6 +81,13 @@ def get_model_dtype(model: torch.nn.Module) -> torch.dtype:
     raise ValueError(f"Unknown dtype {mode_dtype}")
 
 
+def _same_info_value(previous, current) -> bool:
+    """Equality for atoms.info entries that may be arrays, scalars or None."""
+    if previous is None or current is None:
+        return previous is None and current is None
+    return np.array_equal(np.asarray(previous), np.asarray(current))
+
+
 class MACECalculator(Calculator):
     """MACE ASE Calculator
     args:
@@ -119,6 +126,9 @@ class MACECalculator(Calculator):
         pad_num_atoms: int = 0,
         pad_num_edges: int = 0,
         warmup: bool = False,
+        dilute: bool = False,
+        energy_scale: str = "referenced",
+        band_edges: Union[str, Dict, None] = None,
         **kwargs,
     ):
         Calculator.__init__(self, **kwargs)
@@ -132,7 +142,9 @@ class MACECalculator(Calculator):
                 "MACE",
                 "PolarMACE",
                 "DipolePolarizabilityMACE",
-            ], "CuEq/OEq only supports MACE, PolarMACE, and DipolePolarizabilityMACE models"
+            ], (
+                "CuEq/OEq only supports MACE, PolarMACE, and DipolePolarizabilityMACE models"
+            )
         if enable_cueq and enable_oeq:
             if not HYBRID_AVAILABLE:
                 raise ImportError(
@@ -170,6 +182,11 @@ class MACECalculator(Calculator):
                 "total_spin": "spin",
                 "total_charge": "charge",
                 "external_field": "external_field",
+                # Charge-aware defect models; absent for every other model, in which
+                # case these simply stay unset.
+                "carrier_counts": "carrier_counts",
+                "host": "host",
+                "multiplicity": "multiplicity",
             }
         if arrays_keys is None:
             arrays_keys = {}
@@ -325,6 +342,41 @@ class MACECalculator(Calculator):
             elif default_dtype == "float32":
                 self.models = [model.float() for model in self.models]
         self.default_dtype = default_dtype
+
+        # Charge-aware defect options (see charge_aware_defect_mlip_implementation.md).
+        self.is_defect_model = all(
+            model.__class__.__name__ == "MACEDefect" for model in self.models
+        )
+        if energy_scale not in ("referenced", "raw"):
+            raise ValueError(
+                f"energy_scale must be 'referenced' or 'raw', got '{energy_scale}'"
+            )
+        if (dilute or energy_scale == "raw") and not self.is_defect_model:
+            raise ValueError(
+                "dilute and energy_scale='raw' are only meaningful for MACEDefect models"
+            )
+        self.dilute = dilute
+        self.energy_scale = energy_scale
+        if isinstance(band_edges, str):
+            band_edges = {
+                key: {
+                    "e_cbm_cell": value.e_cbm_cell,
+                    "e_vbm_cell": value.e_vbm_cell,
+                }
+                for key, value in mace_data.load_band_edges(band_edges).items()
+            }
+        self.band_edges = band_edges
+        if energy_scale == "raw" and band_edges is None:
+            # Fall back to the table recorded at training time, which is the only source
+            # guaranteed to reproduce the constants the labels were referenced with.
+            registry = getattr(self.models[0], "band_edge_registry", None)
+            if not registry:
+                raise ValueError(
+                    "energy_scale='raw' needs the band edges used in training: pass "
+                    "band_edges=<json path or dict>, or use a model trained with "
+                    "--band_edges_file so the registry ships with it"
+                )
+            self.band_edges = registry
 
         if enable_cueq and enable_oeq:
             logging.info(
@@ -542,6 +594,11 @@ class MACECalculator(Calculator):
             config = mace_data.config_from_atoms(
                 atoms, key_specification=keyspec, head_name=self.head
             )
+            if self.is_defect_model:
+                # Every inference entry point canonicalises, so time-reversed labellings
+                # of the same physical state cannot reach the network as different
+                # inputs (plan section 8.1).
+                mace_data.canonicalise_config_counters(config)
             real_graph = mace_data.AtomicData.from_config(
                 config,
                 z_table=self.z_table,
@@ -647,6 +704,10 @@ class MACECalculator(Calculator):
                 "compute_edge_forces": self.compute_atomic_stresses,
                 "compute_atomic_stresses": self.compute_atomic_stresses,
             }
+            if self.is_defect_model:
+                # Selects E_dilute -- the isolated-limit carrier self-term -- so that a
+                # plain ASE relaxation runs in the dilute limit (plan section 7.1).
+                model_kwargs["dilute"] = self.dilute
             out = model(batch_dict, **model_kwargs)
             if is_padded:
                 out = self._slice_real_outputs(out, num_real_atoms)
@@ -727,6 +788,8 @@ class MACECalculator(Calculator):
                     self.results[results_key + "_var"] = data
 
         # special cases
+        if self.is_defect_model and self.energy_scale == "raw":
+            self._apply_raw_energy_scale(atoms)
         if self.results.get("energy") is not None:
             self.results["free_energy"] = self.results["energy"]
         if self.results.get("node_energy") is not None:
@@ -740,6 +803,61 @@ class MACECalculator(Calculator):
                     full_3x3_to_voigt_6_stress(stress)
                     for stress in self.results["stresses"]
                 ]
+            )
+
+    def check_state(self, atoms, tol=1e-15):
+        """Invalidate the cache when the carrier state changes, not only the geometry.
+
+        ASE compares positions, numbers, cell and pbc; it does not look at ``atoms.info``.
+        For a charge-conditioned model that is a trap: evaluating two charge states at
+        one geometry through the same calculator -- which is exactly what a
+        configuration-coordinate diagram does -- would return the first energy twice,
+        silently.
+        """
+        changes = Calculator.check_state(self, atoms, tol=tol)
+        if not self.is_defect_model or self.atoms is None:
+            return changes
+        for name in ("carrier_counts", "host"):
+            key = self.info_keys.get(name, name)
+            previous = self.atoms.info.get(key)
+            current = atoms.info.get(key)
+            if not _same_info_value(previous, current):
+                changes = changes + [name]
+        return changes
+
+    def _apply_raw_energy_scale(self, atoms) -> None:
+        """Undo the band-edge referencing the labels were trained on (plan section 7.2).
+
+        The model predicts on the referenced scale; the affine map back is explicit and
+        uses the *cell* edges, which are different numbers from the size-converged edges
+        that set the Fermi-level zero. The constants come from one table, never from the
+        Atoms object, so two curves of a configuration-coordinate diagram cannot shift
+        relative to one another because one frame happened to carry a different value.
+        """
+        counts = mace_data.defects.as_counts(
+            atoms.info.get(
+                self.info_keys.get("carrier_counts", "carrier_counts"),
+                np.zeros(4, dtype=int),
+            )
+        )
+        if int(counts.sum()) == 0:
+            return  # the referencing constant is identically zero
+        edges = mace_data.lookup_band_edges(
+            self.band_edges,
+            atoms.info.get(self.info_keys.get("host", "host")),
+            len(atoms),
+        )
+        constant = mace_data.defects.referencing_constant(counts, edges)
+        for key in ("energy", "energy_comm"):
+            if self.results.get(key) is not None:
+                self.results[key] = (
+                    self.results[key] + constant * self.energy_units_to_eV
+                )
+        if self.results.get("node_energy") is not None:
+            # Spread the per-configuration constant evenly; it is not a per-atom
+            # quantity, so this is bookkeeping, not physics.
+            self.results["node_energy"] = self.results["node_energy"] + (
+                constant * self.energy_units_to_eV / len(atoms)
             )
 
     def get_dielectric_derivatives(self, atoms=None):

@@ -26,9 +26,11 @@ from .blocks import (
     RealAgnosticResidualNonLinearInteractionBlock,
     ScaleShiftBlock,
 )
+from .defect_models import MACEDefect
 from .extensions import MagneticScaleShiftMACE, MagneticSCFMACE, PolarMACE
 from .gate import GatedEquivariantBlock
 from .loss import (
+    DefectLoss,
     DipolePolarLoss,
     DipoleSingleLoss,
     UniversalLoss,
@@ -118,6 +120,8 @@ __all__ = [
     "MagneticScaleShiftMACE",
     "MagneticSCFMACE",
     "PolarMACE",
+    "MACEDefect",
+    "DefectLoss",
     "WeightedEnergyForcesLoss",
     "WeightedForcesLoss",
     "WeightedEnergyForcesVirialsLoss",

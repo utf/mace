@@ -17,6 +17,16 @@ class DefaultKeys(Enum):
     ELEC_TEMP = "elec_temp"
     MAGMOM = "REF_magmom"
     MAGFORCES = "REF_magforces"
+    # Charge-aware defect models (see charge_aware_defect_mlip_implementation.md)
+    CARRIER_COUNTS = "carrier_counts"
+    HOST = "host"
+    PAIR_ID = "pair_id"
+    MULTIPLICITY = "multiplicity"
+    E_CBM_CELL = "e_cbm_cell"
+    E_VBM_CELL = "e_vbm_cell"
+    BASE_ENERGY = "REF_base_energy"
+    BASE_FORCES = "REF_base_forces"
+    BASE_STRESS = "REF_base_stress"
 
     @staticmethod
     def keydict() -> dict[str, str]:

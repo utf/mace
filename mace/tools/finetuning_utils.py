@@ -216,13 +216,13 @@ def load_foundations_elements_default(
                 indices_weights_prod = [0]
         max_range = max_L + 1 if i < len(model.products) - 1 else 1
         for j in range(max_range):  # Assuming 3 contractions in symmetric_contractions
-            product.symmetric_contractions.contractions[j].weights_max = (
-                torch.nn.Parameter(
-                    model_foundations.products[i]
-                    .symmetric_contractions.contractions[j]
-                    .weights_max[indices_weights_prod, :, :]
-                    .clone()
-                )
+            product.symmetric_contractions.contractions[
+                j
+            ].weights_max = torch.nn.Parameter(
+                model_foundations.products[i]
+                .symmetric_contractions.contractions[j]
+                .weights_max[indices_weights_prod, :, :]
+                .clone()
             )
 
             target_weights = product.symmetric_contractions.contractions[j].weights
@@ -258,9 +258,9 @@ def load_foundations_elements_default(
                 "NonLinearBiasReadoutBlock",
                 "NonLinearReadoutBlock",
             ]:
-                assert hasattr(readout, "linear_1") or hasattr(
-                    readout, "linear_mid"
-                ), "Readout block must have linear_1 or linear_mid"
+                assert hasattr(readout, "linear_1") or hasattr(readout, "linear_mid"), (
+                    "Readout block must have linear_1 or linear_mid"
+                )
                 if hasattr(readout, "linear_1"):
                     shape_input_1 = (
                         model_foundations.readouts[i]
@@ -323,9 +323,7 @@ def load_foundations_elements_default(
                         i
                     ].linear_2.weight.view(shape_input_1, -1).repeat(
                         len(model_heads), len(model_heads)
-                    ).flatten().clone() / (
-                        ((shape_input_1) / (shape_output_1)) ** 0.5
-                    )
+                    ).flatten().clone() / (((shape_input_1) / (shape_output_1)) ** 0.5)
                     readout.linear_2.weight = torch.nn.Parameter(
                         model_readouts_one_linear_2_weight
                     )
@@ -344,8 +342,15 @@ def load_foundations_elements_default(
                             model_readouts_one_linear_2_bias
                         )
     _handled_attrs = {"interactions", "products", "readouts"}
+    foundation_children = model_foundations.__dict__["_modules"]
     for attr_name, module in model.named_children():
         if attr_name in _handled_attrs:
+            continue
+        if foundation_children.get(attr_name) is None:
+            # A branch the foundation model does not have -- the LES latent-charge
+            # readouts, or the defect correction heads -- so there is nothing to copy
+            # and it keeps its initialisation. Without this the whole finetuning path
+            # raised AttributeError for any model that adds a child module.
             continue
         submodules = (
             list(zip(module, model_foundations.__dict__["_modules"][attr_name]))
@@ -448,24 +453,24 @@ def load_foundations_elements_magnetic(
         for j in range(4):  # Assuming 4 layers in conv_tp_weights,
             layer_name = f"layer{j}"
             if j == 0:
-                getattr(model.interactions[i].conv_tp_weights, layer_name).weight = (
-                    torch.nn.Parameter(
-                        getattr(
-                            model_foundations.interactions[i].conv_tp_weights,
-                            layer_name,
-                        )
-                        .weight[: num_radial + num_mag_radial, :]
-                        .clone()
+                getattr(
+                    model.interactions[i].conv_tp_weights, layer_name
+                ).weight = torch.nn.Parameter(
+                    getattr(
+                        model_foundations.interactions[i].conv_tp_weights,
+                        layer_name,
                     )
+                    .weight[: num_radial + num_mag_radial, :]
+                    .clone()
                 )
             else:
-                getattr(model.interactions[i].conv_tp_weights, layer_name).weight = (
-                    torch.nn.Parameter(
-                        getattr(
-                            model_foundations.interactions[i].conv_tp_weights,
-                            layer_name,
-                        ).weight.clone()
-                    )
+                getattr(
+                    model.interactions[i].conv_tp_weights, layer_name
+                ).weight = torch.nn.Parameter(
+                    getattr(
+                        model_foundations.interactions[i].conv_tp_weights,
+                        layer_name,
+                    ).weight.clone()
                 )
 
         # conv_tp_weights_magmom
@@ -510,25 +515,25 @@ def load_foundations_elements_magnetic(
             "MagneticRealAgnosticResidueSpinOrbitCoupledDensityInteractionBlock",
         ]:
             # Assuming only 1 layer in density_fn
-            getattr(model.interactions[i].density_fn, "layer0").weight = (
-                torch.nn.Parameter(
-                    getattr(
-                        model_foundations.interactions[i].density_fn,
-                        "layer0",
-                    ).weight.clone()
-                )
+            getattr(
+                model.interactions[i].density_fn, "layer0"
+            ).weight = torch.nn.Parameter(
+                getattr(
+                    model_foundations.interactions[i].density_fn,
+                    "layer0",
+                ).weight.clone()
             )
     # Transferring products
     for i in range(2):  # Assuming 2 products modules
         max_range = max_L + 1 if i == 0 else 1
         for j in range(max_range):  # Assuming 3 contractions in symmetric_contractions
-            model.products[i].symmetric_contractions.contractions[j].weights_max = (
-                torch.nn.Parameter(
-                    model_foundations.products[i]
-                    .symmetric_contractions.contractions[j]
-                    .weights_max[indices_weights, :, :]
-                    .clone()
-                )
+            model.products[i].symmetric_contractions.contractions[
+                j
+            ].weights_max = torch.nn.Parameter(
+                model_foundations.products[i]
+                .symmetric_contractions.contractions[j]
+                .weights_max[indices_weights, :, :]
+                .clone()
             )
 
             for k in range(2):  # Assuming 2 weights in each contraction
@@ -547,24 +552,24 @@ def load_foundations_elements_magnetic(
         for j in range(4):  # Assuming 4 layers in conv_tp_weights,
             layer_name = f"layer{j}"
             if j == 0:
-                getattr(model.products[i].conv_tp_weights, layer_name).weight = (
-                    torch.nn.Parameter(
-                        getattr(
-                            model_foundations.products[i].conv_tp_weights,
-                            layer_name,
-                        )
-                        .weight[:num_mag_radial, :]
-                        .clone()
+                getattr(
+                    model.products[i].conv_tp_weights, layer_name
+                ).weight = torch.nn.Parameter(
+                    getattr(
+                        model_foundations.products[i].conv_tp_weights,
+                        layer_name,
                     )
+                    .weight[:num_mag_radial, :]
+                    .clone()
                 )
             else:
-                getattr(model.products[i].conv_tp_weights, layer_name).weight = (
-                    torch.nn.Parameter(
-                        getattr(
-                            model_foundations.products[i].conv_tp_weights,
-                            layer_name,
-                        ).weight.clone()
-                    )
+                getattr(
+                    model.products[i].conv_tp_weights, layer_name
+                ).weight = torch.nn.Parameter(
+                    getattr(
+                        model_foundations.products[i].conv_tp_weights,
+                        layer_name,
+                    ).weight.clone()
                 )
         model.products[i].linear_ori.weight = torch.nn.Parameter(
             model_foundations.products[i].linear_ori.weight.clone()
@@ -607,9 +612,7 @@ def load_foundations_elements_magnetic(
             1
         ].linear_2.weight.view(shape_input_1, -1).repeat(
             len(model_heads), len(model_heads)
-        ).flatten().clone() / (
-            ((shape_input_1) / (shape_output_1)) ** 0.5
-        )
+        ).flatten().clone() / (((shape_input_1) / (shape_output_1)) ** 0.5)
         model.readouts[1].linear_2.weight = torch.nn.Parameter(
             model_readouts_one_linear_2_weight
         )
@@ -778,13 +781,13 @@ def load_foundations_mdp(
         # MDP readouts use all irreps, so always transfer all contractions
         max_range = max_L + 1
         for j in range(max_range):
-            product.symmetric_contractions.contractions[j].weights_max = (
-                torch.nn.Parameter(
-                    model_foundations.products[i]
-                    .symmetric_contractions.contractions[j]
-                    .weights_max[indices_weights_prod, :, :]
-                    .clone()
-                )
+            product.symmetric_contractions.contractions[
+                j
+            ].weights_max = torch.nn.Parameter(
+                model_foundations.products[i]
+                .symmetric_contractions.contractions[j]
+                .weights_max[indices_weights_prod, :, :]
+                .clone()
             )
             target_weights = product.symmetric_contractions.contractions[j].weights
             source_weights = (
