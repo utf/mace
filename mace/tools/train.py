@@ -776,16 +776,19 @@ class MACELoss(Metric):
         # Realised share of the objective taken by the size hinge. The plan asks for
         # lambda_size calibrated to ~5-10% of the delta-energy loss, and for the achieved
         # ratio to be logged rather than the intended one -- they diverge as the fit moves.
-        self.add_state("defect_size_share", default=torch.tensor(0.0), dist_reduce_fx="sum")
-        self.add_state("defect_size_batches", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("defect_size_total", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("defect_delta_total", default=torch.tensor(0.0), dist_reduce_fx="sum")
 
     def update(self, batch, output):  # pylint: disable=arguments-differ
         loss = self.loss_fn(pred=output, ref=batch)
-        size_value = float(getattr(self.loss_fn, "last_size_value", 0.0))
-        if size_value > 0.0:
-            delta_value = float(getattr(self.loss_fn, "last_delta_energy_value", 0.0))
-            self.defect_size_share += size_value / max(delta_value, 1e-30)
-            self.defect_size_batches += 1.0
+        # Accumulate the two terms separately and divide once at the end. Averaging
+        # per-batch ratios instead lets a single batch holding no paired frames -- where
+        # L_delta is legitimately ~0 -- dominate the mean; observed at 1e31, which is
+        # useless for the calibration the ratio exists to serve.
+        self.defect_size_total += float(getattr(self.loss_fn, "last_size_value", 0.0))
+        self.defect_delta_total += float(
+            getattr(self.loss_fn, "last_delta_energy_value", 0.0)
+        )
         self.total_loss += loss
         self.num_data += batch.num_graphs
 
@@ -1052,9 +1055,9 @@ class MACELoss(Metric):
         if self.defect_gauge_u:
             stacked = torch.cat([item.detach() for item in self.defect_gauge_u], dim=0)
             aux["defect_gauge_u"] = stacked.mean(dim=0).cpu().tolist()
-        if float(self.defect_size_batches) > 0:
-            aux["defect_size_share"] = float(
-                self.defect_size_share / self.defect_size_batches
+        if float(self.defect_size_total) > 0.0:
+            aux["defect_size_share"] = float(self.defect_size_total) / max(
+                float(self.defect_delta_total), 1e-30
             )
         if self.defect_shape_computed:
             aux["defect_size_exempt"] = float(self.defect_size_exempt)
