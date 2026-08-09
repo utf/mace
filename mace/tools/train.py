@@ -201,6 +201,11 @@ def valid_err_log(
             )
         ]
         parts = [(name, text) for name, text in parts if text is not None]
+        share = metrics.get("defect_size_share")
+        if share is not None:
+            # Scalar, not per channel: the calibration target the plan states is a single
+            # ratio against the delta-energy term.
+            parts.append(("size/dE", f"{share:.3f}"))
         if parts:
             logging.info(
                 f"{inintial_phrase}: carrier channels (e_maj e_min h_maj h_min): "
@@ -755,9 +760,19 @@ class MACELoss(Metric):
         # of stage D-opt, which says whether the gauge is drifting even with the penalty
         # off. Empty unless gauge counters were configured on the model.
         self.add_state("defect_gauge_u", default=[], dist_reduce_fx="cat")
+        # Realised share of the objective taken by the size hinge. The plan asks for
+        # lambda_size calibrated to ~5-10% of the delta-energy loss, and for the achieved
+        # ratio to be logged rather than the intended one -- they diverge as the fit moves.
+        self.add_state("defect_size_share", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("defect_size_batches", default=torch.tensor(0.0), dist_reduce_fx="sum")
 
     def update(self, batch, output):  # pylint: disable=arguments-differ
         loss = self.loss_fn(pred=output, ref=batch)
+        size_value = float(getattr(self.loss_fn, "last_size_value", 0.0))
+        if size_value > 0.0:
+            delta_value = float(getattr(self.loss_fn, "last_delta_energy_value", 0.0))
+            self.defect_size_share += size_value / max(delta_value, 1e-30)
+            self.defect_size_batches += 1.0
         self.total_loss += loss
         self.num_data += batch.num_graphs
 
@@ -988,6 +1003,10 @@ class MACELoss(Metric):
         if self.defect_gauge_u:
             stacked = torch.cat([item.detach() for item in self.defect_gauge_u], dim=0)
             aux["defect_gauge_u"] = stacked.mean(dim=0).cpu().tolist()
+        if float(self.defect_size_batches) > 0:
+            aux["defect_size_share"] = float(
+                self.defect_size_share / self.defect_size_batches
+            )
         if self.stress_computed:
             delta_stress = self.convert(self.delta_stress)
             aux["mae_stress"] = compute_mae(delta_stress)

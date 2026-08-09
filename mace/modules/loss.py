@@ -809,15 +809,19 @@ class DefectLoss(torch.nn.Module):
     def forward(
         self, ref: Batch, pred: TensorDict, ddp: Optional[bool] = None
     ) -> torch.Tensor:
+        self.last_size_value = 0.0
+        self.last_delta_energy_value = 0.0
         loss = self.energy_weight * weighted_mean_squared_error_field(
             ref, pred, "base_energy", "base_energy_weight", per_atom=True, ddp=ddp
         )
         loss = loss + self.forces_weight * mean_squared_error_forces_field(
             ref, pred, "base_forces", "base_forces_weight", ddp=ddp
         )
-        loss = loss + self.delta_energy_weight * weighted_mean_squared_error_field(
+        delta_energy_term = self.delta_energy_weight * weighted_mean_squared_error_field(
             ref, pred, "delta_energy", "delta_energy_weight", per_atom=False, ddp=ddp
         )
+        self.last_delta_energy_value = float(delta_energy_term.detach())
+        loss = loss + delta_energy_term
         loss = loss + self.delta_forces_weight * mean_squared_error_forces_field(
             ref, pred, "delta_forces", "delta_forces_weight", ddp=ddp
         )
@@ -921,7 +925,14 @@ class DefectLoss(torch.nn.Module):
         counts = ref["carrier_counts"].view(num_graphs, -1).to(drift.dtype)
         excess = (drift.abs() - self.size_tol).clamp_min(0.0)
         raw = ref.weight * (counts.pow(2) * excess.pow(2)).sum(dim=-1)
-        return self.size_weight * reduce_loss(raw, ddp)
+        value = self.size_weight * reduce_loss(raw, ddp)
+        # The plan asks for lambda_size calibrated to ~5-10% of the delta-energy loss and
+        # for the *realised* ratio to be logged, not the intended one -- the two diverge
+        # as the fit moves, and a weight chosen once at the start says nothing about what
+        # the term is worth at epoch 80. Stashed rather than returned so the signature
+        # stays a plain loss.
+        self.last_size_value = float(value.detach())
+        return value
 
     def gauge_penalty(
         self, ref: Batch, pred: TensorDict, ddp: Optional[bool] = None

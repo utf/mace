@@ -824,36 +824,45 @@ def run(args) -> None:
         # from the training set rather than configured, so the penalty constrains exactly
         # the directions the data actually populates; n = 0 is excluded because its
         # correction is identically zero and constrains nothing.
-        if float(args.defect_gauge_weight) > 0.0:
-            observed: List[Tuple[int, ...]] = []
-            for head_config in head_configs:
-                collections = getattr(head_config, "collections", None)
-                if collections is None:
+        #
+        # Populated whether or not the penalty is switched on, because stage D-opt asks
+        # for mean(u^c) every epoch regardless: it is the free diagnostic that says
+        # whether the level mode is drifting, and it is worth nothing if it only exists
+        # once you already suspected a problem. `--defect_gauge_weight` gates the loss
+        # term alone.
+        observed: List[Tuple[int, ...]] = []
+        for head_config in head_configs:
+            collections = getattr(head_config, "collections", None)
+            if collections is None:
+                continue
+            for config in collections.train:
+                counts = config.properties.get("carrier_counts")
+                if counts is None:
                     continue
-                for config in collections.train:
-                    counts = config.properties.get("carrier_counts")
-                    if counts is None:
-                        continue
-                    flat = counts.tolist() if hasattr(counts, "tolist") else counts
-                    vector = tuple(int(v) for v in flat)
-                    if sum(vector) > 0 and vector not in observed:
-                        observed.append(vector)
-            if observed:
-                model.register_buffer(
-                    "gauge_counters",
-                    torch.as_tensor(observed, dtype=torch.long, device=device),
-                    persistent=True,
-                )
-                logging.info(
-                    f"Level-mode gauge penalty on at weight "
-                    f"{args.defect_gauge_weight}, probing {len(observed)} counter "
-                    f"vector(s): {observed}"
-                )
-            else:
-                logging.warning(
-                    "--defect_gauge_weight > 0 but no carrier-bearing counters were "
-                    "found in the training set; the gauge penalty will be inert"
-                )
+                flat = counts.tolist() if hasattr(counts, "tolist") else counts
+                vector = tuple(int(v) for v in flat)
+                if sum(vector) > 0 and vector not in observed:
+                    observed.append(vector)
+        if observed:
+            model.register_buffer(
+                "gauge_counters",
+                torch.as_tensor(observed, dtype=torch.long, device=device),
+                persistent=True,
+            )
+            state = (
+                f"penalty at weight {args.defect_gauge_weight}"
+                if float(args.defect_gauge_weight) > 0.0
+                else "diagnostic only, penalty off"
+            )
+            logging.info(
+                f"Level-mode gauge probe on {len(observed)} counter vector(s) "
+                f"{observed} -- {state}"
+            )
+        elif float(args.defect_gauge_weight) > 0.0:
+            logging.warning(
+                "--defect_gauge_weight > 0 but no carrier-bearing counters were "
+                "found in the training set; the gauge penalty will be inert"
+            )
         if registry:
             logging.info(f"Recorded band edges for {len(registry)} (host, size) pairs")
         else:
@@ -1144,6 +1153,19 @@ def run(args) -> None:
                     f"Epoch {epoch}: logit-seed anneal gamma={report['gamma']}, "
                     f"intrinsic gap={report['gap_intrinsic']}"
                 )
+
+    # Section 10: record the settings *with the model*, not only in the checkpoint args.
+    # The args cover a restart; they do not travel with the artifact someone is handed,
+    # and these values define the cell-size range the correction is valid over, which
+    # should be readable off the model wherever it is used.
+    if model.__class__.__name__ == "MACEDefect":
+        model.size_extensivity_settings = {
+            "size_ratio": float(args.defect_size_ratio),
+            "size_tol": float(args.defect_size_tol),
+            "size_weight": float(args.defect_size_weight),
+            "size_warmup_epochs": int(args.defect_size_warmup_epochs),
+            "gauge_weight": float(args.defect_gauge_weight),
+        }
 
     # The hook fires at the top of each epoch, but `train` evaluates the validation set
     # once before the loop begins. Without this, that first evaluation on a resumed run
