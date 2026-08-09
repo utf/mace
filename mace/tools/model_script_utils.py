@@ -393,6 +393,7 @@ def _build_model(args, model_config, model_config_foundation, heads):  # pylint:
             use_long_range=args.use_long_range,
             les_arguments=args.les_arguments,
             eps_inf_init=args.eps_inf if args.eps_inf is not None else 1.0,
+            freeze_amplitude=args.freeze_amplitude,
         )
     if args.model == "ScaleShiftBOTNet":
         # say it is deprecated
@@ -480,6 +481,7 @@ def _build_model(args, model_config, model_config_foundation, heads):  # pylint:
             use_long_range=args.use_long_range,
             les_arguments=args.les_arguments,
             eps_inf_init=args.eps_inf if args.eps_inf is not None else 1.0,
+            freeze_amplitude=args.freeze_amplitude,
         )
     if args.model == "MACELES":
         from mace.modules.extensions import MACELES

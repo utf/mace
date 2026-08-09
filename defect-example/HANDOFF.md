@@ -1458,3 +1458,328 @@ because the batch sizes happened to differ). It fits each channel against its **
 activations: a shared solve applied to all four readouts seeds channel 0 correctly and
 sends the other three to |u| ~ 1e3 eV, since each has an independently initialised first
 layer.
+
+---
+
+## 21. Logit seeding works: D2(1) realised, the tie is parked
+
+Replaced the u-seed entirely (see §20 for why that route failed, and note the diagnosis
+there was wrong — the target *is* in the readout's span, residual 0.025 at ridge 0; it
+needs `|W| ~ 7e4`, which is ill-conditioning, not missing information).
+
+`logit_i^c += gamma_c * s_hat_i`, gamma trainable per channel, descriptor rebuilt in-graph
+every forward so forces differentiate it (FD-verified, 1.7e-9).
+
+| run | escape | final dE | final dF |
+|---|---|---|---|
+| baseline s1/s2/s3 | 15 / 14 / 16 | 37.16 / 38.50 / 50.56 | 26.63 / 27.16 / 29.64 |
+| **seeded s1/s2/s3** | **4 / 4 / 6** | 46.71 / 44.85 / 43.12 | 27.11 / 25.78 / 26.32 |
+
+Escape falls ~3x in 3/3 seeds, accuracy inside the baseline spread (43-47 vs 37-51),
+forces equal or better, and the seeded runs are tighter across seeds. That is D8.1's
+condition, so **the tie is parked permanently and `MLP_l` stays**. D8 items 2 and 3 are
+skipped by its own stopping rule, D4 is explicitly ruled out, and D-opt lost its
+motivation when D6 retired D2(2). **Only D8.4 remains in stage D.**
+
+### Why attention commits earlier than the escape metric suggests
+
+Participation per epoch on the *unseeded* baselines, which is the measurement that placed
+the seed:
+
+```
+a4_v4_s1   ep0 194.8 -> ep4 43.6 -> ep5 30.7 -> ep9 9.0     (escape 15)
+a4_v4_s2   ep0 172.0 -> ep4 152.0 -> ep13 155.4             (escape 14)
+a4_v4_s3   ep0 172.4 -> ep4 117.9 -> ep7 157.8              (escape 16)
+```
+
+Attention commits well before `RMSE_dF` moves. A warm-up at epoch 5 would already be too
+late for seed 1 -- which is why the u-seed's "wait for the trunk" fix was the wrong shape,
+independent of its conditioning problem.
+
+### Anneal
+
+`gamma -> 0` on readiness per channel, with a forced ramp reaching zero at an **absolute
+epoch** (`--defect_seed_anneal_epochs`, default 30). Absolute rather than fractional
+because early stopping makes the run length unknown in advance, and a fractional schedule
+can let a model converge and stop with the seed still active -- shipping an inference-time
+descriptor, which is the one outcome the anneal exists to prevent.
+
+The schedule is a **ratchet**: monotone non-increasing by construction. Without it the
+readiness reference (built from the current seeded gap) shrinks as gamma falls, and gamma
+could tick back up -- re-imposing a prior the model was outgrowing.
+
+---
+
+## 22. Stage E preconditions: one passes decisively, one cannot be tested here
+
+`stage_e_alpha_checks.py`. These matter because enabling the long-range branch promotes
+`alpha` from an internal weighting to a physical object: `q_i^carrier` is the charge whose
+self-term is the electron-hole interaction, and the energy only constrains the *pooled*
+`sum_i alpha_i u_i`, so it is blind to how the weight is spread.
+
+**Check 2, size stability — and it separates the two variants sharply.** Summed `alpha`
+on the six defect-shell atoms, per channel:
+
+```
+baseline a4_v4_s3      N=286 [0.0344 0.0481 0.0210 0.1133]
+                       N=398 [0.0176 0.0227 0.0151 0.0797]   monotone decline
+
+seeded   e1b_logit_s1  N=286 [0.7784 1.0000 0.9994 0.9980]
+                       N=398 [0.8052 1.0000 0.9962 0.9936]   flat
+```
+
+The seeded model puts **78-100% of its attention on the defect shell at every cell size**,
+drift 0.027. The baseline puts 2-11% there and declines monotonically with N -- it would
+have exported a nearly-uniform `alpha` as the latent charge, giving a badly wrong
+electron-hole term while `Delta E` still looked fine. **Stage E should be run on the seeded
+variant, not the baseline.**
+
+Participation ~3 on the seeded model is physically sensible rather than suspicious: the
+divacancy has three equivalent dangling bonds per sublattice, so a carrier localised on one
+sublattice gives exactly that.
+
+**Check 1, symmetry floor — INCONCLUSIVE and cannot be fixed with this dataset.** The floor
+only binds on a relaxed, symmetric frame, and the calmest frame available has
+|F|max = 1.113 eV/A. Every frame here is thermal, so a participation below 3 is legitimate
+and the check has nothing to bite on. It needs a relaxed ground-state geometry, which is a
+(cheap) external calculation, not a DFT campaign.
+
+### Also done for Stage E
+
+- `--freeze_amplitude` pins `a` at `1/sqrt(eps_inf)` with no gradient. `a` is not
+  identifiable from a dipole term alone -- with q = 0 on every frame there is no monopole
+  for it to scale -- so a free `a` drifts to whatever absorbs the electron-hole energy and
+  then reads as a fitted screening constant while being nothing of the kind.
+- `MACEDefect.__setstate__` fills in attributes added after a checkpoint was written.
+  Whole model objects are pickled, so an older checkpoint previously failed on the *first
+  forward* with `AttributeError: no attribute 'logit_seed'` -- at evaluation time, not load
+  time, which is a confusing place to discover it.
+
+> `eps_inf = 6.5` is a **literature** value for 4H-SiC, not the DFPT calculation the plan
+> asks for. Record it as such: `1/a^2` cannot be checked against it as an independent
+> result, and the plan 9.7 step-7 gate stays closed until a charged system exists.
+
+---
+
+## 23. Two anneal bugs, both caught by testing rather than by inspection
+
+The first annealed run finished with a **live, sign-inverted seed**:
+
+```
+e1c_anneal_s1 final gamma = [0.0, -0.0013, 0.0, -0.092]
+e1c_anneal_s3 final gamma = [0.0,  0.0,    0.0, -0.0839]
+```
+
+That is precisely the outcome the anneal exists to prevent — a shipped model carrying an
+inference-time descriptor — and worse than a residue, because a negative gain does not
+weaken the prior, it **inverts** it: attention is pushed away from the novel atoms.
+
+Two independent causes, and neither was visible from reading the schedule:
+
+1. **gamma was still a trainable parameter.** The schedule set it once per epoch and the
+   optimizer moved it for the rest of the epoch. Fixed: while annealing, the schedule owns
+   gamma outright (`requires_grad_(False)`), and the optimizer group is now conditional on
+   `requires_grad` so the coverage guard stays honest.
+2. **The ratchet preserved negatives.** `min(0, -0.09)` is `-0.09`, not `0`, so once
+   anything drove a channel negative the monotone rule locked it there. Fixed: gamma is
+   clamped non-negative, and the terminal zero is applied **last and unconditionally**, so
+   at and past `zero_by_epoch` the model is bias-free whatever else has touched it.
+
+`test_anneal_survives_an_optimiser_that_also_moves_gamma` reproduces the failure — it
+perturbs gamma between schedule updates, as the optimizer did — and pins the invariant.
+It found bug 2 after bug 1 was already fixed, which is the argument for writing it as a
+test of the *outcome* rather than of the schedule.
+
+**The first e1c results are void.** They are reported in §21 only as the measurement that
+exposed the bug.
+
+---
+
+## 24. Queued pipeline
+
+`run_pipeline.sh` runs the remaining stages in sequence (one GPU) and analyses each as it
+lands, appending to `~/runs/pipeline_results.md`. A failing stage is reported and the
+pipeline continues, so one broken stage cannot silently block the rest.
+
+| stage | script | what it decides |
+|---|---|---|
+| e1c re-run | `run_experiment1c.sh` | does the anneal cost accuracy? |
+| **D8.4** | `run_d84_stagec.sh` | does the linear N-scaling survive seeding? *The whole case for stage D.* |
+| **Stage E** | `run_stage_e.sh` | how much energy does `Delta E_SR` give up to the electron-hole term? |
+| **Stage B** | `run_stage_b.sh` | capacity: 128ch `max_L=0`, then `max_L=1` |
+
+`analyse_runs.sh` is shared: escape epoch, final and best held-out metrics, the final
+per-channel state, and the final gamma (which must read exactly zero on an annealed run --
+that column exists because of §23).
+
+Two things fixed in the run configuration for these stages:
+
+- **Stage B has `ENABLE_CUEQ=True`, and that is not optional.** e3nn OOMs at batch 4 on
+  this 16 GB card at 128ch/`max_L=1`; cueq runs batch 8 in 7.3 GB at ~2.4x the speed, and
+  is verified numerically identical. Stage B runs one configuration at a time for the same
+  memory reason.
+- **Stage E cannot use cueq**: the conversion is only verified with `use_long_range=False`,
+  and `run_train` refuses the combination rather than silently converting an untested
+  branch.
+
+### Stage E is the least-exercised code in the project
+
+The long-range branch has never been trained. The forward pass is verified --
+`a` frozen at exactly `1/sqrt(6.5) = 0.392232`, `sum_i q_i^host = 0` per cell,
+`sum_i q_i = a*q`, and the `n = 0` identity exact -- and the flags parse, but the training
+loop with LES is untried. The pipeline continues past a Stage E failure by design.
+
+Note `sum_i q_i = a*q` is trivially satisfied here because `q = 0` on every frame. The
+invariant cannot be tested in its meaningful form until charged data exists, which is the
+same gap that keeps `a` frozen.
+
+---
+
+## 25. D8.4: the plateau is no longer a production-scale hazard
+
+The stage C protocol re-run on the adopted variant (logit seed + anneal), matched 286 vs
+398 subsets, 3 seeds each.
+
+| | 286 atoms | 398 atoms | median ratio |
+|---|---|---|---|
+| unseeded (stage C) | 22, 50, 43 | 116, 59, 57 | 1.37 |
+| **seeded (D8.4)** | **3, 5, 3** | **5, 9, 1** | 1.67 |
+
+Median escape falls **43 -> 3** at 286 atoms and **59 -> 5** at 398: a 14x and 12x
+reduction. Whatever N-dependence remains is now measured in single epochs.
+
+**Read the ratio with care.** At 1-9 epochs with one-epoch granularity, a ratio of 1.67 is
+one or two epochs of noise -- it is not evidence that the scaling *worsened*, and the
+direction is weaker than before (later at 398 in 2/3 seeds, against 3/3 unseeded). The
+defensible claim is not "the scaling is gone" but the one that actually matters:
+**the plateau has stopped being a production-scale hazard.** Stage C justified stage D on
+the grounds that plateau length grows with N and every production cell is larger than
+these; a cost of 3-5 epochs at both sizes removes that argument whether or not a residual
+slope survives.
+
+Combined with §21, stage D is closed: the tie is parked, `MLP_l` is kept, and the D2(1)
+objective is met by seeding alone.
+
+### The anneal fix works, and the metrics now self-check
+
+All six D8.4 runs and all three re-run e1c runs finish at **`gamma = [0.0, 0.0, 0.0, 0.0]`**
+exactly. Two consequences visible in the logs:
+
+- `gap_l == gap_int` identically on every annealed run -- the seeded and seed-free gaps
+  coincide once the gain is zero, which is a free self-consistency check that the model
+  really is bias-free rather than merely reported as such;
+- `h_maj` returns to participation ~346 (uniform). The dead channel is untouched again
+  once the seed is withdrawn, restoring the control that makes the live channels readable.
+
+### Does the anneal cost accuracy? No.
+
+| | escape | final dE | best dE |
+|---|---|---|---|
+| `e1b` gamma free | 4 / 4 / 6 | 46.71 / 44.85 / 43.12 | 42.71 / 40.31 / 37.88 |
+| `e1c` annealed | 3 / 3 / 4 | 45.45 / 45.84 / 42.84 | 32.62 / 33.72 / 41.92 |
+
+Escape is the same or slightly better, final `dE` is indistinguishable, and best `dE` is
+better. So the bias-free model is not paying for its compliance -- **adopt the annealed
+variant**, which is also the only one that can be shipped without carrying the descriptor.
+
+One caveat for stage E: after annealing, localisation partially relaxes on some seeds
+(`e1c_anneal_s1` ends at participation 44.8 for `e_maj`, against 5.7 for the un-annealed
+`e1b_logit_s1`). Since stage E exports `alpha` as a latent charge, the alpha checks of §22
+must be re-run on an **annealed** model, not on `e1b`.
+
+## 26. The parity-plot energy offset is checkpoint selection, not a referencing bug
+
+`plot_parity.py` on `b_128ch_L1_s1` showed every subset sitting ~15 meV/atom above its
+parity line. The offset is real, but its cause is mundane and worth recording because it
+will recur on every run and is invisible in the per-epoch log.
+
+**It is not the dataset.** There is exactly one 8-atom cell in v5, it lives in `train`
+only, and no `valid` frame is smaller than 286 atoms -- so it cannot move a validation
+parity plot at all, and its pull on the `E0` regression is ~0.1 meV/atom. The tail out to
+-7.65 eV/atom that exceeds the NEP figure's range is the `unpaired` 286-atom frames
+(E/atom up to -7.726), not a small cell.
+
+**It is not the referencing.** The bias is nearly identical across the three states
+(+18.7 / +14.8 / +14.7), and a band-edge referencing error would differ per state by
+construction -- the excited state carries two gaps, the ground state one. The two defect
+states agree to 0.1 meV/atom, which is what a correct reference looks like.
+
+**It is checkpoint selection under the loss weights.** MACE saves the checkpoint with the
+lowest *total* validation loss. With `energy_weight=1.0` against `forces_weight=100`,
+`delta_forces_weight=100` and `delta_energy_weight=10`, the energy term is under 0.5% of
+that total, so selection is effectively blind to it:
+
+| run | saved checkpoint | valid RMSE E |
+|---|---|---|
+| `b_128ch_L1_s1` | epoch 37 (selected) | 18.5 meV/atom |
+| `b_128ch_L1_s1` | epoch 39 (logged) | 12.0 meV/atom |
+| `b_128ch_L0_s1` | epoch 130 of 140 | 9.7 meV/atom |
+
+Two epochs apart, 6.5 meV/atom in energy, and the selection took the worse one because it
+had marginally better forces. A constant per-atom offset is exactly the quantity forces
+cannot see -- `dE/dR` annihilates it -- so nothing in the dominant 99.5% of the loss
+either penalises it or is perturbed by it.
+
+**Consequences.** `analyse_runs.sh` reports the *last* epoch, which is not the epoch that
+was saved; the two can disagree materially on energy. Always cross-check the `Error-table
+on TRAIN and VALID` block that `run_train` writes at the end -- it is evaluated on the
+saved artefact, and it agreed with `plot_parity.py` to 0.05 meV/atom on both runs checked
+(18.5 vs 18.45; 9.7 vs 9.70), which is what validates the plotting script.
+
+Training does remove the offset given enough epochs: `L0_s1` at 140 epochs ends at
++0.4 / +2.9 / +2.8 meV/atom bias, against +18.7 / +14.8 / +14.7 for the 40-epoch `L1_s1`.
+If the offset matters for the deliverable, raise `energy_weight` rather than lengthening
+training -- it fixes both the fit and the selection criterion at once.
+
+### `energy_bias_diagnosis.py`
+
+Separates the two faults a uniform offset could represent, since forces cannot: fits
+`residual_per_cell = a*N + b` per `config_type`, so `a` is the per-atom part (a wrong
+energy reference) and `b` the per-cell part (something localised mis-sized). On `L0_s1`
+both are ~0 with R^2 < 0.03, i.e. no systematic component survives -- the residual there
+is scatter, concentrated on the `unpaired` frames (+10.7 meV/atom against +1.6 for
+`paired`), which are the least sampled (47 train frames) over the widest energy range.
+
+### The loss budget, measured (`loss_term_budget.py`)
+
+Picking `energy_weight` by eye fails here because the terms are not commensurate.
+`base_energy` and the totals energy are normalised **per atom** and then squared, so they
+carry a factor `1/N^2` -- about 1e-5 for a 300-atom cell -- while `delta_energy` is a
+per-frame quantity that is not divided at all. Weight 1.0 on a per-atom term is not
+"somewhat smaller" than weight 10 on a per-frame term; it is five orders smaller before
+the weights apply. Measured on `b_128ch_L0_s1`, valid split:
+
+| term | weight | share of loss | raw MSE | implied RMSE |
+|---|---|---|---|---|
+| `forces_weight` | 100 | 71.60% | 4.352e-4 | 20.9 meV/A |
+| `delta_forces_weight` | 100 | 25.00% | 1.520e-4 | 12.3 meV/A |
+| `delta_energy_weight` | 10 | 3.36% | 2.043e-4 | 14.3 meV |
+| `total_energy_weight` | 0.25 | 0.04% | 9.320e-5 | 9.65 meV/atom |
+| `energy_weight` | 1.0 | 0.0015% | 8.840e-7 | 0.94 meV/atom |
+
+The two terms that see an absolute energy are together **0.04%** of the objective. That is
+the quantitative form of the offset finding above.
+
+The implied-RMSE column is **weighted**: the budget runs through the real loss, so it
+carries `ref.weight`, the per-field weight columns and `config_type_weights`. Rows whose
+mask is effectively uniform reproduce the error table (`total_energy` 9.65 vs MACE's 9.7;
+`forces` 20.9 vs 20.7, which is what validates the harness); rows with a selective mask do
+not, and are not meant to (`delta_forces` implies 12.3 meV/A against ~19 in the error
+table). Read the share column for budgeting and the error table for accuracy.
+
+**Which weight to raise is not obvious from the offset alone.** `base_energy` is already
+fit to 0.94 meV/atom, so `energy_weight` has essentially nothing left to correct -- raising
+it is near-inert. The lever is `total_energy_weight`, the only term carrying an absolute
+energy at `n != 0` frames, where the residual is 9.65 meV/atom; `0.25 -> 10` moves it from
+0.04% to 1.5% of the loss. `delta_energy_weight` must **not** be raised for this purpose:
+it is a paired difference and is blind to a constant at any weight.
+
+This is also the likely reason our energies sit ~50x above the NEP paper's 0.14-0.18
+meV/atom while our forces beat theirs -- we are spending 96.6% of the objective on forces.
+
+Applied in `run_stage_b_full.sh` only (`ENERGY_WEIGHT=10`, `TOTAL_ENERGY_WEIGHT=10`),
+verified to reach the command line by a stub-`python` dry run. The defaults in
+`train_defect_model.sh` were deliberately left at 1.0 / 0.25 while the stage B
+continuation is in flight, because that script is invoked fresh per run and changing it
+mid-queue would give `L1_s1` and `L1_s2` different weights from `L0_s1` and `L0_s2`,
+silently breaking the max_L comparison. Flip the defaults once the continuation finishes.

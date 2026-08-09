@@ -319,6 +319,7 @@ class StructuredLatentCharges(torch.nn.Module):
         counter_dim: int,
         hidden_dim: int = 64,
         eps_inf_init: float = 1.0,
+        freeze_amplitude: bool = False,
     ):
         super().__init__()
         self.host_charge = _mlp(feature_dim, hidden_dim, 1)
@@ -335,6 +336,19 @@ class StructuredLatentCharges(torch.nn.Module):
         last = list(self.amplitude.modules())[-1]
         with torch.no_grad():
             last.bias.fill_(math.log(math.expm1(target)))
+
+        # Stage E freezes `a` at 1/sqrt(eps_inf). It is not identifiable from a dipole
+        # term alone -- with q = 0 on every frame there is no monopole for it to scale --
+        # so leaving it free would let it drift to whatever value best absorbs the
+        # electron-hole energy, and it would then look like a fitted screening constant
+        # while being nothing of the kind. It stays frozen until a charged system exists.
+        #
+        # zero_last_layer already made the readout constant (last weight zero, bias set to
+        # the gauge), so freezing pins the output at exactly `target` for every geometry.
+        self.freeze_amplitude = freeze_amplitude
+        if freeze_amplitude:
+            for parameter in self.amplitude.parameters():
+                parameter.requires_grad_(False)
 
         # s_c: electron channels are negative, hole channels positive.
         self.register_buffer("carrier_signs", torch.tensor([-1.0, -1.0, 1.0, 1.0]))

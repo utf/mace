@@ -127,6 +127,10 @@ DEFECT_ALPHA_MODE="${DEFECT_ALPHA_MODE:-logits}"
 DEFECT_BETA="${DEFECT_BETA:-10.0}"
 # 4H-SiC high-frequency dielectric constant, ~6.5 (DFPT). Sets the initial gauge of the
 # screening amplitude; only meaningful when USE_LONG_RANGE=True.
+# Freeze `a` at 1/sqrt(EPS_INF) rather than fitting it (plan stage E). With q = 0 on every
+# frame there is no monopole for `a` to scale, so a free `a` is unidentifiable and drifts
+# to whatever absorbs the electron-hole energy.
+FREEZE_AMPLITUDE="${FREEZE_AMPLITUDE:-False}"
 EPS_INF="${EPS_INF:-6.5}"
 EPS_INF_PRIOR_WEIGHT="${EPS_INF_PRIOR_WEIGHT:-0.0}"
 
@@ -305,6 +309,7 @@ python -m mace.cli.run_train \
     --defect_alpha_mode="${DEFECT_ALPHA_MODE}" \
     --defect_beta="${DEFECT_BETA}" \
     --use_long_range="${USE_LONG_RANGE}" \
+    --freeze_amplitude="${FREEZE_AMPLITUDE}" \
     --eps_inf="${EPS_INF}" \
     --eps_inf_prior_weight="${EPS_INF_PRIOR_WEIGHT}" \
     --energy_weight="${ENERGY_WEIGHT}" \

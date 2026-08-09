@@ -1154,7 +1154,7 @@ def get_params_options(
     # coverage guard below caught on the first run. No weight decay: gamma going to zero
     # is a meaningful statement (the localisation prior is wrong for this state) and
     # should be driven by the data, not by a penalty.
-    if hasattr(model, "logit_seed_gamma"):
+    if hasattr(model, "logit_seed_gamma") and model.logit_seed_gamma.requires_grad:
         param_options["params"].append(
             {
                 "name": "logit_seed_gamma",

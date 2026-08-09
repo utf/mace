@@ -92,6 +92,7 @@ class MACEDefect(ScaleShiftMACE):
         use_long_range: bool = True,
         les_arguments: Optional[Dict[str, Any]] = None,
         eps_inf_init: float = 1.0,
+        freeze_amplitude: bool = False,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
@@ -160,6 +161,7 @@ class MACEDefect(ScaleShiftMACE):
         # of geometry alone and is present at n = 0.
         self.use_long_range = use_long_range
         self.eps_inf_init = eps_inf_init
+        self.freeze_amplitude = freeze_amplitude
         self.les_arguments = dict(les_arguments) if les_arguments else None
         if use_long_range:
             self.latent_ewald = LatentEwald(les_arguments)
@@ -168,7 +170,27 @@ class MACEDefect(ScaleShiftMACE):
                 counter_dim=counter_embedding_dim,
                 hidden_dim=carrier_mlp_hidden,
                 eps_inf_init=eps_inf_init,
+                freeze_amplitude=freeze_amplitude,
             )
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        """Fill in attributes added after a checkpoint was written.
+
+        Whole `MACEDefect` objects are pickled, so a model saved before a new flag
+        existed comes back without it and `forward` fails on attribute access -- not at
+        load time, but on the first evaluation, which is a confusing place to find out.
+        Defaults here must reproduce the behaviour the checkpoint was trained with.
+        """
+        super().__setstate__(state)
+        for name, default in (
+            ("logit_seed", False),
+            ("alpha_mode", "logits"),
+            ("beta", 10.0),
+            ("freeze_amplitude", False),
+            ("correction_trunk", "shared"),
+        ):
+            if not hasattr(self, name):
+                object.__setattr__(self, name, default)
 
     def forward(  # pylint: disable=too-many-branches
         self,

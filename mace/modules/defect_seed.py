@@ -265,14 +265,22 @@ def anneal_logit_seed(
     updated = (gamma_init.to(scale.device) * scale.clamp(min=0.0)).to(
         model.logit_seed_gamma.dtype
     )
-    if epoch >= zero_by_epoch:
-        updated = torch.zeros_like(updated)
     # Ratchet: the hand-over never hands back. The readiness term is built from a
     # reference gap that itself shrinks as gamma falls, so an unconstrained schedule can
     # let gamma tick back up when the intrinsic gap dips -- re-imposing a prior the model
-    # was in the middle of outgrowing. Monotone by construction is the honest semantics
-    # and removes the whole question.
-    updated = torch.minimum(updated, model.logit_seed_gamma.detach())
+    # was in the middle of outgrowing.
+    #
+    # Clamped at zero, because `min` alone *preserves* a negative gamma: min(0, -0.09) is
+    # -0.09, not 0. A negative gain does not merely weaken the prior, it inverts it --
+    # pushing attention away from the novel atoms. That is how a real run finished at
+    # [0.0, -0.0013, 0.0, -0.092] despite a schedule that had reached its terminal epoch.
+    updated = torch.minimum(
+        updated, model.logit_seed_gamma.detach().clamp(min=0.0)
+    ).clamp(min=0.0)
+    # Unconditional, and last: at and past the terminal epoch the model must be bias-free
+    # whatever the ratchet or anything else has done to gamma.
+    if epoch >= zero_by_epoch:
+        updated = torch.zeros_like(updated)
     model.logit_seed_gamma.copy_(updated)
     return {
         "gamma": [round(float(v), 4) for v in updated],

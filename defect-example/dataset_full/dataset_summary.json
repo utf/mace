@@ -1,0 +1,94 @@
+{
+  "seed": 42,
+  "n_structures_requested": 1341,
+  "n_train": 1207,
+  "n_valid": 134,
+  "fractions": {
+    "paired": 0.752,
+    "unpaired": 0.204,
+    "ideal": 0.044
+  },
+  "stratified": true,
+  "host": "4H-SiC",
+  "dataset_version": "v5",
+  "counter_vectors": {
+    "pristine": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "ground": [
+      1,
+      0,
+      0,
+      1
+    ],
+    "excited": [
+      1,
+      1,
+      0,
+      2
+    ]
+  },
+  "multiplicities": {
+    "pristine": 1,
+    "defect": 3
+  },
+  "anchors": {
+    "enabled": false,
+    "note": "Synthetic zero-anchor frames were tried and removed. Only one frame in ideal.db is a relaxed ideal lattice, so anchors would in practice sit on thermally displaced cells, where the zero target is false: a strained pristine cell's band edge genuinely shifts by the deformation potential. Use --defect_gauge_weight instead if the level mode needs closing."
+  },
+  "species_remap": {
+    "P": "Si",
+    "N": "C",
+    "S": "Si",
+    "O": "C"
+  },
+  "band_edges": {
+    "e_cbm_cell": 0.4715158355555574,
+    "e_vbm_cell": -0.4715158355555574,
+    "effective_gap": 0.9430316711111149,
+    "mean_vertical_excitation": 0.9430316711111149,
+    "gap_margin": 0.0,
+    "note": "A fitted gauge, not PBEsol band edges. Only e_cbm_cell - e_vbm_cell enters the referencing of the defect frames, since the ground state (1,0,0,1) and the excited state (1,1,0,2) each have equal electron and hole counts -- they are referenced by one and two gaps respectively, so the paired difference keeps exactly one. The split of the gap between the two edges is therefore a pure gauge with no observable consequence. The GAP ITSELF is not a gauge: it is fitted from the mean vertical excitation rather than computed as E(N+-1) - E(N) per supercell, so it is a genuine error source across cell sizes. See HANDOFF.md."
+  },
+  "pool_sizes_available": {
+    "pairs": 504,
+    "unpaired_ground": 137,
+    "unpaired_excited": 137,
+    "ideal": 59
+  },
+  "pool_sizes_sampled": {
+    "pairs": 504,
+    "unpaired_ground": 137,
+    "unpaired_excited": 137,
+    "ideal": 59
+  },
+  "train_by_config_type": {
+    "ideal": 53,
+    "paired_ex": 454,
+    "paired_gs": 454,
+    "unpaired_ex": 123,
+    "unpaired_gs": 123
+  },
+  "valid_by_config_type": {
+    "ideal": 6,
+    "paired_ex": 50,
+    "paired_gs": 50,
+    "unpaired_ex": 14,
+    "unpaired_gs": 14
+  },
+  "e0_least_squares_fit": {
+    "species": [
+      6,
+      14
+    ],
+    "e0": [
+      -7.895544021393589,
+      -7.895544021393613
+    ],
+    "rank": 1,
+    "n_frames": 1207
+  }
+}

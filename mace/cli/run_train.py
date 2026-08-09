@@ -1064,6 +1064,13 @@ def run(args) -> None:
         from mace.modules.defect_seed import anneal_logit_seed
 
         gamma_init = model.logit_seed_gamma.detach().clone()
+        # The schedule owns gamma outright while annealing. Left trainable, the optimizer
+        # moves it after each epoch's update and the ratchet then locks in whatever it
+        # did -- observed ending at [0.0, -0.0013, 0.0, -0.092], i.e. a live and
+        # SIGN-FLIPPED bias that pushes attention away from novel atoms. The whole point
+        # of the anneal is that the converged model is bias-free, so gamma cannot also be
+        # a free parameter.
+        model.logit_seed_gamma.requires_grad_(False)
 
         def defect_seed_hook(epoch: int, current_model) -> None:
             report = anneal_logit_seed(

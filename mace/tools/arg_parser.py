@@ -1079,6 +1079,16 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=True,
     )
     parser.add_argument(
+        "--freeze_amplitude",
+        help="Freeze the screening amplitude a at 1/sqrt(eps_inf) instead of fitting it "
+        "(plan stage E). a is not identifiable from a dipole term alone -- with q = 0 on "
+        "every frame there is no monopole for it to scale -- so a free a drifts to "
+        "whatever absorbs the electron-hole energy and then reads as a fitted screening "
+        "constant while being nothing of the kind",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
         "--use_long_range",
         help="Enable the latent-Ewald long-range branch (requires the LES library)",
         type=str2bool,

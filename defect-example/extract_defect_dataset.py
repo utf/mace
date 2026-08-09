@@ -112,7 +112,8 @@ SPECIES_REMAP = {"P": "Si", "N": "C", "S": "Si", "O": "C"}
 #   v2  plan-convention labels + synthetic zero anchors
 #   v3  anchors removed (see below); labels unchanged from v2
 #   v4  unpaired defect frames restored, since L_tot is live again (plan A5.3)
-DATASET_VERSION = "v4"
+#   v5  full source: all 1341 structures, no subsampling (504 pairs + 274 unpaired + 59 ideal)
+DATASET_VERSION = "v5"
 
 COUNTS_PRISTINE = (0, 0, 0, 0)
 COUNTS_GROUND = (1, 0, 0, 1)
