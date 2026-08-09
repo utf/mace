@@ -8,6 +8,8 @@ weight transfer got that right; without it, a layout mismatch would show up as a
 wrong correction rather than an error.
 """
 
+import copy
+
 import numpy as np
 import pytest
 import torch
@@ -30,9 +32,9 @@ Z_TABLE = tools.AtomicNumberTable([6, 14])
 CUTOFF = 4.0
 
 
-def build_model(seed: int = 0) -> MACEDefect:
+def build_model(seed: int = 0, **overrides) -> MACEDefect:
     torch.manual_seed(seed)
-    return MACEDefect(
+    arguments = dict(
         r_max=CUTOFF,
         num_bessel=6,
         num_polynomial_cutoff=5,
@@ -61,6 +63,8 @@ def build_model(seed: int = 0) -> MACEDefect:
         # The correction must be non-trivial, or the test would pass on zeros.
         zero_u_init=False,
     )
+    arguments.update(overrides)
+    return MACEDefect(**arguments)
 
 
 def make_batch(counts):
@@ -138,3 +142,50 @@ class TestDefectCueqEquivalence:
         converted = run_e3nn_to_cueq(build_model().double(), device="cpu").double()
         out = converted(make_batch([(1, 1, 0, 2)]).to_dict(), training=False)
         assert float(out["correction_energy"].abs().max()) > 0.0
+
+
+class TestConversionPreservesConstructorArguments:
+    """The conversion rebuilds the model, so the extracted config is load-bearing.
+
+    ``run_e3nn_to_cueq`` does not wrap the model, it calls
+    ``source.__class__(**extract_config_mace_model(source))`` and transfers weights. Any
+    constructor argument the extractor omits therefore reverts to its **default** in the
+    converted model, silently and with no shape mismatch to catch it.
+
+    That is not hypothetical: ``freeze_amplitude`` was omitted, and it defaults to False
+    while stage E passes True, so converting a frozen-amplitude long-range model returned
+    one whose screening amplitude was trainable again. The amplitude is meant to be an
+    input gauge (``a = 1/sqrt(eps_inf)``); once trainable it drifts to absorb the
+    electron-hole energy and is then indistinguishable from a fitted screening constant.
+    """
+
+    @pytest.mark.parametrize(
+        "name, value",
+        [
+            ("freeze_amplitude", True),
+            ("high_precision_softmax", False),
+            ("zero_u_init", True),
+            ("correction_trunk", "shared"),
+        ],
+    )
+    def test_argument_survives_extraction(self, name, value):
+        from mace.tools.scripts_utils import extract_config_mace_model
+
+        model = build_model(use_long_range=True, **{name: value})
+        assert extract_config_mace_model(model)[name] == value
+
+    def test_frozen_amplitude_stays_frozen_through_conversion(self):
+        model = build_model(use_long_range=True, freeze_amplitude=True)
+        amplitude = list(model.latent_charges.amplitude.modules())[-1].bias
+        assert not amplitude.requires_grad, "precondition: source amplitude is frozen"
+        before = float(torch.nn.functional.softplus(amplitude))
+
+        converted = run_e3nn_to_cueq(copy.deepcopy(model), device="cuda")
+
+        assert converted.freeze_amplitude is True
+        assert converted.use_long_range is True
+        after_bias = list(converted.latent_charges.amplitude.modules())[-1].bias
+        assert not after_bias.requires_grad, "amplitude became trainable via conversion"
+        assert float(torch.nn.functional.softplus(after_bias)) == pytest.approx(
+            before, abs=1e-7
+        )

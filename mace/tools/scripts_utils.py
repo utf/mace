@@ -368,6 +368,30 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         config["use_long_range"] = bool(model.use_long_range)
         config["eps_inf_init"] = float(model.eps_inf_init)
         config["les_arguments"] = model.les_arguments
+        # The conversion rebuilds the model from this config
+        # (``source_model.__class__(**config)``), so any constructor argument missing here
+        # silently reverts to its default in the converted model.
+        #
+        # Only ``freeze_amplitude`` actually diverged in practice: it defaults to False
+        # while stage E passes True, so converting a frozen-amplitude model produced a
+        # *trainable* screening amplitude, which then reads as a fitted screening constant
+        # instead of the input gauge it is meant to be. Same silent failure as the earlier
+        # freeze_amplitude wiring bug, arriving by a different route -- and it is the
+        # reason cuEq conversion was blocked for long-range models.
+        #
+        # The other three are no-ops today and are captured so they cannot become the next
+        # instance of this: ``high_precision_softmax`` and ``zero_u_init`` already equal
+        # their defaults everywhere, and ``correction_trunk`` raises for any value but
+        # "shared".
+        config["freeze_amplitude"] = bool(getattr(model, "freeze_amplitude", False))
+        # Read from the pooling block: MACEDefect forwards this to the submodule without
+        # keeping a copy, so a getattr on the model would silently read the default back
+        # and the round trip would look fine while losing the setting.
+        config["high_precision_softmax"] = bool(
+            getattr(model.carrier_pooling, "high_precision_softmax", True)
+        )
+        config["zero_u_init"] = bool(getattr(model, "zero_u_init", True))
+        config["correction_trunk"] = str(getattr(model, "correction_trunk", "shared"))
     if model.__class__.__name__ == "AtomicDielectricMACE":
         config["use_polarizability"] = model.use_polarizability
         config["only_dipole"] = False  # model.only_dipole

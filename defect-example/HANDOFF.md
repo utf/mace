@@ -1783,3 +1783,217 @@ verified to reach the command line by a stub-`python` dry run. The defaults in
 continuation is in flight, because that script is invoked fresh per run and changing it
 mid-queue would give `L1_s1` and `L1_s2` different weights from `L0_s1` and `L0_s2`,
 silently breaking the max_L comparison. Flip the defaults once the continuation finishes.
+
+## 27. Stage B settled at 140 epochs: `max_L = 1` wins, and 40 epochs had it backwards
+
+The first stage B pass stopped at 40 epochs and read as a near-tie. Continued to 140 on
+the same seeds, the ordering is clear. Metrics from the `Error-table on TRAIN and VALID`
+block, i.e. evaluated on the **saved** checkpoint (see section 26 for why the last-epoch
+numbers in `analyse_runs.sh` are not the same thing):
+
+| run | RMSE E (meV/atom) | RMSE F (meV/A) | RMSE dE (meV) | RMSE dF (meV/A) |
+|---|---|---|---|---|
+| `b_128ch_L0_s1` | **9.7** | 20.7 | 22.6 | 19.2 |
+| `b_128ch_L0_s2` | 11.9 | 20.8 | 26.1 | 18.8 |
+| `b_128ch_L1_s1` | 11.9 | **18.3** | 21.5 | **17.1** |
+| `b_128ch_L1_s2` | 16.0 | **17.8** | **21.1** | 19.0 |
+
+`max_L = 1` is better on forces (17.8-18.3 against 20.7-20.8), on `dE` (21.1-21.5 against
+22.6-26.1) and on `dF`, across both seeds. It is *worse* on absolute energy (11.9-16.0
+against 9.7-11.9) -- which is the section 26 finding again, not a capacity result: the
+absolute energy is 0.04% of the objective, so where it lands is close to arbitrary and
+should not be read as evidence about `max_L` either way.
+
+Adopt `max_L = 1`. This also matches the independent descriptor evidence: the novelty
+statistic separates the defect shell from bulk at 15.0 sigma with angular terms in,
+against 2.97 sigma at `l = 0` only. A defect whose gap states are directional dangling
+bonds was never going to be well served by an isotropic correction.
+
+**The 40-epoch conclusion was wrong in the same direction as the parity plot**, and for a
+related reason -- early checkpoints are selected on a loss that is 96.6% forces, before
+the delta terms have converged. Do not call an architecture comparison at 40 epochs on
+this system.
+
+## 28. Finite-size convergence and the extensivity test (`defect_size_extensivity.py`)
+
+Walks a ladder of supercells and extrapolates `E_f`, `E_ZPL`, `E_vert^abs`, the
+excited-state relaxation `Delta = E_vert^abs - E_ZPL`, and the configuration coordinate
+`Delta q = sqrt(sum_i m_i |dR_i|^2)` to the isolated limit, reproducing the NEP paper's
+convergence figure. Each size costs two relaxations (ground and excited, cell fixed at the
+MLIP-relaxed bulk value) plus two single points, each state evaluated at the other's
+geometry. Driven by `run_size_convergence.sh`.
+
+**It doubles as the extensivity test the architecture needs.** `E_base` is extensive (a
+sum of local energies) and `Delta E_SR = sum_c n_c sum_i alpha_i u_i` with
+`sum_i alpha_i = 1` is intensive (a weighted average). Nothing forces `alpha` to stay
+localised; if it spreads, the correction becomes a bulk average of `u` and every quantity
+drifts with N. Training cannot see this -- it happens at one or two cell sizes. Two
+columns separate a model failure from real finite-size physics:
+
+* `base drift` = `E_host/N - e_bulk`, identically zero for an extensive base at every N.
+  Measured **0.000 meV/atom** at every size so far, so the base branch is exactly
+  size-consistent and anything that moves is attributable to the correction.
+* `dE_corr` = `E(n) - E(0)` at one fixed geometry, which cancels `E_base` exactly. This
+  is the intensive term and should be flat. It is: 3.4339 (N=72), 3.4295 (N=128), 3.4539
+  (N=256), i.e. a spread of 0.02 eV once cells are large enough to be physical. The
+  32-atom cell gives 3.20 and is simply too small -- do not read anything into it.
+
+### `raw` is mandatory, and the band-edge registry has to be extended
+
+The referencing constant is `n_electrons*e_cbm - n_holes*e_vbm`: **0.9430 eV** for the
+ground state `(1,0,0,1)` and **1.8861 eV** for the excited `(1,1,0,2)`. It therefore does
+not cancel in `E_ZPL` or `E_vert^abs` -- on the referenced scale both come out shifted by
+exactly the gauge gap, 0.9430 eV, which is the same size as the answer itself. This is a
+silent error: the numbers look plausible, just wrong by a constant.
+
+The registry is keyed `host|natoms` (`registry_key`) while `band_edges.json` holds one
+size-free entry per host, so *every* cell size off the training ladder raises `KeyError`
+under `--energy-scale raw`. The script rebuilds the registry, replicating the host entry
+to each size it visits. That is faithful to how the labels were referenced -- the recorded
+table is a fitted gauge in which only `e_cbm - e_vbm` matters -- but it **would be wrong
+against a genuinely size-dependent table**, so the replication is printed at run time.
+
+### First results against the paper
+
+Using `b_128ch_L1_s1` (max_L = 1, 140 epochs), at a single 256-atom cell, against the
+paper's extrapolated values:
+
+| | ours, N = 256 | NEP, N -> inf |
+|---|---|---|
+| `E_ZPL` | 0.9030 eV | 0.91 |
+| `E_vert^abs` | 0.9687 eV | 0.99 |
+| `Delta` | 0.0657 eV | 0.08 |
+| `E_f` | 7.2788 eV | 7.69 |
+| `Delta q` | 0.5852 sqrt(Da) A | 0.81 |
+
+`E_ZPL` and `E_vert^abs` land within ~10-20 meV of the published limit at one size, before
+any extrapolation. `E_f` and `Delta q` are still climbing, as they do in the paper.
+
+**Start the ladder at 256 atoms or above.** At 32 atoms every quantity is nonsense
+(`E_ZPL` 0.43, `Delta q` 0.63 against 0.32 at 72) and, being the point furthest from the
+intercept, it dominates a `1/N` fit and drags every extrapolation with it.
+
+## 29. The correction is not size-transferable: softmax dilutes alpha as 1/N
+
+The size-convergence ladder (section 28) does not converge. `E_ZPL` falls 0.903 -> 0.715 eV
+from 256 to 2400 atoms and is still moving; `E_vert^abs` 0.969 -> 0.810. The paper's NEP
+model is flat to ~10 meV over the same range.
+
+**It is not the harness.** Every relaxation converged (|F|max ~0.018 against a 0.02
+target), the divacancy is the same axial pair with the same 1.893 A bond at every size,
+and base extensivity is exactly 0.000 meV/atom. **It is not finite-size physics either**:
+`d(E_ZPL)/d(ln N)` is constant at -0.083, -0.092, -0.091, -0.077, i.e. the drift is
+*logarithmic*, and a real image interaction going as 1/N or 1/L would make that derivative
+decay toward zero.
+
+### The mechanism, measured
+
+`alpha = softmax(l)` is normalised over **every atom in the cell**. With `k` defect sites
+at logit `l_d` and `N - k` bulk sites at `l_b`, the weight reaching the defect is
+
+    alpha_defect = 1 / (1 + (N - k)/k * e^{-gap}),   gap = l_d - l_b,   N* ~ k e^{gap}
+
+so a fixed logit gap **cannot** prevent dilution -- it only sets the cell size where
+dilution begins. `alpha_dilution.py` inverts the measured shell weight for the gap it
+implies, and that gap is constant in N to +-0.02, which is what makes this the right
+description rather than a plausible story:
+
+| channel | implied gap | N* | alpha on shell, N = 70 -> 2398 |
+|---|---|---|---|
+| `e_maj` | 2.25 +- 0.02 | 57 | 0.483 -> 0.023 |
+| `e_min` | 2.39 +- 0.02 | 66 | 0.496 -> 0.027 |
+| `h_maj` | -0.01 (dead) | 6 | 0.085 -> 0.003 |
+| `h_min` | 5.23 +- 0.03 | 1121 | 0.943 -> 0.326 |
+
+Participation grows in proportion to N (11 -> 1017 for `e_maj` at N = 2398), so the
+correction has become a bulk average of `u`.
+
+**Three of the four channels were already diluted inside the training distribution.** At
+N = 398 -- a cell the model was trained on -- `e_maj` and `e_min` hold only 0.126 and
+0.145 of their weight on the defect shell. `h_min` is the one still localised there
+(0.742), and its crossover at N* = 1121 sits in the middle of the convergence ladder,
+which is why the observables move most between 1024 and 2400.
+
+The dead-channel invariant survives: `h_maj` participation equals N exactly at every size.
+
+### What this means for section 3.2 of the plan
+
+The requirement recorded there -- "a logit gap keeps the correction extensive" -- is
+qualitatively right but quantitatively insufficient as stated. The condition is
+`gap >> ln(N/k)`, which **depends on the cell size you intend to use**. Concretely, at
+k = 6: gap 2.4 gives out by ~70 atoms, gap 5.2 by ~1100, and reaching 10^5 atoms needs
+gap >~ 9.7, 10^6 needs ~12. Because the requirement is logarithmic, this is cheap in gap
+terms -- going from 2.4 to 12 buys a factor of ~15000 in usable cell size -- but nothing
+in the current objective asks for it, so the optimiser had no reason to produce it.
+
+Options, in rough order of intrusiveness, none yet tested:
+
+1. **Reward the gap.** A penalty on the shell-to-bulk logit difference, or equivalently on
+   participation, targeting `gap > ln(N_max/k)`. Cheapest, no architecture change, but it
+   is a soft constraint on something that must hold exactly.
+2. **Normalise locally.** Restrict the softmax to a neighbourhood, or top-k, so N never
+   enters the denominator. Removes the failure by construction; changes the model.
+3. **Drop the normalisation.** `Delta E = sum_i g_i u_i` with a bounded gate `g_i` biased
+   so bulk sites give ~0. No `sum_i alpha_i = 1`, hence no 1/N -- but the correction is
+   then extensive unless the bulk gate really does vanish, which trades one failure for
+   another and needs its own check.
+4. **Train across cell sizes** with a size-consistency term, so the drift is in the
+   objective rather than discovered afterwards.
+
+Whichever is chosen, `alpha_dilution.py` is the acceptance test: the implied gap and
+`alpha on shell` must be flat in N.
+
+## 30. cuEq with the long-range branch: unblocked, and the bug the block was hiding
+
+`run_train` refused `--enable_cueq` together with `use_long_range` ("the latent-Ewald
+branch is untested under conversion"). Lifting it turned out to be one real fix plus
+verification, but the block was guarding something genuine.
+
+The conversion is **not a wrapper**. `run_e3nn_to_cueq` calls
+`source.__class__(**extract_config_mace_model(source))` and then transfers weights, so any
+constructor argument the extractor omits reverts to its *default* in the converted model
+-- silently, with no shape mismatch to catch it. An audit of `MACEDefect.__init__` against
+the extractor found four omissions:
+
+| argument | default | passed as | consequence of the omission |
+|---|---|---|---|
+| `freeze_amplitude` | False | **True** by stage E | **the screening amplitude became trainable again** |
+| `high_precision_softmax` | True | never overridden | none today |
+| `zero_u_init` | True | True | none (initialisation only) |
+| `correction_trunk` | "shared" | "shared" | none (anything else raises) |
+
+Only the first diverged in practice, and it is the same failure as the earlier
+`freeze_amplitude` wiring bug arriving by a different route: `a` is meant to be an input
+gauge at `1/sqrt(eps_inf)`, and once trainable it drifts to absorb the electron-hole
+energy and then reads as a *fitted* screening constant. **Every previous cuEq run is
+unaffected** -- they all set `use_long_range=False`, where there is no amplitude, and the
+other three arguments equal their defaults everywhere.
+
+One trap inside the fix: `high_precision_softmax` is forwarded to `carrier_pooling`
+without the model keeping a copy, so `getattr(model, ...)` reads the default straight back
+and the round trip looks fine while losing the setting. It has to be read from the
+submodule. The parametrised test caught this -- it was written before the extractor was,
+and failed on exactly that case.
+
+### Evidence for lifting the block
+
+`defect-example/verify_cueq_long_range.py`, on a real long-range model (`e_lr_s2`):
+
+* all five arguments survive the round trip;
+* amplitude bit-identical, `a = 0.39223227`, `1/a^2 = 6.5000` both sides, and still
+  `requires_grad=False`;
+* the long-range branch is still contributing: `|E_LR|` 0.136412 -> 0.136410 eV (a check
+  that matters, since a conversion that quietly dropped the branch would still pass an
+  energy comparison against itself);
+* energies identical, forces to 5e-6 eV/A, `carrier_alpha` to 4e-7 -- float32
+  summation-order noise.
+
+Permanent regression test: `TestConversionPreservesConstructorArguments` in
+`tests/unit/test_defect_cueq.py` (verified to fail without the fix). Full defect suite:
+152 passed, 1 skipped.
+
+### Why this mattered here
+
+Without it, stage E at production scale was infeasible: e3nn OOMs at batch 4 at
+128ch/max_L=1 on the 16 GB A4000 *without* the long-range branch, while cueq runs batch 8
+in 7.3 GB. The three-model comparison of section 31 depends on it.

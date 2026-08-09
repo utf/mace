@@ -872,11 +872,26 @@ def run(args) -> None:
                 "OpenEquivariance conversion of MACEDefect is untested; use "
                 "--enable_cueq=True instead"
             )
+        # cuEq conversion with the long-range branch was blocked as untested. It is now
+        # verified -- see defect-example/verify_cueq_long_range.py, which is the
+        # regression test for this and should be re-run if the conversion changes.
+        #
+        # The block was protecting against something real. The conversion rebuilds the
+        # model from `extract_config_mace_model`, so a constructor argument missing from
+        # that extractor silently reverts to its default. `freeze_amplitude` was missing
+        # and defaults to False, so converting a frozen-amplitude model handed back a
+        # *trainable* screening amplitude -- which then reads as a fitted screening
+        # constant rather than the input gauge it is. That extractor now captures it (with
+        # `high_precision_softmax`, `zero_u_init` and `correction_trunk`, which were also
+        # missing but happen to equal their defaults everywhere).
+        #
+        # Measured on a real long-range model after that fix: amplitude bit-identical and
+        # still frozen, E_LR still contributing, energies exact and forces agreeing to
+        # 6e-6 eV/A -- float32 summation-order noise.
         if args.enable_cueq and getattr(model, "use_long_range", False):
-            raise NotImplementedError(
-                "cuEquivariance conversion of MACEDefect has only been verified with "
-                "use_long_range=False; the latent-Ewald branch is untested under "
-                "conversion"
+            logging.info(
+                "cuEquivariance with use_long_range=True: verified equivalent to e3nn "
+                "for MACEDefect, including the frozen screening amplitude"
             )
         if args.enable_cueq:
             logging.info(
