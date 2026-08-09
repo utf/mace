@@ -23,6 +23,7 @@ from torch_ema import ExponentialMovingAverage
 from torchmetrics import Metric
 
 from mace.cli.visualise_train import TrainingPlotter
+from mace.modules.defect_size import size_extensivity_probe
 
 from . import torch_geometric
 from .checkpoint import CheckpointHandler, CheckpointState
@@ -191,6 +192,12 @@ def valid_err_log(
                 ("delta_u", "defect_delta_u", 1.0),
                 # gap with the seed off: what MLP_l is holding up on its own.
                 ("gap_int", "defect_gap_intrinsic", 1.0),
+                # Share of attention an R-fold larger cell would capture; ~0 is the goal.
+                ("size_f", "defect_size_f", 1.0),
+                # The energy that share would move, in meV. This is the acceptance number.
+                ("drift_meV", "defect_size_drift", 1e3),
+                ("clamped", "defect_logit_clamped", 1.0),
+                ("gauge_u", "defect_gauge_u", 1.0),
             )
         ]
         parts = [(name, text) for name, text in parts if text is not None]
@@ -735,6 +742,19 @@ class MACELoss(Metric):
         self.add_state("defect_logit_gap", default=[], dist_reduce_fx="cat")
         self.add_state("defect_delta_u", default=[], dist_reduce_fx="cat")
         self.add_state("defect_gap_intrinsic", default=[], dist_reduce_fx="cat")
+        # Size-extensivity monitor. Logged every epoch whether or not the hinge is on:
+        # it is label-free, costs a few medians, and it is the only quantity that says
+        # whether the correction will survive a larger cell. `size_f` is the share of the
+        # attention an R-fold larger cell would take, `size_drift` the resulting energy
+        # error in eV, `logit_clamped` the fraction of logits pinned at the clamp bound --
+        # which receive no gradient, so a run can stall there without any other sign.
+        self.add_state("defect_size_f", default=[], dist_reduce_fx="cat")
+        self.add_state("defect_size_drift", default=[], dist_reduce_fx="cat")
+        self.add_state("defect_logit_clamped", default=[], dist_reduce_fx="cat")
+        # Pooled u at the training counters on pristine cells: the level-mode diagnostic
+        # of stage D-opt, which says whether the gauge is drifting even with the penalty
+        # off. Empty unless gauge counters were configured on the model.
+        self.add_state("defect_gauge_u", default=[], dist_reduce_fx="cat")
 
     def update(self, batch, output):  # pylint: disable=arguments-differ
         loss = self.loss_fn(pred=output, ref=batch)
@@ -817,7 +837,31 @@ class MACELoss(Metric):
                     self.defect_gap_intrinsic.append(
                         intrinsic.view(num_graphs, -1)[carriers]
                     )
+                # Size-extensivity monitor, computed whatever the hinge weight is. The
+                # ratio is read off the loss rather than kept here, so the number logged
+                # is by construction the one the penalty is using.
+                logits = output.get("carrier_logits")
+                ratio = float(getattr(self.loss_fn, "size_ratio", 0.0))
+                if logits is not None and ratio > 1.0:
+                    with torch.no_grad():
+                        size_f, size_drift, clamped = size_extensivity_probe(
+                            logits=logits,
+                            readouts=readouts,
+                            alpha=alpha,
+                            batch=index,
+                            node_attrs=batch.node_attrs,
+                            num_graphs=num_graphs,
+                            ratio=ratio,
+                        )
+                    self.defect_size_f.append(size_f[carriers])
+                    self.defect_size_drift.append(size_drift[carriers])
+                    self.defect_logit_clamped.append(clamped[carriers])
                 self.defect_shape_computed += float(carriers.sum())
+            # The gauge probe is the mirror image: it lives on the *pristine* frames,
+            # where band-edge referencing pins the pooled readout to zero.
+            gauge = output.get("gauge_mean_u")
+            if gauge is not None and bool((~carriers).any()):
+                self.defect_gauge_u.append(gauge[~carriers].mean(dim=1))
         if output.get("stress") is not None and batch.stress is not None:
             self.delta_stress.append(batch.stress - output["stress"])
             self.stress_computed += filter_nonzero_weight(
@@ -931,11 +975,19 @@ class MACELoss(Metric):
                 ("logit_gap", self.defect_logit_gap),
                 ("delta_u", self.defect_delta_u),
                 ("gap_intrinsic", self.defect_gap_intrinsic),
+                ("size_f", self.defect_size_f),
+                ("size_drift", self.defect_size_drift),
+                ("logit_clamped", self.defect_logit_clamped),
             ):
                 if not state:
                     continue
                 stacked = torch.cat([item.detach() for item in state], dim=0)
                 aux[f"defect_{name}"] = stacked.mean(dim=0).cpu().tolist()
+        # Gauge lives on pristine frames, so it is gated separately -- a batch can hold
+        # carrier-bearing frames and no pristine ones, or the reverse.
+        if self.defect_gauge_u:
+            stacked = torch.cat([item.detach() for item in self.defect_gauge_u], dim=0)
+            aux["defect_gauge_u"] = stacked.mean(dim=0).cpu().tolist()
         if self.stress_computed:
             delta_stress = self.convert(self.delta_stress)
             aux["mae_stress"] = compute_mae(delta_stress)

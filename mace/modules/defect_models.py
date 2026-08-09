@@ -93,6 +93,7 @@ class MACEDefect(ScaleShiftMACE):
         les_arguments: Optional[Dict[str, Any]] = None,
         eps_inf_init: float = 1.0,
         freeze_amplitude: bool = False,
+        gauge_counters: Optional[List[List[int]]] = None,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
@@ -102,6 +103,17 @@ class MACEDefect(ScaleShiftMACE):
                 "'shared' is available"
             )
         self.correction_trunk = correction_trunk
+        # Counter vectors the level-mode gauge probe is evaluated at, populated from the
+        # training set. A buffer rather than a plain attribute so it moves with the model
+        # across devices and dtypes and lands in the state dict; empty by default, which
+        # is what makes the probe cost exactly nothing unless it is configured.
+        self.register_buffer(
+            "gauge_counters",
+            torch.as_tensor(
+                gauge_counters if gauge_counters else [], dtype=torch.long
+            ).reshape(-1, NUM_CARRIER_CHANNELS),
+            persistent=True,
+        )
         self.carrier_feature_dim = carrier_feature_dim
         self.counter_embedding_dim = counter_embedding_dim
         self.carrier_mlp_hidden = carrier_mlp_hidden
@@ -191,6 +203,16 @@ class MACEDefect(ScaleShiftMACE):
         ):
             if not hasattr(self, name):
                 object.__setattr__(self, name, default)
+        # Buffers need registering, not just setting, or they stay out of the state dict
+        # and out of `.to()`. A model pickled before the gauge probe existed has none, and
+        # an empty buffer is exactly the "probe disabled" state, so old checkpoints keep
+        # behaving as they did.
+        if not hasattr(self, "gauge_counters"):
+            self.register_buffer(
+                "gauge_counters",
+                torch.zeros((0, NUM_CARRIER_CHANNELS), dtype=torch.long),
+                persistent=True,
+            )
 
     def forward(  # pylint: disable=too-many-branches
         self,
@@ -376,6 +398,38 @@ class MACEDefect(ScaleShiftMACE):
                 logit_bias=None,
             )
 
+        # Level-mode gauge probe (forward plan, stage D-opt). The softmax is
+        # shift-invariant, so a uniform offset in u^c is a free direction; on a pristine
+        # cell the pooled readout at a training counter must be zero, because a carrier
+        # there is a band-to-band transition. Evaluated at every training counter from the
+        # trunk output already computed -- a few readout MLP passes, no extra message
+        # passing, and no new frames. The loss masks this down to pristine cells; it is
+        # computed for all of them so the diagnostic is available whether or not the
+        # penalty is switched on.
+        gauge_mean_u: Optional[torch.Tensor] = None
+        if self.gauge_counters.numel() > 0:
+            gauge_list: List[torch.Tensor] = []
+            for index in range(self.gauge_counters.shape[0]):
+                probe_counts = self.gauge_counters[index].to(counts.dtype).unsqueeze(0)
+                probe_counts = probe_counts.expand(num_graphs, -1).contiguous()
+                _, probe_alpha, probe_u, _, _, _ = self.carrier_pooling(
+                    node_feats=defect_feats,
+                    counter_emb=self.counter_embedding(probe_counts),
+                    counts=probe_counts,
+                    batch=data["batch"],
+                    num_graphs=num_graphs,
+                    logit_bias=logit_bias,
+                )
+                gauge_list.append(
+                    scatter_sum(
+                        src=probe_alpha * probe_u,
+                        index=data["batch"],
+                        dim=0,
+                        dim_size=num_graphs,
+                    )
+                )
+            gauge_mean_u = torch.stack(gauge_list, dim=1)  # [n_graphs, K, 4]
+
         counter_emb_ref = self.counter_embedding(counts_ref)
         delta_sr_ref, alpha_ref, _, _, _, _ = self.carrier_pooling(
             node_feats=defect_feats,
@@ -544,6 +598,10 @@ class MACEDefect(ScaleShiftMACE):
             # term re-forms the normalisation for a hypothetically larger cell, which
             # alpha cannot support because it has already divided the denominator out.
             "carrier_logits": carrier_logits,
+            # [n_graphs, K, 4]: pooled u at each training counter. Present for every frame;
+            # the loss restricts it to pristine ones, where band-edge referencing pins it
+            # to zero. None unless gauge counters were configured.
+            "gauge_mean_u": gauge_mean_u,
             "logit_gap": logit_gap,
             "delta_u": delta_u,
             "logit_gap_intrinsic": logit_gap_intrinsic,

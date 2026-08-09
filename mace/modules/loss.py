@@ -13,6 +13,8 @@ import torch.distributed as dist
 from mace.tools import TensorDict
 from mace.tools.torch_geometric import Batch
 
+from .defect_size import size_extensivity_probe
+
 
 # ------------------------------------------------------------------------------
 # Helper function for loss reduction that handles DDP correction
@@ -757,6 +759,11 @@ class DefectLoss(torch.nn.Module):
         detach_base_in_totals: bool = False,
         eps_inf: Optional[float] = None,
         eps_inf_prior_weight: float = 0.0,
+        size_weight: float = 0.0,
+        size_ratio: float = 1e4,
+        size_tol: float = 1e-3,
+        size_warmup_epochs: int = 20,
+        gauge_weight: float = 0.0,
     ) -> None:
         super().__init__()
         for name, value in (
@@ -778,6 +785,16 @@ class DefectLoss(torch.nn.Module):
         self.detach_base_in_totals = detach_base_in_totals
         self.eps_inf = eps_inf
         self.eps_inf_prior_weight = eps_inf_prior_weight
+        self.size_weight = size_weight
+        self.size_ratio = size_ratio
+        self.size_tol = size_tol
+        self.size_warmup_epochs = size_warmup_epochs
+        self.gauge_weight = gauge_weight
+        # Set by the trainer's epoch hook from the *absolute* epoch, so a run restarted
+        # past the warmup resumes with the term already active. Getting this from a
+        # counter local to the loss would silently re-serve the warmup on every restart --
+        # the same trap that made the gamma anneal restart from scratch.
+        self.current_epoch = 0
 
     def _totals_mask(self, ref: Batch) -> torch.Tensor:
         """Every configuration carrying carriers, i.e. all ``n != 0`` frames.
@@ -857,8 +874,81 @@ class DefectLoss(torch.nn.Module):
             )
             loss = loss + self.pressure_weight * reduce_loss(raw_pressure, ddp)
 
+        loss = loss + self.size_penalty(ref, pred, ddp)
+        loss = loss + self.gauge_penalty(ref, pred, ddp)
         loss = loss + self.regularisation(pred)
         return loss
+
+    def size_penalty(
+        self, ref: Batch, pred: TensorDict, ddp: Optional[bool] = None
+    ) -> torch.Tensor:
+        """Hinge on the drift an ``R``-fold larger cell would show (size plan section 4).
+
+        ``L_size = sum_c n_c^2 max(0, |f_c (ubar_w - <u>_alpha)_c| - tol)^2``
+
+        Three properties, all deliberate. The **hinge** stops pushing once the drift is
+        inside tolerance, so this does not fight the energy objective permanently -- it
+        re-arms only if the fit drifts back out. The ``n_c^2`` weight zeroes dead channels
+        for free and matches each channel's actual contribution to the energy. And the
+        term is **silent early in training**: before ``u`` develops any defect contrast the
+        drift is ~0, so it cannot interfere with the seeding and annealing machinery, which
+        is why the warmup is a backstop rather than the main protection.
+
+        One direction to watch. The gradient reaches the drift through ``<u>_alpha`` as
+        well as through ``f``, so the hinge can in principle be bought by flattening the
+        defect contrast instead of by localising. That is intended where the state really
+        is delocalised -- it is what makes this a dilution penalty rather than a
+        localisation penalty -- but it is a degenerate direction for a bound state. The
+        tell is ``delta_u`` in the per-epoch log collapsing when the term activates; the
+        held-out ``RMSE_dE`` acceptance in section 7 is the backstop.
+        """
+        zero = torch.zeros((), dtype=ref.weight.dtype, device=ref.weight.device)
+        if self.size_weight <= 0.0 or self.current_epoch < self.size_warmup_epochs:
+            return zero
+        logits = pred.get("carrier_logits")
+        if logits is None or pred.get("carrier_readouts") is None:
+            return zero
+        num_graphs = int(ref.num_graphs)
+        _, drift, _ = size_extensivity_probe(
+            logits=logits,
+            readouts=pred["carrier_readouts"],
+            alpha=pred["carrier_alpha"],
+            batch=ref["batch"],
+            node_attrs=ref["node_attrs"],
+            num_graphs=num_graphs,
+            ratio=self.size_ratio,
+        )
+        counts = ref["carrier_counts"].view(num_graphs, -1).to(drift.dtype)
+        excess = (drift.abs() - self.size_tol).clamp_min(0.0)
+        raw = ref.weight * (counts.pow(2) * excess.pow(2)).sum(dim=-1)
+        return self.size_weight * reduce_loss(raw, ddp)
+
+    def gauge_penalty(
+        self, ref: Batch, pred: TensorDict, ddp: Optional[bool] = None
+    ) -> torch.Tensor:
+        """Pin the level mode of ``u`` on pristine cells (forward plan, stage D-opt).
+
+        The softmax is shift-invariant, so a uniform offset in ``u^c`` moves the energy
+        without moving ``alpha`` -- one unidentified direction per channel. With the
+        counters present here, three of the four are free. This penalises the pooled
+        readout evaluated at each training counter vector on **pristine** frames, where a
+        carrier is a band-to-band transition and band-edge referencing therefore requires
+        the pooled value to be zero.
+
+        It does not fix extensivity and never claimed to: a uniform offset contributes
+        ``n_c * const`` independent of ``N`` because ``sum_i alpha_i = 1``. What it buys is
+        that the *diluted* limit becomes physically interpretable instead of arbitrary,
+        which is what makes a size measurement readable at all.
+        """
+        zero = torch.zeros((), dtype=ref.weight.dtype, device=ref.weight.device)
+        gauge = pred.get("gauge_mean_u")
+        if self.gauge_weight <= 0.0 or gauge is None:
+            return zero
+        num_graphs = int(ref.num_graphs)
+        # Pristine frames are exactly the complement of the totals mask; no new flag.
+        pristine = 1.0 - self._totals_mask(ref)
+        raw = ref.weight * pristine * gauge.pow(2).sum(dim=(-1, -2))
+        return self.gauge_weight * reduce_loss(raw, ddp)
 
     def regularisation(self, pred: TensorDict) -> torch.Tensor:
         """Penalties on the correction readouts, plus the optional prior on ``a``."""

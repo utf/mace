@@ -233,7 +233,15 @@ def configuration_coordinate(ground, excited) -> float:
 
 
 def fit_limit(sizes: np.ndarray, values: np.ndarray, power: float):
-    """Extrapolate to N -> inf against ``N**-power``; returns (intercept, max deviation)."""
+    """Extrapolate to N -> inf against ``N**-power``; returns (intercept, max deviation).
+
+    **This is the wrong functional form for the energies and is reported only as a
+    reference.** Finite-size *physics* goes as a power of the cell dimension, but the drift
+    measured here is attention dilution, which is logistic in ``ln N``: fitting a power law
+    to it gave 105-227 meV residuals where the logistic form gives 0.4-4.2 meV. Use
+    ``logistic_size_fit.py`` for any number that will be quoted. Kept here because
+    ``Delta q`` is a displacement, not an occupancy, and has no logistic model.
+    """
     if len(sizes) < 2:
         return float(values[-1]), float("nan")
     abscissa = sizes.astype(float) ** (-power)
@@ -418,7 +426,9 @@ def main() -> None:
     # --- extrapolation ------------------------------------------------------------------
     sizes_array = np.array([r["n_host"] for r in rows], dtype=float)
     limits = {}
-    print(f"\nextrapolated to N -> infinity:")
+    print("\nextrapolated to N -> infinity (POWER-LAW fit, reported for reference only --")
+    print("the energy drift here is attention dilution and is logistic in ln N, so this")
+    print("form is wrong for it; run logistic_size_fit.py for quotable numbers):")
     for key, label, power in (
         ("formation_energy_eV", "E_f", args.energy_power),
         ("zpl_eV", "E_ZPL", args.energy_power),

@@ -11,7 +11,7 @@ import logging
 import os
 from copy import deepcopy
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import torch.distributed
 from e3nn.util import jit
@@ -820,6 +820,40 @@ def run(args) -> None:
                 continue
             registry.update(data.collect_band_edge_registry(collections.train))
         model.band_edge_registry = registry
+        # Counter vectors the level-mode gauge probe is evaluated at (stage D-opt). Taken
+        # from the training set rather than configured, so the penalty constrains exactly
+        # the directions the data actually populates; n = 0 is excluded because its
+        # correction is identically zero and constrains nothing.
+        if float(args.defect_gauge_weight) > 0.0:
+            observed: List[Tuple[int, ...]] = []
+            for head_config in head_configs:
+                collections = getattr(head_config, "collections", None)
+                if collections is None:
+                    continue
+                for config in collections.train:
+                    counts = config.properties.get("carrier_counts")
+                    if counts is None:
+                        continue
+                    flat = counts.tolist() if hasattr(counts, "tolist") else counts
+                    vector = tuple(int(v) for v in flat)
+                    if sum(vector) > 0 and vector not in observed:
+                        observed.append(vector)
+            if observed:
+                model.register_buffer(
+                    "gauge_counters",
+                    torch.as_tensor(observed, dtype=torch.long, device=device),
+                    persistent=True,
+                )
+                logging.info(
+                    f"Level-mode gauge penalty on at weight "
+                    f"{args.defect_gauge_weight}, probing {len(observed)} counter "
+                    f"vector(s): {observed}"
+                )
+            else:
+                logging.warning(
+                    "--defect_gauge_weight > 0 but no carrier-bearing counters were "
+                    "found in the training set; the gauge penalty will be inert"
+                )
         if registry:
             logging.info(f"Recorded band edges for {len(registry)} (host, size) pairs")
         else:
@@ -1071,11 +1105,12 @@ def run(args) -> None:
         calibrate_novelty(model=model, data_loader=train_loader, device=device)
 
     defect_seed_hook = None
-    if (
+    anneal_seed = (
         model.__class__.__name__ == "MACEDefect"
         and getattr(model, "logit_seed", False)
         and getattr(args, "defect_seed_anneal", False)
-    ):
+    )
+    if anneal_seed:
         from mace.modules.defect_seed import anneal_logit_seed
 
         gamma_init = model.logit_seed_gamma.detach().clone()
@@ -1087,7 +1122,15 @@ def run(args) -> None:
         # a free parameter.
         model.logit_seed_gamma.requires_grad_(False)
 
+    if model.__class__.__name__ == "MACEDefect":
+
         def defect_seed_hook(epoch: int, current_model) -> None:
+            # The **absolute** epoch, taken from the trainer. A counter local to the loss
+            # would restart at zero on every resume and silently re-serve the size-hinge
+            # warmup -- the same shape of bug as the gamma anneal restarting from scratch.
+            loss_fn.current_epoch = int(epoch)
+            if not anneal_seed:
+                return
             report = anneal_logit_seed(
                 model=current_model,
                 data_loader=train_loader,
@@ -1101,6 +1144,12 @@ def run(args) -> None:
                     f"Epoch {epoch}: logit-seed anneal gamma={report['gamma']}, "
                     f"intrinsic gap={report['gap_intrinsic']}"
                 )
+
+    # The hook fires at the top of each epoch, but `train` evaluates the validation set
+    # once before the loop begins. Without this, that first evaluation on a resumed run
+    # would report a loss missing the size term while every later one includes it.
+    if hasattr(loss_fn, "current_epoch"):
+        loss_fn.current_epoch = int(start_epoch)
 
     tools.train(
         model=model,

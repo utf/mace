@@ -1050,6 +1050,51 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=0.0,
     )
     parser.add_argument(
+        "--defect_size_weight",
+        help="Weight on the size-extensivity hinge. alpha = softmax(l) normalises over "
+        "every atom, so bulk enters the denominator in proportion to N and attention on "
+        "the defect decays as 1/N once N passes k*exp(gap) -- the gap only sets where. "
+        "This penalises the energy drift that padding the cell with ideal bulk would "
+        "cause. Default 0, i.e. off",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--defect_size_ratio",
+        help="Cell-size ratio R the correction must be stable over. Expressed as a ratio "
+        "rather than an absolute atom count so it needs no knowledge of production cell "
+        "sizes and survives retraining on different cells: the requirement is stability "
+        "over R-fold growth beyond whatever it was trained on",
+        type=float,
+        default=1e4,
+    )
+    parser.add_argument(
+        "--defect_size_tol",
+        help="Tolerated drift in eV before the size hinge activates. A hinge rather than "
+        "a plain penalty so the term stops pushing once satisfied and does not fight the "
+        "energy objective permanently",
+        type=float,
+        default=1e-3,
+    )
+    parser.add_argument(
+        "--defect_size_warmup_epochs",
+        help="Epochs before the size hinge activates, counted on the absolute epoch so a "
+        "restart past the warmup resumes with it already on. A backstop only: the term is "
+        "naturally silent early, since before u develops defect contrast the drift is ~0",
+        type=int,
+        default=20,
+    )
+    parser.add_argument(
+        "--defect_gauge_weight",
+        help="Weight on the level-mode gauge penalty (stage D-opt). The softmax is "
+        "shift-invariant, so a uniform offset in u^c moves the energy without moving "
+        "alpha -- one unidentified direction per channel. Pins the pooled readout to zero "
+        "on pristine cells, where a carrier is a band-to-band transition. Does not fix "
+        "extensivity; makes the diluted limit interpretable. Default 0, i.e. off",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
         "--defect_totals_detach_base",
         help="Detach E_base inside L_tot, the pre-A5 behaviour. Off by default: the "
         "correction is intensive (sum_i alpha_i = 1) while E_base is extensive, so a "

@@ -392,6 +392,14 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         )
         config["zero_u_init"] = bool(getattr(model, "zero_u_init", True))
         config["correction_trunk"] = str(getattr(model, "correction_trunk", "shared"))
+        # A buffer, so the weight transfer would carry the values -- but only if the
+        # rebuilt model allocated the same shape, and it defaults to empty. Without this
+        # the converted model would either fail the state-dict load or come back with the
+        # gauge probe silently switched off.
+        gauge = getattr(model, "gauge_counters", None)
+        config["gauge_counters"] = (
+            gauge.detach().cpu().tolist() if gauge is not None and gauge.numel() else None
+        )
     if model.__class__.__name__ == "AtomicDielectricMACE":
         config["use_polarizability"] = model.use_polarizability
         config["only_dipole"] = False  # model.only_dipole
@@ -925,6 +933,11 @@ def get_loss_fn(
             detach_base_in_totals=args.defect_totals_detach_base,
             eps_inf=args.eps_inf,
             eps_inf_prior_weight=args.eps_inf_prior_weight,
+            size_weight=args.defect_size_weight,
+            size_ratio=args.defect_size_ratio,
+            size_tol=args.defect_size_tol,
+            size_warmup_epochs=args.defect_size_warmup_epochs,
+            gauge_weight=args.defect_gauge_weight,
         )
     elif args.loss == "l1l2energyforces":
         loss_fn = modules.WeightedEnergyForcesL1L2Loss(

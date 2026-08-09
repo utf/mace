@@ -171,6 +171,15 @@ CONFIG_TYPE_WEIGHTS="${CONFIG_TYPE_WEIGHTS:-{\"ideal\":5.0}}"
 # Keeps u close to linear in n, the condition under which counter dependency kills the
 # E_base gauge (plan A5.4). Not a gauge-fixing device in itself.
 DEFECT_ZN_L2="${DEFECT_ZN_L2:-1e-3}"
+# Size-extensivity hinge (size plan section 4) and the level-mode gauge penalty
+# (forward plan stage D-opt). Both default OFF, so every existing run is byte-identical;
+# their diagnostics are logged either way, which is the point of computing them
+# unconditionally.
+DEFECT_SIZE_WEIGHT="${DEFECT_SIZE_WEIGHT:-0.0}"
+DEFECT_SIZE_RATIO="${DEFECT_SIZE_RATIO:-1e4}"
+DEFECT_SIZE_TOL="${DEFECT_SIZE_TOL:-1e-3}"
+DEFECT_SIZE_WARMUP_EPOCHS="${DEFECT_SIZE_WARMUP_EPOCHS:-20}"
+DEFECT_GAUGE_WEIGHT="${DEFECT_GAUGE_WEIGHT:-0.0}"
 # The L2 on u was declared load-bearing (plan 3.2): the mechanism that makes the optimiser
 # buy localisation rather than large cancelling readouts. It is off here (fix plan 1.5).
 # Two reasons. It never did that job -- at 1e-4 * mean(u^2) it was seven orders below the
@@ -319,6 +328,11 @@ python -m mace.cli.run_train \
     --total_energy_weight="${TOTAL_ENERGY_WEIGHT}" \
     --defect_u_l2="${DEFECT_U_L2}" \
     --defect_zn_l2="${DEFECT_ZN_L2}" \
+    --defect_size_weight="${DEFECT_SIZE_WEIGHT}" \
+    --defect_size_ratio="${DEFECT_SIZE_RATIO}" \
+    --defect_size_tol="${DEFECT_SIZE_TOL}" \
+    --defect_size_warmup_epochs="${DEFECT_SIZE_WARMUP_EPOCHS}" \
+    --defect_gauge_weight="${DEFECT_GAUGE_WEIGHT}" \
     --base_lr_factor="${BASE_LR_FACTOR}" \
     --config_type_weights="${CONFIG_TYPE_WEIGHTS}" \
     --defect_p_l2="${DEFECT_P_L2}" \

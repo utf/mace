@@ -166,6 +166,11 @@ class TestConversionPreservesConstructorArguments:
             ("high_precision_softmax", False),
             ("zero_u_init", True),
             ("correction_trunk", "shared"),
+            # A buffer rather than a plain attribute, so it also has to survive the
+            # state-dict transfer with the right shape -- if the rebuilt model allocated
+            # the empty default the load would fail or the gauge probe would come back
+            # silently switched off.
+            ("gauge_counters", [[1, 0, 0, 1], [1, 1, 0, 2]]),
         ],
     )
     def test_argument_survives_extraction(self, name, value):
@@ -173,6 +178,15 @@ class TestConversionPreservesConstructorArguments:
 
         model = build_model(use_long_range=True, **{name: value})
         assert extract_config_mace_model(model)[name] == value
+
+    def test_gauge_probe_survives_conversion(self):
+        counters = [[1, 0, 0, 1], [1, 1, 0, 2]]
+        model = build_model(use_long_range=True, gauge_counters=counters)
+        converted = run_e3nn_to_cueq(copy.deepcopy(model), device="cuda")
+        assert converted.gauge_counters.detach().cpu().tolist() == counters
+        out = converted(make_batch([(0, 0, 0, 0)]).to_dict(), training=False)
+        assert out["gauge_mean_u"] is not None
+        assert out["gauge_mean_u"].shape[1] == len(counters)
 
     def test_frozen_amplitude_stays_frozen_through_conversion(self):
         model = build_model(use_long_range=True, freeze_amplitude=True)
