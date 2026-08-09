@@ -345,7 +345,14 @@ class MACEDefect(ScaleShiftMACE):
             logit_bias = novelty.unsqueeze(-1) * self.logit_seed_gamma.unsqueeze(0)
 
         counter_emb = self.counter_embedding(counts)
-        delta_sr, alpha, carrier_readouts, logit_gap, delta_u = self.carrier_pooling(
+        (
+            delta_sr,
+            alpha,
+            carrier_readouts,
+            logit_gap,
+            delta_u,
+            carrier_logits,
+        ) = self.carrier_pooling(
             node_feats=defect_feats,
             counter_emb=counter_emb,
             counts=counts,
@@ -360,7 +367,7 @@ class MACEDefect(ScaleShiftMACE):
         # the exact version. Costs one MLP pass, no trunk work.
         logit_gap_intrinsic: Optional[torch.Tensor] = None
         if self.logit_seed:
-            _, _, _, logit_gap_intrinsic, _ = self.carrier_pooling(
+            _, _, _, logit_gap_intrinsic, _, _ = self.carrier_pooling(
                 node_feats=defect_feats,
                 counter_emb=counter_emb,
                 counts=counts,
@@ -370,7 +377,7 @@ class MACEDefect(ScaleShiftMACE):
             )
 
         counter_emb_ref = self.counter_embedding(counts_ref)
-        delta_sr_ref, alpha_ref, _, _, _ = self.carrier_pooling(
+        delta_sr_ref, alpha_ref, _, _, _, _ = self.carrier_pooling(
             node_feats=defect_feats,
             counter_emb=counter_emb_ref,
             counts=counts_ref,
@@ -533,6 +540,10 @@ class MACEDefect(ScaleShiftMACE):
             "defect_features": defect_feats,
             "counter_embedding": counter_emb,
             "carrier_readouts": carrier_readouts,
+            # Post-clamp, post-bias: the tensor the softmax actually consumed. The size
+            # term re-forms the normalisation for a hypothetically larger cell, which
+            # alpha cannot support because it has already divided the denominator out.
+            "carrier_logits": carrier_logits,
             "logit_gap": logit_gap,
             "delta_u": delta_u,
             "logit_gap_intrinsic": logit_gap_intrinsic,

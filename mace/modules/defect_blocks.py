@@ -210,8 +210,21 @@ class CarrierAttentionPooling(torch.nn.Module):
         batch: torch.Tensor,  # [n_nodes]
         num_graphs: int,
         logit_bias: Optional[torch.Tensor] = None,  # [n_nodes, 4]
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Returns (Delta E_SR, alpha, u, logit gap, delta_u), the last three per channel."""
+    ) -> Tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+    ]:
+        """Returns (Delta E_SR, alpha, u, logit gap, delta_u, logits).
+
+        ``logits`` is returned post-clamp and post-bias, i.e. exactly the tensor the
+        softmax consumed. The size-extensivity term needs the logits themselves rather
+        than ``alpha``: it asks what the normalisation *would* be in a larger cell, which
+        means re-forming the denominator, and ``alpha`` has already divided that out.
+        """
         features = torch.cat([node_feats, counter_emb[batch]], dim=-1)
 
         readout_list: List[torch.Tensor] = []
@@ -287,7 +300,7 @@ class CarrierAttentionPooling(torch.nn.Module):
         )
         delta_u = mean_u - minima
 
-        return delta_sr, alpha, energies, logit_gap, delta_u
+        return delta_sr, alpha, energies, logit_gap, delta_u, logits
 
 
 @compile_mode("script")
