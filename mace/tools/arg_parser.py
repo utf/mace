@@ -929,11 +929,12 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--defect_u_l2",
-        help="L2 penalty on the per-channel carrier energy readouts. Load-bearing for "
-        "extensivity: it is what makes the model buy localisation rather than large "
-        "cancelling readouts",
+        help="L2 penalty on the per-channel carrier energy readouts. Default 0: this was "
+        "expected to be what buys localisation, but the divacancy reaches a logit gap of "
+        "~11.7 without it. It is also a mean over sites, so it cannot penalise a "
+        "bulk-wide level of u, and it updates carrier channels no frame occupies",
         type=float,
-        default=1e-4,
+        default=0.0,
     )
     parser.add_argument(
         "--defect_p_l2",
@@ -970,15 +971,18 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--counter_embedding_dim",
-        help="Width of the carrier counter embedding",
+        help="Width of the carrier counter embedding. It embeds six numbers (four "
+        "counters plus derived q and M_s), so it does not need to be wide",
         type=int,
-        default=32,
+        default=16,
     )
     parser.add_argument(
         "--carrier_mlp_hidden",
-        help="Hidden width of the per-channel carrier readouts",
+        help="Hidden width of the per-channel carrier readouts. These produce one scalar "
+        "per channel; the first layer of these eight MLPs dominates the correction "
+        "branch's parameter count",
         type=int,
-        default=64,
+        default=32,
     )
     parser.add_argument(
         "--share_logits_across_spin",
@@ -986,6 +990,93 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         "carrier type",
         type=str2bool,
         default=False,
+    )
+    parser.add_argument(
+        "--defect_logit_seed_gamma",
+        help="Initial per-channel gamma for the additive novelty logit bias "
+        "(logit_i^c += gamma_c * s_hat_i). 0 disables. gamma is TRAINABLE, so a state "
+        "for which the localisation prior is wrong can drive it to zero. Unlike the "
+        "u-seed this works at step 0 -- s_hat is exact and needs no fit through the "
+        "readout. NOTE it is an architecture term, present at inference and part of the "
+        "energy, not a training-only initialisation",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--defect_seed_anneal",
+        help="Anneal the novelty logit-seed gain to zero during training, per channel, "
+        "scheduled on each channel's intrinsic (seed-off) gap rather than on epochs. "
+        "The converged model is then bias-free: no inference-time descriptor to carry, "
+        "differentiate, or accidentally cache as a constant -- which would silently "
+        "break force consistency. Safe only because MLP_l is retained",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--defect_seed_anneal_epochs",
+        help="Absolute epoch by which the logit-seed gain reaches zero. Absolute, not a "
+        "fraction of max_num_epochs: with early stopping the run length is not known in "
+        "advance, and a fractional schedule can let a model converge and stop with the "
+        "seed still active -- baking an inference-time descriptor into the shipped model",
+        type=int,
+        default=30,
+    )
+    parser.add_argument(
+        "--defect_alpha_mode",
+        help="How the carrier attention is produced. 'logits': a separate network per "
+        "channel (the baseline). 'tied': alpha = softmax(-beta u), derived from the "
+        "carrier site energy itself, which removes the additive gauge freedom in the "
+        "logits, forbids incoherent bound-but-delocalised states, and makes Delta u a "
+        "physical binding energy rather than an arbitrary logit scale (plan stage D)",
+        type=str,
+        choices=["logits", "tied"],
+        default="logits",
+    )
+    parser.add_argument(
+        "--defect_beta",
+        help="Inverse energy scale of the tied attention, in 1/eV. A fixed gauge "
+        "constant recorded with the model, not a tuning knob. Only used with "
+        "--defect_alpha_mode=tied",
+        type=float,
+        default=10.0,
+    )
+    parser.add_argument(
+        "--defect_zn_l2",
+        help="L2 on the counter-embedding input columns of MLP_u's first layer. Keeps "
+        "the carrier site energy close to linear in n, which is the condition under "
+        "which a counter that is the sum of two other observed counters over-determines "
+        "and so kills the E_base gauge. Not itself a gauge-fixing device",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--defect_totals_detach_base",
+        help="Detach E_base inside L_tot, the pre-A5 behaviour. Off by default: the "
+        "correction is intensive (sum_i alpha_i = 1) while E_base is extensive, so a "
+        "bulk-wide base error cannot be absorbed by the correction, and detaching it "
+        "left total forces at defect geometries supervised by nothing. Ablation only",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--base_lr_factor",
+        help="Multiplies the learning rate of the base-branch parameter groups "
+        "(embedding, interactions, products, readouts). Below 1 slows the base branch "
+        "so it is not a moving target for the correction, which matters once L_tot "
+        "trains both branches at defect geometries",
+        type=float,
+        default=1.0,
+    )
+    parser.add_argument(
+        "--defect_zero_u_init",
+        help="Zero-initialise the carrier energy readout MLP_u. ON by default, for "
+        "optimisation conditioning: a random u is structureless noise that the optimiser "
+        "must first destroy, arriving back at u ~ 0 with the attention still uniform, "
+        "whereas from zero u grows along the gradient and its contrast is "
+        "target-aligned from the first step. This is NOT needed for the n = 0 identity, "
+        "which is structural via the counter prefactor. Set False to ablate",
+        type=str2bool,
+        default=True,
     )
     parser.add_argument(
         "--use_long_range",

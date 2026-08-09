@@ -7,6 +7,77 @@ which deviate from the original design plan in ways I want scrutinised before I 
 
 ---
 
+> ## ⚠️ CORRECTION — 2026-08-08, after this document was written
+>
+> Two of the central claims below have since been **measured and refuted**. Read this box
+> before acting on §5–§7. The title of this document is itself wrong: the branch does
+> learn.
+>
+> **1. It is a plateau, not an attractor. The title claim is false.**
+> §5–§6 rest on short runs (≤6 epochs) whose validation metrics were additionally read off
+> **EMA-averaged weights**, not the weights being optimised (`train.py:299` wraps
+> validation in `ema.average_parameters()`, and the run script hard-coded `--ema`).
+> A 200-epoch run with EMA off shows a flat plateau through epoch 21 — `RMSE_dE` at the
+> target σ of 109.8 meV, `RMSE_dF` pinned at 46.11 — and then a **sharp escape at epoch
+> ~22**, reaching `RMSE_dE = 43.67 meV` by epoch 42 and 26.6 meV/Å on `dF` by epoch 68,
+> both still falling. 43.67 meV is already **below the 48 meV linear-probe floor** that
+> §5 sets as the target. So the correction branch does fit the binding; it just takes
+> ~2000 gradient updates to leave the plateau. §6.3's "the optimiser has a third option:
+> don't fit the binding at all" is not what happens.
+>
+> **2. The attention gradient is not suppressed by cell size.**
+> §6.1 argues the attention gradient is ~260× weaker because `α ~ 1/N`, and §7.4 proposes
+> replacing the softmax on that basis. Measured directly, with one model instance across
+> four cell sizes, the ratio `|∇logit| / |∇u|` is **0.0330, 0.0329, 0.0330, 0.0329** for
+> N = 286, 318, 382, 398 — constant to 0.1% across a 1.39× change in N, at both 16 and 128
+> channels. The `α_j` prefactor is cancelled by the sum over sites, as the algebra says.
+> The ratio is small (~0.03) but it is a **fixed** factor set by the spread of `u`, not a
+> growing one. **§7.4 is not motivated by size-scaling.**
+>
+> **What survives.** The zero-init mechanism of §6.1(a) is real and now has a unit test:
+> with `u ≡ 0`, `∂ΔE_SR/∂ℓ` is *exactly* `0.0` at every cell size, so the attention starts
+> with no gradient at all. But `u` itself keeps receiving gradient, climbs away from zero,
+> and switches the attention on — hence a **delay**, not a trap.
+>
+> **3. §7.1 (remove the zero-init) is not supported — but neither is its opposite.**
+> Three seeds per arm, 200 epochs, identical otherwise. Escape epoch (first epoch with
+> `RMSE_dF < 45`; the metric is flat at 49.3 on the plateau):
+>
+> | zero-init | seed 1 | seed 2 | seed 3 | best final dF |
+> |---|---|---|---|---|
+> | off (§7.1's proposal) | never | never | 37 | **23.92** |
+> | on (status quo) | 10 | 78 | 102 | 25.44 |
+>
+> Zero-init escaped 3/3 versus 1/3 — suggestive but Fisher-exact p ≈ 0.4, not a result.
+> Escape times vary 10× *within* the winning arm, so **seed dominates the init**, and once
+> a run escapes the final quality is the same either way (the single best run of the six
+> is a no-zero-init one). So the real finding is that **the plateau fails to resolve
+> within 200 epochs in a third of runs regardless of initialisation.** That is an
+> optimisation pathology worth fixing on its own terms, and it is direct evidence *for*
+> plan §2.3's structured init — seed `u` with descriptor novelty at controlled scale, so
+> it is neither zero (no attention gradient) nor noise (crushed back toward zero by the
+> cheapest early loss reduction). Under the §2.2 tie `α = softmax(−βu)` this matters more,
+> not less, since the attention would inherit a random `u`'s noise directly.
+>
+> A per-channel autopsy of one escaped and one stuck run is in `HANDOFF.md` §11. The
+> escaped run localises `e_maj` onto **2.5 of 286 atoms with 99.96% of the attention on
+> the six defect first-shell atoms** — the architecture does what it was designed to do.
+> That autopsy also exposes a gap not in the plan: the anchors pin `e_maj` and `h_min`,
+> `h_maj` is dead in this dataset, and **`e_min` — the channel that carries the excitation
+> — has no anchor at all**, leaving its bulk level free (measured `mean(u)` = 0.1699
+> against 0.0014 for anchored `h_min`).
+>
+> Also corrected since: the long-range branch is **not** inert at q = 0 (`q^carrier` is a
+> compensated but pointwise non-zero charge; `q^pol` carries a factor `Σ_c n_c`), and the
+> carrier labelling used for every number below was wrong — the divacancy triplet ground
+> state was labelled `n = 0` when the plan's reference is the closed-shell surface, so it
+> is `(1,0,0,1)`. Relabelling leaves the delta *targets* numerically unchanged, so the
+> measurements above still stand, but it changes what supervises the base branch.
+>
+> Current state of the work: `defect-example/HANDOFF.md`.
+
+---
+
 ## 1. What the model is
 
 `MACEDefect` is a charge-aware defect potential built on MACE. A geometry-only message-passing

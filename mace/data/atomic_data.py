@@ -62,6 +62,7 @@ class AtomicData(torch_geometric.data.Data):
     fermi_level: torch.Tensor
     external_field: torch.Tensor
     carrier_counts: torch.Tensor
+    carrier_counts_ref: torch.Tensor
     raw_energy: torch.Tensor
     base_energy: torch.Tensor
     base_forces: torch.Tensor
@@ -111,6 +112,7 @@ class AtomicData(torch_geometric.data.Data):
         fermi_level: Optional[torch.Tensor] = None,  # [,]
         external_field: Optional[torch.Tensor] = None,  # [1,3]
         carrier_counts: Optional[torch.Tensor] = None,  # [1,4]
+        carrier_counts_ref: Optional[torch.Tensor] = None,  # [1,4]
         raw_energy: Optional[torch.Tensor] = None,  # [,]
         base_energy: Optional[torch.Tensor] = None,  # [,]
         base_forces: Optional[torch.Tensor] = None,  # [n_nodes, 3]
@@ -163,6 +165,7 @@ class AtomicData(torch_geometric.data.Data):
         assert fermi_level is None or len(fermi_level.shape) == 0
         assert external_field is None or external_field.shape == (1, 3)
         assert carrier_counts is None or carrier_counts.shape == (1, 4)
+        assert carrier_counts_ref is None or carrier_counts_ref.shape == (1, 4)
         assert raw_energy is None or len(raw_energy.shape) == 0
         assert base_energy is None or len(base_energy.shape) == 0
         assert base_forces is None or base_forces.shape == (num_nodes, 3)
@@ -208,6 +211,7 @@ class AtomicData(torch_geometric.data.Data):
             "fermi_level": fermi_level,
             "external_field": external_field,
             "carrier_counts": carrier_counts,
+            "carrier_counts_ref": carrier_counts_ref,
             "raw_energy": raw_energy,
             "base_energy": base_energy,
             "base_forces": base_forces,
@@ -504,14 +508,16 @@ class AtomicData(torch_geometric.data.Data):
                 dtype=torch.get_default_dtype(),
             )
 
-        carrier_counts = (
-            torch.tensor(
-                config.properties.get("carrier_counts"),
-                dtype=torch.get_default_dtype(),
-            ).view(1, 4)
-            if config.properties.get("carrier_counts") is not None
-            else torch.zeros(1, 4, dtype=torch.get_default_dtype())
-        )
+        def counter_vector(name: str) -> torch.Tensor:
+            value = config.properties.get(name)
+            if value is None:
+                return torch.zeros(1, 4, dtype=torch.get_default_dtype())
+            return torch.tensor(value, dtype=torch.get_default_dtype()).view(1, 4)
+
+        carrier_counts = counter_vector("carrier_counts")
+        # The reference counter of this frame's pair group. Absent (zeros) reproduces the
+        # n_ref = 0 behaviour exactly, since the correction vanishes at n = 0.
+        carrier_counts_ref = counter_vector("carrier_counts_ref")
         base_stress = (
             voigt_to_matrix(
                 torch.tensor(
@@ -559,6 +565,7 @@ class AtomicData(torch_geometric.data.Data):
             fermi_level=fermi_level,
             external_field=external_field,
             carrier_counts=carrier_counts,
+            carrier_counts_ref=carrier_counts_ref,
             raw_energy=defect_scalar("raw_energy"),
             base_energy=defect_scalar("base_energy"),
             base_forces=defect_forces("base_forces"),

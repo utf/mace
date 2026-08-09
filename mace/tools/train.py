@@ -26,6 +26,7 @@ from mace.cli.visualise_train import TrainingPlotter
 
 from . import torch_geometric
 from .checkpoint import CheckpointHandler, CheckpointState
+from .scatter import scatter_mean, scatter_sum
 from .torch_tools import to_numpy
 from .utils import (
     MetricsLogger,
@@ -168,6 +169,36 @@ def valid_err_log(
             f"RMSE_E_per_atom={error_e:8.2f} meV, RMSE_F={error_f:8.2f} meV / A, "
             f"RMSE_dE={delta_e_str}, RMSE_dF={delta_f_str}",
         )
+        # Shape diagnostics, per carrier channel. Kept on a separate line because they
+        # are vectors, and logged every epoch because the interesting transition -- the
+        # attention leaving the uniform state -- is sharp and easy to miss between
+        # checkpoints. mean(u) is the level mode: it is unidentified unless the gauge
+        # penalty is on, and watching it drift is the free diagnostic for that.
+        def _fmt(key: str, scale: float = 1.0, fmt: str = "6.3f") -> Optional[str]:
+            values = eval_metrics.get(key)
+            if values is None:
+                return None
+            return "[" + " ".join(f"{v * scale:{fmt}}" for v in values) + "]"
+
+        parts = [
+            (name, _fmt(key, scale))
+            for name, key, scale in (
+                ("partic", "defect_participation", 1.0),
+                ("mean_u", "defect_u_mean", 1.0),
+                ("std_u", "defect_u_std", 1.0),
+                ("gap_l", "defect_logit_gap", 1.0),
+                # Under the tie this is a binding energy in eV, not a logit scale.
+                ("delta_u", "defect_delta_u", 1.0),
+                # gap with the seed off: what MLP_l is holding up on its own.
+                ("gap_int", "defect_gap_intrinsic", 1.0),
+            )
+        ]
+        parts = [(name, text) for name, text in parts if text is not None]
+        if parts:
+            logging.info(
+                f"{inintial_phrase}: carrier channels (e_maj e_min h_maj h_min): "
+                + ", ".join(f"{name}={text}" for name, text in parts)
+            )
     else:
         # Every branch above is conditional, so an unrecognised error_table -- or a
         # recognised one whose metrics are missing -- used to emit nothing at all for the
@@ -207,6 +238,7 @@ def train(
     train_sampler: Optional[DistributedSampler] = None,
     rank: Optional[int] = 0,
     data_aug_magmom: Optional[bool] = False,
+    epoch_hook: Optional[Any] = None,
 ):
     lowest_loss = np.inf
     valid_loss = np.inf
@@ -249,6 +281,12 @@ def train(
         train_loader = create_random_rotation_loader(train_loader)
 
     while epoch < max_num_epochs:
+        # Fires at the top of every epoch, before any gradient step of that epoch. Used
+        # by MACEDefect to seed MLP_u once the trunk has warmed up: the seed target is a
+        # function of the trunk features, which carry nothing at initialisation.
+        if epoch_hook is not None:
+            epoch_hook(epoch, model)
+
         # LR scheduler and SWA update
         if swa is None or epoch < swa.start:
             if epoch > start_epoch:
@@ -684,6 +722,19 @@ class MACELoss(Metric):
             "defect_dF_computed", default=torch.tensor(0.0), dist_reduce_fx="sum"
         )
         self.add_state("defect_delta_fs", default=[], dist_reduce_fx="cat")
+        # Per-carrier-channel shape diagnostics, on frames that actually carry carriers.
+        # These are what say *how* the correction is being represented rather than how
+        # accurate it is: a uniform attention scoring well means the fit is riding on the
+        # level of u, which is a different model from a localised carrier.
+        self.add_state(
+            "defect_shape_computed", default=torch.tensor(0.0), dist_reduce_fx="sum"
+        )
+        self.add_state("defect_participation", default=[], dist_reduce_fx="cat")
+        self.add_state("defect_u_mean", default=[], dist_reduce_fx="cat")
+        self.add_state("defect_u_std", default=[], dist_reduce_fx="cat")
+        self.add_state("defect_logit_gap", default=[], dist_reduce_fx="cat")
+        self.add_state("defect_delta_u", default=[], dist_reduce_fx="cat")
+        self.add_state("defect_gap_intrinsic", default=[], dist_reduce_fx="cat")
 
     def update(self, batch, output):  # pylint: disable=arguments-differ
         loss = self.loss_fn(pred=output, ref=batch)
@@ -735,6 +786,38 @@ class MACELoss(Metric):
                     (batch.delta_forces - output["delta_forces"])[node_mask]
                 )
                 self.defect_dF_computed += float(node_mask.sum())
+        if output.get("carrier_alpha") is not None:
+            alpha = output["carrier_alpha"]  # [n_nodes, 4]
+            readouts = output["carrier_readouts"]  # [n_nodes, 4]
+            num_graphs = int(batch.num_graphs)
+            index = batch.batch
+            # Participation ratio 1 / sum_i alpha_i^2: equals the atom count for a
+            # uniform field and 1 for a fully localised one.
+            inverse = scatter_sum(
+                alpha * alpha, index, dim=0, dim_size=num_graphs
+            ).clamp_min(1e-30)
+            participation = 1.0 / inverse
+            mean_u = scatter_mean(readouts, index, dim=0, dim_size=num_graphs)
+            mean_u_sq = scatter_mean(readouts * readouts, index, dim=0, dim_size=num_graphs)
+            std_u = (mean_u_sq - mean_u * mean_u).clamp_min(0.0).sqrt()
+
+            carriers = batch.carrier_counts.view(num_graphs, -1).sum(dim=-1) > 0
+            if bool(carriers.any()):
+                self.defect_participation.append(participation[carriers])
+                self.defect_u_mean.append(mean_u[carriers])
+                self.defect_u_std.append(std_u[carriers])
+                gap = output.get("logit_gap")
+                if gap is not None:
+                    self.defect_logit_gap.append(gap.view(num_graphs, -1)[carriers])
+                delta_u = output.get("delta_u")
+                if delta_u is not None:
+                    self.defect_delta_u.append(delta_u.view(num_graphs, -1)[carriers])
+                intrinsic = output.get("logit_gap_intrinsic")
+                if intrinsic is not None:
+                    self.defect_gap_intrinsic.append(
+                        intrinsic.view(num_graphs, -1)[carriers]
+                    )
+                self.defect_shape_computed += float(carriers.sum())
         if output.get("stress") is not None and batch.stress is not None:
             self.delta_stress.append(batch.stress - output["stress"])
             self.stress_computed += filter_nonzero_weight(
@@ -837,6 +920,22 @@ class MACELoss(Metric):
             defect_delta_fs = self.convert(self.defect_delta_fs)
             aux["mae_delta_f"] = compute_mae(defect_delta_fs)
             aux["rmse_delta_f"] = compute_rmse(defect_delta_fs)
+        if self.defect_shape_computed:
+            # Averaged over carrier-bearing frames, kept per channel: the channels are
+            # not interchangeable, and in a dataset where one channel is never occupied
+            # a pooled number would hide that entirely.
+            for name, state in (
+                ("participation", self.defect_participation),
+                ("u_mean", self.defect_u_mean),
+                ("u_std", self.defect_u_std),
+                ("logit_gap", self.defect_logit_gap),
+                ("delta_u", self.defect_delta_u),
+                ("gap_intrinsic", self.defect_gap_intrinsic),
+            ):
+                if not state:
+                    continue
+                stacked = torch.cat([item.detach() for item in state], dim=0)
+                aux[f"defect_{name}"] = stacked.mean(dim=0).cpu().tolist()
         if self.stress_computed:
             delta_stress = self.convert(self.delta_stress)
             aux["mae_stress"] = compute_mae(delta_stress)

@@ -33,6 +33,7 @@ def keyspec():
         info_keys={
             "energy": "REF_energy",
             "carrier_counts": "carrier_counts",
+            "multiplicity": "multiplicity",
             "host": "host",
             "pair_id": "pair_id",
         },
@@ -49,6 +50,12 @@ def make_atoms(counts, energy, forces=0.0, pair_id=None):
     )
     atoms.info["REF_energy"] = energy
     atoms.info["carrier_counts"] = np.asarray(counts, dtype=int)
+    # Mandatory for spin-polarised frames (plan 1.1.2). Consistent by construction, so
+    # tests that are not about the cross-check are unaffected by it.
+    array = np.asarray(counts, dtype=int)
+    atoms.info["multiplicity"] = (
+        int((array[0] - array[2]) - (array[1] - array[3])) + 1
+    )
     atoms.info["host"] = "GaN"
     if pair_id is not None:
         atoms.info["pair_id"] = pair_id
@@ -181,7 +188,7 @@ class TestUnpairedTotals:
         prediction.update(overrides)
         return prediction
 
-    def test_totals_term_applies_only_to_unpaired_charged_frames(self):
+    def test_totals_term_applies_to_every_charged_frame(self):
         batch = self.unpaired_batch()
         loss_fn = DefectLoss(
             energy_weight=0.0,
@@ -193,17 +200,23 @@ class TestUnpairedTotals:
             p_l2=0.0,
             qhost_l2=0.0,
         )
-        # Perturb the reference-state frame: it has no partner either, but it is not
-        # charged, so the totals term must ignore it.
+        # The n = 0 frame is still excluded -- the term is keyed on carrying carriers,
+        # not on being unpaired. Perturbing it must cost nothing.
         pred = self.consistent_prediction(batch)
-        pred["base_energy"] = pred["base_energy"] + torch.tensor([3.0, 0.0])
+        pred["energy"] = pred["energy"] + torch.tensor([3.0, 0.0])
         assert float(loss_fn(ref=batch, pred=pred)) == 0.0
 
         pred = self.consistent_prediction(batch)
-        pred["delta_energy"] = pred["delta_energy"] + torch.tensor([0.0, 2.0])
+        pred["energy"] = pred["energy"] + torch.tensor([0.0, 2.0])
         assert float(loss_fn(ref=batch, pred=pred)) > 0.0
 
-    def test_paired_frames_are_excluded_from_the_totals_term(self):
+    def test_paired_frames_are_now_included_in_the_totals_term(self):
+        """Reversed by plan A5.3, deliberately.
+
+        The term used to skip paired frames because they already carried delta
+        supervision. Under corrected labels that left total forces at *every* defect
+        geometry supervised by nothing at all, which is the gap A5 closes.
+        """
         batch = make_batch(PAIR)
         loss_fn = DefectLoss(
             energy_weight=0.0,
@@ -216,14 +229,20 @@ class TestUnpairedTotals:
             qhost_l2=0.0,
         )
         pred = perfect_prediction(batch)
-        pred["delta_energy"] = pred["delta_energy"] + torch.tensor([0.0, 2.0])
-        assert float(loss_fn(ref=batch, pred=pred)) == 0.0
+        pred["energy"] = pred["energy"] + torch.tensor([0.0, 2.0])
+        assert float(loss_fn(ref=batch, pred=pred)) > 0.0
 
-    def test_base_branch_is_detached_in_the_totals_term(self):
-        """Without the detachment, unpaired charged data reshapes the base potential and
-        the residual decomposition stops meaning what it is supposed to."""
+    def test_base_branch_receives_gradient_from_the_totals_term(self):
+        """Reversed by plan A5.3. The detach is now opt-in, not the default.
+
+        E_base at a defect geometry is a gauge, not an observable, and the detach was the
+        original protection against the correction absorbing it. It is not needed: the
+        correction is intensive (sum_i alpha_i = 1) while E_base is extensive, so a
+        bulk-wide base error cannot be absorbed at any localisation of alpha. Detaching
+        it cost the base branch all supervision at defect geometries.
+        """
         batch = self.unpaired_batch()
-        loss_fn = DefectLoss(
+        weights = dict(
             energy_weight=0.0,
             forces_weight=0.0,
             delta_energy_weight=0.0,
@@ -233,15 +252,27 @@ class TestUnpairedTotals:
             p_l2=0.0,
             qhost_l2=0.0,
         )
-        base = (batch.energy - batch.delta_energy).clone().requires_grad_(True)
-        delta = batch.delta_energy.clone().requires_grad_(True)
-        pred = self.consistent_prediction(
-            batch, base_energy=base, delta_energy=delta + 1.0
-        )
-        loss = loss_fn(ref=batch, pred=pred)
-        loss.backward()
-        assert base.grad is None or float(base.grad.abs().sum()) == 0.0
-        assert float(delta.grad.abs().sum()) > 0.0
+
+        def base_gradient(detach: bool) -> float:
+            # Offset so the total is *wrong*: a perfect prediction has zero residual and
+            # therefore zero gradient, which would pass the detach test vacuously.
+            base = (
+                (batch.energy - batch.delta_energy + 1.0).clone().requires_grad_(True)
+            )
+            pred = self.consistent_prediction(batch, base_energy=base)
+            # The totals term reads `energy` normally and `base_energy` +
+            # `correction_energy` under the detach, so both routes need populating for
+            # the comparison to be like-for-like.
+            pred["correction_energy"] = pred["delta_energy"]
+            pred["energy"] = base + pred["correction_energy"]
+            loss = DefectLoss(**weights, detach_base_in_totals=detach)(
+                ref=batch, pred=pred
+            )
+            loss.backward()
+            return 0.0 if base.grad is None else float(base.grad.abs().sum())
+
+        assert base_gradient(detach=False) > 0.0, "the base branch must now be trained"
+        assert base_gradient(detach=True) == 0.0, "the ablation switch must still work"
 
 
 class TestRegularisation:

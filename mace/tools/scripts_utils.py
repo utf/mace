@@ -358,6 +358,13 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         config["counter_embedding_dim"] = int(model.counter_embedding_dim)
         config["carrier_mlp_hidden"] = int(model.carrier_mlp_hidden)
         config["share_logits_across_spin"] = bool(model.share_logits_across_spin)
+        config["alpha_mode"] = str(getattr(model, "alpha_mode", "logits"))
+        config["logit_seed_gamma"] = (
+            float(model.logit_seed_gamma.detach().abs().max())
+            if getattr(model, "logit_seed", False)
+            else 0.0
+        )
+        config["beta"] = float(getattr(model, "beta", 10.0))
         config["use_long_range"] = bool(model.use_long_range)
         config["eps_inf_init"] = float(model.eps_inf_init)
         config["les_arguments"] = model.les_arguments
@@ -888,8 +895,10 @@ def get_loss_fn(
             stress_weight=args.stress_weight if args.compute_stress else 0.0,
             pressure_weight=args.pressure_weight,
             u_l2=args.defect_u_l2,
+            zn_l2=args.defect_zn_l2,
             p_l2=args.defect_p_l2,
             qhost_l2=args.defect_qhost_l2,
+            detach_base_in_totals=args.defect_totals_detach_base,
             eps_inf=args.eps_inf,
             eps_inf_prior_weight=args.eps_inf_prior_weight,
         )
@@ -1139,6 +1148,36 @@ def get_params_options(
                     "weight_decay": 0.0,
                 }
             )
+
+    # The novelty logit-seed gain. It sits directly on the model rather than inside one
+    # of the whitelisted submodules, so it is an orphan unless named here -- which the
+    # coverage guard below caught on the first run. No weight decay: gamma going to zero
+    # is a meaningful statement (the localisation prior is wrong for this state) and
+    # should be driven by the data, not by a penalty.
+    if hasattr(model, "logit_seed_gamma"):
+        param_options["params"].append(
+            {
+                "name": "logit_seed_gamma",
+                "params": [model.logit_seed_gamma],
+                "weight_decay": 0.0,
+            }
+        )
+
+    # Slow the base branch relative to the correction. Once L_tot trains both branches at
+    # defect geometries (plan A5.3) the base is otherwise a moving target for the
+    # correction, which has to track it while also fitting the carrier physics.
+    base_lr_factor = float(getattr(args, "base_lr_factor", 1.0))
+    if base_lr_factor != 1.0:
+        base_groups = {
+            "embedding",
+            "interactions_decay",
+            "interactions_no_decay",
+            "products",
+            "readouts",
+        }
+        for group in param_options["params"]:
+            if group.get("name") in base_groups:
+                group["lr"] = group.get("lr", args.lr) * base_lr_factor
 
     # Every group above is opt-in, so a model with a submodule nobody added here trains
     # with that submodule frozen and reports nothing unusual. Fail loudly instead.

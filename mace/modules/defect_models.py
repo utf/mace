@@ -23,6 +23,7 @@ from e3nn.util.jit import compile_mode
 
 from mace.modules.blocks import LinearReadoutBlock, NonLinearReadoutBlock
 from mace.modules.defect_blocks import (
+    NUM_CARRIER_CHANNELS,
     CarrierAttentionPooling,
     CounterEmbedding,
     StructuredLatentCharges,
@@ -79,10 +80,14 @@ class MACEDefect(ScaleShiftMACE):
     def __init__(
         self,
         carrier_feature_dim: int = 32,
-        counter_embedding_dim: int = 32,
-        carrier_mlp_hidden: int = 64,
+        counter_embedding_dim: int = 16,
+        carrier_mlp_hidden: int = 32,
         share_logits_across_spin: bool = False,
         high_precision_softmax: bool = True,
+        zero_u_init: bool = True,
+        alpha_mode: str = "logits",
+        beta: float = 10.0,
+        logit_seed_gamma: float = 0.0,
         correction_trunk: str = "shared",
         use_long_range: bool = True,
         les_arguments: Optional[Dict[str, Any]] = None,
@@ -100,6 +105,31 @@ class MACEDefect(ScaleShiftMACE):
         self.counter_embedding_dim = counter_embedding_dim
         self.carrier_mlp_hidden = carrier_mlp_hidden
         self.share_logits_across_spin = share_logits_across_spin
+        self.alpha_mode = alpha_mode
+        self.beta = beta
+
+        # Novelty logit seeding (plan D7.1, logit route). gamma is trainable per channel,
+        # so a shallow or effective-mass state -- for which the localisation prior is
+        # simply wrong -- can drive it to zero rather than having to unlearn a seeded u.
+        #
+        # NOTE this is an architecture term, not an initialisation: it is present at
+        # inference and is part of the energy. The descriptor is therefore recomputed
+        # from the trunk's edge basis on every forward so that forces differentiate it,
+        # and its scale constants are buffers that travel with the model.
+        self.logit_seed = logit_seed_gamma > 0.0
+        if self.logit_seed:
+            num_channels = (
+                self.radial_embedding.out_dim
+                * (int(kwargs["max_ell"]) + 1)
+                * int(kwargs["num_elements"])
+            )
+            self.register_buffer(
+                "novelty_channel_scale", torch.ones(num_channels)
+            )
+            self.register_buffer("novelty_global_scale", torch.ones(()))
+            self.logit_seed_gamma = torch.nn.Parameter(
+                torch.full((NUM_CARRIER_CHANNELS,), float(logit_seed_gamma))
+            )
 
         cueq_config = kwargs.get("cueq_config", None)
         feature_irreps = o3.Irreps(f"{carrier_feature_dim}x0e")
@@ -121,6 +151,9 @@ class MACEDefect(ScaleShiftMACE):
             hidden_dim=carrier_mlp_hidden,
             share_logits_across_spin=share_logits_across_spin,
             high_precision_softmax=high_precision_softmax,
+            zero_u_init=zero_u_init,
+            alpha_mode=alpha_mode,
+            beta=beta,
         )
 
         # Long-range branch. E_LR[q_host] is part of the *base* branch: it is a function
@@ -263,14 +296,65 @@ class MACEDefect(ScaleShiftMACE):
 
         # Carrier correction. The counters are canonicalised at data loading and at every
         # inference entry point, so the network never sees a non-canonical vector.
+        defect_feats = torch.cat(defect_feats_list, dim=-1)
         counts = data["carrier_counts"].view(num_graphs, -1).to(vectors.dtype)
+        # The counter the paired difference is measured from. Absent (zeros) is the
+        # closed-shell reference, for which the correction vanishes identically -- so a
+        # dataset without reference counters behaves exactly as before.
+        if "carrier_counts_ref" in data:
+            counts_ref = data["carrier_counts_ref"].view(num_graphs, -1).to(vectors.dtype)
+        else:
+            counts_ref = torch.zeros_like(counts)
+
+        logit_bias: Optional[torch.Tensor] = None
+        if self.logit_seed:
+            from mace.modules.defect_seed import novelty_from_basis
+
+            novelty = novelty_from_basis(
+                edge_feats=edge_feats,
+                edge_sh=edge_attrs,
+                edge_index=data["edge_index"],
+                node_attrs=data["node_attrs"],
+                batch=data["batch"],
+                num_graphs=num_graphs,
+                channel_scale=self.novelty_channel_scale,
+                global_scale=self.novelty_global_scale,
+            )
+            logit_bias = novelty.unsqueeze(-1) * self.logit_seed_gamma.unsqueeze(0)
+
         counter_emb = self.counter_embedding(counts)
-        delta_sr, alpha, carrier_readouts, logit_gap = self.carrier_pooling(
-            node_feats=torch.cat(defect_feats_list, dim=-1),
+        delta_sr, alpha, carrier_readouts, logit_gap, delta_u = self.carrier_pooling(
+            node_feats=defect_feats,
             counter_emb=counter_emb,
             counts=counts,
             batch=data["batch"],
             num_graphs=num_graphs,
+            logit_bias=logit_bias,
+        )
+        # Intrinsic gap: the same pooling with the seed switched off, so the logged gap
+        # separates what MLP_l has learned from what the seed is supplying. The dead
+        # channel is a decent proxy for the seed baseline (its logit weights are frozen
+        # by n_c = 0) but not an exact one, since its trunk inputs still move; this is
+        # the exact version. Costs one MLP pass, no trunk work.
+        logit_gap_intrinsic: Optional[torch.Tensor] = None
+        if self.logit_seed:
+            _, _, _, logit_gap_intrinsic, _ = self.carrier_pooling(
+                node_feats=defect_feats,
+                counter_emb=counter_emb,
+                counts=counts,
+                batch=data["batch"],
+                num_graphs=num_graphs,
+                logit_bias=None,
+            )
+
+        counter_emb_ref = self.counter_embedding(counts_ref)
+        delta_sr_ref, alpha_ref, _, _, _ = self.carrier_pooling(
+            node_feats=defect_feats,
+            counter_emb=counter_emb_ref,
+            counts=counts_ref,
+            batch=data["batch"],
+            num_graphs=num_graphs,
+            logit_bias=logit_bias,
         )
 
         # Long-range branch (plan section 3.4).
@@ -281,6 +365,7 @@ class MACEDefect(ScaleShiftMACE):
         amplitude: Optional[torch.Tensor] = None
         dilute_correction: Optional[torch.Tensor] = None
         delta_lr = torch.zeros_like(base_energy)
+        delta_lr_ref = torch.zeros_like(base_energy)
         # The host long-range term is part of the base branch but does depend on the
         # positions, so it must reach the force/stress derivative.
         energy_lr_host = torch.zeros_like(base_energy)
@@ -304,7 +389,7 @@ class MACEDefect(ScaleShiftMACE):
                 polarisation,
                 amplitude,
             ) = self.latent_charges(
-                node_feats=torch.cat(defect_feats_list, dim=-1),
+                node_feats=defect_feats,
                 counter_emb=counter_emb,
                 counts=counts,
                 alpha=alpha,
@@ -322,23 +407,52 @@ class MACEDefect(ScaleShiftMACE):
             base_energy = base_energy + energy_lr_host
             delta_lr = energy_lr_total - energy_lr_host
 
+            # The same at the reference counter. This branch is *not* inert at q = 0:
+            # q^carrier is a compensated but pointwise non-zero charge whose self-term is
+            # the electron-hole interaction, and q^pol carries a factor sum_c n_c. Both
+            # are live whenever the reference state itself carries carriers.
+            latent_charge_ref, _, _, _, _ = self.latent_charges(
+                node_feats=defect_feats,
+                counter_emb=counter_emb_ref,
+                counts=counts_ref,
+                alpha=alpha_ref,
+                batch=data["batch"],
+                num_graphs=num_graphs,
+            )
+            delta_lr_ref = (
+                self.latent_ewald.energy(
+                    latent_charge_ref, positions, cell_les, data["batch"]
+                )
+                - energy_lr_host
+            )
+
             if dilute:
                 dilute_correction = self.latent_ewald.dilute_correction(
                     q_carrier, positions, cell_les, data["batch"], num_graphs
                 )
                 delta_lr = delta_lr + dilute_correction
 
-        delta_energy = delta_sr + delta_lr
-        total_energy = base_energy + delta_energy
+        # The correction at this frame's own counter is what the total energy carries;
+        # the paired difference is what the delta labels supervise. They coincide only
+        # when the reference is the closed-shell state.
+        correction_energy = delta_sr + delta_lr
+        correction_energy_ref = delta_sr_ref + delta_lr_ref
+        delta_energy = correction_energy - correction_energy_ref
+        total_energy = base_energy + correction_energy
 
-        # Delta forces first: they differentiate the same graph the total-energy pass
+        # Correction forces first: they differentiate the same graph the total-energy pass
         # below consumes, and get_outputs is free to release it.
+        correction_forces: Optional[torch.Tensor] = None
         delta_forces: Optional[torch.Tensor] = None
         if compute_force:
-            delta_forces = _energy_gradient(delta_energy, positions, training)
+            correction_forces = _energy_gradient(correction_energy, positions, training)
+            correction_forces_ref = _energy_gradient(
+                correction_energy_ref, positions, training
+            )
+            delta_forces = correction_forces - correction_forces_ref
 
         forces, virials, stress, hessian, edge_forces, _ = get_outputs(
-            energy=inter_e + energy_lr_host + delta_energy,
+            energy=inter_e + energy_lr_host + correction_energy,
             positions=positions,
             displacement=displacement,
             vectors=vectors,
@@ -353,10 +467,12 @@ class MACEDefect(ScaleShiftMACE):
 
         # The base-branch forces are what L_base is trained against. They come for free
         # as the difference: the total energy is the sum of the two branches, and the
-        # gradient is linear.
+        # gradient is linear. Note this subtracts the correction at *this* frame's
+        # counter, not the paired difference -- the two agree only when the reference is
+        # the closed-shell state, which is exactly when base labels exist.
         base_forces: Optional[torch.Tensor] = None
-        if forces is not None and delta_forces is not None:
-            base_forces = forces - delta_forces
+        if forces is not None and correction_forces is not None:
+            base_forces = forces - correction_forces
 
         atomic_virials: Optional[torch.Tensor] = None
         atomic_stresses: Optional[torch.Tensor] = None
@@ -374,6 +490,8 @@ class MACEDefect(ScaleShiftMACE):
             "energy": total_energy,
             "base_energy": base_energy,
             "delta_energy": delta_energy,
+            "correction_energy": correction_energy,
+            "counter_input_l2": self.carrier_pooling.counter_input_l2(),
             "delta_sr_energy": delta_sr,
             "node_energy": node_energy,
             "forces": forces,
@@ -388,8 +506,14 @@ class MACEDefect(ScaleShiftMACE):
             "hessian": hessian,
             "node_feats": node_feats_out,
             "carrier_alpha": alpha,
+            # The exact inputs the correction readouts consume, exposed so that seeding
+            # and diagnostics do not have to re-derive the trunk (defect_seed.py).
+            "defect_features": defect_feats,
+            "counter_embedding": counter_emb,
             "carrier_readouts": carrier_readouts,
             "logit_gap": logit_gap,
+            "delta_u": delta_u,
+            "logit_gap_intrinsic": logit_gap_intrinsic,
             "latent_charges": latent_charge,
             "latent_charges_host": q_host,
             "latent_charges_carrier": q_carrier,

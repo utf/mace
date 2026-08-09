@@ -96,28 +96,120 @@ CORRELATION="${CORRELATION:-3}"
 
 # ---- defect heads ---------------------------------------------------------------------
 CARRIER_FEATURE_DIM="${CARRIER_FEATURE_DIM:-32}"
-COUNTER_EMBEDDING_DIM="${COUNTER_EMBEDDING_DIM:-32}"
-CARRIER_MLP_HIDDEN="${CARRIER_MLP_HIDDEN:-64}"
+# Halved from 32/64. The correction branch is dominated by the first layer of the eight
+# carrier MLPs (in_dim = carrier_feature_dim*n_layers + counter_embedding_dim -> hidden),
+# which was 68.8% of all model parameters at 8 channels. The counter embedding maps six
+# numbers, and the readouts produce one scalar each, so neither needed the width.
+COUNTER_EMBEDDING_DIM="${COUNTER_EMBEDDING_DIM:-16}"
+CARRIER_MLP_HIDDEN="${CARRIER_MLP_HIDDEN:-32}"
 USE_LONG_RANGE="${USE_LONG_RANGE:-False}"
+# Attention mode (plan stage D). 'logits' is the baseline: a separate network per channel.
+# 'tied' sets alpha = softmax(-DEFECT_BETA * u), deriving the attention from the carrier
+# site energy itself -- which removes the additive gauge freedom in the logits, forbids
+# bound-but-delocalised states, drops MLP_l entirely, and makes the reported gap a
+# physical binding energy. DEFECT_BETA is a recorded gauge constant, not a tuning knob.
+# Additive novelty logit bias: logit_i^c += gamma_c * s_hat_i, gamma trainable per channel.
+# Preferred over the u-seed: it acts directly on what controls attention, works at step 0
+# with no fit through the readout, and the descriptor is recomputed in-graph so forces
+# differentiate it (FD-verified to 1.7e-9). It IS an architecture term, present at
+# inference -- not a training-only initialisation.
+DEFECT_LOGIT_SEED_GAMMA="${DEFECT_LOGIT_SEED_GAMMA:-0.0}"
+# Anneal that gain to zero over training, per channel, on readiness. Strongly recommended
+# whenever the seed is on: it leaves the converged model bias-free, so nothing downstream
+# has to carry or differentiate the descriptor, and no future caching of s_hat can
+# silently break force consistency.
+DEFECT_SEED_ANNEAL="${DEFECT_SEED_ANNEAL:-True}"
+# Absolute epoch by which gamma reaches zero. Absolute rather than a fraction of
+# max_num_epochs because early stopping makes the run length unknown in advance, and
+# a fractional schedule can let a model converge and stop with the seed still active.
+DEFECT_SEED_ANNEAL_EPOCHS="${DEFECT_SEED_ANNEAL_EPOCHS:-30}"
+DEFECT_ALPHA_MODE="${DEFECT_ALPHA_MODE:-logits}"
+DEFECT_BETA="${DEFECT_BETA:-10.0}"
 # 4H-SiC high-frequency dielectric constant, ~6.5 (DFPT). Sets the initial gauge of the
 # screening amplitude; only meaningful when USE_LONG_RANGE=True.
 EPS_INF="${EPS_INF:-6.5}"
 EPS_INF_PRIOR_WEIGHT="${EPS_INF_PRIOR_WEIGHT:-0.0}"
 
 # ---- loss weights ---------------------------------------------------------------------
-# L_base (energy/forces on the n = 0 surface), L_delta (paired charge-state differences,
-# weighted highest because they are algebraically free of base-model error) and L_tot
-# (unpaired excited frames, base branch detached -- note its energy term is downweighted
-# to 0.1 but its FORCE term runs at the full FORCES_WEIGHT).
+# L_base (energy/forces on the n = 0 surface, i.e. pristine frames only), L_delta (paired
+# charge-state differences, weighted highest because they are algebraically free of
+# base-model error) and L_tot (see below -- now every n != 0 frame, base branch NOT
+# detached; its energy term is moderate but its FORCE term runs at the full
+# FORCES_WEIGHT, which is what supervises forces at defect geometries).
 ENERGY_WEIGHT="${ENERGY_WEIGHT:-1.0}"
 FORCES_WEIGHT="${FORCES_WEIGHT:-100.0}"
 DELTA_ENERGY_WEIGHT="${DELTA_ENERGY_WEIGHT:-10.0}"
 DELTA_FORCES_WEIGHT="${DELTA_FORCES_WEIGHT:-100.0}"
-TOTAL_ENERGY_WEIGHT="${TOTAL_ENERGY_WEIGHT:-0.1}"
-# The L2 on u is load-bearing, not housekeeping: it is what makes the optimiser buy
-# localisation rather than large cancelling readouts, and hence what keeps the logit gap
-# open. Record the value used alongside any reported result.
-DEFECT_U_L2="${DEFECT_U_L2:-1e-4}"
+# L_tot is back ON, and now applies at every n != 0 frame with E_base receiving gradient
+# (plan A5.3). It was off because corrected labels leave no n = 0 reference at defect
+# geometries, which left total forces there supervised by nothing at all. The protection
+# against the base branch absorbing correction physics is structural rather than the old
+# stopgrad: the correction is intensive (sum_i alpha_i = 1) and E_base is extensive, so a
+# bulk-wide base error cannot be absorbed at any localisation of alpha.
+# Moderate on the energy, full on the forces (the force term uses FORCES_WEIGHT).
+TOTAL_ENERGY_WEIGHT="${TOTAL_ENERGY_WEIGHT:-0.25}"
+# Plan A5.3 asks for the base branch on a low learning rate, so it is not a moving target
+# for the correction. Measured on dataset_beta, 25 epochs, one knob at a time:
+#
+#   BASE_LR_FACTOR=0.25 (with L_tot on)   RMSE_E =  789 meV/atom, RMSE_F = 177
+#   BASE_LR_FACTOR=0.25 (with L_tot off)  RMSE_E = 1545 meV/atom, RMSE_F = 179
+#   BASE_LR_FACTOR=1.0  (with L_tot on)   RMSE_E =   18 meV/atom, RMSE_F =  89
+#
+# So it stays at 1.0 here. The "moving target" argument assumes a base branch that is
+# already trained; this one starts from random init and has to learn the whole SiC
+# potential, and quartering its learning rate simply leaves it undertrained -- which
+# L_tot then exposes directly, because it now supervises total energy at defect
+# geometries. Lower it when warm-starting from a trained base (e.g. the Stage E retrain).
+BASE_LR_FACTOR="${BASE_LR_FACTOR:-1.0}"
+# Pristine frames are the only real n = 0 labels, and there are just 53 of them against
+# ~666 defect frames, so they are replayed at high weight.
+CONFIG_TYPE_WEIGHTS="${CONFIG_TYPE_WEIGHTS:-{\"ideal\":5.0}}"
+# Keeps u close to linear in n, the condition under which counter dependency kills the
+# E_base gauge (plan A5.4). Not a gauge-fixing device in itself.
+DEFECT_ZN_L2="${DEFECT_ZN_L2:-1e-3}"
+# The L2 on u was declared load-bearing (plan 3.2): the mechanism that makes the optimiser
+# buy localisation rather than large cancelling readouts. It is off here (fix plan 1.5).
+# Two reasons. It never did that job -- at 1e-4 * mean(u^2) it was seven orders below the
+# data term, and being a *mean* it is intensive, so it cannot penalise a bulk-wide level of
+# u at all. And the synthetic anchors now pin u_bulk = 0 from data, which is the honest
+# version of the same constraint. If the Stage 2 tie is ever removed, a regulariser must
+# return on the residual head v, not on u.
+DEFECT_U_L2="${DEFECT_U_L2:-0.0}"
+# Zero-init of MLP_u's last layer. ON: it is an optimisation-conditioning choice, not a
+# requirement of the n = 0 identity (that is structural, via the counter prefactor). A
+# random u is noise the optimiser must first destroy, and it ends up back at u ~ 0 with
+# the attention still uniform; from zero, u grows along the gradient instead. Measured
+# over three seeds: escape 3/3 with it, 1/3 without. Set False to ablate.
+DEFECT_ZERO_U_INIT="${DEFECT_ZERO_U_INIT:-True}"
+# cuEquivariance acceleration of the trunk. Verified numerically identical to e3nn for
+# the short-range model (tests/unit/test_defect_cueq.py: 9e-14 on energies, 2e-16 on
+# forces in float64). It converts the TRUNK only -- the correction heads are dense MLPs
+# and are already as fast as they get.
+#
+# Measured on the A4000, 128 channels / max_L=1, 286-atom cells, float32:
+#
+#   batch  backend   ms/step   peak MiB   ms/frame
+#       2  e3nn        343.3       8257      171.7
+#       2  cueq        159.8       1835       79.9
+#       2  oeq         126.2       4604       63.1
+#       4  e3nn          OOM          -          -
+#       4  cueq        139.5       3648       34.9
+#       4  oeq         233.4       9144       58.3
+#       8  cueq        141.1       7274       17.6
+#       8  oeq           OOM          -          -
+#
+# The memory column is the headline: cueq needs 4.5x less than e3nn, which is what lets
+# the batch grow, and throughput follows -- 17.6 ms/frame at batch 8 against e3nn's 171.7
+# at batch 2, a ~10x improvement. OpenEquivariance is faster per step at batch 2 but uses
+# 2.5x the memory of cueq and OOMs at batch 8, so it loses on throughput here.
+#
+# It does NOT pay at small width: 8 channels / max_L=0 measured 0.85x, i.e. a slowdown,
+# where kernel launch overhead dominates. Leave it off for debug runs.
+#
+# Not supported with USE_LONG_RANGE=True (untested). The cueq+oeq hybrid does not work in
+# this tree: the cueq conversion does not persist cueq_config on the model, so chaining
+# the two loses the cueq half and fails on a state_dict mismatch.
+ENABLE_CUEQ="${ENABLE_CUEQ:-False}"
 DEFECT_P_L2="${DEFECT_P_L2:-1e-4}"
 DEFECT_QHOST_L2="${DEFECT_QHOST_L2:-1e-4}"
 
@@ -128,6 +220,11 @@ VALID_BATCH_SIZE="${VALID_BATCH_SIZE:-4}"
 LR="${LR:-0.005}"
 EMA_DECAY="${EMA_DECAY:-0.99}"
 PATIENCE="${PATIENCE:-50}"
+# Validation runs inside `ema.average_parameters()` (train.py:299), so with EMA on the
+# reported metrics are those of the averaged weights, not the ones being optimised. Set
+# USE_EMA=False to read the raw weights -- the control that separates "not learning" from
+# "learning, but the average lags" (fix plan stage 0.3).
+USE_EMA="${USE_EMA:-True}"
 
 # ---- preflight ------------------------------------------------------------------------
 # All of this fails in seconds on a login node rather than after a queue wait.
@@ -168,6 +265,14 @@ print(f"GPU:   {name}, {total:.0f} GiB")
 PY
 fi
 
+case "${USE_EMA}" in
+    True | true | TRUE | 1) EMA_ARGS=(--ema "--ema_decay=${EMA_DECAY}") ;;
+    *)
+        EMA_ARGS=()
+        echo "EMA disabled: validation metrics reflect the raw (optimised) weights."
+        ;;
+esac
+
 python -m mace.cli.run_train \
     --name="${NAME}" \
     --model="MACEDefect" \
@@ -192,6 +297,13 @@ python -m mace.cli.run_train \
     --carrier_feature_dim="${CARRIER_FEATURE_DIM}" \
     --counter_embedding_dim="${COUNTER_EMBEDDING_DIM}" \
     --carrier_mlp_hidden="${CARRIER_MLP_HIDDEN}" \
+    --defect_zero_u_init="${DEFECT_ZERO_U_INIT}" \
+    --enable_cueq="${ENABLE_CUEQ}" \
+    --defect_logit_seed_gamma="${DEFECT_LOGIT_SEED_GAMMA}" \
+    --defect_seed_anneal="${DEFECT_SEED_ANNEAL}" \
+    --defect_seed_anneal_epochs="${DEFECT_SEED_ANNEAL_EPOCHS}" \
+    --defect_alpha_mode="${DEFECT_ALPHA_MODE}" \
+    --defect_beta="${DEFECT_BETA}" \
     --use_long_range="${USE_LONG_RANGE}" \
     --eps_inf="${EPS_INF}" \
     --eps_inf_prior_weight="${EPS_INF_PRIOR_WEIGHT}" \
@@ -201,14 +313,16 @@ python -m mace.cli.run_train \
     --delta_forces_weight="${DELTA_FORCES_WEIGHT}" \
     --total_energy_weight="${TOTAL_ENERGY_WEIGHT}" \
     --defect_u_l2="${DEFECT_U_L2}" \
+    --defect_zn_l2="${DEFECT_ZN_L2}" \
+    --base_lr_factor="${BASE_LR_FACTOR}" \
+    --config_type_weights="${CONFIG_TYPE_WEIGHTS}" \
     --defect_p_l2="${DEFECT_P_L2}" \
     --defect_qhost_l2="${DEFECT_QHOST_L2}" \
     --max_num_epochs="${MAX_NUM_EPOCHS}" \
     --batch_size="${BATCH_SIZE}" \
     --valid_batch_size="${VALID_BATCH_SIZE}" \
     --lr="${LR}" \
-    --ema \
-    --ema_decay="${EMA_DECAY}" \
+    ${EMA_ARGS[@]+"${EMA_ARGS[@]}"} \
     --patience="${PATIENCE}" \
     --eval_interval=1 \
     --default_dtype="${DEFAULT_DTYPE}" \

@@ -1,11 +1,11 @@
 {
-  "seed": 42,
-  "n_structures_requested": 800,
-  "n_train": 720,
-  "n_valid": 80,
+  "seed": 7,
+  "n_structures_requested": 150,
+  "n_train": 135,
+  "n_valid": 15,
   "fractions": {
-    "paired": 0.8,
-    "unpaired": 0.13,
+    "paired": 0.93,
+    "unpaired": 0.0,
     "ideal": 0.07
   },
   "stratified": true,
@@ -46,38 +46,34 @@
     "O": "C"
   },
   "band_edges": {
-    "e_cbm_cell": 0.4715158355555574,
-    "e_vbm_cell": -0.4715158355555574,
-    "effective_gap": 0.9430316711111149,
-    "mean_vertical_excitation": 0.9430316711111149,
-    "gap_margin": 0.0,
+    "e_cbm_cell": 0.4715,
+    "e_vbm_cell": -0.4715,
+    "effective_gap": 0.943,
+    "mean_vertical_excitation": 0.9460833693750089,
+    "gap_margin": null,
     "note": "A fitted gauge, not PBEsol band edges. Only e_cbm_cell - e_vbm_cell enters the referencing of the defect frames, since the ground state (1,0,0,1) and the excited state (1,1,0,2) each have equal electron and hole counts -- they are referenced by one and two gaps respectively, so the paired difference keeps exactly one. The split of the gap between the two edges is therefore a pure gauge with no observable consequence. The GAP ITSELF is not a gauge: it is fitted from the mean vertical excitation rather than computed as E(N+-1) - E(N) per supercell, so it is a genuine error source across cell sizes. See HANDOFF.md."
   },
   "pool_sizes_available": {
-    "pairs": 504,
+    "pairs": 80,
     "unpaired_ground": 137,
     "unpaired_excited": 137,
-    "ideal": 59
+    "ideal": 10
   },
   "pool_sizes_sampled": {
-    "pairs": 320,
-    "unpaired_ground": 52,
-    "unpaired_excited": 52,
-    "ideal": 56
+    "pairs": 70,
+    "unpaired_ground": 0,
+    "unpaired_excited": 0,
+    "ideal": 10
   },
   "train_by_config_type": {
-    "ideal": 50,
-    "paired_ex": 288,
-    "paired_gs": 288,
-    "unpaired_ex": 47,
-    "unpaired_gs": 47
+    "ideal": 9,
+    "paired_ex": 63,
+    "paired_gs": 63
   },
   "valid_by_config_type": {
-    "ideal": 6,
-    "paired_ex": 32,
-    "paired_gs": 32,
-    "unpaired_ex": 5,
-    "unpaired_gs": 5
+    "ideal": 1,
+    "paired_ex": 7,
+    "paired_gs": 7
   },
   "e0_least_squares_fit": {
     "species": [
@@ -85,10 +81,10 @@
       14
     ],
     "e0": [
-      -7.900862432901526,
-      -7.900862432901514
+      -7.8984986853008,
+      -7.898498685300809
     ],
     "rank": 1,
-    "n_frames": 720
+    "n_frames": 135
   }
 }

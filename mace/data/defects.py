@@ -232,6 +232,16 @@ def _canonicalise_all(configs: Configurations) -> None:
             continue
         counts = canonicalise_counts(raw, context=context)
         multiplicity = config.properties.get("multiplicity")
+        if multiplicity is None and spin_magnetisation(counts) != 0:
+            # Optional multiplicity is why the original 4H-SiC labelling went unnoticed:
+            # the triplet ground state was written as n = 0, and with no multiplicity to
+            # cross-check there was nothing to contradict it (plan section 1.1.2).
+            raise ValueError(
+                f"carrier_counts {counts.tolist()} has M_s = "
+                f"{spin_magnetisation(counts)} but no multiplicity was recorded"
+                f"{f' ({context})' if context else ''}; multiplicity is required for "
+                "every spin-polarised frame"
+            )
         validate_counts(counts, multiplicity=multiplicity, context=context)
         config.properties["carrier_counts"] = counts
     if missing:
@@ -267,21 +277,55 @@ def _group_indices(configs: Configurations) -> Dict[str, List[int]]:
     return dict(groups)
 
 
-def _join_pairs(configs: Configurations, groups: Dict[str, List[int]]) -> None:
+def _group_references(
+    configs: Configurations, groups: Dict[str, List[int]]
+) -> Dict[str, int]:
+    """Index of the member each group's differences are measured from.
+
+    The reference is the member with the fewest carriers, which is *not* necessarily
+    ``n = 0``. A defect whose electronic ground state is a triplet has no ``n = 0`` member
+    at that geometry at all: ``n = 0`` is fixed to the closed-shell ``M_s = 0`` surface
+    (plan section 2.2), not to whatever the system's own ground state happens to be.
+    """
+    references: Dict[str, int] = {}
+    for pair_id, indices in groups.items():
+        totals = [
+            int(np.asarray(configs[i].properties["carrier_counts"]).sum())
+            for i in indices
+        ]
+        lowest = min(totals)
+        winners = [i for i, total in zip(indices, totals) if total == lowest]
+        if len(winners) != 1:
+            raise ValueError(
+                f"pair_id '{pair_id}' has {len(winners)} members with the minimal carrier "
+                f"count {lowest}; the reference member of a group must be unique for the "
+                "paired difference to be defined"
+            )
+        references[pair_id] = winners[0]
+    return references
+
+
+def _join_pairs(
+    configs: Configurations,
+    groups: Dict[str, List[int]],
+    references: Dict[str, int],
+) -> None:
     for pair_id, indices in groups.items():
         members = [configs[i] for i in indices]
-        neutral = [
-            config
-            for config in members
-            if int(np.asarray(config.properties["carrier_counts"]).sum()) == 0
-        ]
-        if len(neutral) != 1:
-            raise ValueError(
-                f"pair_id '{pair_id}' has {len(neutral)} reference-state (n = 0) members; "
-                "exactly one is required to define the paired difference"
-            )
         _assert_same_geometry(members, pair_id)
-        reference = neutral[0]
+        reference = configs[references[pair_id]]
+        ref_counts = np.asarray(reference.properties["carrier_counts"])
+
+        # Every member records the counter its difference is taken against, so the model
+        # can evaluate the correction at both n and n_ref on one trunk pass.
+        for config in members:
+            config.properties["carrier_counts_ref"] = ref_counts.copy()
+
+        if int(ref_counts.sum()) != 0:
+            # The reference is itself a carrier state, so nothing at this geometry is an
+            # n = 0 label. Emitting base_* here would train the base branch against a
+            # spin-polarised energy and quietly redefine what "base" means.
+            continue
         for config in members:
             for target, source in (
                 ("base_energy", "energy"),
@@ -318,11 +362,15 @@ def _resolve_band_edges(
         abs(previous.e_cbm_cell - edges.e_cbm_cell) > BAND_EDGE_TOLERANCE
         or abs(previous.e_vbm_cell - edges.e_vbm_cell) > BAND_EDGE_TOLERANCE
     ):
-        # Inconsistent edges shift every transition level of that host uniformly, which
-        # no downstream metric can see.
-        logging.warning(
-            f"config {index}: band edges for host {key} disagree with an earlier "
-            f"configuration ({edges} vs {previous})"
+        # Inconsistent edges shift every transition level of that (host, cell) uniformly,
+        # which no downstream metric can see -- the plan's section 7.2 failure mode. Two
+        # frames of the same host and the same supercell size refer to the same physical
+        # band edges by definition, so a disagreement is a data error, not a tolerance
+        # question.
+        raise ValueError(
+            f"config {index}: band edges for {key} disagree with an earlier "
+            f"configuration ({edges} vs {previous}); frames sharing a (host, cell) key "
+            "must resolve to identical edge constants"
         )
     return edges
 
@@ -357,10 +405,19 @@ def _apply_band_edge_referencing(
         )
 
 
-def _derive_targets(configs: Configurations) -> None:
-    for config in configs:
+def _derive_targets(
+    configs: Configurations,
+    groups: Dict[str, List[int]],
+    references: Dict[str, int],
+) -> None:
+    reference_of: Dict[int, int] = {}
+    for pair_id, indices in groups.items():
+        for index in indices:
+            reference_of[index] = references[pair_id]
+
+    for index, config in enumerate(configs):
         counts = np.asarray(config.properties["carrier_counts"])
-        is_reference = int(counts.sum()) == 0
+        is_reference_state = int(counts.sum()) == 0
 
         # Base-branch labels: the n = 0 energy, forces and stress at this geometry.
         for target, source in (
@@ -368,22 +425,26 @@ def _derive_targets(configs: Configurations) -> None:
             ("base_forces", "forces"),
             ("base_stress", "stress"),
         ):
-            if config.properties.get(target) is None and is_reference:
+            if config.properties.get(target) is None and is_reference_state:
                 config.properties[target] = config.properties.get(source)
 
-        # Delta labels. The energy is already referenced, so subtracting the raw n = 0
-        # energy gives the plan's Delta E_target directly.
+        # Delta labels, taken against the group's reference member. Both energies are
+        # already band-edge referenced, so the difference is the plan's Delta E_target
+        # whether or not the reference is the n = 0 state.
         delta_energy = None
         delta_forces = None
-        if not is_reference:
+        ref_index = reference_of.get(index)
+        if ref_index is not None and ref_index != index:
+            reference = configs[ref_index]
             energy = config.properties.get("energy")
-            base_energy = config.properties.get("base_energy")
-            if energy is not None and base_energy is not None:
-                delta_energy = float(energy) - float(base_energy)
+            ref_energy = reference.properties.get("energy")
+            if energy is not None and ref_energy is not None:
+                delta_energy = float(energy) - float(ref_energy)
             forces = config.properties.get("forces")
-            base_forces = config.properties.get("base_forces")
-            if forces is not None and base_forces is not None:
-                delta_forces = np.asarray(forces) - np.asarray(base_forces)
+            ref_forces = reference.properties.get("forces")
+            if forces is not None and ref_forces is not None:
+                delta_forces = np.asarray(forces) - np.asarray(ref_forces)
+
         config.properties["delta_energy"] = delta_energy
         config.properties["delta_forces"] = delta_forces
         config.property_weights["delta_energy"] = (
@@ -394,22 +455,28 @@ def _derive_targets(configs: Configurations) -> None:
         )
 
 
-def _assign_base_weights(configs: Configurations, groups: Dict[str, List[int]]) -> None:
+def _assign_base_weights(
+    configs: Configurations,
+    groups: Dict[str, List[int]],
+    references: Dict[str, int],
+) -> None:
     """Exactly one configuration per geometry supervises the base branch.
 
     ``base_energy`` is a model output on every frame, so a geometry with several charge
     states would otherwise contribute the same base-branch target once per state.
+
+    A group whose reference member carries carriers supervises the base branch through
+    *no* member. There is no fallback to an arbitrary member: handing base-branch
+    supervision to a charged frame is how a spin-polarised energy would end up training
+    the charge-blind branch.
     """
     owner = set()
     grouped = set()
-    for indices in groups.values():
+    for pair_id, indices in groups.items():
         grouped.update(indices)
-        reference = [
-            i
-            for i in indices
-            if int(np.asarray(configs[i].properties["carrier_counts"]).sum()) == 0
-        ]
-        owner.add(reference[0] if reference else min(indices))
+        reference = references[pair_id]
+        if int(np.asarray(configs[reference].properties["carrier_counts"]).sum()) == 0:
+            owner.add(reference)
     for index in range(len(configs)):
         if index not in grouped:
             owner.add(index)
@@ -419,6 +486,89 @@ def _assign_base_weights(configs: Configurations, groups: Dict[str, List[int]]) 
         for name in ("base_energy", "base_forces", "base_stress"):
             defined = config.properties.get(name) is not None
             config.property_weights[name] = 1.0 if (carries and defined) else 0.0
+
+
+def report_gauge_identifiability(configs: Configurations) -> Dict[str, Any]:
+    """Is the base-branch gauge fixed by the counters present, or under-determined?
+
+    ``E_base`` at a defect geometry is a gauge: shifting it by ``f(R)`` while the
+    correction absorbs ``-f`` leaves every label unchanged. Because the correction is
+    ``sum_c n_c v_c``, absorbing ``f`` needs per-channel factors ``s_c`` obeying
+
+        ``sum_c n_c^(k) s_c = -1``   for every observed counter ``k``
+
+    which is a linear system in ``s``. If it has solutions, the gauge is open and the
+    dimension of the solution set is the remaining freedom; if it has none, the counters
+    over-determine it and ``f`` is pinned to zero.
+
+    The cheap sufficient condition is *counter dependency*: ``g(n) = sum_c n_c s_c`` is
+    linear, so if an observed counter is the integer sum of two others then
+    ``g(n1 + n2) = 2`` contradicts the required ``g = 1``. For the divacancy that is
+    exactly ``(1,0,0,1) = (1,0,0,0) + (0,0,0,1)`` -- the two ``q = +-1`` doublets needed
+    for transition levels are the states that close the gauge (plan A5.4).
+    """
+    observed = sorted(
+        {
+            tuple(int(v) for v in np.asarray(config.properties["carrier_counts"]))
+            for config in configs
+            if int(np.asarray(config.properties["carrier_counts"]).sum()) != 0
+        }
+    )
+    if not observed:
+        return {"observed": [], "identified": False, "null_space": None, "sums": []}
+
+    matrix = np.asarray(observed, dtype=float)
+    # Channels that are zero in every observed counter contribute nothing: their s_c
+    # multiplies n_c = 0 always, so counting them would inflate the free dimension by one
+    # per dead channel. Only live channels are unknowns.
+    live = matrix.any(axis=0)
+    matrix = matrix[:, live]
+    rhs = -np.ones(len(observed))
+    # Consistent iff rank([A|b]) == rank(A); the free directions are then dim(null A).
+    rank = np.linalg.matrix_rank(matrix)
+    augmented_rank = np.linalg.matrix_rank(np.hstack([matrix, rhs[:, None]]))
+    consistent = bool(rank == augmented_rank)
+    null_space = int(matrix.shape[1] - rank)
+
+    lookup = set(observed)
+    sums = [
+        (a, b, tuple(x + y for x, y in zip(a, b)))
+        for i, a in enumerate(observed)
+        for b in observed[i:]
+        if tuple(x + y for x, y in zip(a, b)) in lookup
+    ]
+
+    return {
+        "observed": observed,
+        # "identified" means the gauge is closed, i.e. no non-trivial f survives.
+        "identified": not consistent,
+        "null_space": null_space if consistent else 0,
+        "sums": sums,
+    }
+
+
+def log_gauge_identifiability(configs: Configurations) -> None:
+    """Log the A5.4 report, so an under-determined gauge is visible before training."""
+    report = report_gauge_identifiability(configs)
+    if not report["observed"]:
+        return
+    counters = ", ".join(str(list(c)) for c in report["observed"])
+    logging.info(f"Carrier counters observed: {counters}")
+    if report["identified"]:
+        pairs = "; ".join(
+            f"{list(a)} + {list(b)} = {list(c)}" for a, b, c in report["sums"]
+        )
+        logging.info(
+            "E_base gauge is IDENTIFIED by the counter set"
+            + (f" (dependency: {pairs})" if pairs else "")
+        )
+    else:
+        logging.warning(
+            f"E_base gauge is UNDER-DETERMINED: {report['null_space']} free "
+            "direction(s) remain. E_base at defect geometries is latent, not a validated "
+            "prediction; do not ship transition levels from this model (plan A5.6). "
+            "Adding the q = +-1 doublets would close it."
+        )
 
 
 def prepare_defect_configurations(
@@ -433,10 +583,12 @@ def prepare_defect_configurations(
     table = dict(band_edges) if band_edges else {}
     _canonicalise_all(configs)
     groups = _group_indices(configs)
-    _join_pairs(configs, groups)
+    references = _group_references(configs, groups)
+    _join_pairs(configs, groups, references)
     _apply_band_edge_referencing(configs, table)
-    _derive_targets(configs)
-    _assign_base_weights(configs, groups)
+    _derive_targets(configs, groups, references)
+    _assign_base_weights(configs, groups, references)
+    log_gauge_identifiability(configs)
     return configs
 
 

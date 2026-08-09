@@ -126,24 +126,81 @@ class CarrierAttentionPooling(torch.nn.Module):
         share_logits_across_spin: bool = False,
         logit_clamp: float = 40.0,
         high_precision_softmax: bool = True,
+        zero_u_init: bool = True,
+        alpha_mode: str = "logits",
+        beta: float = 10.0,
     ):
         super().__init__()
+        if alpha_mode not in ("logits", "tied"):
+            raise ValueError(
+                f"alpha_mode must be 'logits' or 'tied', got '{alpha_mode}'"
+            )
         self.share_logits_across_spin = share_logits_across_spin
         self.logit_clamp = logit_clamp
         self.high_precision_softmax = high_precision_softmax
+        # 'tied' derives the attention from the carrier site energy itself,
+        # alpha = softmax(-beta u), instead of from a separate logit network (plan D1).
+        # beta is a fixed gauge constant recorded with the model, like sigma and k_c --
+        # not a learnable parameter and not a tuning knob.
+        self.alpha_mode = alpha_mode
+        self.tied = alpha_mode == "tied"
+        self.beta = beta
 
         in_dim = feature_dim + counter_dim
+        self.feature_dim = feature_dim
         self.energy_readouts = torch.nn.ModuleList(
             [_mlp(in_dim, hidden_dim, 1) for _ in range(NUM_CARRIER_CHANNELS)]
         )
-        num_logit_networks = 2 if share_logits_across_spin else NUM_CARRIER_CHANNELS
+        # Under the tie there is no separate logit network at all: an empty ModuleList
+        # keeps the attribute (and the optimizer group) valid without holding parameters.
+        num_logit_networks = 0 if self.tied else (2 if share_logits_across_spin else NUM_CARRIER_CHANNELS)
         self.logit_readouts = torch.nn.ModuleList(
             [_mlp(in_dim, hidden_dim, 1) for _ in range(num_logit_networks)]
         )
-        # u starts at zero so the correction starts at zero; the logits do not, since a
-        # zero logit field is a uniform (maximally delocalised) carrier.
+        # u is zero-initialised by default (plan section 9.6 -- KEEP, but for a different
+        # reason than the one originally stated).
+        #
+        # The stated reason was to make a fresh model reproduce the base potential. That
+        # reason is wrong: the n = 0 identity is *structural*, coming from the `counts *`
+        # prefactor in `delta_sr`, and holds for any parameters whatsoever. Acting on the
+        # stated reason, the zero-init was removed -- and the fit got worse.
+        #
+        # The real reason is optimisation conditioning. At u == 0 the attention has no
+        # gradient at all (d(Delta E_SR)/d(logit) vanishes identically), which looks like
+        # the problem but is not: u itself keeps its gradient, and from zero it grows
+        # *along* the gradient, so the contrast it develops is aligned with the target
+        # from the first step. A random u is instead structureless noise contributing a
+        # spurious Delta E; the cheapest early loss reduction is to destroy it, so the
+        # optimiser travels back to u ~ 0 anyway and arrives with the attention still
+        # uniform and nothing to grow from. Measured over three seeds on dataset_beta:
+        # escape from the plateau in 3/3 runs with the zero-init, 1/3 without.
+        #
+        # Do not remove this again by re-deriving from the n = 0 identity.
+        self.zero_u_init = zero_u_init
+        if zero_u_init:
+            for readout in self.energy_readouts:
+                zero_last_layer(readout)
+
+    def counter_input_l2(self) -> torch.Tensor:
+        """Squared norm of the ``z(n)`` input columns of every ``MLP_u``'s first layer.
+
+        These are the weights through which the carrier site energy depends on the
+        counter vector, and they are what makes ``u`` *nonlinear* in ``n``.
+
+        The rationale is subtle and is not gauge suppression (plan A5.4). The base-branch
+        gauge is killed by counter *dependency*: ``g(n) = sum_c n_c s_c`` is linear, so an
+        observed counter that is the sum of two other observed counters forces
+        ``g(n1 + n2) = 2`` against the required ``g = 1``, over-determining the system and
+        pinning ``f = 0``. That cancellation is exact only while the correction is linear
+        in ``n``; genuine multi-carrier interaction makes it approximate. This penalty
+        exists to keep the nonlinearity small enough for the cancellation to bite, while
+        still leaving real electron-hole physics representable.
+        """
+        total = torch.zeros((), device=self.energy_readouts[0][0].weight.device)
         for readout in self.energy_readouts:
-            zero_last_layer(readout)
+            first = readout[0]
+            total = total + first.weight[:, self.feature_dim :].pow(2).sum()
+        return total
 
     def forward(
         self,
@@ -152,8 +209,9 @@ class CarrierAttentionPooling(torch.nn.Module):
         counts: torch.Tensor,  # [n_graphs, 4]
         batch: torch.Tensor,  # [n_nodes]
         num_graphs: int,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Returns (Delta E_SR [n_graphs], alpha, u [n_nodes, 4], logit gap [n_graphs, 4])."""
+        logit_bias: Optional[torch.Tensor] = None,  # [n_nodes, 4]
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Returns (Delta E_SR, alpha, u, logit gap, delta_u), the last three per channel."""
         features = torch.cat([node_feats, counter_emb[batch]], dim=-1)
 
         readout_list: List[torch.Tensor] = []
@@ -161,16 +219,36 @@ class CarrierAttentionPooling(torch.nn.Module):
             readout_list.append(readout(features).squeeze(-1))
         energies = torch.stack(readout_list, dim=-1)  # [n_nodes, 4]
 
-        logit_list: List[torch.Tensor] = []
-        for readout in self.logit_readouts:
-            logit_list.append(readout(features).squeeze(-1))
-        if self.share_logits_across_spin:
-            logits = torch.stack(
-                [logit_list[0], logit_list[0], logit_list[1], logit_list[1]], dim=-1
-            )
+        if self.tied:
+            # alpha = softmax(-beta u): the carrier localises where its own site energy is
+            # lowest, by construction. This removes the additive gauge freedom in the
+            # logits and forbids incoherent states -- bound but delocalised, or localised
+            # but unbound -- which the independent networks could represent.
+            #
+            # Note the correction stays live at u == 0: with alpha uniform,
+            # d(Delta E_SR)/du_j = n_c alpha_j [1 - beta (u_j - <u>_alpha)] = n_c / N,
+            # so nothing needs seeding and the zero-init costs no gradient here.
+            logits = -self.beta * energies
         else:
-            logits = torch.stack(logit_list, dim=-1)  # [n_nodes, 4]
-        logits = torch.clamp(logits, -self.logit_clamp, self.logit_clamp)
+            logit_list: List[torch.Tensor] = []
+            for readout in self.logit_readouts:
+                logit_list.append(readout(features).squeeze(-1))
+            if self.share_logits_across_spin:
+                logits = torch.stack(
+                    [logit_list[0], logit_list[0], logit_list[1], logit_list[1]], dim=-1
+                )
+            else:
+                logits = torch.stack(logit_list, dim=-1)  # [n_nodes, 4]
+            # Not applied under the tie: clamping would break alpha == softmax(-beta u)
+            # exactly where u is largest, which is the bound site the model is supposed
+            # to find. segment_softmax subtracts the per-cell maximum anyway, so the
+            # large-logit case is already numerically safe.
+            logits = torch.clamp(logits, -self.logit_clamp, self.logit_clamp)
+        if logit_bias is not None:
+            # Additive novelty bias (plan D7.1, logit route). Applied after the clamp so
+            # the seed is never truncated, and outside the tied branch because there is
+            # no separate logit to bias when alpha is derived from u.
+            logits = logits + logit_bias
 
         alpha, maxima = segment_softmax(
             logits, batch, num_graphs, high_precision=self.high_precision_softmax
@@ -189,7 +267,27 @@ class CarrierAttentionPooling(torch.nn.Module):
         mean_logits = scatter_mean(logits, batch, dim=0, dim_size=num_graphs)
         logit_gap = maxima - mean_logits
 
-        return delta_sr, alpha, energies, logit_gap
+        # Delta u: the bulk-minus-bound carrier site energy, in eV. Under the tie this is
+        # a physical binding energy rather than a statement about an arbitrary logit
+        # scale, and logit_gap == beta * delta_u identically. It is computed the same way
+        # in both modes so the two are directly comparable.
+        mean_u = scatter_mean(energies, batch, dim=0, dim_size=num_graphs)
+        minima = torch.full(
+            (num_graphs, energies.shape[-1]),
+            float("inf"),
+            dtype=energies.dtype,
+            device=energies.device,
+        )
+        minima = minima.scatter_reduce(
+            0,
+            batch.unsqueeze(-1).expand_as(energies),
+            energies,
+            reduce="amin",
+            include_self=False,
+        )
+        delta_u = mean_u - minima
+
+        return delta_sr, alpha, energies, logit_gap, delta_u
 
 
 @compile_mode("script")

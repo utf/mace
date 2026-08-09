@@ -27,11 +27,26 @@ remaining 137 frames per database are independent trajectories with no partner; 
 ground-state ones supervise the base branch, the excited-state ones train through
 ``L_tot``.
 
-**Band edges are fitted, because none were published.** The divacancy excitation is an
-intra-defect promotion within the minority (beta) spin channel, so its counter vector is
-``n = (n_e_maj, n_e_min, n_h_maj, n_h_min) = (0, 1, 0, 1)`` -- one electron and one hole,
-net charge zero. MACEDefect references such a frame by ``E_CBM - E_VBM``, so the only
-load-bearing number is the effective gap, and it is estimated from the data as
+**Carriers are counted from the closed-shell surface, not from the system's own ground
+state.** The neutral divacancy ground state is a triplet, so it is *not* ``n = 0``: it is
+``n = (1, 0, 0, 1)`` (``q = 0``, ``M_s = 2``), and the excitation, a further promotion
+within the minority spin channel, is ``n = (1, 1, 0, 2)``. Only the pristine cells carry
+``n = 0``. Consequences worth stating plainly: no defect geometry supplies a base-branch
+label any more (there is no ``M_s = 0`` calculation at those geometries); and the paired
+difference is now taken between two carrier states rather than against the reference
+state, which is what ``n_ref`` in the model exists to evaluate.
+
+``L_tot`` was switched off for a while because of that missing reference, which left total
+forces at defect geometries supervised by nothing. It is on again: ``E_base`` there is a
+*gauge* rather than an unobservable, and the correction cannot absorb a bulk-wide base
+error because it is intensive (``sum_i alpha_i = 1``) while ``E_base`` is extensive. See
+the forward plan's stage A5. The unpaired frames exist for that term.
+
+**Band edges are fitted, because none were published.** MACEDefect references a frame by
+``n_e E_CBM - n_h E_VBM``. Both defect states here have equal electron and hole counts --
+one pair in the ground state, two in the excited state -- so they are referenced by one
+and two gaps respectively and the paired difference keeps exactly one. The only
+load-bearing number is therefore the effective gap, estimated from the data as
 
     gap = <E_ex - E_gs>_paired + margin
 
@@ -73,11 +88,46 @@ from ase.db import connect
 # Undo it -- MACEDefect learns the electronic state from the counters, not the labels.
 SPECIES_REMAP = {"P": "Si", "N": "C", "S": "Si", "O": "C"}
 
-# The excitation promotes one electron between two localised levels of the minority
-# (beta) spin channel: one electron above, one hole below, net charge zero. The loader
-# canonicalises this to (1, 0, 1, 0); at M_s = 0 the two labellings are gauge-equivalent.
-COUNTS_GROUND = (0, 0, 0, 0)
-COUNTS_EXCITED = (0, 1, 0, 1)
+# Carrier labelling, relative to the closed-shell M_s = 0 reference surface (plan 2.2).
+#
+# The neutral divacancy ground state is a *triplet*: two unpaired electrons occupying
+# localised gap levels. Relative to the closed-shell surface that is one majority-spin
+# electron promoted into a gap level plus the minority-spin hole it leaves behind, so
+# n = (1, 0, 0, 1) with q = 0 and M_s = 2. Labelling it n = 0 -- as the first version of
+# this script did -- asserts that the triplet *is* the reference surface, which is what
+# broke the counter algebra: it made the reference state itself spin-polarised, and it
+# put the entire ground-state binding energy outside the model's reach.
+#
+# The excitation promotes a further electron between two localised levels within the
+# minority (beta) channel, adding one minority electron and one minority hole:
+# n = (1, 1, 0, 2), again q = 0 and M_s = 2.
+#
+# Both are already canonical (M_s > 0 fixes the time-reversal gauge). Multiplicity is
+# 2 S + 1 = M_s + 1 = 3 for both, and is now written to every frame -- the loader makes
+# it mandatory for spin-polarised frames, and that assertion is what would have caught
+# the original mislabelling.
+# Bumped whenever the frame composition changes: metrics are not comparable across
+# versions, since loss composition and epoch length both shift.
+#   v1  original (mislabelled: triplet ground state written as n = 0)
+#   v2  plan-convention labels + synthetic zero anchors
+#   v3  anchors removed (see below); labels unchanged from v2
+#   v4  unpaired defect frames restored, since L_tot is live again (plan A5.3)
+DATASET_VERSION = "v4"
+
+COUNTS_PRISTINE = (0, 0, 0, 0)
+COUNTS_GROUND = (1, 0, 0, 1)
+COUNTS_EXCITED = (1, 1, 0, 2)
+MULTIPLICITY_PRISTINE = 1
+MULTIPLICITY_DEFECT = 3
+
+# Synthetic zero-anchor frames were tried here and are REJECTED -- do not re-add them.
+# Two reasons. Only one frame in ideal.db is a relaxed ideal lattice (the 8-atom cell), so
+# in practice every anchor would sit on a thermally displaced cell; and there the zero
+# target is simply false -- a strained pristine cell's band edge genuinely shifts by the
+# deformation potential, which is a real effect plan 3.2 wants u to carry, not an error to
+# be pinned away. The level-mode freedom they were meant to close is handled instead by
+# the optional gauge penalty (--defect_gauge_weight), which constrains a cell-level pooled
+# scalar rather than asserting a per-frame energy nobody computed.
 
 # Paired frames must be the same geometry; the loader's own tolerance is 1e-8 A.
 POSITION_TOLERANCE = 1e-10
@@ -218,6 +268,7 @@ def make_frame(
     pool: str,
     config_type: str,
     source: str,
+    multiplicity: int,
     pair_id: Optional[str] = None,
     positions_from: Optional[Atoms] = None,
     host: str = "4H-SiC",
@@ -237,6 +288,8 @@ def make_frame(
     if with_stress and row["stress"] is not None:
         atoms.info["REF_stress"] = np.asarray(row["stress"], dtype=float)
     atoms.info["carrier_counts"] = np.asarray(counts, dtype=int)
+    # Mandatory for spin-polarised frames; the loader asserts M_s == multiplicity - 1.
+    atoms.info["multiplicity"] = int(multiplicity)
     atoms.info["host"] = host
     if pair_id is not None:
         atoms.info["pair_id"] = pair_id
@@ -316,36 +369,56 @@ def stratified_sample(
     return selected
 
 
-def report_e0_fit(frames: Sequence[Frame]) -> Dict[str, object]:
-    """Reproduce ``--E0s average`` on the reference-state frames, for information.
+def report_e0_fit(
+    frames: Sequence[Frame], e_cbm_cell: float, e_vbm_cell: float
+) -> Dict[str, object]:
+    """Reproduce ``--E0s average`` for information.
 
-    MACE fits the isolated-atom energies by least squares on composition, over the
-    ``n = 0`` subset only. Every structure here -- pristine and divacancy alike -- has
-    equal Si and C counts, so the design matrix is rank 1 and ``lstsq`` returns the
-    minimum-norm solution: the two E0s come out identical. That is a gauge choice, not
-    two independently determined atomic energies. It is harmless at fixed stoichiometry,
-    but it will look odd in the training log, so it is reported here.
+    ``mace.data.compute_average_E0s`` fits the isolated-atom energies by least squares on
+    composition over **every training frame**, not over the ``n = 0`` subset, and it does
+    so *after* band-edge referencing has been applied -- so the referencing constant is
+    subtracted here too, or the prediction would not match the training log.
+
+    Every structure here -- pristine and divacancy alike -- has equal Si and C counts, so
+    the design matrix is rank 1 and ``lstsq`` returns the minimum-norm solution: the two
+    E0s come out identical. That is a gauge choice, not two independently determined
+    atomic energies. It is harmless at fixed stoichiometry, but it will look odd in the
+    training log, so it is reported here.
     """
-    reference = [
-        frame
-        for frame in frames
-        if int(np.asarray(frame.atoms.info["carrier_counts"]).sum()) == 0
-    ]
-    if not reference:
+    if not frames:
         return {}
-    species = sorted({int(z) for frame in reference for z in frame.atoms.numbers})
+    species = sorted({int(z) for frame in frames for z in frame.atoms.numbers})
     design = np.array(
-        [[int(np.count_nonzero(frame.atoms.numbers == z)) for z in species] for frame in reference],
+        [[int(np.count_nonzero(frame.atoms.numbers == z)) for z in species] for frame in frames],
         dtype=float,
     )
-    targets = np.array([frame.atoms.info["REF_energy"] for frame in reference], dtype=float)
+    targets = np.array(
+        [
+            frame.atoms.info["REF_energy"]
+            - referencing_constant(
+                frame.atoms.info["carrier_counts"], e_cbm_cell, e_vbm_cell
+            )
+            for frame in frames
+        ],
+        dtype=float,
+    )
     solution, _, rank, _ = np.linalg.lstsq(design, targets, rcond=None)
     return {
         "species": species,
         "e0": [float(value) for value in solution],
         "rank": int(rank),
-        "n_reference_frames": len(reference),
+        "n_frames": len(frames),
     }
+
+
+def referencing_constant(
+    counts: Sequence[int], e_cbm_cell: float, e_vbm_cell: float
+) -> float:
+    """What the loader subtracts from a raw energy (mace.data.defects)."""
+    counts = np.asarray(counts, dtype=int)
+    electrons = int(counts[0] + counts[1])
+    holes = int(counts[2] + counts[3])
+    return electrons * e_cbm_cell - holes * e_vbm_cell
 
 
 def split_groups(
@@ -429,6 +502,31 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default=0,
         help="drop frames smaller than this (the 8-atom primitive cell in ideal.db)",
     )
+    parser.add_argument(
+        "--max-natoms",
+        type=int,
+        default=0,
+        help="drop frames larger than this (0 = no limit). Cost per frame grows with the "
+        "atom count, so capping at 290 keeps only the smallest defect cells (286) and "
+        "their pristine partners (288) -- the fast configuration for debugging. The "
+        "8-atom pristine cell is always kept, since it is the only exact anchor",
+    )
+    parser.add_argument(
+        "--defect-natoms",
+        type=int,
+        default=0,
+        help="keep only defect frames with exactly this many atoms (0 = no filter). "
+        "Applies to the ground/excited databases only, so the pristine pool can be held "
+        "fixed while the defect cell size is varied -- which is what a cell-size "
+        "comparison needs, since removing the pristine frames removes all n = 0 labels "
+        "and with them every base-branch loss term",
+    )
+    parser.add_argument(
+        "--ideal-natoms",
+        type=int,
+        default=0,
+        help="keep only pristine frames with exactly this many atoms (0 = no filter)",
+    )
     parser.add_argument("--no-stratify", action="store_true", help="sample uniformly at random instead")
     parser.add_argument("--no-stress", action="store_true", help="omit REF_stress from the output")
     return parser.parse_args(argv)
@@ -448,6 +546,27 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     if args.min_natoms > 0:
         keep = lambda rows: [r for r in rows if r["natoms"] >= args.min_natoms]  # noqa: E731
         ideal, ground, excited = keep(ideal), keep(ground), keep(excited)
+    if args.max_natoms > 0:
+        # The 8-atom pristine cell is exempt: it is the only frame in the whole set at a
+        # relaxed ideal lattice, so it is the only anchor whose zero target is exact.
+        cap = lambda rows: [  # noqa: E731
+            r for r in rows if r["natoms"] <= args.max_natoms or r["natoms"] == 8
+        ]
+        ideal, ground, excited = cap(ideal), cap(ground), cap(excited)
+        print(
+            f"  capped at {args.max_natoms} atoms: ideal {len(ideal)}, "
+            f"ground {len(ground)}, excited {len(excited)}"
+        )
+    if args.defect_natoms > 0:
+        ground = [r for r in ground if r["natoms"] == args.defect_natoms]
+        excited = [r for r in excited if r["natoms"] == args.defect_natoms]
+        print(
+            f"  defect cells fixed at {args.defect_natoms} atoms: "
+            f"ground {len(ground)}, excited {len(excited)}"
+        )
+    if args.ideal_natoms > 0:
+        ideal = [r for r in ideal if r["natoms"] == args.ideal_natoms]
+        print(f"  pristine cells fixed at {args.ideal_natoms} atoms: ideal {len(ideal)}")
 
     pairs = build_pairs(ground, excited)
     paired_ground_ids = {pair["ground"]["id"] for pair in pairs}
@@ -545,10 +664,12 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         reference = pair["ground"]["atoms"]
         gs_frame = make_frame(
             pair["ground"], COUNTS_GROUND, "paired", "paired_gs", "ground_state",
+            MULTIPLICITY_DEFECT,
             pair_id=pair_id, positions_from=reference, host=args.host, with_stress=with_stress,
         )
         ex_frame = make_frame(
             pair["excited"], COUNTS_EXCITED, "paired", "paired_ex", "excited_state",
+            MULTIPLICITY_DEFECT,
             pair_id=pair_id, positions_from=reference, host=args.host, with_stress=with_stress,
         )
         groups.append(Group([gs_frame, ex_frame], gs_frame.stratum, "paired"))
@@ -556,20 +677,23 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     for row in chosen_unpaired_ground:
         frame = make_frame(
             row, COUNTS_GROUND, "unpaired_gs", "unpaired_gs", "ground_state",
-            host=args.host, with_stress=with_stress,
+            MULTIPLICITY_DEFECT, host=args.host, with_stress=with_stress,
         )
         groups.append(Group([frame], frame.stratum, "unpaired_gs"))
 
     for row in chosen_unpaired_excited:
         frame = make_frame(
             row, COUNTS_EXCITED, "unpaired_ex", "unpaired_ex", "excited_state",
-            host=args.host, with_stress=with_stress,
+            MULTIPLICITY_DEFECT, host=args.host, with_stress=with_stress,
         )
         groups.append(Group([frame], frame.stratum, "unpaired_ex"))
 
     for row in chosen_ideal:
+        # Pristine frames are ungrouped: they are the only n = 0 labels, so they train the
+        # base branch, and they supply the geometries the optional gauge penalty uses.
         frame = make_frame(
-            row, COUNTS_GROUND, "ideal", "ideal", "ideal",
+            row, COUNTS_PRISTINE, "ideal", "ideal", "ideal",
+            MULTIPLICITY_PRISTINE,
             host=args.host, with_stress=with_stress,
         )
         groups.append(Group([frame], frame.stratum, "ideal"))
@@ -620,12 +744,12 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             f"std {delta.std():.4f}, range [{delta.min():+.4f}, {delta.max():+.4f}]"
         )
 
-    e0_fit = report_e0_fit(train_frames)
+    e0_fit = report_e0_fit(train_frames, e_cbm_cell, e_vbm_cell)
     if e0_fit:
         pairs_of = ", ".join(
             f"Z={z}: {value:+.6f} eV" for z, value in zip(e0_fit["species"], e0_fit["e0"])
         )
-        print(f"\n  --E0s average would fit ({e0_fit['n_reference_frames']} n=0 frames): {pairs_of}")
+        print(f"\n  --E0s average would fit ({e0_fit['n_frames']} train frames): {pairs_of}")
         if e0_fit["rank"] < len(e0_fit["species"]):
             print(
                 f"    rank {e0_fit['rank']} of {len(e0_fit['species'])}: Si and C counts are "
@@ -644,7 +768,26 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         },
         "stratified": stratify,
         "host": args.host,
-        "counter_vectors": {"ground": list(COUNTS_GROUND), "excited": list(COUNTS_EXCITED)},
+        "dataset_version": DATASET_VERSION,
+        "counter_vectors": {
+            "pristine": list(COUNTS_PRISTINE),
+            "ground": list(COUNTS_GROUND),
+            "excited": list(COUNTS_EXCITED),
+        },
+        "multiplicities": {
+            "pristine": MULTIPLICITY_PRISTINE,
+            "defect": MULTIPLICITY_DEFECT,
+        },
+        "anchors": {
+            "enabled": False,
+            "note": (
+                "Synthetic zero-anchor frames were tried and removed. Only one frame in "
+                "ideal.db is a relaxed ideal lattice, so anchors would in practice sit on "
+                "thermally displaced cells, where the zero target is false: a strained "
+                "pristine cell's band edge genuinely shifts by the deformation potential. "
+                "Use --defect_gauge_weight instead if the level mode needs closing."
+            ),
+        },
         "species_remap": SPECIES_REMAP,
         "band_edges": {
             "e_cbm_cell": e_cbm_cell,
@@ -654,8 +797,14 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             "gap_margin": args.gap_margin if args.band_gap is None else None,
             "note": (
                 "A fitted gauge, not PBEsol band edges. Only e_cbm_cell - e_vbm_cell "
-                "enters the referencing, since every non-zero counter vector here has "
-                "one electron and one hole."
+                "enters the referencing of the defect frames, since the ground state "
+                "(1,0,0,1) and the excited state (1,1,0,2) each have equal electron and "
+                "hole counts -- they are referenced by one and two gaps respectively, so "
+                "the paired difference keeps exactly one. The split of the gap between "
+                "the two edges is therefore a pure gauge with no observable consequence. "
+                "The GAP ITSELF is not a gauge: it is fitted from the mean vertical "
+                "excitation rather than computed as E(N+-1) - E(N) per supercell, so it "
+                "is a genuine error source across cell sizes. See HANDOFF.md."
             ),
         },
         "pool_sizes_available": {

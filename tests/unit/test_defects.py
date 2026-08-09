@@ -73,6 +73,12 @@ def make_config(counts, energy, forces=None, positions=None, **info):
     atoms.arrays["REF_forces"] = (
         np.zeros((2, 3)) if forces is None else np.asarray(forces, dtype=float)
     )
+    # A spin-polarised frame must record its multiplicity (plan 1.1.2). Supply the
+    # consistent value so that tests not about the cross-check are unaffected by it;
+    # tests that exercise a mismatch pass multiplicity explicitly.
+    info.setdefault(
+        "multiplicity", spin_magnetisation(canonicalise_counts(counts)) + 1
+    )
     atoms.info.update(info)
     return config_from_atoms(atoms, key_specification=keyspec())
 
@@ -260,12 +266,14 @@ class TestPrepareConfigurations:
         prepare_defect_configurations(configs, band_edges={"GaN": EDGES})
         assert configs[1].properties["energy"] == pytest.approx(-1236.70)
 
-    def test_group_without_reference_state_is_rejected(self):
+    def test_group_with_an_ambiguous_reference_is_rejected(self):
+        """One electron and one hole both have a single carrier, so neither is the
+        reference and the difference between them is not defined either way round."""
         configs = [
             make_config((1, 0, 0, 0), -1238.70, pair_id="g", host="GaN"),
             make_config((0, 0, 0, 1), -1227.90, pair_id="g", host="GaN"),
         ]
-        with pytest.raises(ValueError, match="0 reference-state"):
+        with pytest.raises(ValueError, match="minimal carrier count"):
             prepare_defect_configurations(configs, band_edges={"GaN": EDGES})
 
     def test_group_with_two_reference_states_is_rejected(self):
@@ -273,8 +281,44 @@ class TestPrepareConfigurations:
             make_config((0, 0, 0, 0), -1234.50, pair_id="g", host="GaN"),
             make_config((0, 0, 0, 0), -1234.40, pair_id="g", host="GaN"),
         ]
-        with pytest.raises(ValueError, match="2 reference-state"):
+        with pytest.raises(ValueError, match="minimal carrier count"):
             prepare_defect_configurations(configs, band_edges={"GaN": EDGES})
+
+    def test_group_reference_need_not_be_the_closed_shell_state(self):
+        """The 4H-SiC case: a triplet ground state and its excitation, with no n = 0
+        member at that geometry at all.
+
+        The reference is the member with fewest carriers. Its difference is defined
+        against that member, and -- crucially -- neither member supervises the base
+        branch, because neither is an n = 0 label.
+        """
+        ground = make_config(
+            (1, 0, 0, 1), -1234.50, pair_id="dv", host="GaN", multiplicity=3
+        )
+        excited = make_config(
+            (1, 1, 0, 2), -1233.10, pair_id="dv", host="GaN", multiplicity=3
+        )
+        configs = [ground, excited]
+        prepare_defect_configurations(configs, band_edges={"GaN": EDGES})
+
+        gap = EDGES.e_cbm_cell - EDGES.e_vbm_cell
+        # Ground is referenced by one gap, excited by two, so the difference keeps one.
+        assert excited.properties["delta_energy"] == pytest.approx(
+            -1233.10 - (-1234.50) - gap
+        )
+        assert excited.property_weights["delta_energy"] == 1.0
+        # The reference member has no difference of its own.
+        assert ground.properties["delta_energy"] is None
+        assert ground.property_weights["delta_energy"] == 0.0
+        # Every member records the counter it is measured against.
+        for config in configs:
+            assert np.array_equal(
+                config.properties["carrier_counts_ref"], np.array([1, 0, 0, 1])
+            )
+        # No n = 0 label exists here, so nothing supervises the base branch.
+        for config in configs:
+            assert config.property_weights["base_energy"] == 0.0
+            assert config.property_weights["base_forces"] == 0.0
 
     def test_group_with_mismatched_geometry_is_rejected(self):
         """The failure a structurally-paired file format cannot even express: two states
@@ -439,3 +483,45 @@ class TestAtomicDataRoundTrip:
             [1.0, 0.0, 0.0, 0.0],
             [0.0, 0.0, 0.0, 1.0],
         ]
+
+
+class TestGaugeIdentifiability:
+    """Plan A5.4: does the observed counter set close the E_base gauge?"""
+
+    @staticmethod
+    def _configs(counters):
+        return [make_config(c, -1234.5, host="GaN") for c in counters]
+
+    def test_two_counters_leave_the_gauge_open(self):
+        from mace.data.defects import report_gauge_identifiability
+
+        report = report_gauge_identifiability(
+            self._configs([(1, 0, 0, 1), (1, 1, 0, 2)])
+        )
+        assert report["identified"] is False
+        # Three live channels, two equations: exactly one free direction, which is the
+        # family the seed-dependent channel split is sampling.
+        assert report["null_space"] == 1
+        assert report["sums"] == []
+
+    def test_the_charged_doublets_close_it(self):
+        from mace.data.defects import report_gauge_identifiability
+
+        report = report_gauge_identifiability(
+            self._configs([(1, 0, 0, 0), (0, 0, 0, 1), (1, 0, 0, 1), (1, 1, 0, 2)])
+        )
+        assert report["identified"] is True
+        # (1,0,0,1) = (1,0,0,0) + (0,0,0,1): the dependency that over-determines it.
+        # The pair is reported in sorted-counter order, so compare as a set.
+        assert any(
+            {a, b} == {(1, 0, 0, 0), (0, 0, 0, 1)} and total == (1, 0, 0, 1)
+            for a, b, total in report["sums"]
+        )
+
+    def test_dead_channels_do_not_inflate_the_free_dimension(self):
+        """h_maj is zero in every frame here, so its s_c is not an unknown."""
+        from mace.data.defects import report_gauge_identifiability
+
+        report = report_gauge_identifiability(self._configs([(1, 0, 0, 1)]))
+        # Live channels are e_maj and h_min only, so one equation leaves one free.
+        assert report["null_space"] == 1

@@ -862,13 +862,28 @@ def run(args) -> None:
     logging.info(loss_fn)
 
     # Cueq and OEQ conversion
-    if (args.enable_cueq or args.enable_oeq) and model.__class__.__name__ == (
-        "MACEDefect"
-    ):
-        raise NotImplementedError(
-            "cuEquivariance / OpenEquivariance conversion of the MACEDefect correction "
-            "heads is untested; run with --enable_cueq=False --enable_oeq=False"
-        )
+    if model.__class__.__name__ == "MACEDefect":
+        # cuEquivariance is verified against e3nn for the short-range model: energies
+        # agree to 9e-14 and forces to 2e-16 in float64 (test_defect_cueq.py). The
+        # correction heads are plain dense MLPs, so nothing there is converted; the gain
+        # is entirely in the trunk, which is where the time goes.
+        if args.enable_oeq:
+            raise NotImplementedError(
+                "OpenEquivariance conversion of MACEDefect is untested; use "
+                "--enable_cueq=True instead"
+            )
+        if args.enable_cueq and getattr(model, "use_long_range", False):
+            raise NotImplementedError(
+                "cuEquivariance conversion of MACEDefect has only been verified with "
+                "use_long_range=False; the latent-Ewald branch is untested under "
+                "conversion"
+            )
+        if args.enable_cueq:
+            logging.info(
+                "cuEquivariance pays off with width: measured 2.4x at 128 channels / "
+                "max_L=1, but 0.85x (a slowdown) at 8 channels, where kernel overhead "
+                "dominates. Benchmark before using it for small debug runs."
+            )
     if args.enable_cueq and args.enable_oeq:
         logging.warning(
             "Both CUEQ and OEQ are enabled, using CUEQ for training. "
@@ -884,6 +899,7 @@ def run(args) -> None:
             "PolarMACE",
             "MagneticScaleShiftMACE",
             "AtomicDielectricMACE",
+            "MACEDefect",
         ]
         model = run_e3nn_to_cueq(deepcopy(model), device=device)
     if args.enable_oeq:
@@ -1031,6 +1047,39 @@ def run(args) -> None:
                 "Please install it to use XPU device."
             )
 
+    # The novelty descriptor's scale constants are dataset statistics and must be fixed
+    # before the first forward: under logit seeding s_hat is an input, so they are part
+    # of the model definition and are saved as buffers.
+    if model.__class__.__name__ == "MACEDefect" and getattr(model, "logit_seed", False):
+        from mace.modules.defect_seed import calibrate_novelty
+
+        calibrate_novelty(model=model, data_loader=train_loader, device=device)
+
+    defect_seed_hook = None
+    if (
+        model.__class__.__name__ == "MACEDefect"
+        and getattr(model, "logit_seed", False)
+        and getattr(args, "defect_seed_anneal", False)
+    ):
+        from mace.modules.defect_seed import anneal_logit_seed
+
+        gamma_init = model.logit_seed_gamma.detach().clone()
+
+        def defect_seed_hook(epoch: int, current_model) -> None:
+            report = anneal_logit_seed(
+                model=current_model,
+                data_loader=train_loader,
+                device=device,
+                epoch=epoch,
+                zero_by_epoch=args.defect_seed_anneal_epochs,
+                gamma_init=gamma_init,
+            )
+            if report:
+                logging.info(
+                    f"Epoch {epoch}: logit-seed anneal gamma={report['gamma']}, "
+                    f"intrinsic gap={report['gap_intrinsic']}"
+                )
+
     tools.train(
         model=model,
         loss_fn=loss_fn,
@@ -1058,6 +1107,7 @@ def run(args) -> None:
         train_sampler=train_sampler,
         rank=rank,
         data_aug_magmom=args.data_aug_magmom,
+        epoch_hook=defect_seed_hook,
     )
 
     logging.info("")

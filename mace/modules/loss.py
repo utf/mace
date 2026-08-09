@@ -727,11 +727,18 @@ class DefectLoss(torch.nn.Module):
     intensive, of order the carrier binding energy, and dividing it by the atom count
     would make it vanish from the objective exactly in the large cells that matter.
 
-    Regularisation. The L2 on ``u`` is load-bearing rather than housekeeping: fitting a
-    bound carrier with a small attention weight would otherwise need a huge readout, and
-    it is the penalty on that which makes the optimiser buy localisation -- and hence
-    the logit gap that keeps the correction extensive (plan section 3.2). Record the
-    value used with the model, and re-check the extensivity bound whenever it changes.
+    Regularisation. The L2 on ``u`` was expected to be load-bearing -- the mechanism that
+    makes the optimiser buy localisation, and hence the logit gap that keeps the
+    correction extensive (plan section 3.2). It is **off by default**, because that
+    expectation did not survive measurement: the 4H-SiC divacancy reaches a logit gap of
+    about 11.7, comfortably meeting the section 3.2 requirement, with no regulariser at
+    all. The data prefers localisation here without being paid to.
+
+    Two further reasons not to switch it back on casually. It is a *mean* over sites, so
+    it is intensive and cannot penalise a bulk-wide level of ``u`` in the first place.
+    And it reaches carrier channels that no frame occupies, which the counter prefactor
+    would otherwise leave untouched -- breaking the dead-channel invariant that makes
+    live-channel behaviour interpretable (see ``test_dead_channels_are_never_updated``).
     """
 
     def __init__(
@@ -743,9 +750,11 @@ class DefectLoss(torch.nn.Module):
         total_energy_weight: float = 0.1,
         stress_weight: float = 0.0,
         pressure_weight: float = 0.0,
-        u_l2: float = 1e-4,
+        u_l2: float = 0.0,
+        zn_l2: float = 0.0,
         p_l2: float = 1e-4,
         qhost_l2: float = 1e-4,
+        detach_base_in_totals: bool = False,
         eps_inf: Optional[float] = None,
         eps_inf_prior_weight: float = 0.0,
     ) -> None:
@@ -763,16 +772,22 @@ class DefectLoss(torch.nn.Module):
                 name, torch.tensor(value, dtype=torch.get_default_dtype())
             )
         self.u_l2 = u_l2
+        self.zn_l2 = zn_l2
         self.p_l2 = p_l2
         self.qhost_l2 = qhost_l2
+        self.detach_base_in_totals = detach_base_in_totals
         self.eps_inf = eps_inf
         self.eps_inf_prior_weight = eps_inf_prior_weight
 
     def _totals_mask(self, ref: Batch) -> torch.Tensor:
-        """Charged configurations with no paired reference state."""
-        has_carriers = ref["carrier_counts"].sum(dim=-1) > 0
-        unpaired = ref["delta_energy_weight"] == 0
-        return (has_carriers & unpaired).to(ref.weight.dtype)
+        """Every configuration carrying carriers, i.e. all ``n != 0`` frames.
+
+        This used to select *unpaired* charged frames only, because the base branch was
+        detached here and paired frames already had delta supervision. Under corrected
+        labels that left total forces at every defect geometry supervised by nothing at
+        all, which is the gap this term now closes (plan A5.3).
+        """
+        return (ref["carrier_counts"].sum(dim=-1) > 0).to(ref.weight.dtype)
 
     def forward(
         self, ref: Batch, pred: TensorDict, ddp: Optional[bool] = None
@@ -790,16 +805,32 @@ class DefectLoss(torch.nn.Module):
             ref, pred, "delta_forces", "delta_forces_weight", ddp=ddp
         )
 
-        # (c) Unpaired totals, with the base branch detached.
+        # (c) Totals at n != 0, with the base branch receiving gradient.
+        #
+        # E_base at a defect geometry is a gauge, not an observable: shifting it by f(R)
+        # and letting the correction absorb -f leaves every label unchanged. Detaching it
+        # was the original protection against that. It is not needed, and it cost the
+        # base branch all supervision at defect geometries: the correction is
+        # sum_i alpha_i u_i with sum_i alpha_i = 1, so it is *intensive*, while E_base is
+        # a sum of local energies and so *extensive*. A bulk-wide base error therefore
+        # cannot be absorbed by the correction at any localisation of alpha -- the
+        # normalisation does that, not the localisation. The residual gauge freedom is
+        # confined to the defect-localised intensive part (plan A5.2).
+        #
+        # Note this must use the total energy at *this* frame's counter, not
+        # `delta_energy`, which is now a paired difference against n_ref and only equals
+        # the correction when n_ref = 0.
         mask = self._totals_mask(ref)
         if bool(mask.any()):
             num_atoms = _per_atom_counts(ref)
-            detached_total = pred["base_energy"].detach() + pred["delta_energy"]
+            total = pred["energy"]
+            if self.detach_base_in_totals:
+                total = pred["base_energy"].detach() + pred["correction_energy"]
             raw_energy = (
                 ref.weight
                 * ref.energy_weight
                 * mask
-                * torch.square((ref["energy"] - detached_total) / num_atoms)
+                * torch.square((ref["energy"] - total) / num_atoms)
             )
             loss = loss + self.total_energy_weight * reduce_loss(raw_energy, ddp)
             # Forces carry no referencing constant, so the raw total force is a valid
@@ -842,6 +873,11 @@ class DefectLoss(torch.nn.Module):
                 total = total.to(value.device) + weight * torch.mean(
                     torch.square(value)
                 )
+        # Already a squared norm of a weight slice, not a per-site quantity, so it is
+        # added directly rather than averaged.
+        counter_input = pred.get("counter_input_l2")
+        if self.zn_l2 > 0 and counter_input is not None:
+            total = total.to(counter_input.device) + self.zn_l2 * counter_input
         amplitude = pred.get("screening_amplitude")
         if (
             self.eps_inf_prior_weight > 0
