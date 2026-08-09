@@ -1085,6 +1085,14 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=20,
     )
     parser.add_argument(
+        "--defect_size_ema",
+        help="EMA decay for the per-channel contrast |c| used to place the size "
+        "threshold. The threshold is detached, so smoothing costs nothing and stops it "
+        "chasing per-batch noise",
+        type=float,
+        default=0.95,
+    )
+    parser.add_argument(
         "--defect_gauge_weight",
         help="Weight on the level-mode gauge penalty (stage D-opt). The softmax is "
         "shift-invariant, so a uniform offset in u^c moves the energy without moving "

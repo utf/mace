@@ -937,6 +937,7 @@ def get_loss_fn(
             size_ratio=args.defect_size_ratio,
             size_tol=args.defect_size_tol,
             size_warmup_epochs=args.defect_size_warmup_epochs,
+            size_ema_decay=args.defect_size_ema,
             gauge_weight=args.defect_gauge_weight,
         )
     elif args.loss == "l1l2energyforces":

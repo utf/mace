@@ -1,10 +1,10 @@
-"""The size-extensivity probe and hinge (size-extensivity plan, section 4).
+"""The size-extensivity probe and hinge (size plan section 4, as amended).
 
-These are written to discriminate, not to cover. The properties that matter are the ones
-that distinguish this term from every localisation penalty the plan rejected: it must be
-*exactly* zero when the site energies carry no defect contrast, and its gradient must push
-the shell logits **up**. A test that only checks the loss is finite would pass on a term
-that does neither.
+Written to discriminate rather than to cover. The properties that matter are the ones
+separating this term from every localisation penalty the plan rejected: it must be exempt
+when the site energies carry no defect contrast, its gradient must raise the gap and must
+*not* be able to flatten contrast, and it must be blind to a uniform shift of the logits.
+A test that only checks the loss is finite would pass on a term that does none of these.
 """
 
 import numpy as np
@@ -24,12 +24,12 @@ def two_level_cell(
     u_shell: float = -1.0,
     num_species: int = 2,
 ):
-    """One cell: ``num_shell`` atoms at a raised logit, the rest at a flat bulk level.
+    """``num_shell`` atoms at a raised logit, the rest on a flat bulk plateau.
 
-    This is the field the model actually produces -- beyond ``r_max * n_layers`` every
-    atom has an identical descriptor and hence an identical logit, so the logit field is
-    two-level rather than an exponentially decaying envelope. That is precisely why weight
-    leaks to bulk in proportion to N.
+    This is the field the model actually produces: beyond ``r_max * n_layers`` every atom
+    has an identical descriptor and hence an identical logit, so the logit field is
+    two-level rather than an exponentially decaying envelope. That flat plateau is what
+    leaks weight in proportion to N, and it was never physical.
     """
     total = num_bulk + num_shell
     logits = torch.zeros(total, CHANNELS, dtype=torch.float64)
@@ -37,142 +37,254 @@ def two_level_cell(
     readouts = torch.full((total, CHANNELS), u_bulk, dtype=torch.float64)
     readouts[:num_shell] = u_shell
     batch = torch.zeros(total, dtype=torch.long)
-    # Alternate species so both are present and the median reference is well defined.
     node_attrs = torch.zeros(total, num_species, dtype=torch.float64)
-    node_attrs[torch.arange(total) % num_species, ] = 0.0
     for index in range(total):
         node_attrs[index, index % num_species] = 1.0
     alpha = torch.softmax(logits, dim=0)
     return logits, readouts, alpha, batch, node_attrs
 
 
-class TestProbe:
-    def test_no_contrast_gives_exactly_zero_drift(self):
-        """The central claim: a state with no defect contrast is not penalised at all.
+def build_loss(**kwargs):
+    from mace.modules.loss import DefectLoss
 
-        A genuine band-edge or shallow carrier *should* be delocalised. Here ``u`` is
-        uniform while the logits are strongly peaked, so ``f`` is large -- and the drift
-        must still be exactly zero, because the padding would capture attention but no
-        energy. Entropy and participation penalties are large in exactly this situation,
-        which is why they were rejected.
-        """
-        logits, readouts, alpha, batch, node_attrs = two_level_cell(
-            u_bulk=0.3, u_shell=0.3
-        )
-        f, drift, _ = size_extensivity_probe(
-            logits, readouts, alpha, batch, node_attrs, num_graphs=1, ratio=1e4
-        )
-        assert float(f.max()) > 0.5, "precondition: the padding should capture weight"
-        # Analytically identically zero; in floating point it lands at rounding on
-        # quantities of order u itself (~1e-15 relative). Bounded far below the 1e-3
-        # tolerance the hinge uses, so "exactly zero" holds for every practical purpose.
-        assert float(drift.abs().max()) < 1e-12
+    defaults = dict(
+        energy_weight=0.0, forces_weight=0.0, delta_energy_weight=0.0,
+        delta_forces_weight=0.0, total_energy_weight=0.0, p_l2=0.0, qhost_l2=0.0,
+        size_weight=1.0, size_tol=1e-3, size_warmup_epochs=0, size_ratio=1e4,
+    )
+    defaults.update(kwargs)
+    return DefectLoss(**defaults)
 
-    def test_drift_grows_with_contrast(self):
-        """With contrast present the drift is non-zero and scales with it."""
-        results = []
-        for contrast in (0.5, 1.0, 2.0):
-            logits, readouts, alpha, batch, node_attrs = two_level_cell(
-                u_shell=-contrast
-            )
-            _, drift, _ = size_extensivity_probe(
-                logits, readouts, alpha, batch, node_attrs, num_graphs=1, ratio=1e4
-            )
-            results.append(float(drift.abs().max()))
-        assert results[0] < results[1] < results[2]
 
-    def test_the_lnA_path_raises_the_shell_logits(self):
-        """The intended mechanism, isolated.
+def make_inputs(counts=(1, 0, 0, 1), **cell):
+    logits, readouts, alpha, batch, node_attrs = two_level_cell(**cell)
 
-        Descending the penalty must **raise** the shell logits, so that the current
-        cell's normalisation outgrows the hypothetical padding. With ``<u>_alpha``
-        detached the only route left is through ``lnA``, and its sign must be negative
-        (gradient descent then increases the logit). Isolating it matters: the combined
-        gradient is dominated by the other path, which is measured separately below.
+    class FakeBatch(dict):
+        num_graphs = 1
+        weight = torch.ones(1, dtype=torch.float64)
+
+    ref = FakeBatch(
+        {
+            "batch": batch,
+            "node_attrs": node_attrs,
+            "carrier_counts": torch.tensor([counts], dtype=torch.long),
+        }
+    )
+    pred = {
+        "carrier_logits": logits,
+        "carrier_readouts": readouts,
+        "carrier_alpha": alpha,
+    }
+    return ref, pred
+
+
+class TestZeroSetEquivalence:
+    """The reformulation must not move the feasible set, only the coordinate."""
+
+    def test_sigma_x_c_le_tol_iff_x_le_threshold(self):
+        generator = torch.Generator().manual_seed(0)
+        for _ in range(500):
+            x = float(torch.randn(1, generator=generator) * 6.0)
+            contrast = float(torch.rand(1, generator=generator)) * 2.0
+            tol = float(torch.rand(1, generator=generator)) * 0.5
+            energy_space = torch.sigmoid(torch.tensor(x)) * contrast <= tol
+            t = tol / max(contrast, 1e-12)
+            if t >= 1.0:
+                log_space = True  # threshold is +inf: no x can violate
+            else:
+                log_space = x <= float(np.log(t / (1.0 - t)))
+            assert bool(energy_space) == bool(log_space), (x, contrast, tol)
+
+
+class TestGradient:
+    def test_lnA_gradient_survives_saturation(self):
+        """The failure the reformulation exists to fix.
+
+        At ``f > 0.99`` the energy-space form's gradient carried a factor ``f(1-f)`` and
+        effectively vanished. Here the gradient is linear in the violation, so it must be
+        of order one even when ``f`` is pinned.
         """
         logits, readouts, alpha, batch, node_attrs = two_level_cell(gap=2.0)
         logits = logits.clone().requires_grad_(True)
-        _, drift, _ = size_extensivity_probe(
-            logits, readouts, torch.softmax(logits.detach(), dim=0), batch,
-            node_attrs, num_graphs=1, ratio=1e4,
+        ref, pred = make_inputs()
+        pred["carrier_logits"] = logits
+        loss = build_loss()
+        loss.contrast_ema = torch.full((CHANNELS,), 1.0, dtype=torch.float64)
+        probe_f = torch.sigmoid(
+            size_extensivity_probe(
+                logits, readouts, alpha, batch, node_attrs, 1, 1e4
+            ).x
         )
-        drift.abs().sum().backward()
-        assert float(logits.grad[:6].sum()) < 0.0
+        assert float(probe_f.min()) > 0.99, "precondition: f is saturated"
 
-    @pytest.mark.parametrize("ratio, dominant", [(1e4, "contrast"), (10.0, "gap")])
-    def test_which_gradient_path_dominates(self, ratio, dominant):
-        """``f = sigmoid(lnB - lnA)`` saturates, and a saturated sigmoid has no gradient.
+        loss.size_penalty(ref, pred).backward()
+        gradient = float(logits.grad[:6].sum())
+        assert gradient < 0.0, "descent must RAISE the shell logits"
+        assert abs(gradient) > 1e-2, (
+            f"gradient {gradient} is vanishing; the f(1-f) suppression is back"
+        )
 
-        This records a real property of the term as specified rather than asserting a
-        preference. At large ``R`` the padding outweighs the cell so overwhelmingly that
-        ``f -> 1``, its derivative ``f(1-f) -> 0``, and the ``lnA`` path -- the only one
-        that raises the gap -- is suppressed by orders of magnitude. What survives is the
-        gradient through ``<u>_alpha``, which reduces the drift by flattening the defect
-        contrast instead. The two exchange dominance around the point where ``f`` comes
-        off its bound, i.e. where ``gap ~ ln(R N / k)``.
+    def test_contrast_carries_no_gradient(self):
+        """``c`` is detached, so the term cannot buy the constraint by flattening it.
 
-        Consequence for tuning: ``R`` is not a free statement of intent. It sets where the
-        term has any gradient at all, and at the plan's default of 1e4 that is only once
-        the gap is already near target.
+        Differentiating the *whole penalty*, not just ``x``: ``x`` has no functional
+        dependence on ``u`` at all, so backpropagating through it alone would prove
+        nothing. The threshold does depend on ``|c|``, and that is the route that has to
+        be dead.
         """
-        logits, readouts, alpha, batch, node_attrs = two_level_cell(gap=5.0)
+        logits, readouts, alpha, batch, node_attrs = two_level_cell()
+        logits = logits.clone().requires_grad_(True)
+        readouts = readouts.clone().requires_grad_(True)
+        ref, pred = make_inputs()
+        pred.update(
+            {"carrier_logits": logits, "carrier_readouts": readouts,
+             "carrier_alpha": alpha}
+        )
+        loss = build_loss()
+        loss.contrast_ema = torch.full((CHANNELS,), 1.0, dtype=torch.float64)
+        value = loss.size_penalty(ref, pred)
+        assert float(value) > 0.0, "precondition: the term must be active"
+        value.backward()
+        assert readouts.grad is None or float(readouts.grad.abs().max()) == 0.0
+        assert float(logits.grad.abs().max()) > 0.0
+
+    def test_uniform_logit_shift_leaves_x_and_the_gradient_alone(self):
+        """``x`` is shift-invariant as a function; the gradient must be too.
+
+        With a *detached* bulk reference ``dx/dl_i = -alpha_i``, which sums to -1, so the
+        optimiser would read uniform logit inflation as descent even though ``x`` does not
+        move. Averaging the reference live makes the sum exactly zero.
+        """
+        logits, readouts, alpha, batch, node_attrs = two_level_cell(gap=3.0)
+        base = size_extensivity_probe(
+            logits, readouts, alpha, batch, node_attrs, 1, 1e4
+        ).x
+        shifted = size_extensivity_probe(
+            logits + 7.5, readouts, alpha, batch, node_attrs, 1, 1e4
+        ).x
+        assert torch.allclose(base, shifted, atol=1e-9)
 
         live = logits.clone().requires_grad_(True)
         size_extensivity_probe(
-            live, readouts, torch.softmax(live.detach(), dim=0), batch, node_attrs,
-            1, ratio,
-        )[1].abs().sum().backward()
-        via_gap = abs(float(live.grad[:6].sum()))
+            live, readouts, alpha, batch, node_attrs, 1, 1e4
+        ).x.sum().backward()
+        assert float(live.grad.sum(dim=0).abs().max()) < 1e-9
 
-        live_u = logits.clone().requires_grad_(True)
+    def test_log_space_mean_bias_is_bounded_and_safe(self):
+        """Why a plain mean is admissible on the ``l`` side at all.
+
+        Averaging ``e^l`` would be dominated by the shell: ``ln(mean e^l)`` overshoots the
+        bulk level by ``gap - ln(N_Z/k_Z)``. Averaging ``l`` instead caps the pull at
+        ``k_Z gap / N_Z``, which shrinks as ``1/N`` -- and the sign matters as much as the
+        size, because overestimating ``ln B`` tightens the constraint and can never loosen
+        it.
+        """
+        num_bulk, num_shell, gap = 280, 6, 12.0
+        logits, *_ = two_level_cell(num_bulk=num_bulk, num_shell=num_shell, gap=gap)
+        total = num_bulk + num_shell
+        # Species 0 holds every other atom, so it carries half the shell.
+        column = logits[torch.arange(total) % 2 == 0][:, 0]
+        shell_in_species = int((column > 0).sum())
+        log_space = float(column.mean())
+        linear_space = float(torch.log(torch.exp(column).mean()))
+
+        predicted = shell_in_species * gap / len(column)
+        assert log_space == pytest.approx(predicted, rel=1e-6)
+        assert log_space < 0.4, "log-space bias must stay small"
+        assert linear_space > 7.0, "linear-space averaging is catastrophic, as claimed"
+        assert log_space > 0.0, "bias must tighten ln B, never loosen it"
+
+    def test_uniform_state_gradient_is_null(self):
+        """On a uniform cell the term cannot *create* a gap, only deepen one.
+
+        A second protection for genuinely delocalised carriers, alongside the ``|c| <=
+        tol`` exemption -- and the reason the warmup must sit after the escape phase.
+        """
+        logits, readouts, alpha, batch, node_attrs = two_level_cell(
+            num_shell=0, num_bulk=64, u_bulk=0.2, u_shell=0.2
+        )
+        live = logits.clone().requires_grad_(True)
         size_extensivity_probe(
-            live_u.detach(), readouts, torch.softmax(live_u, dim=0), batch, node_attrs,
-            1, ratio,
-        )[1].abs().sum().backward()
-        via_contrast = abs(float(live_u.grad[:6].sum()))
+            live, readouts, torch.softmax(live, dim=0), batch, node_attrs, 1, 1e4
+        ).x.sum().backward()
+        assert float(live.grad.abs().max()) < 1e-9
 
-        if dominant == "gap":
-            assert via_gap > via_contrast
-        else:
-            assert via_contrast > via_gap
+
+class TestExemption:
+    def test_no_contrast_is_exempt_for_any_dilution(self):
+        ref, pred = make_inputs(cell=None) if False else make_inputs(
+            u_bulk=0.3, u_shell=0.3
+        )
+        loss = build_loss()
+        loss.size_penalty(ref, pred)  # primes the EMA
+        assert float(loss.size_penalty(ref, pred)) == 0.0
+        assert loss.last_size_exempt > 0
+
+    def test_threshold_is_continuous_approaching_t_equals_one(self):
+        """``x* -> +inf`` smoothly as ``|c| -> tol``, rather than switching at a branch."""
+        loss = build_loss(size_tol=1e-3)
+        counts = torch.tensor([[1, 0, 0, 1]])
+        previous = -float("inf")
+        for magnitude in (2e-3, 1.5e-3, 1.1e-3, 1.01e-3, 1.001e-3):
+            loss.contrast_ema = torch.full((CHANNELS,), magnitude, dtype=torch.float64)
+            value = float(loss.size_threshold(counts)[0, 0])
+            assert value > previous, "threshold must rise monotonically toward +inf"
+            previous = value
+        loss.contrast_ema = torch.full((CHANNELS,), 1e-3, dtype=torch.float64)
+        assert not torch.isfinite(loss.size_threshold(counts)[0, 0])
+
+    def test_zero_tolerance_is_maximally_strict_not_silently_off(self):
+        """``tol = 0`` must be the tightest setting, not a disabled one.
+
+        ``t -> 0`` sends ``ln(t/(1-t)) -> -inf``, which is non-finite in the same way the
+        exemption's ``+inf`` is. A caller filtering on ``isfinite`` would then skip the
+        channel and switch the term off precisely when it was demanded most. Caught in a
+        real run, where ``size_viol`` sat at 0 with ``--defect_size_tol 0``.
+        """
+        ref, pred = make_inputs()
+        loss = build_loss(size_tol=0.0)
+        loss.size_penalty(ref, pred)  # primes the EMA
+        value = float(loss.size_penalty(ref, pred))
+        assert value > 0.0, "zero tolerance must produce an active, finite penalty"
+        threshold = loss.size_threshold(ref["carrier_counts"])
+        assert bool(torch.isfinite(threshold).all())
+
+    def test_tolerance_is_divided_by_the_carrier_count(self):
+        """``n_c`` sets a per-channel drift budget rather than an outer weight."""
+        loss = build_loss()
+        loss.contrast_ema = torch.full((CHANNELS,), 1.0, dtype=torch.float64)
+        one = float(loss.size_threshold(torch.tensor([[1, 0, 0, 0]]))[0, 0])
+        two = float(loss.size_threshold(torch.tensor([[2, 0, 0, 0]]))[0, 0])
+        assert two < one, "two carriers must get a tighter threshold"
+
+
+class TestPlumbing:
+    def test_warmup_gate_is_restart_safe(self):
+        ref, pred = make_inputs()
+        loss = build_loss(size_warmup_epochs=20)
+        loss.current_epoch = 5
+        assert float(loss.size_penalty(ref, pred)) == 0.0
+        loss.current_epoch = 50
+        assert float(loss.size_penalty(ref, pred)) > 0.0
+
+    def test_zero_weight_is_exactly_off(self):
+        ref, pred = make_inputs()
+        assert float(build_loss(size_weight=0.0).size_penalty(ref, pred)) == 0.0
+
+    def test_dead_channels_are_excluded(self):
+        ref_dead, pred = make_inputs(counts=(0, 0, 0, 0))
+        assert float(build_loss().size_penalty(ref_dead, pred)) == 0.0
 
     def test_survives_logits_at_the_clamp(self):
         """``e^40`` overflows float32; the term must live entirely in log space."""
         logits, readouts, alpha, batch, node_attrs = two_level_cell(gap=40.0)
-        logits = logits.to(torch.float32)
-        readouts = readouts.to(torch.float32)
-        node_attrs = node_attrs.to(torch.float32)
-        alpha = torch.softmax(logits, dim=0)
-        f, drift, clamped = size_extensivity_probe(
-            logits, readouts, alpha, batch, node_attrs, num_graphs=1, ratio=1e4,
-            logit_clamp=40.0,
+        probe = size_extensivity_probe(
+            logits.to(torch.float32), readouts.to(torch.float32),
+            torch.softmax(logits.to(torch.float32), dim=0), batch,
+            node_attrs.to(torch.float32), 1, 1e4, logit_clamp=40.0,
         )
-        assert torch.isfinite(f).all() and torch.isfinite(drift).all()
-        # 6 shell atoms of 66 are sitting on the bound.
-        assert float(clamped[0, 0]) == pytest.approx(6 / 66, abs=1e-6)
-
-    def test_median_reference_tracks_bulk_not_the_shell(self):
-        """A mean bulk reference would be dominated by a handful of ``e^{12}`` sites.
-
-        The plan calls the median load-bearing rather than cosmetic, and this is that
-        claim, tested directly on the reference itself rather than on the drift. The
-        padding-weighted site energy is recoverable from the returned quantities, since
-        ``drift = f (ubar_w - <u>_alpha)``, and it must sit on the **bulk** value even
-        though the shell is far more extreme.
-        """
-        shell_u, bulk_u = -5.0, 0.25
-        logits, readouts, alpha, batch, node_attrs = two_level_cell(
-            num_shell=6, gap=12.0, u_shell=shell_u, u_bulk=bulk_u
-        )
-        f, drift, _ = size_extensivity_probe(
-            logits, readouts, alpha, batch, node_attrs, num_graphs=1, ratio=1e4
-        )
-        pooled = float((alpha * readouts).sum(dim=0)[0])
-        recovered = float(drift[0, 0] / f[0, 0]) + pooled
-        assert recovered == pytest.approx(bulk_u, abs=1e-9), (
-            "the padded reference must be the bulk site energy; a mean would be dragged "
-            f"toward {shell_u}"
-        )
+        assert torch.isfinite(probe.x).all() and torch.isfinite(probe.contrast).all()
+        assert float(probe.clamped[0, 0]) == pytest.approx(6 / 66, abs=1e-6)
 
     def test_segment_logsumexp_matches_torch(self):
         values = torch.randn(40, CHANNELS, dtype=torch.float64)
@@ -184,75 +296,25 @@ class TestProbe:
 
     def test_ratio_must_exceed_one(self):
         with pytest.raises(ValueError, match="ratio must exceed 1"):
-            size_extensivity_probe(
-                *two_level_cell(), num_graphs=1, ratio=1.0
-            )
+            size_extensivity_probe(*two_level_cell(), num_graphs=1, ratio=1.0)
 
 
-class TestHinge:
-    """The loss wrapper: tolerance, dead channels and the warmup gate."""
+class TestSaturationRegressionGuard:
+    """Retained from the superseded f-space form.
 
-    @staticmethod
-    def build_loss(**kwargs):
-        from mace.modules.loss import DefectLoss
+    It encodes a failure that is invisible in the loss value: at ``R = 1e4`` the sigmoid
+    pins at 1, so any term whose gradient carries an ``f(1-f)`` factor is silently inert
+    while appearing to train. If anyone reformulates back into energy space this fires.
+    """
 
-        defaults = dict(
-            energy_weight=0.0, forces_weight=0.0, delta_energy_weight=0.0,
-            delta_forces_weight=0.0, total_energy_weight=0.0, p_l2=0.0, qhost_l2=0.0,
-            size_weight=1.0, size_tol=0.0, size_warmup_epochs=0, size_ratio=1e4,
+    def test_f_is_saturated_at_the_default_ratio(self):
+        logits, readouts, alpha, batch, node_attrs = two_level_cell(gap=5.0)
+        probe = size_extensivity_probe(
+            logits, readouts, alpha, batch, node_attrs, 1, 1e4
         )
-        defaults.update(kwargs)
-        return DefectLoss(**defaults)
-
-    @staticmethod
-    def make_inputs(counts=(1, 0, 0, 1)):
-        logits, readouts, alpha, batch, node_attrs = two_level_cell()
-        ref = {
-            "batch": batch,
-            "node_attrs": node_attrs,
-            "carrier_counts": torch.tensor([counts], dtype=torch.long),
-        }
-
-        class FakeBatch(dict):
-            num_graphs = 1
-            weight = torch.ones(1, dtype=torch.float64)
-
-        pred = {
-            "carrier_logits": logits,
-            "carrier_readouts": readouts,
-            "carrier_alpha": alpha,
-        }
-        return FakeBatch(ref), pred
-
-    def test_active_term_is_positive(self):
-        ref, pred = self.make_inputs()
-        value = self.build_loss().size_penalty(ref, pred)
-        assert float(value) > 0.0
-
-    def test_tolerance_switches_it_off(self):
-        ref, pred = self.make_inputs()
-        loose = self.build_loss(size_tol=10.0).size_penalty(ref, pred)
-        assert float(loose) == 0.0
-
-    def test_warmup_gate(self):
-        ref, pred = self.make_inputs()
-        loss = self.build_loss(size_warmup_epochs=20)
-        loss.current_epoch = 5
-        assert float(loss.size_penalty(ref, pred)) == 0.0
-        # A restart lands the trainer's absolute epoch straight into the active region;
-        # the term must be on immediately rather than serving the warmup again.
-        loss.current_epoch = 50
-        assert float(loss.size_penalty(ref, pred)) > 0.0
-
-    def test_dead_channels_contribute_nothing(self):
-        """``n_c = 0`` zeroes a channel through the ``n_c^2`` weight, for free."""
-        ref_live, pred = self.make_inputs(counts=(1, 1, 1, 1))
-        ref_dead, _ = self.make_inputs(counts=(1, 0, 0, 0))
-        loss = self.build_loss()
-        assert float(loss.size_penalty(ref_live, pred)) > float(
-            loss.size_penalty(ref_dead, pred)
+        assert float(probe.f.min()) > 0.99
+        suppression = float((probe.f * (1 - probe.f)).max())
+        assert suppression < 1e-2, (
+            "f(1-f) is the factor the energy-space gradient carried; it is ~0 here, which "
+            "is why the term is formulated in x-space instead"
         )
-
-    def test_zero_weight_is_exactly_off(self):
-        ref, pred = self.make_inputs()
-        assert float(self.build_loss(size_weight=0.0).size_penalty(ref, pred)) == 0.0

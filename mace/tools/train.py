@@ -194,18 +194,25 @@ def valid_err_log(
                 ("gap_int", "defect_gap_intrinsic", 1.0),
                 # Share of attention an R-fold larger cell would capture; ~0 is the goal.
                 ("size_f", "defect_size_f", 1.0),
-                # The energy that share would move, in meV. This is the acceptance number.
-                ("drift_meV", "defect_size_drift", 1e3),
+                # The log-ratio the term actually descends, its threshold, and whether the
+                # constraint is binding. x alone says nothing without x*.
+                ("size_x", "defect_size_x", 1.0),
+                ("size_x*", "defect_size_threshold", 1.0),
+                ("size_viol", "defect_size_violation", 1.0),
+                ("|c|", "defect_size_contrast", 1.0),
                 ("clamped", "defect_logit_clamped", 1.0),
                 ("gauge_u", "defect_gauge_u", 1.0),
             )
         ]
         parts = [(name, text) for name, text in parts if text is not None]
-        share = metrics.get("defect_size_share")
+        share = eval_metrics.get("defect_size_share")
         if share is not None:
             # Scalar, not per channel: the calibration target the plan states is a single
             # ratio against the delta-energy term.
             parts.append(("size/dE", f"{share:.3f}"))
+        exempt = eval_metrics.get("defect_size_exempt")
+        if exempt is not None:
+            parts.append(("exempt", f"{exempt:.0f}"))
         if parts:
             logging.info(
                 f"{inintial_phrase}: carrier channels (e_maj e_min h_maj h_min): "
@@ -754,8 +761,14 @@ class MACELoss(Metric):
         # error in eV, `logit_clamped` the fraction of logits pinned at the clamp bound --
         # which receive no gradient, so a run can stall there without any other sign.
         self.add_state("defect_size_f", default=[], dist_reduce_fx="cat")
-        self.add_state("defect_size_drift", default=[], dist_reduce_fx="cat")
+        self.add_state("defect_size_x", default=[], dist_reduce_fx="cat")
+        self.add_state("defect_size_threshold", default=[], dist_reduce_fx="cat")
+        self.add_state("defect_size_violation", default=[], dist_reduce_fx="cat")
+        self.add_state("defect_size_contrast", default=[], dist_reduce_fx="cat")
         self.add_state("defect_logit_clamped", default=[], dist_reduce_fx="cat")
+        # How often the |c| <= tol exemption fires. Frequent firing means contrast has
+        # collapsed, which is a finding about the fit rather than a nuisance.
+        self.add_state("defect_size_exempt", default=torch.tensor(0.0), dist_reduce_fx="sum")
         # Pooled u at the training counters on pristine cells: the level-mode diagnostic
         # of stage D-opt, which says whether the gauge is drifting even with the penalty
         # off. Empty unless gauge counters were configured on the model.
@@ -859,7 +872,7 @@ class MACELoss(Metric):
                 ratio = float(getattr(self.loss_fn, "size_ratio", 0.0))
                 if logits is not None and ratio > 1.0:
                     with torch.no_grad():
-                        size_f, size_drift, clamped = size_extensivity_probe(
+                        probe = size_extensivity_probe(
                             logits=logits,
                             readouts=readouts,
                             alpha=alpha,
@@ -868,9 +881,35 @@ class MACELoss(Metric):
                             num_graphs=num_graphs,
                             ratio=ratio,
                         )
-                    self.defect_size_f.append(size_f[carriers])
-                    self.defect_size_drift.append(size_drift[carriers])
-                    self.defect_logit_clamped.append(clamped[carriers])
+                        threshold = self.loss_fn.size_threshold(
+                            batch.carrier_counts.view(num_graphs, -1)
+                        )
+                        # Violation is what the term actually descends; x and x* alone do
+                        # not say whether the constraint is binding. Masked by n_c > 0 as
+                        # well as by the exemption, or a dead channel reports a large
+                        # violation the loss is in fact ignoring -- which is exactly what
+                        # this line looked like before the mask was added.
+                        channel_live = batch.carrier_counts.view(num_graphs, -1) > 0
+                        violation = torch.where(
+                            torch.isfinite(threshold) & channel_live,
+                            (probe.x - threshold).clamp_min(0.0),
+                            torch.zeros_like(probe.x),
+                        )
+                    self.defect_size_f.append(probe.f[carriers])
+                    self.defect_size_x.append(probe.x[carriers])
+                    self.defect_size_threshold.append(
+                        torch.where(
+                            torch.isfinite(threshold),
+                            threshold,
+                            torch.full_like(threshold, float("nan")),
+                        )[carriers]
+                    )
+                    self.defect_size_violation.append(violation[carriers])
+                    self.defect_size_contrast.append(probe.contrast.abs()[carriers])
+                    self.defect_logit_clamped.append(probe.clamped[carriers])
+                    self.defect_size_exempt += float(
+                        (~torch.isfinite(threshold))[carriers].sum()
+                    )
                 self.defect_shape_computed += float(carriers.sum())
             # The gauge probe is the mirror image: it lives on the *pristine* frames,
             # where band-edge referencing pins the pooled readout to zero.
@@ -991,13 +1030,23 @@ class MACELoss(Metric):
                 ("delta_u", self.defect_delta_u),
                 ("gap_intrinsic", self.defect_gap_intrinsic),
                 ("size_f", self.defect_size_f),
-                ("size_drift", self.defect_size_drift),
+                ("size_x", self.defect_size_x),
+                ("size_threshold", self.defect_size_threshold),
+                ("size_violation", self.defect_size_violation),
+                ("size_contrast", self.defect_size_contrast),
                 ("logit_clamped", self.defect_logit_clamped),
             ):
                 if not state:
                     continue
                 stacked = torch.cat([item.detach() for item in state], dim=0)
-                aux[f"defect_{name}"] = stacked.mean(dim=0).cpu().tolist()
+                # nanmean: the threshold is NaN-filled on exempt channels, and a plain
+                # mean would let one exempt frame poison the whole column.
+                pooled = (
+                    torch.nanmean(stacked, dim=0)
+                    if name == "size_threshold"
+                    else stacked.mean(dim=0)
+                )
+                aux[f"defect_{name}"] = pooled.cpu().tolist()
         # Gauge lives on pristine frames, so it is gated separately -- a batch can hold
         # carrier-bearing frames and no pristine ones, or the reverse.
         if self.defect_gauge_u:
@@ -1007,6 +1056,8 @@ class MACELoss(Metric):
             aux["defect_size_share"] = float(
                 self.defect_size_share / self.defect_size_batches
             )
+        if self.defect_shape_computed:
+            aux["defect_size_exempt"] = float(self.defect_size_exempt)
         if self.stress_computed:
             delta_stress = self.convert(self.delta_stress)
             aux["mae_stress"] = compute_mae(delta_stress)

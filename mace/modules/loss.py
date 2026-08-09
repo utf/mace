@@ -13,6 +13,7 @@ import torch.distributed as dist
 from mace.tools import TensorDict
 from mace.tools.torch_geometric import Batch
 
+from .defect_blocks import NUM_CARRIER_CHANNELS
 from .defect_size import size_extensivity_probe
 
 
@@ -763,6 +764,8 @@ class DefectLoss(torch.nn.Module):
         size_ratio: float = 1e4,
         size_tol: float = 1e-3,
         size_warmup_epochs: int = 20,
+        size_ema_decay: float = 0.95,
+        size_contrast_eps: float = 1e-9,
         gauge_weight: float = 0.0,
     ) -> None:
         super().__init__()
@@ -789,7 +792,19 @@ class DefectLoss(torch.nn.Module):
         self.size_ratio = size_ratio
         self.size_tol = size_tol
         self.size_warmup_epochs = size_warmup_epochs
+        self.size_ema_decay = size_ema_decay
+        self.size_contrast_eps = size_contrast_eps
         self.gauge_weight = gauge_weight
+        # Running |c| per channel, used only to place the (detached) threshold. A buffer so
+        # it survives checkpointing: restarting with a cold EMA would put every channel in
+        # the exempt branch for the first few batches and briefly switch the term off.
+        self.register_buffer(
+            "contrast_ema",
+            torch.zeros(NUM_CARRIER_CHANNELS, dtype=torch.get_default_dtype()),
+        )
+        self.last_size_exempt = 0.0
+        self.last_size_x: Optional[torch.Tensor] = None
+        self.last_size_threshold: Optional[torch.Tensor] = None
         # Set by the trainer's epoch hook from the *absolute* epoch, so a run restarted
         # past the warmup resumes with the term already active. Getting this from a
         # counter local to the loss would silently re-serve the warmup on every restart --
@@ -883,37 +898,68 @@ class DefectLoss(torch.nn.Module):
         loss = loss + self.regularisation(pred)
         return loss
 
+    def size_threshold(self, counts: torch.Tensor) -> torch.Tensor:
+        """``x*_c = ln(t/(1-t))`` with ``t = (tol/n_c) / |c|_EMA``; ``+inf`` when ``t >= 1``.
+
+        The constraint being expressed is ``sigma(x)|c| <= tol_c``. Since ``sigma`` is
+        monotone that is exactly ``x <= x*``, so this threshold defines the *same* feasible
+        set as the superseded energy-space hinge -- only the coordinate differs.
+
+        ``t >= 1`` means the contrast is already inside tolerance, so no ``x`` can violate
+        the constraint and the channel is exempt for any amount of dilution. That is the
+        delocalised-carrier exemption, and it arrives continuously as ``|c| -> tol`` rather
+        than as a branch: ``x* -> +inf`` smoothly from below.
+
+        ``n_c`` enters through the tolerance rather than as an outer weight. The old
+        ``n_c^2`` factor was justified by the penalised quantity being an energy; ``x`` is a
+        dimensionless log-ratio, so that argument does not carry over. A per-channel drift
+        budget does: a channel carrying two carriers may drift half as far.
+        """
+        counts = counts.to(self.contrast_ema.dtype)
+        per_channel_tol = self.size_tol / counts.clamp_min(1.0)
+        magnitude = self.contrast_ema.clamp_min(self.size_contrast_eps)
+        t = (per_channel_tol / magnitude).clamp_max(1.0)
+        satisfied = t >= 1.0
+        # Floored as well as capped. Only ``t >= 1`` -- contrast already inside tolerance --
+        # means exempt, and that is the branch the caller skips. ``t -> 0`` is the opposite
+        # extreme, a maximally strict constraint, and it must stay *finite*: an unfloored
+        # ``log(0) = -inf`` is non-finite too, so a caller testing ``isfinite`` would read
+        # the strictest possible setting as "no constraint" and switch the term off exactly
+        # when it was asked for most. Observed with ``--defect_size_tol 0``.
+        safe = t.clamp(min=1e-12, max=1.0 - 1e-12)
+        threshold = torch.log(safe / (1.0 - safe))
+        return torch.where(
+            satisfied, torch.full_like(threshold, float("inf")), threshold
+        )
+
     def size_penalty(
         self, ref: Batch, pred: TensorDict, ddp: Optional[bool] = None
     ) -> torch.Tensor:
-        """Hinge on the drift an ``R``-fold larger cell would show (size plan section 4).
+        """Hinge in log-ratio space (size plan section 4, as amended).
 
-        ``L_size = sum_c n_c^2 max(0, |f_c (ubar_w - <u>_alpha)_c| - tol)^2``
+        ``L_size = sum_{c: n_c > 0} max(0, x_c - x*_c)^2``
 
-        Three properties, all deliberate. The **hinge** stops pushing once the drift is
-        inside tolerance, so this does not fight the energy objective permanently -- it
-        re-arms only if the fit drifts back out. The ``n_c^2`` weight zeroes dead channels
-        for free and matches each channel's actual contribution to the energy. And the
-        term is **silent early in training**: before ``u`` develops any defect contrast the
-        drift is ~0, so it cannot interfere with the seeding and annealing machinery, which
-        is why the warmup is a backstop rather than the main protection.
+        Same zero-set as penalising the energy drift ``sigma(x)|c|`` directly, but the
+        gradient is ``-2 max(0, x - x*)`` in ``ln A`` -- linear in the violation and never
+        vanishing. The energy-space form's gradient carried a factor ``f(1-f)``, which is
+        ~0 exactly where the term is most needed, and its only reachable optimum at
+        ``f -> 1`` was to flatten the defect contrast. Here ``c`` is detached throughout, so
+        that route does not exist at all.
 
-        One direction to watch. The gradient reaches the drift through ``<u>_alpha`` as
-        well as through ``f``, so the hinge can in principle be bought by flattening the
-        defect contrast instead of by localising. That is intended where the state really
-        is delocalised -- it is what makes this a dilution penalty rather than a
-        localisation penalty -- but it is a degenerate direction for a bound state. The
-        tell is ``delta_u`` in the per-epoch log collapsing when the term activates; the
-        held-out ``RMSE_dE`` acceptance in section 7 is the backstop.
+        Badly-violated behaviour is gentler too: the penalty grows like ``(ln|c|)^2``
+        rather than ``|c|^2``, which is better conditioned.
+
+        Still silent early in training: before ``u`` develops contrast ``|c| < tol``, so
+        every channel is exempt. The warmup remains a backstop, and matters for a second
+        reason -- on a uniform state the gradient is identically zero, so the term can only
+        deepen a gap that already exists, never create one.
         """
         zero = torch.zeros((), dtype=ref.weight.dtype, device=ref.weight.device)
-        if self.size_weight <= 0.0 or self.current_epoch < self.size_warmup_epochs:
-            return zero
         logits = pred.get("carrier_logits")
         if logits is None or pred.get("carrier_readouts") is None:
             return zero
         num_graphs = int(ref.num_graphs)
-        _, drift, _ = size_extensivity_probe(
+        probe = size_extensivity_probe(
             logits=logits,
             readouts=pred["carrier_readouts"],
             alpha=pred["carrier_alpha"],
@@ -922,15 +968,34 @@ class DefectLoss(torch.nn.Module):
             num_graphs=num_graphs,
             ratio=self.size_ratio,
         )
-        counts = ref["carrier_counts"].view(num_graphs, -1).to(drift.dtype)
-        excess = (drift.abs() - self.size_tol).clamp_min(0.0)
-        raw = ref.weight * (counts.pow(2) * excess.pow(2)).sum(dim=-1)
+        counts = ref["carrier_counts"].view(num_graphs, -1)
+        live = counts > 0
+
+        # The threshold is detached by construction, so smoothing it across batches costs
+        # nothing and stops it chasing per-batch noise in |c|.
+        if torch.is_grad_enabled() and bool(live.any()):
+            observed = (probe.contrast.abs() * live).sum(dim=0) / live.sum(dim=0).clamp_min(1)
+            self.contrast_ema.mul_(self.size_ema_decay).add_(
+                observed.to(self.contrast_ema.dtype) * (1.0 - self.size_ema_decay)
+            )
+
+        threshold = self.size_threshold(counts)
+        self.last_size_exempt = float((~torch.isfinite(threshold) & live).sum())
+        self.last_size_x = probe.x.detach()
+        self.last_size_threshold = threshold
+        if self.size_weight <= 0.0 or self.current_epoch < self.size_warmup_epochs:
+            return zero
+        violation = torch.where(
+            torch.isfinite(threshold) & live,
+            (probe.x - threshold).clamp_min(0.0),
+            torch.zeros_like(probe.x),
+        )
+        raw = ref.weight * violation.pow(2).sum(dim=-1)
         value = self.size_weight * reduce_loss(raw, ddp)
         # The plan asks for lambda_size calibrated to ~5-10% of the delta-energy loss and
-        # for the *realised* ratio to be logged, not the intended one -- the two diverge
-        # as the fit moves, and a weight chosen once at the start says nothing about what
-        # the term is worth at epoch 80. Stashed rather than returned so the signature
-        # stays a plain loss.
+        # for the *realised* ratio to be logged, not the intended one -- the two diverge as
+        # the fit moves, and the loss is now dimensionless so the previous weight carries
+        # no meaning at all.
         self.last_size_value = float(value.detach())
         return value
 

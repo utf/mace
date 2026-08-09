@@ -228,3 +228,158 @@ and with what `w` and anneal schedule, the frozen `ε_∞` and `a`, and the gaug
 weight. Record per-channel implied gaps and `N*` at convergence, per seed — these define the
 cell-size range the model is valid over and should be stated wherever it is used.
 
+
+
+## !! Update after initial implementation
+
+# L_size — amendment: reformulate in log-ratio space
+
+Supersedes the `f`-space hinge in §4 of the size-extensivity plan. The zero-set is
+unchanged; the gradient is not. Everything below is training-time only — no architecture
+change, no inference-time change, `Σ_i α_i = 1` untouched.
+
+## 1. Why the shipped form must change
+
+With `D = f·c`, `f = σ(ln B − ln A)`, `c = ū_w − ⟨u⟩_α`:
+
+```
+∂D/∂(ln A) = −f(1−f)·c        # raises the gap — what we want
+∂D/∂c      = f                 # flattens defect contrast — what we don't
+```
+
+The ratio of the two is exactly `(1−f)`. At the plan's `R = 1e4`, `f` pins at 1.000 on
+286-atom cells, so the useful path is suppressed by ~10⁻³ and the term descends by
+destroying defect contrast — the failure it exists to prevent.
+
+At `f = 1` the feasible set `|f·c| ≤ tol` degenerates to `|c| ≤ tol`, i.e. contrast below
+5 meV. The term's unique optimum is the pathology.
+
+`R` is not at fault and must not be reduced to work around this: `R` states the validity
+range, and lowering it to restore trainability trades the specification for the optimiser's
+convenience. The reformulation decouples the two.
+
+*(Note: the implementation write-up quotes "3–4 orders of magnitude" where the table shows
+~48×. Fix the docstring to match the table before this is cited anywhere.)*
+
+## 2. The reformulated term
+
+`σ` is monotone, so `σ(x)·|c| ≤ tol ⟺ x ≤ ln(t/(1−t))` with `t = tol/|c|`. Penalise in
+`x`-space:
+
+```
+x_c   = ln B_c − ln A_c                       # log-ratio, as before (logsumexp)
+t_c   = tol_c / max(|c_c|_EMA, eps_c)         # c detached and EMA-smoothed
+x*_c  = ln( t_c / (1 − t_c) )                 # threshold; +inf when t_c >= 1
+L_size = Σ_{c : n_c > 0}  max(0, x_c − x*_c)²
+```
+
+`∂/∂(ln A) = −2·max(0, x − x*)` — linear in the gap, never vanishing while violated.
+
+### Properties verified against the original spec
+
+| Property | Status |
+|---|---|
+| Exempt at zero contrast | Holds. `|c| → 0` ⇒ `t → ∞` ⇒ `x* → +∞`, penalty inactive for any `x`. Continuous, not a branch |
+| Hinge stops when satisfied | Holds |
+| Silent before contrast develops | Holds |
+| Badly-violated behaviour | `(ln|c|)²` rather than `|c|²` — gentler, better conditioned |
+| Convergence | `f ∝ e^{−gap}` falls exponentially while `|c|` saturates; constraint closes at `gap ≈ ln(RN/k) + ln(Δu/tol)` ≈ 18 on current numbers |
+| Labels / structures / inference inputs | None, as before |
+
+## 3. Required alongside — gradient structure of the bulk reference
+
+Two properties are needed, and they are not the same:
+
+- **Shift-invariance:** `Σ_i ∂x/∂ℓ_i = 0`, so uniform logit inflation is not a descent
+  direction.
+- **Uniform-state null:** `∂x/∂ℓ_i = 0` *pointwise* on a uniform state, so `L_size` cannot
+  create structure where none exists.
+
+With `w_Z = m_Z e^{ℓ̄_Z}/B`, the gradient is `∂x/∂ℓ_i = w_{Z_i}·(∂ℓ̄_{Z_i}/∂ℓ_i) − α_i`.
+
+**Use the plain arithmetic mean of `ℓ` in log space, undetached:**
+
+```
+ℓ̄_Z = (1/N_Z) Σ_{i : Z_i = Z} ℓ_i          # NOT detached, NOT trimmed, NOT median
+ū_Z = median_{i : Z_i = Z} u_i               # detached — robustness is free here
+```
+
+Then `∂ℓ̄_Z/∂ℓ_i = 1/N_Z` for every atom of that species, giving
+`∂x/∂ℓ_i = w_Z/N_Z − α_i`, which:
+
+- sums to `Σ_Z w_Z − 1 = 0` exactly, always — shift-invariance holds unconditionally;
+- equals `1/N − 1/N = 0` pointwise on a uniform state with matched composition, since
+  `w_Z = N_Z/N` there — uniform-state null holds;
+- in the localised regime gives defect atoms `1/N − α_i` (strongly negative ⇒ logits rise)
+  and bulk atoms a small positive value (⇒ logits fall). Correct direction on both.
+
+**Do not detach, trim, or use a median on the `ℓ` side.** Detaching gives
+`∂x/∂ℓ_i = −α_i`, summing to `−1`: uniform inflation becomes a false descent direction.
+Trimming gives `∂ℓ̄_Z/∂ℓ_i = (1/N_Z^kept)·1[i kept]`, which sums to zero but is **nonzero
+pointwise on a uniform state** (`−1/N` on trimmed atoms, measured). Since two-sided trimming
+selects by extremal `ℓ`, which is arbitrary under ties, that would promote seed-determined
+atoms — the premature-commitment failure mode, reintroduced.
+
+**Why the mean is safe in log space.** The median was originally motivated by shell atoms at
+`e^ℓ ~ e^{12}` dominating the average. That applies to averaging in *linear* space —
+`ln(mean_i e^{ℓ_i})` overestimates `ℓ_bulk` by `gap − ln(N_Z/k_Z)` ≈ 8 at gap 12. In log
+space the shift is only `k_Z·gap/N_Z` ≈ 0.25 at N = 286, gap 12, and 0.38 at gap 18:
+bounded, shrinking as `1/N`, and biased so that `ln B` is overestimated — the constraint is
+marginally tightened, never loosened.
+
+**Fallback if that bias is ever measured to matter** (much smaller cells, or many defect
+atoms per species): straight-through median,
+`ℓ̄ = median.detach() + mean − mean.detach()` — robust value, mean gradient, both properties
+preserved, ~0.6% gradient bias at current localisation. Do not adopt pre-emptively.
+
+**Consequence for warmup.** With the uniform-state null restored, `L_size` cannot create a
+gap on a uniform state, only deepen an existing one. Keep the post-escape warmup as good
+practice, but it is no longer the sole guard against structure creation.
+
+## 4. Other changes
+
+- **Move `n_c` into the tolerance:** `tol_c = tol / n_c`, outer weight an indicator on
+  `n_c > 0`. The `n_c²` weighting was justified by `D` being an energy; `x` is a log-ratio,
+  so that justification does not transfer. Per-channel drift budget does.
+- **Recalibrate `λ_size` from scratch.** The loss is now dimensionless; the previous value
+  carries no meaning. Target 5–10% of `L_Δ` when active and log the realised ratio.
+- **EMA-smooth `|c|`** per channel before forming `x*`, so a detached threshold does not
+  chase per-batch noise.
+- **Guard `t ≥ 1`:** when `|c| ≤ tol` the constraint is satisfied for any `x` — return zero.
+  Use an `eps_c` floor on `|c|` and **log how often this branch fires**; frequent firing
+  means contrast has collapsed and is a finding, not a nuisance.
+- **Keep `R = 1e4`.** The reason for lowering it has been removed.
+
+## 5. Logging (extend the existing per-epoch set)
+
+Per channel, every epoch, regardless of whether the term is active:
+
+- `x_c`, `x*_c`, and the violation `max(0, x_c − x*_c)`
+- `size_f` (retain — it is the direct saturation indicator)
+- `|c|_EMA` and the `t ≥ 1` branch-fire count
+- realised `L_size / L_Δ` ratio
+
+## 6. Tests
+
+Keep the existing saturation test as a **regression guard** — it encodes a failure invisible
+in the loss value, and would silently reappear if anyone reverts to the `f`-space form.
+Add:
+
+1. **Zero-set equivalence.** Random `(x, c, tol)`: `σ(x)|c| ≤ tol` iff `x ≤ x*`.
+2. **Gradient direction.** At `f > 0.99`, the gradient w.r.t. `ln A` is non-negligible and
+   the gradient w.r.t. `c` is zero (detached).
+3. **Shift-invariance.** Uniform `ℓ → ℓ + s` leaves `x` and `L_size` unchanged, and
+   `Σ_i ∂x/∂ℓ_i = 0` to numerical precision.
+4. **Uniform-state null.** On a pristine cell with matched composition, `∂L_size/∂ℓ ≡ 0`.
+5. **Delocalised exemption.** `|c| < tol` ⇒ `L_size = 0` for arbitrarily large `x`.
+6. **Continuity across `t = 1`**, approached from below.
+
+## 7. Interpretation note for the plan
+
+A required gap of ~18 does **not** mean the carrier must collapse onto `k` atoms. The
+constraint is on shell-versus-**bulk-plateau** weight, not on the size of the support: the
+model may spread weight over 20–50 atoms following the physical envelope and still satisfy
+it. What it cannot retain is the flat, non-decaying plateau beyond the receptive field,
+which was never physical. Over-localisation risk is governed by `tol`, not by the mechanism.
+
+Acceptance (`alpha_dilution.py`: implied gap and `α` on shell flat in `N`) is unchanged.
