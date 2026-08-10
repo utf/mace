@@ -279,9 +279,19 @@ def main() -> None:
     parser.add_argument("--energy-power", type=float, default=1.0,
                         help="extrapolate energies against N**-p; 1.0 (the paper's "
                              "choice) makes image-interaction terms a straight line")
-    parser.add_argument("--dq-power", type=float, default=1 / 3,
-                        help="extrapolate Delta q against N**-p; the elastic field at "
-                             "the defect converges with the linear cell dimension")
+    parser.add_argument("--dq-power", type=float, default=1.0,
+                        help="extrapolate Delta q against N**-p. 1.0, i.e. 1/N, the same "
+                             "power as the energies: the finite-size error in the "
+                             "relaxation field is an elastic image interaction going as "
+                             "1/L^3 = 1/N. The previous 1/L choice decays too slowly and "
+                             "is refuted by the data -- it extrapolates past the observed "
+                             "plateau (0.676 against a measured 0.647) where 1/N lands on "
+                             "it, and fits worse at every ladder length")
+    parser.add_argument("--fit-min-size", type=int, default=0,
+                        help="exclude cells below this many atoms from the fits and the "
+                             "plot. The smallest cell is furthest from the intercept and "
+                             "carries the most leverage, while being the one least "
+                             "described by an asymptotic form")
     parser.add_argument("--dilute", action="store_true",
                         help="evaluate the long-range branch in its isolated limit. OFF "
                              "by default and it must stay off for this test: the dilute "
@@ -424,7 +434,15 @@ def main() -> None:
               f"{'' if converged_all else '  UNCONVERGED'}")
 
     # --- extrapolation ------------------------------------------------------------------
-    sizes_array = np.array([r["n_host"] for r in rows], dtype=float)
+    fitted_rows = [r for r in rows if r["n_host"] >= args.fit_min_size]
+    if len(fitted_rows) < 2:
+        fitted_rows = rows
+    if len(fitted_rows) != len(rows):
+        excluded = sorted(r["n_host"] for r in rows if r not in fitted_rows)
+        print(f"\nexcluded from the fits and the plot: N = {excluded} "
+              f"(--fit-min-size {args.fit_min_size})")
+    sizes_array = np.array([r["n_host"] for r in fitted_rows], dtype=float)
+    rows_for_fit = fitted_rows
     limits = {}
     print("\nextrapolated to N -> infinity (POWER-LAW fit, reported for reference only --")
     print("the energy drift here is attention dilution and is logistic in ln N, so this")
@@ -438,7 +456,7 @@ def main() -> None:
         ("delta_correction_eV", "Delta E (correction)", args.energy_power),
         ("delta_q_sqrtDa_A", "Delta q", args.dq_power),
     ):
-        values = np.array([r[key] for r in rows])
+        values = np.array([r[key] for r in rows_for_fit])
         intercept, deviation = fit_limit(sizes_array, values, power)
         limits[key] = intercept
         unit = "sqrt(Da) A" if key.startswith("delta_q") else "eV"
@@ -477,6 +495,9 @@ def make_plot(rows, limits, args) -> None:
         "xtick.top": False, "ytick.right": True,
         "xtick.labelsize": 9, "ytick.labelsize": 9,
     })
+    # Same exclusion as the fits: a point dropped from the fit but left on the chart
+    # invites the reader to judge a line against data it was not fitted to.
+    rows = [r for r in rows if r["n_host"] >= getattr(args, "fit_min_size", 0)] or rows
     sizes = np.array([r["n_host"] for r in rows], dtype=float)
     order = np.argsort(1.0 / sizes)
     inverse = (1.0 / sizes)[order] * 1e3  # plotted in units of 1e-3
@@ -504,7 +525,10 @@ def make_plot(rows, limits, args) -> None:
                      label=f"{label} $\\rightarrow$ {limits[key]:.2f} eV")
     axes[0].axhline(0.0, lw=0.6, color="0.75", zorder=0)
     axes[0].set_ylabel(r"$\Delta E$ (meV)")
-    axes[0].legend(frameon=False, fontsize=9.5, loc="lower left", handletextpad=0.4)
+    # Outside the axes: once the residuals are meV-scale the points spread across
+    # the whole panel and any in-axes legend lands on top of them.
+    axes[0].legend(frameon=False, fontsize=8.5, loc="upper left",
+                   bbox_to_anchor=(1.01, 1.0), handletextpad=0.4)
     axes[0].text(0.04, 0.93, "a)", transform=axes[0].transAxes, fontsize=11)
 
     # Panel b: Delta q absolutely, with its own (different) convergence power.
@@ -530,7 +554,10 @@ def make_plot(rows, limits, args) -> None:
     # Top axis labelled by N, as in the original.
     top = axes[0].secondary_xaxis("top")
     top.set_xticks(inverse)
-    top.set_xticklabels([f"{int(n)}" for n in sizes[order]], fontsize=9)
+    # Rotated: the largest cells sit at nearly the same 1/N and their labels overlap
+    # horizontally, which is worse than useless -- it hides which point is which.
+    top.set_xticklabels([f"{int(n)}" for n in sizes[order]], fontsize=8, rotation=45,
+                        ha="left")
     top.set_xlabel("Number of atoms $N$", fontsize=9)
     top.tick_params(direction="in")
 

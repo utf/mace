@@ -1,0 +1,241 @@
+{
+ "model": "/home/alex/runs/efull_128ch_L1_s2/efull_128ch_L1_s2.model",
+ "energy_scale": "raw",
+ "e_bulk_per_atom": -7.958031488325326,
+ "cellpar": [
+  3.082088307549895,
+  3.082088306477537,
+  10.063374998816371,
+  90.0,
+  90.0,
+  120.00000007751558
+ ],
+ "limits": {
+  "formation_energy_eV": 7.273612103804971,
+  "zpl_eV": 0.8665232867990517,
+  "vertical_absorption_eV": 0.9194566009515955,
+  "vertical_emission_eV": 0.8200276461577236,
+  "relaxation_energy_eV": 0.05293331415254405,
+  "delta_correction_eV": 2.490137572575572,
+  "delta_q_sqrtDa_A": 0.4290682774952379
+ },
+ "rows": [
+  {
+   "repeat": [
+    4,
+    4,
+    2
+   ],
+   "n_host": 256,
+   "n_defect": 254,
+   "e_host": -2037.2560610112837,
+   "e_gs_at_gs": -2013.9967662906836,
+   "e_ex_at_ex": -2013.0457434502466,
+   "e_ex_at_gs": -2012.9712771219424,
+   "e_gs_at_ex": -2013.930445838016,
+   "formation_energy_eV": 7.343231743949458,
+   "zpl_eV": 0.9510228404369627,
+   "vertical_absorption_eV": 1.02548916874116,
+   "vertical_emission_eV": 0.8847023877694937,
+   "relaxation_energy_eV": 0.0744663283041973,
+   "delta_q_sqrtDa_A": 0.6076189329645212,
+   "delta_correction_eV": 2.552720698960229,
+   "base_drift_meV_per_atom": -8.881784197001252e-13,
+   "converged": true,
+   "fmax_gs": 0.028160960934310086,
+   "fmax_ex": 0.027401770471303252,
+   "pair": "axial",
+   "removed": [
+    164,
+    168
+   ],
+   "bond_length": 1.8848447865535465
+  },
+  {
+   "repeat": [
+    5,
+    5,
+    2
+   ],
+   "n_host": 400,
+   "n_defect": 398,
+   "e_host": -3183.2125953301306,
+   "e_gs_at_gs": -3159.977340504175,
+   "e_ex_at_ex": -3159.034307565155,
+   "e_ex_at_gs": -3158.9599155550886,
+   "e_gs_at_ex": -3159.9128416514136,
+   "formation_energy_eV": 7.319191849304856,
+   "zpl_eV": 0.9430329390202132,
+   "vertical_absorption_eV": 1.0174249490864895,
+   "vertical_emission_eV": 0.8785340862586963,
+   "relaxation_energy_eV": 0.07439201006627627,
+   "delta_q_sqrtDa_A": 0.6368183747178371,
+   "delta_correction_eV": 2.545471889095097,
+   "base_drift_meV_per_atom": -8.881784197001252e-13,
+   "converged": true,
+   "fmax_gs": 0.029639497165007703,
+   "fmax_ex": 0.02136826546256409,
+   "pair": "axial",
+   "removed": [
+    196,
+    200
+   ],
+   "bond_length": 1.8848447865535465
+  },
+  {
+   "repeat": [
+    6,
+    6,
+    2
+   ],
+   "n_host": 576,
+   "n_defect": 574,
+   "e_host": -4583.826137275388,
+   "e_gs_at_gs": -4560.602610331567,
+   "e_ex_at_ex": -4559.667251155254,
+   "e_ex_at_gs": -4559.596540013615,
+   "e_gs_at_ex": -4560.540722523477,
+   "formation_energy_eV": 7.307463967169964,
+   "zpl_eV": 0.9353591763128861,
+   "vertical_absorption_eV": 1.0060703179524353,
+   "vertical_emission_eV": 0.8734713682224537,
+   "relaxation_energy_eV": 0.07071114163954917,
+   "delta_q_sqrtDa_A": 0.6252146502986499,
+   "delta_correction_eV": 2.5386458881839644,
+   "base_drift_meV_per_atom": 0.0,
+   "converged": true,
+   "fmax_gs": 0.029776617196835754,
+   "fmax_ex": 0.024356960482288637,
+   "pair": "axial",
+   "removed": [
+    340,
+    344
+   ],
+   "bond_length": 1.8848447865535465
+  },
+  {
+   "repeat": [
+    8,
+    8,
+    2
+   ],
+   "n_host": 1024,
+   "n_defect": 1022,
+   "e_host": -8149.024244045135,
+   "e_gs_at_gs": -8125.814267904125,
+   "e_ex_at_ex": -8124.8955285619295,
+   "e_ex_at_gs": -8124.8305151879185,
+   "e_gs_at_ex": -8125.7567726019815,
+   "formation_energy_eV": 7.2939131643593225,
+   "zpl_eV": 0.9187393421952947,
+   "vertical_absorption_eV": 0.9837527162062543,
+   "vertical_emission_eV": 0.8612440400520427,
+   "relaxation_energy_eV": 0.06501337401095952,
+   "delta_q_sqrtDa_A": 0.5923454620539526,
+   "delta_correction_eV": 2.5243395148054333,
+   "base_drift_meV_per_atom": -8.881784197001252e-13,
+   "converged": true,
+   "fmax_gs": 0.02932297501410499,
+   "fmax_ex": 0.02434136399442521,
+   "pair": "axial",
+   "removed": [
+    580,
+    584
+   ],
+   "bond_length": 1.8848447865535465
+  },
+  {
+   "repeat": [
+    10,
+    10,
+    3
+   ],
+   "n_host": 2400,
+   "n_defect": 2398,
+   "e_host": -19099.275571980783,
+   "e_gs_at_gs": -19076.077938322618,
+   "e_ex_at_ex": -19075.19503114664,
+   "e_ex_at_gs": -19075.13746389811,
+   "e_gs_at_ex": -19076.02748990237,
+   "formation_energy_eV": 7.281570681514053,
+   "zpl_eV": 0.8829071759791987,
+   "vertical_absorption_eV": 0.9404744245075563,
+   "vertical_emission_eV": 0.8324587557326595,
+   "relaxation_energy_eV": 0.057567248528357595,
+   "delta_q_sqrtDa_A": 0.5436749579981368,
+   "delta_correction_eV": 2.498525722116028,
+   "base_drift_meV_per_atom": 0.0,
+   "converged": true,
+   "fmax_gs": 0.028953402450292088,
+   "fmax_ex": 0.022895872261373077,
+   "pair": "axial",
+   "removed": [
+    1333,
+    1329
+   ],
+   "bond_length": 1.8848447865535447
+  },
+  {
+   "repeat": [
+    12,
+    12,
+    3
+   ],
+   "n_host": 3456,
+   "n_defect": 3454,
+   "e_host": -27502.956823652326,
+   "e_gs_at_gs": -27479.763731696006,
+   "e_ex_at_ex": -27478.901104877066,
+   "e_ex_at_gs": -27478.848691126263,
+   "e_gs_at_ex": -27479.717682542072,
+   "formation_energy_eV": 7.277028979669479,
+   "zpl_eV": 0.8626268189400434,
+   "vertical_absorption_eV": 0.9150405697437236,
+   "vertical_emission_eV": 0.8165776650057524,
+   "relaxation_energy_eV": 0.05241375080368016,
+   "delta_q_sqrtDa_A": 0.5148523026381269,
+   "delta_correction_eV": 2.4872409239142144,
+   "base_drift_meV_per_atom": 0.0,
+   "converged": true,
+   "fmax_gs": 0.029030073527758816,
+   "fmax_ex": 0.022123677442662307,
+   "pair": "axial",
+   "removed": [
+    1885,
+    1881
+   ],
+   "bond_length": 1.8848447865535456
+  },
+  {
+   "repeat": [
+    14,
+    14,
+    3
+   ],
+   "n_host": 4704,
+   "n_defect": 4702,
+   "e_host": -37434.580121082334,
+   "e_gs_at_gs": -37411.38847455105,
+   "e_ex_at_ex": -37410.546967938906,
+   "e_ex_at_gs": -37410.50059850802,
+   "e_gs_at_ex": -37411.34728866765,
+   "formation_energy_eV": 7.275583554631806,
+   "zpl_eV": 0.8415066121451673,
+   "vertical_absorption_eV": 0.8878760430307011,
+   "vertical_emission_eV": 0.8003207287474652,
+   "relaxation_energy_eV": 0.0463694308855338,
+   "delta_q_sqrtDa_A": 0.4814189534741245,
+   "delta_correction_eV": 2.478975031088339,
+   "base_drift_meV_per_atom": 0.0,
+   "converged": true,
+   "fmax_gs": 0.029252389386334596,
+   "fmax_ex": 0.021205688433038772,
+   "pair": "axial",
+   "removed": [
+    2533,
+    2529
+   ],
+   "bond_length": 1.8848447865535414
+  }
+ ]
+}
