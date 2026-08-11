@@ -179,6 +179,10 @@ class TestConversionPreservesConstructorArguments:
             ("pol_gate", True),
             ("pol_gate_lambda", 5.5),
             ("pol_gate_hops", 3),
+            # Training runs with --enable_cueq, so the conversion happens on the model
+            # that trains. Losing this would silently restore the cross term the run
+            # exists to remove.
+            ("host_carrier_coupling", False),
         ],
     )
     def test_argument_survives_extraction(self, name, value):
