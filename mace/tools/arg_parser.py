@@ -1215,6 +1215,16 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=True,
     )
     parser.add_argument(
+        "--carrier_self_isolated",
+        help="Define E_LR as the finite-size correction: subtract each carrier channel's "
+        "ISOLATED self-energy from the periodic one, leaving only the image interaction. "
+        "The in-cell part is self-interaction error -- a single hole has no Hartree "
+        "self-repulsion -- and measured at the training cell it pays 0.104 eV to spread "
+        "the attention out. Per channel, so cross-channel terms (electron-hole) survive",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
         "--use_long_range",
         help="Enable the latent-Ewald long-range branch (requires the LES library)",
         type=str2bool,

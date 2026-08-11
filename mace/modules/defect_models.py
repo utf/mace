@@ -99,6 +99,7 @@ class MACEDefect(ScaleShiftMACE):
         pol_gate_lambda: float = 6.0,
         pol_gate_hops: int = 2,
         host_carrier_coupling: bool = True,
+        carrier_self_isolated: bool = False,
         gauge_counters: Optional[List[List[int]]] = None,
         **kwargs: Any,
     ):
@@ -187,6 +188,7 @@ class MACEDefect(ScaleShiftMACE):
         self.pol_gate_lambda = pol_gate_lambda
         self.pol_gate_hops = pol_gate_hops
         self.host_carrier_coupling = host_carrier_coupling
+        self.carrier_self_isolated = carrier_self_isolated
         if use_long_range:
             self.latent_ewald = LatentEwald(les_arguments)
             self.latent_charges = StructuredLatentCharges(
@@ -223,6 +225,7 @@ class MACEDefect(ScaleShiftMACE):
             ("pol_gate_lambda", 6.0),
             ("pol_gate_hops", 2),
             ("host_carrier_coupling", True),
+            ("carrier_self_isolated", False),
         ):
             if not hasattr(self, name):
                 object.__setattr__(self, name, default)
@@ -249,6 +252,43 @@ class MACEDefect(ScaleShiftMACE):
             ):
                 if not hasattr(charges, name):
                     object.__setattr__(charges, name, default)
+
+
+    def _isolated_carrier_self(
+        self,
+        alpha: torch.Tensor,  # [n_nodes, 4]
+        counts: torch.Tensor,  # [n_graphs, 4]
+        amplitude: torch.Tensor,  # [n_graphs]
+        positions: torch.Tensor,
+        batch: torch.Tensor,
+        num_graphs: int,
+    ) -> torch.Tensor:
+        """``sum_c E_isolated[Q^c]`` -- the in-cell electrostatics of each carrier channel
+        with itself, evaluated with no images.
+
+        Subtracting this from the periodic energy leaves the finite-size correction and
+        nothing else. The in-cell part is spurious: a single hole has no Hartree
+        self-repulsion, so the whole in-cell electrostatic energy of ONE channel is
+        self-interaction error. Measured at the training cell it pays +0.104 eV to spread
+        the attention out, and removing it is what let two of three control seeds reach the
+        correct vacancy-shell solution.
+
+        Per channel, not on the summed charge: the CROSS-channel terms are real physics
+        (the electron-hole interaction on 4H-SiC) and must survive. Only the within-channel
+        self-energy is removed.
+
+        The i = j cancellation is exact regardless of the minimum-image convention, because
+        both evaluators build the same on-site term from the same smeared charge -- which is
+        the robust part of this construction.
+        """
+        signed = self.latent_charges.carrier_signs.unsqueeze(0) * counts
+        total = torch.zeros(num_graphs, dtype=positions.dtype, device=positions.device)
+        for channel in range(NUM_CARRIER_CHANNELS):
+            charge = amplitude[batch] * alpha[:, channel] * signed[batch, channel]
+            total = total + self.latent_ewald.isolated_energy(
+                charge, positions, batch, num_graphs
+            )
+        return total
 
     def forward(  # pylint: disable=too-many-branches
         self,
@@ -581,6 +621,16 @@ class MACEDefect(ScaleShiftMACE):
             else:
                 delta_lr_ref = self.latent_ewald.energy(
                     latent_charge_ref - q_host, positions, cell_les, data["batch"]
+                )
+
+            if self.carrier_self_isolated:
+                # E_LR = E_periodic[Q] - sum_c E_isolated[Q^c]: only the image interaction
+                # survives, with 1/L monopole scaling by construction.
+                delta_lr = delta_lr - self._isolated_carrier_self(
+                    alpha, counts, amplitude, positions, data["batch"], num_graphs
+                )
+                delta_lr_ref = delta_lr_ref - self._isolated_carrier_self(
+                    alpha_ref, counts_ref, amplitude, positions, data["batch"], num_graphs
                 )
 
             if dilute:

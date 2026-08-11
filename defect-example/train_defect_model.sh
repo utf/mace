@@ -145,6 +145,8 @@ POL_GATE_HOPS="${POL_GATE_HOPS:-2}"
 # carries only what Delta E_SR structurally cannot: the monopole self-interaction and
 # interactions between separated carriers.
 HOST_CARRIER_COUPLING="${HOST_CARRIER_COUPLING:-True}"
+# E_LR as the finite-size correction (subtract per-channel isolated self-energy).
+CARRIER_SELF_ISOLATED="${CARRIER_SELF_ISOLATED:-False}"
 EPS_INF="${EPS_INF:-6.5}"
 EPS_INF_PRIOR_WEIGHT="${EPS_INF_PRIOR_WEIGHT:-0.0}"
 
@@ -339,6 +341,7 @@ python -m mace.cli.run_train \
     --pol_gate_lambda="${POL_GATE_LAMBDA}" \
     --pol_gate_hops="${POL_GATE_HOPS}" \
     --host_carrier_coupling="${HOST_CARRIER_COUPLING}" \
+    --carrier_self_isolated="${CARRIER_SELF_ISOLATED}" \
     --eps_inf="${EPS_INF}" \
     --eps_inf_prior_weight="${EPS_INF_PRIOR_WEIGHT}" \
     --energy_weight="${ENERGY_WEIGHT}" \
