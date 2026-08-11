@@ -1161,6 +1161,16 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=False,
     )
     parser.add_argument(
+        "--per_species_neutral",
+        help="Make q^pol neutral within each species rather than across the whole cell. A "
+        "global mean leaves each species a constant residual on every atom -- a fictitious "
+        "ionic lattice whose Madelung energy and whose cross term with q^host both grow "
+        "with N, measured as 97%% of the size growth of delta_lr on CsPbCl3. Subtracting "
+        "the per-species mean makes a bulk atom exactly zero by construction",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
         "--use_long_range",
         help="Enable the latent-Ewald long-range branch (requires the LES library)",
         type=str2bool,

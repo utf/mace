@@ -52,6 +52,11 @@ def main() -> None:
     parser.add_argument("--repeats", nargs="+",
                         default=["2,2,2", "3,2,2", "3,3,2", "3,3,3"])
     parser.add_argument("--site", type=int, default=0)
+    parser.add_argument("--per-species", action="store_true",
+                        help="patch the trained model to make q^pol neutral WITHIN each "
+                             "species. The projection is parameter-free, so it can be "
+                             "switched on at inference: if the exponents collapse without "
+                             "retraining, the fix is structural rather than fitted.")
     args = parser.parse_args()
 
     logging.getLogger().setLevel(logging.ERROR)
@@ -64,7 +69,12 @@ def main() -> None:
     ewald = model.latent_ewald
     sigma = float(ewald.sigma)
     norm_factor = float(ewald.ewald.norm_factor)
-    print(f"model {args.model.name}")
+    if args.per_species:
+        model.latent_charges.per_species_neutral = True
+        model.latent_charges.num_species = len(model.atomic_numbers)
+        model.per_species_neutral = True
+    print(f"model {args.model.name}   per_species_neutral = "
+          f"{getattr(model.latent_charges, 'per_species_neutral', False)}")
     print(f"sigma = {sigma}  norm_factor = {norm_factor}\n")
 
     z_table = tools.AtomicNumberTable(sorted({17, 55, 82}))

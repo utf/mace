@@ -32,6 +32,7 @@ def main() -> None:
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, default=here / "dataset_pbe")
     parser.add_argument("--repeats", nargs="+", default=["2,2,2", "3,3,2"])
+    parser.add_argument("--per-species", action="store_true")
     args = parser.parse_args()
 
     logging.getLogger().setLevel(logging.ERROR)
@@ -46,7 +47,11 @@ def main() -> None:
     sites = pst.classify_sites(pristine)
     site_index = list(sites.values())[0][0]
 
-    print(f"model {args.model.name}   state V_Cl+ (0,0,1,0)\n")
+    if args.per_species:
+        model.latent_charges.per_species_neutral = True
+        model.latent_charges.num_species = len(model.atomic_numbers)
+    print(f"model {args.model.name}   state V_Cl+ (0,0,1,0)   per_species = "
+          f"{getattr(model.latent_charges, 'per_species_neutral', False)}\n")
 
     for text in args.repeats:
         supercell = pristine.repeat(pst.parse_repeat(text))
@@ -81,8 +86,13 @@ def main() -> None:
         distance = np.linalg.norm(fractional @ cell, axis=1)
         symbols = np.array(defect.get_chemical_symbols())
 
+        alpha = out["carrier_alpha"][:, 2].numpy()  # h_maj, the live channel
+        lead = symbols == "Pb"
         print(f"N = {len(defect)}   sum q_pol = {q_pol.sum():+.2e}   "
               f"sum q_pol^2 = {(q_pol ** 2).sum():.4f}")
+        print(f"  alpha(h_maj): sum over Pb = {alpha[lead].sum():.4f} "
+              f"({lead.sum()} atoms), sum over the rest = {alpha[~lead].sum():.4f}; "
+              f"participation = {1.0 / (alpha ** 2).sum():.1f}")
         print(f"  {'species':>8s} {'<3 A':>12s} {'3-6 A':>12s} {'6-10 A':>12s} "
               f"{'>10 A':>12s} {'bulk spread':>13s}")
         edges = [(0, 3), (3, 6), (6, 10), (10, 1e9)]

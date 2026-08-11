@@ -317,6 +317,24 @@ class StructuredLatentCharges(torch.nn.Module):
       in sign -- it supplies the sign-changing near-field structure that a sign-definite
       carrier channel cannot represent, and hence the multipole content the far field
       needs. It supplies *shape*, never monopole;
+
+      Neutrality alone is not enough, and a whole-cell mean does not deliver locality.
+      Far from the defect the node features are the bulk values for the species, so the
+      readout returns a fixed per-species number and a *global* mean removes only the
+      composition-weighted average: each species keeps a constant residual on every atom
+      in the crystal. Measured on ``perov_lr_s1``, V_Cl+ in CsPbCl3, that residual was
+      Cs -0.067, Pb +0.109, Cl -0.015 e, flat from 3 A to beyond 10 A and identical at
+      two cell sizes -- a fictitious ionic lattice whose Madelung energy and whose cross
+      term with ``q^host`` both grow in proportion to N (measured exponents +1.002 and
+      +1.022, together 97% of the size growth of ``delta_lr``).
+
+      ``per_species_neutral`` subtracts the mean *within each species* instead. A bulk
+      atom then gets identically zero by construction, because the plateau being removed
+      is exactly the per-species mean. Locality is structural rather than penalised, the
+      monopole guarantee is strengthened (per-species zero implies global zero), and the
+      projection is parameter-free. The residual contamination is benign: a defect makes
+      each bulk atom of a species carry -(shell excess)/N_species, so the artefact's
+      sum of squares decays as 1/N rather than growing with it;
     * ``q^carrier`` reuses the attention weights for its shape and a single amplitude
       ``a`` for its magnitude, so it alone carries the monopole.
 
@@ -333,8 +351,12 @@ class StructuredLatentCharges(torch.nn.Module):
         hidden_dim: int = 64,
         eps_inf_init: float = 1.0,
         freeze_amplitude: bool = False,
+        num_species: int = 1,
+        per_species_neutral: bool = False,
     ):
         super().__init__()
+        self.num_species = num_species
+        self.per_species_neutral = per_species_neutral
         self.host_charge = _mlp(feature_dim, hidden_dim, 1)
         self.polarisation = _mlp(feature_dim + counter_dim, hidden_dim, 1)
         self.amplitude = _mlp(feature_dim, hidden_dim, 1)
@@ -374,6 +396,7 @@ class StructuredLatentCharges(torch.nn.Module):
         alpha: torch.Tensor,  # [n_nodes, 4]
         batch: torch.Tensor,  # [n_nodes]
         num_graphs: int,
+        node_attrs: Optional[torch.Tensor] = None,  # [n_nodes, n_species] one-hot Z
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Returns (q, q_host, q_carrier, p, a)."""
         host_raw = self.host_charge(node_feats).squeeze(-1)
@@ -383,8 +406,18 @@ class StructuredLatentCharges(torch.nn.Module):
         polar_raw = self.polarisation(
             torch.cat([node_feats, counter_emb[batch]], dim=-1)
         ).squeeze(-1)
-        polar_mean = scatter_mean(polar_raw, batch, dim=0, dim_size=num_graphs)
-        polarisation = polar_raw - polar_mean[batch]
+        if self.per_species_neutral and node_attrs is not None:
+            # One group per (graph, species). Subtracting the within-species mean makes a
+            # bulk atom exactly zero, since the bulk plateau *is* that mean.
+            species = node_attrs.argmax(dim=-1)
+            group = batch * self.num_species + species
+            polar_mean = scatter_mean(
+                polar_raw, group, dim=0, dim_size=num_graphs * self.num_species
+            )
+            polarisation = polar_raw - polar_mean[group]
+        else:
+            polar_mean = scatter_mean(polar_raw, batch, dim=0, dim_size=num_graphs)
+            polarisation = polar_raw - polar_mean[batch]
         total_carriers = counts.sum(dim=-1)  # [n_graphs]
         q_pol = total_carriers[batch] * polarisation
 
