@@ -101,24 +101,62 @@ def canonicalise_counts(counts: Any, context: str = "") -> np.ndarray:
 
 
 def validate_counts(
-    counts: Any, multiplicity: Optional[float] = None, context: str = ""
+    counts: Any,
+    multiplicity: Optional[float] = None,
+    context: str = "",
+    m_s_ref_doubled: int = 0,
 ) -> np.ndarray:
-    """Assert a counter vector is well formed, canonical and consistent with the SCF."""
+    """Assert a counter vector is well formed, canonical and consistent with the SCF.
+
+    ``m_s_ref_doubled`` is ``2 M_s`` of the **reference** state for this composition, and
+    it is composition-dependent. It is zero for an even-electron composition, where the
+    neutral and closed-shell references coincide; it is 1 for an odd-electron one such as
+    the CsPbCl3 chloride vacancy, whose neutral state is a doublet.
+
+    The reference must be **neutral**, not closed-shell, wherever the two conflict. Charge
+    drives the long-range branch (``sum_i q_i = a q`` uses the counter charge) and the
+    locality of ``E_base`` (a charged periodic cell carries ``-q^2 alpha_M / 2 eps L``,
+    which no sum of local atomic energies can express). Spin only labels the channels.
+
+    The parity fact that forces this: ``q = 0`` requires ``n0 + n1 == n2 + n3``, which makes
+    ``M_s`` even and the multiplicity odd. A neutral **doublet** is therefore inexpressible
+    at ``q = 0`` against a closed-shell reference -- so the reference has to move, rather
+    than the counters being bent to fit.
+    """
     where = f" ({context})" if context else ""
     counts = as_counts(counts, context=context)
-    if not np.array_equal(counts, canonicalise_counts(counts)):
+    # Time reversal flips the reference spin as well as the counters, so with a
+    # spin-polarised reference the counters are no longer free to be canonicalised on
+    # their own: (0,0,1,0) and (0,0,0,1) are physically distinct states with different
+    # multiplicities. Canonicalising would silently rewrite the hole channel and give the
+    # wrong multiplicity. That distinguishability is a benefit here -- it is what makes
+    # the channel identifiable from the measured magnetisation.
+    if m_s_ref_doubled == 0 and not np.array_equal(counts, canonicalise_counts(counts)):
         raise ValueError(
             f"carrier_counts {counts.tolist()} is not canonical; expected "
             f"{canonicalise_counts(counts).tolist()}{where}"
         )
     if multiplicity is not None:
-        expected = spin_magnetisation(counts) + 1
+        expected = int(m_s_ref_doubled) + spin_magnetisation(counts) + 1
         if int(round(float(multiplicity))) != expected:
             raise ValueError(
-                f"carrier_counts {counts.tolist()} implies multiplicity {expected}, "
+                f"carrier_counts {counts.tolist()} with reference 2*M_s = "
+                f"{int(m_s_ref_doubled)} implies multiplicity {expected}, "
                 f"but {int(round(float(multiplicity)))} was recorded{where}"
             )
     return counts
+
+
+def counter_charge(counts: Any) -> int:
+    """``q = holes - electrons``, which must equal the absolute cell charge.
+
+    Under a neutral reference these coincide by construction. Checking it is the assertion
+    that would have caught the original CsPbCl3 labelling, where a physically neutral
+    V_Cl(0) was given counter charge -1 and the charged V_Cl(+) was given 0 -- inverting
+    the long-range branch and asking ``E_base`` to represent a Madelung term.
+    """
+    counts = as_counts(counts)
+    return int((counts[2] + counts[3]) - (counts[0] + counts[1]))
 
 
 def enumerate_counts(
@@ -230,9 +268,18 @@ def _canonicalise_all(configs: Configurations) -> None:
                 NUM_CARRIER_CHANNELS, dtype=np.int64
             )
             continue
-        counts = canonicalise_counts(raw, context=context)
+        # 2 M_s of the reference state for this composition. Zero unless the frame says
+        # otherwise, so every existing dataset is unaffected; non-zero disables the
+        # time-reversal canonicalisation, which is only a symmetry when the reference is
+        # itself unpolarised.
+        m_s_ref = int(round(float(config.properties.get("m_s_ref_doubled", 0) or 0)))
+        counts = (
+            canonicalise_counts(raw, context=context)
+            if m_s_ref == 0
+            else as_counts(raw, context=context)
+        )
         multiplicity = config.properties.get("multiplicity")
-        if multiplicity is None and spin_magnetisation(counts) != 0:
+        if multiplicity is None and (m_s_ref + spin_magnetisation(counts)) != 0:
             # Optional multiplicity is why the original 4H-SiC labelling went unnoticed:
             # the triplet ground state was written as n = 0, and with no multiplicity to
             # cross-check there was nothing to contradict it (plan section 1.1.2).
@@ -242,7 +289,19 @@ def _canonicalise_all(configs: Configurations) -> None:
                 f"{f' ({context})' if context else ''}; multiplicity is required for "
                 "every spin-polarised frame"
             )
-        validate_counts(counts, multiplicity=multiplicity, context=context)
+        validate_counts(counts, multiplicity=multiplicity, context=context,
+                        m_s_ref_doubled=m_s_ref)
+        # The check that would have caught the original CsPbCl3 labelling.
+        cell_charge = config.properties.get("cell_charge")
+        if cell_charge is not None:
+            implied = counter_charge(counts)
+            if implied != int(round(float(cell_charge))):
+                raise ValueError(
+                    f"carrier_counts {counts.tolist()} implies cell charge {implied} but "
+                    f"cell_charge {int(round(float(cell_charge)))} was recorded"
+                    f"{f' ({context})' if context else ''}; the reference state must be "
+                    "neutral, so counter charge and absolute cell charge must agree"
+                )
         config.properties["carrier_counts"] = counts
     if missing:
         logging.warning(
@@ -609,8 +668,17 @@ def canonicalise_config_counters(config: Configuration) -> np.ndarray:
     if raw is None:
         counts = np.zeros(NUM_CARRIER_CHANNELS, dtype=np.int64)
     else:
-        counts = canonicalise_counts(raw)
-        validate_counts(counts, multiplicity=config.properties.get("multiplicity"))
+        # Same rule as the training loader: with a spin-polarised reference the counters
+        # are not freely canonicalisable, because time reversal flips the reference too.
+        # Inference has to agree with training here, or a model trained on (0,0,1,0) would
+        # silently be evaluated on (0,0,0,1).
+        m_s_ref = int(round(float(config.properties.get("m_s_ref_doubled", 0) or 0)))
+        counts = canonicalise_counts(raw) if m_s_ref == 0 else as_counts(raw)
+        validate_counts(
+            counts,
+            multiplicity=config.properties.get("multiplicity"),
+            m_s_ref_doubled=m_s_ref,
+        )
     config.properties["carrier_counts"] = counts
     return counts
 

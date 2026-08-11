@@ -64,6 +64,12 @@ def update_keyspec_from_kwargs(
         "host_key",
         "pair_id_key",
         "multiplicity_key",
+        # 2*M_s of the neutral reference for this composition, and the absolute cell
+        # charge. Both are per-frame because the reference is composition-dependent: an
+        # odd-electron composition has a spin-polarised neutral reference, and the counter
+        # charge must equal the cell charge on every frame.
+        "m_s_ref_doubled_key",
+        "cell_charge_key",
         "e_cbm_cell_key",
         "e_vbm_cell_key",
         "base_energy_key",

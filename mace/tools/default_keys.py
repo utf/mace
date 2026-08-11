@@ -22,6 +22,8 @@ class DefaultKeys(Enum):
     HOST = "host"
     PAIR_ID = "pair_id"
     MULTIPLICITY = "multiplicity"
+    M_S_REF_DOUBLED = "m_s_ref_doubled"
+    CELL_CHARGE = "cell_charge"
     E_CBM_CELL = "e_cbm_cell"
     E_VBM_CELL = "e_vbm_cell"
     BASE_ENERGY = "REF_base_energy"

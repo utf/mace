@@ -707,6 +707,25 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=DefaultKeys.MULTIPLICITY.value,
     )
     parser.add_argument(
+        "--m_s_ref_doubled_key",
+        help="Key of 2*M_s for the NEUTRAL reference state of this composition. Zero for "
+        "an even-electron composition, where the neutral and closed-shell references "
+        "coincide; 1 for an odd-electron one such as the CsPbCl3 chloride vacancy. "
+        "Non-zero also disables the time-reversal canonicalisation, which is only a "
+        "symmetry when the reference is itself unpolarised",
+        type=str,
+        default="m_s_ref_doubled",
+    )
+    parser.add_argument(
+        "--cell_charge_key",
+        help="Key of the absolute cell charge. Cross-checked against the counter charge "
+        "q = holes - electrons, which must agree frame by frame under a neutral "
+        "reference. This is the assertion that catches a reference-state error, which "
+        "spin bookkeeping alone cannot see",
+        type=str,
+        default="cell_charge",
+    )
+    parser.add_argument(
         "--e_cbm_cell_key",
         help="Key of the supercell CBM reference energy",
         type=str,

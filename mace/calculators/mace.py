@@ -187,6 +187,11 @@ class MACECalculator(Calculator):
                 "carrier_counts": "carrier_counts",
                 "host": "host",
                 "multiplicity": "multiplicity",
+                # Composition-dependent reference spin, and the absolute cell charge.
+                # Without these an odd-electron composition is canonicalised as though its
+                # reference were closed-shell, which rewrites the hole channel.
+                "m_s_ref_doubled": "m_s_ref_doubled",
+                "cell_charge": "cell_charge",
             }
         if arrays_keys is None:
             arrays_keys = {}

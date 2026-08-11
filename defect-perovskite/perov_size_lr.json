@@ -1,0 +1,103 @@
+{
+ "model": "/home/alex/runs/perov_lr_s1/perov_lr_s1.model",
+ "energy_scale": "referenced",
+ "e_vbm_gauge": -1.2,
+ "relaxed": true,
+ "rows": [
+  {
+   "repeat": [
+    2,
+    2,
+    2
+   ],
+   "n_host": 640,
+   "n_defect": 639,
+   "e_host": -2254.118034032373,
+   "e_neutral": -2248.94349941609,
+   "e_charged": -2272.6833098859297,
+   "eps_opt_eV": -23.39477579675713,
+   "transition_level_eV": 23.73981046983954,
+   "e_relative_eV": 5.174534616282926,
+   "delta_q_sqrtDa_A": 7.581535167946985,
+   "base_drift_meV_per_atom": 0.0,
+   "converged": true,
+   "removed_index": 41
+  },
+  {
+   "repeat": [
+    3,
+    2,
+    2
+   ],
+   "n_host": 960,
+   "n_defect": 959,
+   "e_host": -3381.177051048559,
+   "e_neutral": -3376.009454551335,
+   "e_charged": -3410.7713164441375,
+   "eps_opt_eV": -34.38804423904912,
+   "transition_level_eV": 34.7618618928027,
+   "e_relative_eV": 5.167596497224167,
+   "delta_q_sqrtDa_A": 7.784998879036795,
+   "base_drift_meV_per_atom": 8.881784197001252e-13,
+   "converged": true,
+   "removed_index": 41
+  },
+  {
+   "repeat": [
+    3,
+    3,
+    2
+   ],
+   "n_host": 1440,
+   "n_defect": 1439,
+   "e_host": -5071.76557657284,
+   "e_neutral": -5066.608793561338,
+   "e_charged": -5117.907256240929,
+   "eps_opt_eV": -50.9024147275195,
+   "transition_level_eV": 51.298462679591466,
+   "e_relative_eV": 5.15678301150183,
+   "delta_q_sqrtDa_A": 8.152997804833634,
+   "base_drift_meV_per_atom": 0.0,
+   "converged": true,
+   "removed_index": 41
+  },
+  {
+   "repeat": [
+    3,
+    3,
+    3
+   ],
+   "n_host": 2160,
+   "n_defect": 2159,
+   "e_host": -7607.648364859259,
+   "e_neutral": -7602.509680516959,
+   "e_charged": -7678.636983108545,
+   "eps_opt_eV": -75.70940776008956,
+   "transition_level_eV": 76.12730259158616,
+   "e_relative_eV": 5.138684342300621,
+   "delta_q_sqrtDa_A": 8.782065827648262,
+   "base_drift_meV_per_atom": 0.0,
+   "converged": true,
+   "removed_index": 41
+  },
+  {
+   "repeat": [
+    4,
+    3,
+    3
+   ],
+   "n_host": 2880,
+   "n_defect": 2879,
+   "e_host": -10143.53115314568,
+   "e_neutral": -10138.409137720972,
+   "e_charged": -10239.342446957296,
+   "eps_opt_eV": -100.49301662418657,
+   "transition_level_eV": 100.93330923632493,
+   "e_relative_eV": 5.12201542470757,
+   "delta_q_sqrtDa_A": 9.115379505125413,
+   "base_drift_meV_per_atom": 0.0,
+   "converged": true,
+   "removed_index": 41
+  }
+ ]
+}

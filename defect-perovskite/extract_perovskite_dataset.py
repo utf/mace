@@ -35,26 +35,42 @@ the paired terms are inert and supervision has to come from ``L_base`` plus ``L_
 ``eps_opt`` curve the paper reports is then a genuine held-out test rather than a fit --
 which is the appealing part, since one charge-conditioned model would replace their two.
 
-COUNTER CONVENTION, AND WHY IT CANNOT BE THE OBVIOUS ONE
---------------------------------------------------------
+COUNTER CONVENTION: THE REFERENCE MUST BE NEUTRAL
+--------------------------------------------------
 Measured cell magnetisation: V_Cl neutral |m| = 1.004 (a doublet, one unpaired electron),
-V_Cl charged |m| = 0.010 and pristine 0.004 (both closed shell).
+V_Cl charged 0.010 and pristine 0.004 (both closed shell).
 
-A neutral doublet cannot be expressed with ``q = 0``. With ``q = (n2+n3) - (n0+n1)`` and
-``M_s = (n0-n2) - (n1-n3)``, setting ``q = 0`` forces ``n0+n1 = n2+n3``, which makes
-``M_s`` even and the multiplicity odd. So the reference state must be the **ionised**
-``V_Cl+``, and the neutral vacancy carries one electron relative to it:
+    pristine   n = (0,0,0,0)   M_s_ref 0     multiplicity 1   cell q  0
+    V_Cl0      n = (0,0,0,0)   M_s_ref 1/2   multiplicity 2   cell q  0   <- reference
+    V_Cl+      n = (0,0,1,0)   dM_s = -1/2   multiplicity 1   cell q +1
 
-    pristine     n = (0, 0, 0, 0)   multiplicity 1    q_cell  0
-    V_Cl+        n = (0, 0, 0, 0)   multiplicity 1    q_cell +1
-    V_Cl0        n = (1, 0, 0, 0)   multiplicity 2    q_cell  0     (q = -1 vs reference)
+``h_maj``, not ``h_min``: removing the unpaired **majority** electron takes M_s from 1/2 to
+0, which is what the measured 0.010 for V_Cl+ confirms. Under this assignment the counter
+charge equals the absolute cell charge on every frame, which is asserted here.
 
-One thing to be explicit about: this puts a neutral pristine cell and a +1 charged vacancy
-cell both at ``n = 0``, i.e. both on the base surface, even though their absolute charges
-differ. They differ in composition, so the model can tell them apart and the E0 fit absorbs
-the difference -- but "base" now means *the reference charge state for that composition*
-rather than "neutral", and any transition level read off this model inherits that
-convention. Stated here because nothing downstream can infer it.
+Why not the closed-shell reference (V_Cl+), which is what a naive reading of the parity rule
+suggests. ``q = 0`` forces ``n0+n1 == n2+n3``, hence even ``M_s`` and odd multiplicity, so a
+neutral doublet is inexpressible at ``q = 0`` *against a closed-shell reference*. The
+resolution is to move the reference, not to bend the counters: ``M_s_ref`` becomes
+composition-dependent. Referencing against V_Cl+ instead would cause three measurable
+failures --
+
+* **the long-range branch inverts.** ``sum_i q_i = a q`` uses the *counter* charge, so the
+  physically neutral V_Cl0 would get q = -1 and the charged V_Cl+ q = 0. With
+  ``a^2 = 1/eps_inf ~ 0.22`` and L ~ 11 A that misplaces a Madelung term of order 0.4 eV,
+  applied to the wrong state and omitted from the right one; in ``eps_opt`` the two errors
+  add rather than cancel;
+* **E_base is asked to represent a non-local quantity.** A charged periodic cell carries
+  ``-q^2 alpha_M / 2 eps L``, which depends on cell size rather than on local environments,
+  so a sum of local atomic energies cannot express it and exact base extensivity must break;
+* **the fit resolves the tension the wrong way.** Nothing pins ``a``, and the cheapest way
+  to remove a spurious size-dependent term is ``a -> 0`` -- disabling the long-range branch
+  on the first dataset able to validate it.
+
+A benefit of the polarised reference: ``h_maj`` and ``h_min`` are now physically distinct
+states with different multiplicities, so the time-reversal canonicalisation that left
+``e_min`` unidentifiable in 4H-SiC does not apply. The magnetisation identifies the channel
+directly. Canonicalisation is therefore disabled whenever ``m_s_ref_doubled != 0``.
 
 BAND EDGES
 ----------
@@ -80,9 +96,12 @@ from ase.io import write as ase_write
 
 HOST = "CsPbCl3"
 DATASET_VERSION = "perovskite-v1"
+# Neutral reference, per composition. `m_s_ref_doubled` is 2*M_s of that reference: 0 for
+# the even-electron pristine cell, 1 for the odd-electron vacancy whose neutral state is a
+# doublet (measured |m| = 1.004).
 PRISTINE = (0, 0, 0, 0)
-IONISED = (0, 0, 0, 0)
-NEUTRAL_VACANCY = (1, 0, 0, 0)
+NEUTRAL_VACANCY = (0, 0, 0, 0)     # the reference for this composition
+IONISED = (0, 0, 1, 0)             # h_maj: removing the unpaired MAJORITY electron
 
 
 def classify(atoms) -> str:
@@ -132,6 +151,8 @@ def main() -> None:
                  "tag": "q0"},
         "02_+1": {"counts": IONISED, "multiplicity": 1, "cell_charge": 1, "tag": "qp1"},
     }
+    # 2*M_s of the neutral reference, by composition.
+    M_S_REF = {"pristine": 0, "vacancy": 1}
 
     args.out.mkdir(parents=True, exist_ok=True)
     written: dict = {"train": [], "valid": []}
@@ -170,6 +191,25 @@ def main() -> None:
                     multiplicity = spec["multiplicity"]
                     cell_charge = spec["cell_charge"]
                     config_type = f"vcl_{spec['tag']}"
+                m_s_ref = M_S_REF[kind]
+
+                # Hard error, not a warning: under a neutral reference the counter charge
+                # IS the absolute cell charge, and the original labelling of this dataset
+                # violated exactly this.
+                implied = int(counts[2] + counts[3] - counts[0] - counts[1])
+                if implied != cell_charge:
+                    raise SystemExit(
+                        f"counter {counts} implies charge {implied} but the cell carries "
+                        f"{cell_charge}"
+                    )
+                expected_multiplicity = (
+                    m_s_ref + (counts[0] - counts[2]) - (counts[1] - counts[3]) + 1
+                )
+                if expected_multiplicity != multiplicity:
+                    raise SystemExit(
+                        f"counter {counts} with reference 2*M_s = {m_s_ref} implies "
+                        f"multiplicity {expected_multiplicity}, not {multiplicity}"
+                    )
 
                 atoms.info.update(
                     {
@@ -177,13 +217,14 @@ def main() -> None:
                         "multiplicity": int(multiplicity),
                         "host": HOST,
                         "cell_charge": int(cell_charge),
+                        "m_s_ref_doubled": int(m_s_ref),
                         "config_type": config_type,
                         "source_dir": directory,
                         "natoms": len(atoms),
-                        # No pair partner exists anywhere in this dataset; recorded
-                        # explicitly so the loader reports "unpaired" rather than looking
-                        # like the field was forgotten.
-                        "pair_id": "",
+                        # No pair partner exists anywhere in this dataset. The key is
+                        # OMITTED rather than set empty: an empty extxyz info value does
+                        # not round-trip -- it merges with the following key on read, and
+                        # every frame then arrives with pair_id='e_cbm_cell=1.2'.
                         "e_cbm_cell": 0.5 * args.gap,
                         "e_vbm_cell": -0.5 * args.gap,
                     }
@@ -210,14 +251,32 @@ def main() -> None:
         "source": "Mosquera-Lois & Walsh, PRX Energy 4, 043008 (2025)",
         "counter_vectors": {
             "pristine": list(PRISTINE),
-            "ionised_vacancy_qp1": list(IONISED),
             "neutral_vacancy_q0": list(NEUTRAL_VACANCY),
+            "ionised_vacancy_qp1": list(IONISED),
         },
-        "multiplicities": {"pristine": 1, "vcl_qp1": 1, "vcl_q0": 2},
+        "multiplicities": {"pristine": 1, "vcl_q0": 2, "vcl_qp1": 1},
+        "m_s_ref_doubled": {"pristine": 0, "vacancy": 1},
+        "q_ref": 0,
         "reference_state": (
-            "V_Cl+ (ionised). A neutral doublet cannot be expressed at q = 0, since "
-            "q = 0 forces M_s even; so the reference is the closed-shell charged state "
-            "and the neutral vacancy carries one electron relative to it."
+            "NEUTRAL, per composition. 'base' means the neutral surface for that "
+            "composition, not a closed-shell one: pristine is a closed-shell singlet "
+            "(2*M_s_ref = 0) while V_Cl0 is a doublet (2*M_s_ref = 1). The counter charge "
+            "equals the absolute cell charge on every frame, which is asserted at "
+            "extraction."
+        ),
+        "parity_argument": (
+            "q = 0 forces n0+n1 == n2+n3, hence M_s even and multiplicity odd, so a "
+            "neutral doublet is inexpressible at q = 0 against a closed-shell reference. "
+            "The reference moves rather than the counters bending: M_s_ref is "
+            "composition-dependent. Referencing against the charged V_Cl+ instead would "
+            "invert the long-range branch (sum_i q_i = a q uses the counter charge), ask "
+            "E_base to represent a Madelung term that no sum of local energies can "
+            "express, and let the fit drive a -> 0 to remove the resulting size drift."
+        ),
+        "canonicalisation": (
+            "Disabled where m_s_ref_doubled != 0: time reversal flips the reference spin "
+            "too, so (0,0,1,0) and (0,0,0,1) are distinct states with different "
+            "multiplicities. h_maj vs h_min is identified by the measured magnetisation."
         ),
         "pairing": (
             "NONE. Geometry-keyed matching finds the two charge states share only "
