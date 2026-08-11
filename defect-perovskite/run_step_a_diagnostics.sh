@@ -7,7 +7,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PYTHONPATH="$(cd "${HERE}/.." && pwd)"
 export PATH="$HOME/micromamba/envs/py13/bin:$PATH"
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
-NAME="${NAME:-perov_lr_stepA_s1}"
+NAME="${NAME:-perov_lr_a4_s1}"
 MODEL="$HOME/runs/${NAME}/${NAME}.model"
 REPEATS="${REPEATS:-2,2,2 3,2,2 3,3,2 3,3,3 4,3,3}"
 REPORT="$HOME/runs/step_a_report.md"
@@ -47,7 +47,7 @@ record "alpha_audit" "$?" "$HOME/runs/step_a_alpha.log"
 
 # 3. Relaxed ladders, periodic and dilute.
 for variant in "" "--dilute"; do
-    tag="stepA"; [ -n "$variant" ] && tag="stepA_dilute"
+    tag="${NAME}"; [ -n "$variant" ] && tag="${NAME}_dilute"
     CUDA_VISIBLE_DEVICES="" OMP_NUM_THREADS=40 python -u "${HERE}/perovskite_size_test.py" \
         --model "$MODEL" --repeats ${REPEATS} --site 0 --fmax 0.05 --steps 300 \
         --out-json "${HERE}/perov_size_${tag}.json" ${variant} \
@@ -61,7 +61,7 @@ done
 
 # 4. Dilute magnitudes, now on a model whose attention should be repaired.
 CUDA_VISIBLE_DEVICES="" python -u "${HERE}/dilute_impact.py" \
-    "${HERE}/perov_size_stepA.json" "${HERE}/perov_size_stepA_dilute.json" \
+    "${HERE}/perov_size_${NAME}.json" "${HERE}/perov_size_${NAME}_dilute.json" \
     > "$HOME/runs/step_a_dilute.log" 2>&1
 record "dilute_impact" "$?" "$HOME/runs/step_a_dilute.log"
 
@@ -115,7 +115,7 @@ section () { echo; echo "## $1"; echo; }
     echo '```'
 
     section "Relaxed ladders"
-    for tag in stepA stepA_dilute; do
+    for tag in "${NAME}" "${NAME}_dilute"; do
         echo "### ${tag}"
         echo '```'
         sed -n '/repeat/,/^$/p' "$HOME/runs/step_a_ladder_${tag}.log" 2>/dev/null \
@@ -133,6 +133,6 @@ section () { echo; echo "## $1"; echo; }
     echo '```'
 
     echo
-    echo "Figures: perov_size_stepA.png, perov_size_stepA_dilute.png in defect-perovskite/."
+    echo "Figures: perov_size_${NAME}{,_dilute}.png in defect-perovskite/."
 } > "$REPORT"
 echo "STEP_A_DIAGNOSTICS_DONE -- report at $REPORT (gates exit ${GATE_CODE})"

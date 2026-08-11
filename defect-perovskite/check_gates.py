@@ -92,7 +92,7 @@ def parse_decomposition(path: Path) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     here = Path(__file__).resolve().parent
-    parser.add_argument("--name", default="perov_lr_stepA_s1")
+    parser.add_argument("--name", default="perov_lr_a4_s1")
     parser.add_argument("--runs", type=Path, default=Path.home() / "runs")
     args = parser.parse_args()
     gates = Gates()
@@ -179,7 +179,8 @@ def main() -> None:
         gates.skip("decomposition", "+1.002 / +1.022", f"{decomposition.name} missing")
 
     # ---- 3. relaxed ladder -----------------------------------------------------------
-    for tag, label in (("stepA", "eps_opt drift"), ("stepA_dilute", "eps_opt (dilute)")):
+    for suffix, label in (("", "eps_opt drift"), ("_dilute", "eps_opt (dilute)")):
+        tag = f"{args.name}{suffix}"
         path = here / f"perov_size_{tag}.json"
         if not path.exists():
             gates.skip(label, "77 eV", f"perov_size_{tag}.json missing")
