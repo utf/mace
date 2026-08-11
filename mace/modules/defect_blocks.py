@@ -387,8 +387,20 @@ class StructuredLatentCharges(torch.nn.Module):
         self.polarisation = _mlp(feature_dim + counter_dim, hidden_dim, 1)
         self.amplitude = _mlp(feature_dim, hidden_dim, 1)
 
-        # Start at the base potential: no host charges, no polarisation.
-        zero_last_layer(self.host_charge)
+        # Start at the base potential: no polarisation.
+        #
+        # `q^host` is deliberately NOT zero-initialised, and that is a fix rather than an
+        # omission. Under `host_carrier_coupling=False` the only place it enters is
+        # `E_LR[q^host]`, which is QUADRATIC -- so at `q^host = 0` the term is zero *with
+        # zero gradient*, and a zero init sits exactly on a stationary point the readout
+        # can never leave. Measured on a real run: `|q^host| max = 0.000e+00` after four
+        # epochs, `E_LR[q^host] = 0.0 eV`, and the share of the base-energy trunk gradient
+        # flowing through it was 0.000%. A whole component had never once been exercised.
+        #
+        # The n = 0 identity does not depend on this. It is structural, coming from the
+        # `counts *` prefactor in `delta_sr` and from `q^pol`'s counter factor; `q^host` is
+        # geometry-only and n-independent, so it cannot break it. `zero_last_layer` on the
+        # polarisation is what starts the correction at zero, and that stays.
         zero_last_layer(self.polarisation)
         # softplus(0) ~ 0.69 would put the initial amplitude at an implied eps_inf of
         # about 2.1 by accident; start from a stated gauge instead.

@@ -272,7 +272,30 @@ offset. That is how both faults stayed invisible in training.
 6. Then: site-averaging `eps_opt` over many Cl environments, DFPT `eps_inf` for the interim
    4.0, a real per-level-of-theory `E_VBM` for the fitted gauge, seed replication (>=3).
 
-## 10. Standing recommendation
+## 10. This dataset is weak ground for VALIDATING the long-range branch
+
+Recorded because it bounds what any perovskite result can mean.
+
+In 4H-SiC, per-atom **delta-force** supervision resolved which atoms carry the carrier: the
+labels said directly where the correction had to act. This dataset has **no paired frames**
+(the two charge states share only duplicated pristine copies; the V_Cl geometries are
+disjoint, because the source paper trains separate models per charge state). So
+`delta_SR = sum_i alpha_i u_i` is fitted against a *scalar* with `u` free, and the
+`alpha`/`u` degeneracy is essentially unbroken -- any `alpha` can be compensated by a
+matching `u`.
+
+What holds `alpha` in place is therefore only: the logit seed (which anneals away), a weak
+signal in total forces, and the size hinge -- which constrains *dilution*, not *site
+selection*, as section 7 shows. **That `perov_nolr_s1` localises at all is marginal**, not
+robust, and any additional term that couples to `alpha` can outbid the little that holds it.
+
+The consequence for how results here are read: this dataset can **expose** long-range bugs,
+and it did so decisively -- the `q^pol` ionic lattice, the mis-signed `host.carrier` cross
+term, the `q^host` stationary point. It cannot **validate** the branch. A perovskite run that
+localises correctly is necessary but not sufficient evidence; the SiC transfer test, with its
+delta-force supervision, is what can confirm the physics.
+
+## 11. Standing recommendation
 
 Use `perov_nolr_s1` for size-critical work until the gates pass. The short-range model is
 **self-consistently missing** the image tail, not getting it wrong: a charged cell has a
