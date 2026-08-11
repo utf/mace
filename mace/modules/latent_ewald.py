@@ -26,7 +26,6 @@ Cost: training needs two evaluations per step (``E[q_host]`` and ``E[q_total]``)
 three. The full decomposition is an inference and testing tool.
 """
 
-import math
 from typing import Any, Dict, Optional, Tuple
 
 import torch
@@ -95,12 +94,20 @@ class LatentEwald(torch.nn.Module):
 
             ``E_bg = -(2 pi / V) (sigma^2 / 2) Q^2 * C = -pi sigma^2 Q^2 C / V``
 
-        (the same term as ``-pi Q^2 / (2 V alpha^2)`` with ``alpha = 1 / (sigma sqrt 2)``).
-        It is ``O(1/V)`` -- about -24 meV at the 79-atom perovskite training cells and
-        -3 meV at 639 atoms -- so it is a correctness item, not a size-extensivity one: it
-        is a pure ``Q^2`` effect and vanishes identically for a neutral distribution. The
-        reason to include it is that the DFT labels use the jellium convention, so without
-        it the model is fitting to a different electrostatic convention than its own.
+        with ``C`` the Coulomb constant in eV.A, equivalently
+        ``-pi Q^2 / (2 V alpha^2)`` for ``alpha = 1 / (sigma sqrt 2)``. **In LES's own
+        units the prefactor is not ``pi``**: LES folds the ``2 pi`` into
+        ``norm_factor = 2 pi C = 90.4756``, so substituting ``norm_factor`` for ``C`` in
+        the expression above overstates the term by exactly ``2 pi``. Written against the
+        quantity the code actually has:
+
+            ``E_bg = -norm_factor * sigma^2 * Q^2 / (2 V)``
+
+        It is ``O(1/V)`` -- about -3.8 meV at the 79-atom perovskite training cells and
+        -0.5 meV at 639 atoms -- so it is a correctness item, not a size-extensivity one:
+        a pure ``Q^2`` effect, identically zero for a neutral distribution. The reason to
+        include it is that the DFT labels use the jellium convention, so without it the
+        model fits against a different electrostatic convention than its own.
         """
         cell = cell.view(-1, 3, 3)
         energy, _, _ = self.ewald(q=charges, r=positions, cell=cell, batch=batch)
@@ -112,11 +119,10 @@ class LatentEwald(torch.nn.Module):
         # A zero-volume cell is the isolated evaluator, which has no background at all.
         background = torch.where(
             volume > 0,
-            -math.pi
+            -self.ewald.norm_factor
             * self.sigma**2
             * net**2
-            * self.ewald.norm_factor
-            / volume.clamp_min(1e-30),
+            / (2.0 * volume.clamp_min(1e-30)),
             torch.zeros_like(energy),
         )
         return energy + background

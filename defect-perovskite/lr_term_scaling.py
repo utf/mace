@@ -174,7 +174,9 @@ def main() -> None:
             ss_carrier=float((q_carrier ** 2).sum()),
             # the proposed missing background, evaluated for the net charge that is
             # actually present
-            bg=-np.pi * sigma ** 2 * net ** 2 * norm_factor / volume,
+            # LES folds 2*pi into norm_factor, so the coefficient here is
+            # 1/2, not pi -- see LatentEwald.energy.
+            bg=-norm_factor * sigma ** 2 * net ** 2 / (2.0 * volume),
         )
         rows.append(row)
         print(f"  N = {n_atoms:5d}  delta_lr = {delta_lr:12.4f} eV   done")
