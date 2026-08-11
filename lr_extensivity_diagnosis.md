@@ -190,53 +190,114 @@ ladders, and adding the background term should move neither by more than a few m
 
 The SiC decomposition is the next thing to run and will settle it in a table.
 
-## 6. Second finding: `alpha` is uniform over the wrong sublattice, and my previous report
-misstated it
+## 6. Second finding, CORRECTED: the LR run's attention collapsed because the size
+# hinge switched itself off. The short-range model is exactly right.
 
-`perov_alpha_check.py` had a stale call signature and crashed with a `TypeError` on every
-invocation. `run_overnight.sh` swallowed it (`2>/dev/null`, `|| continue`), the report's
-attention section rendered "(n/a)" indistinguishably from "not applicable", and the figures I
-quoted — `partic 2.02`, `alpha on shell 1.0000 at every cell size` — came from the training
-log, i.e. from **80-atom training frames**, never from the ladder. **Withdraw the claim that
-alpha on the vacancy shell is 1.0000 at every cell size; it was never measured.**
+**Retract the previous version of this section.** It claimed the attention was diluting with
+cell size and that the size hinge "read healthy anyway". Both are wrong, and the numbers I
+quoted (`partic 2.02`, `size_f 0.016`) were the **nolr** model's, attributed to the LR one.
+Audited properly on real training frames, several defect sites, and both models:
 
-Repaired and run, it says the opposite:
+### The short-range model is textbook correct
 
 ```
-     N  shell          e_maj          e_min          h_maj          h_min
-              partic  a_shell partic  a_shell partic  a_shell partic  a_shell
-   639      2   638.3  0.003   636.0  0.003   127.6  0.000   635.9  0.003
-   959      2   957.9  0.002   954.5  0.002   191.3  0.000   954.3  0.002
-  1439      2  1437.4  0.001  1432.2  0.001   287.0  0.000  1431.9  0.001
-  2159      2  2156.6  0.001  2148.7  0.001   430.5  0.000  2148.4  0.001
+perov_nolr_s1, live channel h_maj, real V_Cl+ frames from the dataset
+  train frame 0    partic  1.96   Cs 0.000/16   Pb 1.000/16   Cl 0.000/47
+  train frame 1    partic  2.00   Cs 0.000/16   Pb 1.000/16   Cl 0.000/47
+  valid frame 0    partic  1.98   Cs 0.000/16   Pb 1.000/16   Cl 0.000/47
+  ...              range 1.96 - 2.00 over train and valid
+
+tiled supercells, three inequivalent Cl sites
+  N=639  site 0    partic  1.99   top: Pb@2.6A 0.528  Pb@2.9A 0.472
+  N=1439 site 0    partic  1.99   top: Pb@2.6A 0.528  Pb@2.9A 0.472
+  N=639  site 1    partic  1.96   top: Pb@2.6A 0.569  Pb@3.0A 0.431
+  N=1439 site 1    partic  1.96   top: Pb@2.6A 0.569  Pb@3.0A 0.431
+
+pristine 80-atom cell at the SAME counter (no vacancy to find)
+                   partic  7.09   Cs 0.000    Pb 0.001    Cl 0.999
 ```
 
-The participation of the live `h_maj` channel is 127.6 / 191.3 / 287.0 / 430.5 against Cs
-counts of 128 / 192 / 288 / 432, and a direct sum confirms it:
+The hole sits on **exactly the two under-coordinated Pb** that lost their bridging Cl, at
+2.6 and 2.9 Å, split ~0.53/0.47 — the physically correct answer for a Pb-derived V_Cl state.
+It is identical to three decimals across a 2.25× size range, holds across inequivalent
+sites, and correctly **fails to localise** on a pristine cell where there is no vacancy.
+
+This is why the short-range model works well. There was never a conflict to explain.
+
+### The long-range model's attention is degenerate — and not size-dependent
 
 ```
-N = 639    alpha(h_maj): sum over Pb = 0.0000 (128 atoms), sum over the rest = 1.0000
-N = 1439   alpha(h_maj): sum over Pb = 0.0000 (288 atoms), sum over the rest = 1.0000
+perov_lr_s1, live channel h_maj
+  train frame 0    partic 15.97   Cs 1.000/16    Pb 0.000/16    Cl 0.000/47
+  N=639  site 0    partic 127.56  Cs 1.000/128   Pb 0.000/128   Cl 0.000/383
+  N=1439 site 0    partic 287.02  Cs 1.000/288   Pb 0.000/288   Cl 0.000/863
+  pristine         partic 15.95   Cs 1.000/16    Pb 0.000/16    Cl 0.000/48
 ```
 
-So this is not generic dilution: **the hole is spread uniformly over the Cs sublattice, with
-identically zero weight on Pb**, and `alpha` on the vacancy shell is 0.0000. For a Cl vacancy
-in CsPbCl3 the state should be Pb-derived and sit on the vacancy shell, so the attention has
-locked onto the wrong sublattice entirely.
+Uniform over the **Cs sublattice**, zero on Pb and Cl, at *every* size — including the
+79-atom training frames, where participation is 15.97 against 16 Cs. So this is **not
+dilution with cell size**: participation tracks `N_Cs = N/5` because "uniform over Cs" means
+that at any size. It is a wrong fixed solution, and it is identical with and without a
+vacancy present — the attention does not see the defect at all.
 
-Why the size hinge reads healthy anyway: it constrains the log-ratio of a *pooled* quantity,
-and `<u>` is uniform enough that the constraint is satisfied trivially. `<u>_h_maj` is
-**0.1269 eV at every cell size, drift −0.0 meV**, which is why `delta_SR` is exactly
-size-independent and the `nolr` ladder is flat. The short-range branch is genuinely safe; the
-hinge is simply not evidence about *where* `alpha` sits.
+### Why: the hinge's delocalised-carrier exemption is a trap
 
-Two consequences:
-* Gating `q^pol` by `alpha` — the obvious alternative fix — would have inherited a broken
-  localiser. Per-species subtraction avoids depending on `alpha` at all.
-* The `dilute` correction takes `q_carrier` as input, and `q_carrier = a·alpha`. Its
-  measured `−0.349` scaling was therefore obtained on a **sublattice-smeared monopole**.
-  The exponent is right, but treat the dilute numbers as not-yet-physical until `alpha` is
-  repaired.
+Final-epoch diagnostics, the two runs side by side:
+
+```
+nolr  partic=[79.7 79.7  2.013 79.7]  size_f=[1.000 1.000 0.017 1.000]  |c|=[0 0 0.090 0]
+      size_x=[9.21 9.21 -5.023 9.21]  size_x*=[nan nan -4.164 nan]  size_viol=[0 0 0.236 0]
+
+lr    partic=[79.7 79.4 16.073 79.4]  size_f=[1.000 1.000 1.000 1.000]  |c|=[0 0 0.000 0]
+      size_x=[9.21 9.21  9.208 9.21]  size_x*=[nan nan   nan  nan]  size_viol=[0 0 0.000 0]
+```
+
+**In the LR run the size term was inactive for every channel for the whole run** —
+`size_f = 1.000` across the board, `size_viol = 0`, contrast EMA `|c| = 0.000`. In the nolr
+run it was live and doing work (`size_f = 0.017`, `|c| = 0.090`, `size_viol = 0.236`).
+
+The mechanism is in `DefectLoss.size_threshold`, and it is deliberate:
+
+```python
+t = (per_channel_tol / magnitude).clamp_max(1.0)   # magnitude = |c|_EMA
+satisfied = t >= 1.0
+return torch.where(satisfied, +inf, threshold)     # caller's isfinite -> exempt
+```
+
+When the contrast `|c|` falls below `tol`, `t >= 1`, the threshold goes to `+inf`, and the
+channel is exempt. The docstring calls this the *delocalised-carrier exemption* and its
+reasoning is sound **for the energy**: if the attention-weighted pool differs from the mean
+pool by less than `tol`, no amount of dilution can move the energy by more than `tol`.
+
+But it is self-reinforcing. Flat attention ⇒ contrast → 0 ⇒ exemption engages ⇒ the hinge
+switches off ⇒ nothing pulls the attention back. **The constraint degenerates exactly at the
+state it exists to prevent**, and it cannot recover from it.
+
+The hinge kept its actual promise: `<u>_h_maj` is 0.1269 eV at every cell size, drift
+−0.0 meV, and `delta_SR` is exactly size-independent. It guarantees **energy** size-stability,
+never spatial localisation. I previously read a large `gap_l` as evidence of localisation; it
+is not — it separates *species*, and a sublattice is a fixed fraction of any cell.
+
+### The two bugs are causally linked
+
+The LR branch handed the model tens of eV of spurious fitting freedom in `q^pol` (§3). With
+the defect energy absorbable there, the short-range carrier channel no longer needed contrast;
+`u` flattened, `|c|` fell through `tol`, the exemption engaged, and the attention drifted to a
+sublattice. That predicts **fixing `q^pol` should also restore the contrast and keep the hinge
+live** — a prediction the retrain tests directly.
+
+### Consequences
+
+* §1–§4 are unaffected. `q^pol` is `MLP(node_feats, counter_emb)` mean-subtracted times
+  `Σ_c n_c` — **no `alpha` dependence whatsoever** — so the extensivity diagnosis and the
+  per-species fix stand on their own.
+* `q^carrier = a·alpha` is physically meaningless in the LR model, though its monopole is
+  still exactly right (`Σ = a·q = 0.5`). Every `dilute` number was measured on a
+  sublattice-smeared monopole: the `−0.349` exponent is right, the magnitudes are not
+  physical.
+* The retrain must fix **both**. Guarding the exemption — e.g. a floor on `|c|`, or refusing
+  to exempt a channel whose participation exceeds a fraction of the cell — is needed
+  independently, because any future run can fall into the same trap.
 
 ## 7. Acceptance gates for the retrain — corrected
 
