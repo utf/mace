@@ -61,6 +61,7 @@ done
 
 # 4. Dilute magnitudes, now on a model whose attention should be repaired.
 CUDA_VISIBLE_DEVICES="" python -u "${HERE}/dilute_impact.py" \
+    "${HERE}/perov_size_stepA.json" "${HERE}/perov_size_stepA_dilute.json" \
     > "$HOME/runs/step_a_dilute.log" 2>&1
 record "dilute_impact" "$?" "$HOME/runs/step_a_dilute.log"
 

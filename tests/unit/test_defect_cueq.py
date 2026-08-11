@@ -171,6 +171,14 @@ class TestConversionPreservesConstructorArguments:
             # the empty default the load would fail or the gauge probe would come back
             # silently switched off.
             ("gauge_counters", [[1, 0, 0, 1], [1, 1, 0, 2]]),
+            # The q^pol controls. use_polarisation=False is the case that matters most:
+            # it defaults to True, so an extractor that dropped it would rebuild an
+            # ABLATED model with the channel switched back on -- the same silent revert
+            # that turned a frozen screening amplitude into a trainable one.
+            ("use_polarisation", False),
+            ("pol_gate", True),
+            ("pol_gate_lambda", 5.5),
+            ("pol_gate_hops", 3),
         ],
     )
     def test_argument_survives_extraction(self, name, value):

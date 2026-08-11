@@ -106,10 +106,12 @@ class LatentEwald(torch.nn.Module):
         energy, _, _ = self.ewald(q=charges, r=positions, cell=cell, batch=batch)
         num_graphs = int(energy.shape[0])
         net = scatter_sum(charges, batch, dim=0, dim_size=num_graphs)
-        volume = torch.det(cell)
+        # abs(): a left-handed cell has a negative determinant, which would flip the
+        # sign of the background and, through the clamp below, produce ~1e31 eV.
+        volume = torch.det(cell).abs()
         # A zero-volume cell is the isolated evaluator, which has no background at all.
         background = torch.where(
-            volume.abs() > 0,
+            volume > 0,
             -math.pi
             * self.sigma**2
             * net**2

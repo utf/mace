@@ -770,6 +770,7 @@ class DefectLoss(torch.nn.Module):
         size_contrast_eps: float = 1e-9,
         size_delocalised_fraction: float = 0.05,
         size_delocalised_min_atoms: float = 8.0,
+        size_delocalised_leak: float = 0.05,
         gauge_weight: float = 0.0,
     ) -> None:
         super().__init__()
@@ -807,6 +808,7 @@ class DefectLoss(torch.nn.Module):
         # long-range one at 16.1 in a 79-atom cell, where a whole sublattice is 16.
         self.size_delocalised_fraction = size_delocalised_fraction
         self.size_delocalised_min_atoms = size_delocalised_min_atoms
+        self.size_delocalised_leak = size_delocalised_leak
         self.gauge_weight = gauge_weight
         # Running |c| per channel, used only to place the (detached) threshold. A buffer so
         # it survives checkpointing: restarting with a cold EMA would put every channel in
@@ -939,19 +941,6 @@ class DefectLoss(torch.nn.Module):
         t = (per_channel_tol / magnitude).clamp_max(1.0)
         satisfied = t >= 1.0
         if delocalised is not None:
-            # GUARD. The exemption above is self-reinforcing and can trap the fit. Flat
-            # attention drives the contrast to zero, |c| falls below tol, the channel is
-            # exempted, the hinge switches off, and nothing pulls the attention back --
-            # the constraint degenerates exactly at the state it exists to prevent.
-            # Observed end to end: the perovskite long-range run spent its whole life at
-            # size_f = 1.000 on all four channels with |c| = 0.000, and its live channel
-            # ended uniform over the Cs sublattice with zero weight on the vacancy shell,
-            # while the short-range run kept |c| = 0.090, stayed live, and put the hole on
-            # exactly the two under-coordinated Pb.
-            #
-            # A channel whose attention is spread over a fixed *fraction* of the cell is
-            # not a delocalised carrier that happens to be within tolerance; it is a
-            # collapsed one. Refuse the exemption there, so the hinge keeps acting.
             satisfied = satisfied & ~delocalised
         # Floored as well as capped. Only ``t >= 1`` -- contrast already inside tolerance --
         # means exempt, and that is the branch the caller skips. ``t -> 0`` is the opposite
@@ -961,6 +950,37 @@ class DefectLoss(torch.nn.Module):
         # when it was asked for most. Observed with ``--defect_size_tol 0``.
         safe = t.clamp(min=1e-12, max=1.0 - 1e-12)
         threshold = torch.log(safe / (1.0 - safe))
+        if delocalised is not None:
+            # GUARD. The exemption is self-reinforcing and traps the fit: flat attention
+            # drives the contrast to zero, |c| falls below tol, the channel is exempted,
+            # the hinge switches off, and nothing pulls the attention back -- the
+            # constraint degenerates exactly at the state it exists to prevent. Observed
+            # end to end: the perovskite long-range run spent its whole life at
+            # size_f = 1.000 on all four channels with |c| = 0.000 and finished with its
+            # live channel uniform over the Cs sublattice and zero weight on the vacancy
+            # shell, while the short-range run kept |c| = 0.090, stayed live, and put the
+            # hole on exactly the two under-coordinated Pb.
+            #
+            # Refusing the exemption is NOT enough on its own, and the near-miss is worth
+            # recording. With `satisfied` merely flipped, the threshold still comes from
+            # |c| -- and |c| ~ 0 sends t to its clamp, giving x* = ln((1-1e-12)/1e-12)
+            # = 27.6 while x is structurally capped at ln(R-1) = 9.21. The violation is
+            # then max(0, 9.21 - 27.6) = 0: a guard that changes a label and no gradient.
+            # In float32, which is what training uses, 1 - 1e-12 rounds to 1.0 and the
+            # threshold becomes +inf, so the channel is silently exempt again.
+            #
+            # So for a collapsed channel the threshold must not be derived from |c| at
+            # all -- its normalisation is the thing that degenerated. Use a fixed
+            # localisation target instead: cap the leaked fraction at
+            # `size_delocalised_leak`, i.e. x* = ln(f*/(1-f*)). Same units as `size_f`,
+            # so the target reads directly off the diagnostic.
+            leak = self.size_delocalised_leak
+            target = math.log(leak / (1.0 - leak))
+            threshold = torch.where(
+                delocalised.expand_as(threshold),
+                torch.full_like(threshold, target),
+                threshold,
+            )
         return torch.where(
             satisfied, torch.full_like(threshold, float("inf")), threshold
         )

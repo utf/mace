@@ -12,17 +12,33 @@ correction from a broken quantity it is being added to.
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
 import numpy as np
 
-here = Path(__file__).resolve().parent
-periodic = {r["n_host"]: r for r in
-            json.loads((here / "perov_size_lr.json").read_text())["rows"]}
-dilute = {r["n_host"]: r for r in
-          json.loads((here / "perov_size_lr_dilute.json").read_text())["rows"]}
+# The ladder files are ARGUMENTS, not hardcoded names. A fixed default meant that analysing
+# a new model silently reported the previous one's numbers: the script reads whatever is on
+# disk, exits 0, and the report renders stale results under a new heading. That is the same
+# stale-rendered-as-current failure the stage status table exists to catch, and no default
+# can be trusted to fail loudly.
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("periodic", type=Path, help="ladder JSON, periodic evaluation")
+parser.add_argument("dilute", type=Path, help="ladder JSON, --dilute evaluation")
+args = parser.parse_args()
+for path in (args.periodic, args.dilute):
+    if not path.exists():
+        raise SystemExit(f"missing ladder file: {path}")
+
+print(f"periodic: {args.periodic.name}")
+print(f"dilute:   {args.dilute.name}")
+print()
+periodic = {r["n_host"]: r for r in json.loads(args.periodic.read_text())["rows"]}
+dilute = {r["n_host"]: r for r in json.loads(args.dilute.read_text())["rows"]}
 sizes = sorted(set(periodic) & set(dilute))
+if not sizes:
+    raise SystemExit("the two ladders share no cell sizes")
 
 print(f"{'N':>6s} {'periodic':>11s} {'dilute':>11s} {'correction':>13s}")
 differences = []

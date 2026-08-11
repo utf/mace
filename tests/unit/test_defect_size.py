@@ -225,26 +225,40 @@ class TestExemption:
         assert float(loss.size_penalty(ref, pred)) == 0.0
         assert loss.last_size_exempt > 0
 
-    def test_collapsed_attention_is_refused_the_exemption(self):
-        """A flat channel must NOT be exempted, or the constraint disables itself.
+    @pytest.mark.parametrize("dtype", [torch.float64, torch.float32])
+    def test_collapsed_attention_gets_a_real_penalty(self, dtype):
+        """A flat channel must produce a PENALTY, not merely lose its exempt label.
 
         The exemption is self-reinforcing: flat attention drives the contrast to zero, the
         channel is exempted, the hinge switches off, and nothing pulls the attention back.
         Observed end to end -- the perovskite long-range run spent its whole life at
-        ``size_f = 1.000`` on all four channels with ``|c| = 0.000``, and finished with its
-        live channel uniform over the Cs sublattice (participation 16.1 of 79 atoms, where
-        a sublattice is 16) and zero weight on the vacancy shell. The short-range run, whose
-        contrast stayed at 0.090, kept participation at 2.0 on the correct two atoms.
+        ``size_f = 1.000`` on all four channels with ``|c| = 0.000`` and finished with its
+        live channel uniform over the Cs sublattice, while the short-range run kept
+        ``|c| = 0.090`` and put the hole on the two under-coordinated Pb.
+
+        Asserting on ``last_size_exempt`` alone is not enough, and the near-miss is the
+        reason this test exists in this form. Simply un-exempting the channel left the
+        threshold derived from ``|c|``, and ``|c| ~ 0`` sends it to ``x* = 27.6`` while
+        ``x`` is capped at ``ln(R-1) = 9.21`` -- violation identically zero. Both dtypes
+        are exercised because in float32 ``1 - 1e-12`` rounds to 1.0, the threshold becomes
+        ``+inf``, and the channel is silently exempt again. Training runs float32.
         """
-        # gap = 0 makes alpha exactly uniform, so the contrast is zero AND the carrier is
-        # spread over the whole cell -- the degenerate state, not a delocalised-but-fine one.
-        ref, pred = make_inputs(gap=0.0, u_bulk=0.3, u_shell=0.3)
-        loss = build_loss()
-        loss.size_penalty(ref, pred)
-        loss.size_penalty(ref, pred)
-        assert loss.last_size_exempt == 0, (
-            "a channel whose attention covers the cell must keep the constraint"
-        )
+        previous = torch.get_default_dtype()
+        torch.set_default_dtype(dtype)
+        try:
+            ref, pred = make_inputs(gap=0.0, u_bulk=0.3, u_shell=0.3)
+            loss = build_loss()
+            loss.current_epoch = 10_000  # past warmup
+            loss.size_penalty(ref, pred)  # primes the EMA
+            value = float(loss.size_penalty(ref, pred))
+            assert loss.last_size_exempt == 0, "collapsed channel must not be exempt"
+            assert value > 0.0, (
+                "a collapsed channel must be penalised, not just un-exempted "
+                f"(x={loss.last_size_x.reshape(-1)[0]:.3f}, "
+                f"x*={loss.last_size_threshold.reshape(-1)[0]:.3f})"
+            )
+        finally:
+            torch.set_default_dtype(previous)
 
     def test_threshold_is_continuous_approaching_t_equals_one(self):
         """``x* -> +inf`` smoothly as ``|c| -> tol``, rather than switching at a branch."""
