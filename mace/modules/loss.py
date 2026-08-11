@@ -976,10 +976,19 @@ class DefectLoss(torch.nn.Module):
             # so the target reads directly off the diagnostic.
             leak = self.size_delocalised_leak
             target = math.log(leak / (1.0 - leak))
-            threshold = torch.where(
-                delocalised.expand_as(threshold),
-                torch.full_like(threshold, target),
-                threshold,
+            resolved = torch.where(
+                satisfied, torch.full_like(threshold, float("inf")), threshold
+            )
+            # `minimum`, not a replacement. A smaller x* is a stricter constraint, and
+            # while |c| is healthy the ordinary path can already be stricter than the
+            # fixed target -- at |c| = 0.033 it gives -3.46 against the target's -2.94, so
+            # substituting would LOOSEN a channel that was being held. Taking the minimum
+            # makes the guard a floor: it binds only when the |c| path has gone slack, and
+            # `minimum(+inf, target) = target` covers the exempted case for free.
+            return torch.where(
+                delocalised.expand_as(resolved),
+                torch.minimum(resolved, torch.full_like(resolved, target)),
+                resolved,
             )
         return torch.where(
             satisfied, torch.full_like(threshold, float("inf")), threshold

@@ -884,8 +884,35 @@ class MACELoss(Metric):
                             num_graphs=num_graphs,
                             ratio=ratio,
                         )
+                        # The SAME delocalisation mask the loss uses. Calling
+                        # size_threshold without it reports the un-guarded path, so
+                        # size_x*, size_viol and exempt would describe a constraint the
+                        # loss is not applying -- diagnostics that disagree with the term
+                        # they are meant to monitor are worse than none.
+                        inverse = scatter_sum(
+                            alpha * alpha, index, dim=0, dim_size=num_graphs
+                        ).clamp_min(1e-30)
+                        sizes = scatter_sum(
+                            torch.ones_like(alpha[:, :1]),
+                            index,
+                            dim=0,
+                            dim_size=num_graphs,
+                        ).clamp_min(1.0)
+                        floor = torch.clamp(
+                            sizes * float(
+                                getattr(
+                                    self.loss_fn, "size_delocalised_fraction", 0.05
+                                )
+                            ),
+                            min=float(
+                                getattr(
+                                    self.loss_fn, "size_delocalised_min_atoms", 8.0
+                                )
+                            ),
+                        )
                         threshold = self.loss_fn.size_threshold(
-                            batch.carrier_counts.view(num_graphs, -1)
+                            batch.carrier_counts.view(num_graphs, -1),
+                            delocalised=((1.0 / inverse) > floor).any(dim=0),
                         )
                         # Violation is what the term actually descends; x and x* alone do
                         # not say whether the constraint is binding. Masked by n_c > 0 as
