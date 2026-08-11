@@ -5,6 +5,15 @@
 #   ARM=A1  2a + 2b(i)            -- and q^host computed from detached features
 #   ARM=Z   2a + a = 0            -- the CONTROL
 #   ARM=F   2a + finite-size E_LR -- the physics fix
+#   ARM=D   F + the branch held out until epoch 30, 60 epochs total
+#
+# D exists because every long-range run to date has had its attention captured before the
+# energy fit could settle it, while the short-range model reliably finds the vacancy shell
+# within a few epochs (participation 10.1 -> 4.3 -> 2.6 by epoch 4). Holding the branch out
+# entirely -- not ramping a, the branch is simply absent -- lets the short-range objective
+# converge first, then asks whether the long-range branch DESTROYS a settled correct answer.
+# That is a different question from whether it can find one, and it is the question the
+# control could not answer.
 #
 # F keeps a at its gauge value and redefines E_LR as the finite-size correction,
 # subtracting each carrier channel's isolated self-energy so only the image interaction
@@ -35,6 +44,7 @@ SEED="${SEED:-1}"
 NAME="perov_${ARM}_s${SEED}"
 EPS="${EPS_INF:-4.0}"
 ISOLATED="${CARRIER_SELF_ISOLATED:-False}"
+LR_START="${LR_START_EPOCH:-0}"
 case "$ARM" in
     A0) DETACH=False ;;
     A1) DETACH=True ;;
@@ -42,7 +52,8 @@ case "$ARM" in
     # purpose, with no code change and therefore no new code path of its own.
     Z)  DETACH=False; EPS=1e12 ;;
     F)  DETACH=False; ISOLATED=True ;;
-    *) echo "unknown ARM '$ARM' (want A0, A1, Z or F)" >&2; exit 2 ;;
+    D)  DETACH=False; ISOLATED=True; LR_START=30 ;;
+    *) echo "unknown ARM '$ARM' (want A0, A1, Z, F or D)" >&2; exit 2 ;;
 esac
 
 rm -rf "$HOME/runs/$NAME" "$HOME/runs/${NAME}.log"
@@ -58,7 +69,7 @@ DELTA_ENERGY_WEIGHT=0.0 DELTA_FORCES_WEIGHT=0.0 \
 DEFECT_LOGIT_SEED_GAMMA=1.5 DEFECT_SEED_ANNEAL=True \
 USE_LONG_RANGE=True FREEZE_AMPLITUDE=True EPS_INF="$EPS" \
 USE_POLARISATION=False HOST_CARRIER_COUPLING=False \
-CARRIER_SELF_ISOLATED="$ISOLATED" \
+CARRIER_SELF_ISOLATED="$ISOLATED" LR_START_EPOCH="$LR_START" \
 HOST_CHARGE_DETACHED="$DETACH" \
 DEFECT_SIZE_WEIGHT=1e-4 DEFECT_SIZE_WARMUP_EPOCHS=20 \
 "${REPO}/defect-example/train_defect_model.sh" > "$HOME/runs/${NAME}.log" 2>&1

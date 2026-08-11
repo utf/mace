@@ -401,6 +401,7 @@ def _build_model(args, model_config, model_config_foundation, heads):  # pylint:
             pol_gate_hops=args.pol_gate_hops,
             host_carrier_coupling=args.host_carrier_coupling,
             carrier_self_isolated=args.carrier_self_isolated,
+            lr_start_epoch=args.lr_start_epoch,
         )
     if args.model == "ScaleShiftBOTNet":
         # say it is deprecated
@@ -496,6 +497,7 @@ def _build_model(args, model_config, model_config_foundation, heads):  # pylint:
             pol_gate_hops=args.pol_gate_hops,
             host_carrier_coupling=args.host_carrier_coupling,
             carrier_self_isolated=args.carrier_self_isolated,
+            lr_start_epoch=args.lr_start_epoch,
         )
     if args.model == "MACELES":
         from mace.modules.extensions import MACELES

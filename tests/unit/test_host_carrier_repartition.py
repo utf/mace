@@ -67,6 +67,8 @@ def build_model(**overrides) -> MACEDefect:
     model = MACEDefect(**arguments).double()
     # zero_last_layer leaves the charge readouts at zero, which would make every identity
     # below hold vacuously.
+    if not hasattr(model, "latent_charges"):
+        return model.eval()  # use_long_range=False: no charge readouts to randomise
     generator = torch.Generator().manual_seed(1)
     for mlp in (model.latent_charges.host_charge, model.latent_charges.polarisation):
         last = list(mlp.modules())[-1]

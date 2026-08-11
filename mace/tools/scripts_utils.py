@@ -397,6 +397,7 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         config["carrier_self_isolated"] = bool(
             getattr(model, "carrier_self_isolated", False)
         )
+        config["lr_start_epoch"] = int(getattr(model, "lr_start_epoch", 0))
         # Read from the pooling block: MACEDefect forwards this to the submodule without
         # keeping a copy, so a getattr on the model would silently read the default back
         # and the round trip would look fine while losing the setting.

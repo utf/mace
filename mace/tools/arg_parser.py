@@ -1225,6 +1225,17 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=False,
     )
     parser.add_argument(
+        "--lr_start_epoch",
+        help="Hold the long-range branch out of the energy and the loss until this epoch. "
+        "Not a ramp on a: the branch is absent entirely, so the model IS the short-range "
+        "model until it fires. The short-range model reliably localises within a few "
+        "epochs while every long-range run so far has had its attention captured first, so "
+        "this asks whether the branch destroys a settled correct answer rather than "
+        "whether it can find one",
+        type=int,
+        default=0,
+    )
+    parser.add_argument(
         "--use_long_range",
         help="Enable the latent-Ewald long-range branch (requires the LES library)",
         type=str2bool,

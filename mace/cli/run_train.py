@@ -1138,6 +1138,12 @@ def run(args) -> None:
             # would restart at zero on every resume and silently re-serve the size-hinge
             # warmup -- the same shape of bug as the gamma anneal restarting from scratch.
             loss_fn.current_epoch = int(epoch)
+            # The model needs it too: the long-range branch is gated on the same absolute
+            # epoch, and it must reach the module that is actually being trained.
+            target = getattr(current_model, "module", current_model)
+            if hasattr(target, "current_epoch"):
+                with torch.no_grad():
+                    target.current_epoch.fill_(int(epoch))
             if not anneal_seed:
                 return
             report = anneal_logit_seed(
@@ -1182,6 +1188,10 @@ def run(args) -> None:
     # would report a loss missing the size term while every later one includes it.
     if hasattr(loss_fn, "current_epoch"):
         loss_fn.current_epoch = int(start_epoch)
+    _target = getattr(model, "module", model)
+    if hasattr(_target, "current_epoch"):
+        with torch.no_grad():
+            _target.current_epoch.fill_(int(start_epoch))
 
     tools.train(
         model=model,

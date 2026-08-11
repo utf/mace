@@ -100,6 +100,7 @@ class MACEDefect(ScaleShiftMACE):
         pol_gate_hops: int = 2,
         host_carrier_coupling: bool = True,
         carrier_self_isolated: bool = False,
+        lr_start_epoch: int = 0,
         gauge_counters: Optional[List[List[int]]] = None,
         **kwargs: Any,
     ):
@@ -189,6 +190,19 @@ class MACEDefect(ScaleShiftMACE):
         self.pol_gate_hops = pol_gate_hops
         self.host_carrier_coupling = host_carrier_coupling
         self.carrier_self_isolated = carrier_self_isolated
+        # Hold the long-range branch out of the energy AND the loss until this epoch. Not a
+        # ramp on `a`: the branch is absent entirely, so the model IS the short-range model
+        # until it fires. The point is that the short-range model reliably finds the
+        # vacancy shell within a few epochs (participation 10.1 -> 4.3 -> 2.6 by epoch 4),
+        # while every long-range run to date has had attention captured before it could.
+        # Starting from a settled, correct attention asks a different question: whether the
+        # long-range branch DESTROYS a right answer, rather than whether it can find one.
+        self.lr_start_epoch = int(lr_start_epoch)
+        # A buffer, so it travels with the model and survives checkpointing and the cuEq
+        # round trip. Set by the trainer's epoch hook from the ABSOLUTE epoch.
+        self.register_buffer(
+            "current_epoch", torch.zeros((), dtype=torch.long), persistent=True
+        )
         if use_long_range:
             self.latent_ewald = LatentEwald(les_arguments)
             self.latent_charges = StructuredLatentCharges(
@@ -226,6 +240,7 @@ class MACEDefect(ScaleShiftMACE):
             ("pol_gate_hops", 2),
             ("host_carrier_coupling", True),
             ("carrier_self_isolated", False),
+            ("lr_start_epoch", 0),
         ):
             if not hasattr(self, name):
                 object.__setattr__(self, name, default)
@@ -233,6 +248,12 @@ class MACEDefect(ScaleShiftMACE):
         # and out of `.to()`. A model pickled before the gauge probe existed has none, and
         # an empty buffer is exactly the "probe disabled" state, so old checkpoints keep
         # behaving as they did.
+        if not hasattr(self, "current_epoch"):
+            # Old checkpoints predate the gate. lr_start_epoch defaults to 0 for them, so
+            # any value leaves the branch on, which is the behaviour they were trained with.
+            self.register_buffer(
+                "current_epoch", torch.zeros((), dtype=torch.long), persistent=True
+            )
         if not hasattr(self, "gauge_counters"):
             self.register_buffer(
                 "gauge_counters",
@@ -530,7 +551,7 @@ class MACEDefect(ScaleShiftMACE):
         # positions, so it must reach the force/stress derivative.
         energy_lr_host = torch.zeros_like(base_energy)
 
-        if self.use_long_range:
+        if self.use_long_range and int(self.current_epoch) >= self.lr_start_epoch:
             # A null cell selects the isolated evaluator inside LES, which is how
             # non-periodic configurations are handled.
             cell_les = cell.clone()
