@@ -4,6 +4,14 @@
 #   ARM=A0  2a only               -- seed anneal regated on site structure
 #   ARM=A1  2a + 2b(i)            -- and q^host computed from detached features
 #   ARM=Z   2a + a = 0            -- the CONTROL
+#   ARM=F   2a + finite-size E_LR -- the physics fix
+#
+# F keeps a at its gauge value and redefines E_LR as the finite-size correction,
+# subtracting each carrier channel's isolated self-energy so only the image interaction
+# survives. The in-cell part is self-interaction error and, measured at the training cell,
+# pays +0.104 eV to spread the attention out. The a = 0 control reached the correct
+# vacancy-shell answer in 2 of 3 seeds; F asks whether removing just that pressure, while
+# keeping the physical image term, does as well or better.
 #
 # Z is the measurement that discriminates. A0 and nolr differ in more than one energy
 # term: enabling the long-range branch constructs additional modules, and `_mlp` draws its
@@ -26,13 +34,15 @@ ARM="${ARM:-A0}"
 SEED="${SEED:-1}"
 NAME="perov_${ARM}_s${SEED}"
 EPS="${EPS_INF:-4.0}"
+ISOLATED="${CARRIER_SELF_ISOLATED:-False}"
 case "$ARM" in
     A0) DETACH=False ;;
     A1) DETACH=True ;;
     # a = 1/sqrt(eps_inf) = 1e-6, so carrier^2 ~ a^2 = 1e-12 eV: zero for every practical
     # purpose, with no code change and therefore no new code path of its own.
     Z)  DETACH=False; EPS=1e12 ;;
-    *) echo "unknown ARM '$ARM' (want A0, A1 or Z)" >&2; exit 2 ;;
+    F)  DETACH=False; ISOLATED=True ;;
+    *) echo "unknown ARM '$ARM' (want A0, A1, Z or F)" >&2; exit 2 ;;
 esac
 
 rm -rf "$HOME/runs/$NAME" "$HOME/runs/${NAME}.log"
@@ -48,6 +58,7 @@ DELTA_ENERGY_WEIGHT=0.0 DELTA_FORCES_WEIGHT=0.0 \
 DEFECT_LOGIT_SEED_GAMMA=1.5 DEFECT_SEED_ANNEAL=True \
 USE_LONG_RANGE=True FREEZE_AMPLITUDE=True EPS_INF="$EPS" \
 USE_POLARISATION=False HOST_CARRIER_COUPLING=False \
+CARRIER_SELF_ISOLATED="$ISOLATED" \
 HOST_CHARGE_DETACHED="$DETACH" \
 DEFECT_SIZE_WEIGHT=1e-4 DEFECT_SIZE_WARMUP_EPOCHS=20 \
 "${REPO}/defect-example/train_defect_model.sh" > "$HOME/runs/${NAME}.log" 2>&1
