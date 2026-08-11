@@ -8,6 +8,8 @@ import math
 from typing import Optional
 
 import torch
+
+from mace.tools.scatter import scatter_sum
 import torch.distributed as dist
 
 from mace.tools import TensorDict
@@ -766,6 +768,7 @@ class DefectLoss(torch.nn.Module):
         size_warmup_epochs: int = 20,
         size_ema_decay: float = 0.95,
         size_contrast_eps: float = 1e-9,
+        size_delocalised_fraction: float = 0.05,
         gauge_weight: float = 0.0,
     ) -> None:
         super().__init__()
@@ -794,6 +797,11 @@ class DefectLoss(torch.nn.Module):
         self.size_warmup_epochs = size_warmup_epochs
         self.size_ema_decay = size_ema_decay
         self.size_contrast_eps = size_contrast_eps
+        # Participation fraction above which a channel is refused the delocalised-carrier
+        # exemption. 0.05 sits far above a real localised carrier (2 atoms of 79 is 0.025
+        # only for the very smallest cells, and ~0.001 on the ladder) and far below any
+        # sublattice (0.2 for a perovskite A or B site).
+        self.size_delocalised_fraction = size_delocalised_fraction
         self.gauge_weight = gauge_weight
         # Running |c| per channel, used only to place the (detached) threshold. A buffer so
         # it survives checkpointing: restarting with a cold EMA would put every channel in
@@ -803,6 +811,7 @@ class DefectLoss(torch.nn.Module):
             torch.zeros(NUM_CARRIER_CHANNELS, dtype=torch.get_default_dtype()),
         )
         self.last_size_exempt = 0.0
+        self.last_size_spread: Optional[torch.Tensor] = None
         self.last_size_x: Optional[torch.Tensor] = None
         self.last_size_threshold: Optional[torch.Tensor] = None
         # Set by the trainer's epoch hook from the *absolute* epoch, so a run restarted
@@ -898,7 +907,11 @@ class DefectLoss(torch.nn.Module):
         loss = loss + self.regularisation(pred)
         return loss
 
-    def size_threshold(self, counts: torch.Tensor) -> torch.Tensor:
+    def size_threshold(
+        self,
+        counts: torch.Tensor,
+        delocalised: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """``x*_c = ln(t/(1-t))`` with ``t = (tol/n_c) / |c|_EMA``; ``+inf`` when ``t >= 1``.
 
         The constraint being expressed is ``sigma(x)|c| <= tol_c``. Since ``sigma`` is
@@ -920,6 +933,21 @@ class DefectLoss(torch.nn.Module):
         magnitude = self.contrast_ema.clamp_min(self.size_contrast_eps)
         t = (per_channel_tol / magnitude).clamp_max(1.0)
         satisfied = t >= 1.0
+        if delocalised is not None:
+            # GUARD. The exemption above is self-reinforcing and can trap the fit. Flat
+            # attention drives the contrast to zero, |c| falls below tol, the channel is
+            # exempted, the hinge switches off, and nothing pulls the attention back --
+            # the constraint degenerates exactly at the state it exists to prevent.
+            # Observed end to end: the perovskite long-range run spent its whole life at
+            # size_f = 1.000 on all four channels with |c| = 0.000, and its live channel
+            # ended uniform over the Cs sublattice with zero weight on the vacancy shell,
+            # while the short-range run kept |c| = 0.090, stayed live, and put the hole on
+            # exactly the two under-coordinated Pb.
+            #
+            # A channel whose attention is spread over a fixed *fraction* of the cell is
+            # not a delocalised carrier that happens to be within tolerance; it is a
+            # collapsed one. Refuse the exemption there, so the hinge keeps acting.
+            satisfied = satisfied & ~delocalised
         # Floored as well as capped. Only ``t >= 1`` -- contrast already inside tolerance --
         # means exempt, and that is the branch the caller skips. ``t -> 0`` is the opposite
         # extreme, a maximally strict constraint, and it must stay *finite*: an unfloored
@@ -979,7 +1007,21 @@ class DefectLoss(torch.nn.Module):
                 observed.to(self.contrast_ema.dtype) * (1.0 - self.size_ema_decay)
             )
 
-        threshold = self.size_threshold(counts)
+        # Participation ratio 1 / sum_i alpha_i^2 per channel, as a fraction of the cell.
+        # Scale-free, so one threshold works at every cell size: a carrier on a handful of
+        # atoms gives ~0 at any N, while a whole sublattice pins to its fixed fraction
+        # (1/5 for Cs in CsPbCl3) no matter how large the supercell.
+        alpha = pred["carrier_alpha"]
+        inverse = scatter_sum(
+            alpha.pow(2), ref["batch"], dim=0, dim_size=num_graphs
+        ).clamp_min(1e-30)
+        sizes = scatter_sum(
+            torch.ones_like(alpha[:, :1]), ref["batch"], dim=0, dim_size=num_graphs
+        ).clamp_min(1.0)
+        spread = (1.0 / inverse) / sizes
+        delocalised = (spread > self.size_delocalised_fraction).any(dim=0)
+        self.last_size_spread = spread.detach().amax(dim=0)
+        threshold = self.size_threshold(counts, delocalised=delocalised)
         self.last_size_exempt = float((~torch.isfinite(threshold) & live).sum())
         self.last_size_x = probe.x.detach()
         self.last_size_threshold = threshold

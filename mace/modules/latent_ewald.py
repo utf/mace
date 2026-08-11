@@ -26,9 +26,12 @@ Cost: training needs two evaluations per step (``E[q_host]`` and ``E[q_total]``)
 three. The full decomposition is an inference and testing tool.
 """
 
+import math
 from typing import Any, Dict, Optional, Tuple
 
 import torch
+
+from mace.tools.scatter import scatter_sum
 
 LES_INSTALL_HINT = (
     "Cannot import 'les'. Please install the 'les' library from "
@@ -83,11 +86,38 @@ class LatentEwald(torch.nn.Module):
 
         A cell with zero volume selects the isolated evaluator inside LES, which is how
         non-periodic configurations are handled.
+
+        Includes the neutralising-background term that LES omits. LES is not a split Ewald:
+        it sums ``exp(-sigma^2 k^2 / 2) / k^2 * |S(k)|^2`` over ``k != 0`` only. For a
+        neutral cell that is exact, because ``S(0) = sum_i q_i = 0``. For a net-charged one
+        the ``k -> 0`` limit is finite once a uniform compensating background cancels the
+        divergent ``1/k^2`` piece, and what remains is
+
+            ``E_bg = -(2 pi / V) (sigma^2 / 2) Q^2 * C = -pi sigma^2 Q^2 C / V``
+
+        (the same term as ``-pi Q^2 / (2 V alpha^2)`` with ``alpha = 1 / (sigma sqrt 2)``).
+        It is ``O(1/V)`` -- about -24 meV at the 79-atom perovskite training cells and
+        -3 meV at 639 atoms -- so it is a correctness item, not a size-extensivity one: it
+        is a pure ``Q^2`` effect and vanishes identically for a neutral distribution. The
+        reason to include it is that the DFT labels use the jellium convention, so without
+        it the model is fitting to a different electrostatic convention than its own.
         """
-        energy, _, _ = self.ewald(
-            q=charges, r=positions, cell=cell.view(-1, 3, 3), batch=batch
+        cell = cell.view(-1, 3, 3)
+        energy, _, _ = self.ewald(q=charges, r=positions, cell=cell, batch=batch)
+        num_graphs = int(energy.shape[0])
+        net = scatter_sum(charges, batch, dim=0, dim_size=num_graphs)
+        volume = torch.det(cell)
+        # A zero-volume cell is the isolated evaluator, which has no background at all.
+        background = torch.where(
+            volume.abs() > 0,
+            -math.pi
+            * self.sigma**2
+            * net**2
+            * self.ewald.norm_factor
+            / volume.clamp_min(1e-30),
+            torch.zeros_like(energy),
         )
-        return energy
+        return energy + background
 
     def isolated_energy(
         self,

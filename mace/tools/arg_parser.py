@@ -1161,14 +1161,38 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=False,
     )
     parser.add_argument(
-        "--per_species_neutral",
-        help="Make q^pol neutral within each species rather than across the whole cell. A "
-        "global mean leaves each species a constant residual on every atom -- a fictitious "
-        "ionic lattice whose Madelung energy and whose cross term with q^host both grow "
-        "with N, measured as 97%% of the size growth of delta_lr on CsPbCl3. Subtracting "
-        "the per-species mean makes a bulk atom exactly zero by construction",
+        "--use_polarisation",
+        help="Enable the q^pol channel. False ablates it entirely, leaving delta_lr as "
+        "carrier^2 + host.carrier. After gating, the polarisation response is contained "
+        "inside the receptive field, and a neutral cloud contained inside the receptive "
+        "field has a local electrostatic energy that delta_SR can already represent",
+        type=str2bool,
+        default=True,
+    )
+    parser.add_argument(
+        "--pol_gate",
+        help="Gate q^pol on a smeared UNSIGNED carrier density instead of subtracting a "
+        "cell mean. A whole-cell mean gives neutrality, not locality, and leaves every "
+        "atom a constant per-species residual whose Madelung energy grows with N. Gating "
+        "makes a bulk atom zero because the gate is zero there. Also self-protecting: a "
+        "delocalised alpha gives g ~ 1/N, so attention collapse stops being profitable",
         type=str2bool,
         default=False,
+    )
+    parser.add_argument(
+        "--pol_gate_lambda",
+        help="Screening length of the polarisation gate, in A. A FIXED gauge constant "
+        "recorded with the model, like sigma and beta -- not learned, because an unbounded "
+        "lambda recovers the bulk plateau exactly",
+        type=float,
+        default=6.0,
+    )
+    parser.add_argument(
+        "--pol_gate_hops",
+        help="Propagation steps for the polarisation gate on the message-passing graph. "
+        "Two hops at r_max = 5 reaches 10 A",
+        type=int,
+        default=2,
     )
     parser.add_argument(
         "--use_long_range",

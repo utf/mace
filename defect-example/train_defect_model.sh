@@ -131,6 +131,14 @@ DEFECT_BETA="${DEFECT_BETA:-10.0}"
 # frame there is no monopole for `a` to scale, so a free `a` is unidentifiable and drifts
 # to whatever absorbs the electron-hole energy.
 FREEZE_AMPLITUDE="${FREEZE_AMPLITUDE:-False}"
+# q^pol channel. A whole-cell mean gives neutrality, not locality, so an ungated q^pol puts
+# a fixed per-species charge on every atom in the crystal and its Madelung energy grows with
+# N. USE_POLARISATION=False ablates the channel; POL_GATE=True gates it on the smeared
+# carrier density instead. Only meaningful when USE_LONG_RANGE=True.
+USE_POLARISATION="${USE_POLARISATION:-True}"
+POL_GATE="${POL_GATE:-False}"
+POL_GATE_LAMBDA="${POL_GATE_LAMBDA:-6.0}"
+POL_GATE_HOPS="${POL_GATE_HOPS:-2}"
 EPS_INF="${EPS_INF:-6.5}"
 EPS_INF_PRIOR_WEIGHT="${EPS_INF_PRIOR_WEIGHT:-0.0}"
 
@@ -319,6 +327,10 @@ python -m mace.cli.run_train \
     --defect_beta="${DEFECT_BETA}" \
     --use_long_range="${USE_LONG_RANGE}" \
     --freeze_amplitude="${FREEZE_AMPLITUDE}" \
+    --use_polarisation="${USE_POLARISATION}" \
+    --pol_gate="${POL_GATE}" \
+    --pol_gate_lambda="${POL_GATE_LAMBDA}" \
+    --pol_gate_hops="${POL_GATE_HOPS}" \
     --eps_inf="${EPS_INF}" \
     --eps_inf_prior_weight="${EPS_INF_PRIOR_WEIGHT}" \
     --energy_weight="${ENERGY_WEIGHT}" \

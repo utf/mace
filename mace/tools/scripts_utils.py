@@ -384,9 +384,10 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         # their defaults everywhere, and ``correction_trunk`` raises for any value but
         # "shared".
         config["freeze_amplitude"] = bool(getattr(model, "freeze_amplitude", False))
-        config["per_species_neutral"] = bool(
-            getattr(model, "per_species_neutral", False)
-        )
+        config["use_polarisation"] = bool(getattr(model, "use_polarisation", True))
+        config["pol_gate"] = bool(getattr(model, "pol_gate", False))
+        config["pol_gate_lambda"] = float(getattr(model, "pol_gate_lambda", 6.0))
+        config["pol_gate_hops"] = int(getattr(model, "pol_gate_hops", 2))
         # Read from the pooling block: MACEDefect forwards this to the submodule without
         # keeping a copy, so a getattr on the model would silently read the default back
         # and the round trip would look fine while losing the setting.

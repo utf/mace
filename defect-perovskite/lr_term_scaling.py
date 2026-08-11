@@ -52,11 +52,15 @@ def main() -> None:
     parser.add_argument("--repeats", nargs="+",
                         default=["2,2,2", "3,2,2", "3,3,2", "3,3,3"])
     parser.add_argument("--site", type=int, default=0)
-    parser.add_argument("--per-species", action="store_true",
-                        help="patch the trained model to make q^pol neutral WITHIN each "
-                             "species. The projection is parameter-free, so it can be "
-                             "switched on at inference: if the exponents collapse without "
-                             "retraining, the fix is structural rather than fitted.")
+    parser.add_argument("--mode", choices=("baseline", "ablate", "gate"),
+                        default="baseline",
+                        help="baseline: q^pol as trained (cell-mean subtracted). "
+                             "ablate (Step A): q^pol switched off entirely. "
+                             "gate (Step B): q^pol gated on the smeared unsigned carrier "
+                             "density. Both are parameter-free, so they can be evaluated "
+                             "on existing weights before any retraining.")
+    parser.add_argument("--pol-gate-lambda", type=float, default=6.0)
+    parser.add_argument("--pol-gate-hops", type=int, default=2)
     args = parser.parse_args()
 
     logging.getLogger().setLevel(logging.ERROR)
@@ -69,12 +73,15 @@ def main() -> None:
     ewald = model.latent_ewald
     sigma = float(ewald.sigma)
     norm_factor = float(ewald.ewald.norm_factor)
-    if args.per_species:
-        model.latent_charges.per_species_neutral = True
-        model.latent_charges.num_species = len(model.atomic_numbers)
-        model.per_species_neutral = True
-    print(f"model {args.model.name}   per_species_neutral = "
-          f"{getattr(model.latent_charges, 'per_species_neutral', False)}")
+    charges = model.latent_charges
+    charges.use_polarisation = args.mode != "ablate"
+    charges.pol_gate = args.mode == "gate"
+    charges.pol_gate_lambda = args.pol_gate_lambda
+    charges.pol_gate_hops = args.pol_gate_hops
+    charges.pol_gate_eps = 1e-8
+    print(f"model {args.model.name}   mode = {args.mode}"
+          + (f"  lambda = {args.pol_gate_lambda} A, hops = {args.pol_gate_hops}"
+             if args.mode == "gate" else ""))
     print(f"sigma = {sigma}  norm_factor = {norm_factor}\n")
 
     z_table = tools.AtomicNumberTable(sorted({17, 55, 82}))

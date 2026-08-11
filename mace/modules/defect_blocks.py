@@ -319,22 +319,38 @@ class StructuredLatentCharges(torch.nn.Module):
       needs. It supplies *shape*, never monopole;
 
       Neutrality alone is not enough, and a whole-cell mean does not deliver locality.
-      Far from the defect the node features are the bulk values for the species, so the
-      readout returns a fixed per-species number and a *global* mean removes only the
-      composition-weighted average: each species keeps a constant residual on every atom
-      in the crystal. Measured on ``perov_lr_s1``, V_Cl+ in CsPbCl3, that residual was
-      Cs -0.067, Pb +0.109, Cl -0.015 e, flat from 3 A to beyond 10 A and identical at
-      two cell sizes -- a fictitious ionic lattice whose Madelung energy and whose cross
-      term with ``q^host`` both grow in proportion to N (measured exponents +1.002 and
-      +1.022, together 97% of the size growth of ``delta_lr``).
+      ``p_i`` is a local function of the descriptors, so on a bulk-like atom it returns a
+      fixed value determined by that environment; subtracting the cell mean removes only
+      the composition-weighted average and leaves every atom carrying a constant residual.
+      Measured on ``perov_lr_s1`` that residual was Cs -0.067, Pb +0.109, Cl -0.015 e, flat
+      from 3 A to beyond 10 A and identical at two cell sizes -- a fictitious ionic lattice
+      whose Madelung energy and whose cross term with ``q^host`` both grow in proportion to
+      N (exponents +1.002 and +1.022, together 97% of the size growth of ``delta_lr``).
 
-      ``per_species_neutral`` subtracts the mean *within each species* instead. A bulk
-      atom then gets identically zero by construction, because the plateau being removed
-      is exactly the per-species mean. Locality is structural rather than penalised, the
-      monopole guarantee is strengthened (per-species zero implies global zero), and the
-      projection is parameter-free. The residual contamination is benign: a defect makes
-      each bulk atom of a species carry -(shell excess)/N_species, so the artefact's
-      sum of squares decays as 1/N rather than growing with it;
+      Estimating the bulk value empirically -- per species, say -- is a statistical patch
+      that fails wherever the statistic is undefined: mixed valence, alloys, surfaces, and
+      thermally disordered snapshots where every site is inequivalent. It also forbids real
+      physics, since per-species neutrality prohibits net charge transfer between
+      sublattices, the dominant screening mechanism in an ionic solid.
+
+      The structural answer is that response follows cause. The far-field dielectric
+      response is already carried by ``a = 1/sqrt(eps_inf)`` on ``q^carrier``; what
+      ``q^pol`` has to represent is the beyond-continuum *near-field* response, and in a
+      gapped material the density-density response is short-ranged, hence local **to the
+      carrier**. ``pol_gate`` multiplies the readout by a smeared, UNSIGNED carrier density
+      ``g`` and centres it under that same weight, so a bulk atom is zero because ``g`` is
+      zero there rather than because a mean was subtracted. Unsigned because an exciton
+      with net-zero carrier charge still polarises the lattice locally. Two further
+      properties fall out: at ``n = 0`` the gate vanishes identically, so the identity is
+      structural; and a delocalised ``alpha`` gives ``g ~ 1/N``, which decays instead of
+      offering tens of eV of fitting freedom -- so the construction is self-protecting
+      against the attention collapse that produced the failure in the first place.
+
+      ``use_polarisation=False`` drops the channel entirely. After gating, the response is
+      contained well inside the receptive field, and a neutral cloud contained inside the
+      receptive field has a local electrostatic energy that ``delta_SR`` can already
+      represent -- so the ablation is the first thing to try, not the fallback.
+
     * ``q^carrier`` reuses the attention weights for its shape and a single amplitude
       ``a`` for its magnitude, so it alone carries the monopole.
 
@@ -351,12 +367,20 @@ class StructuredLatentCharges(torch.nn.Module):
         hidden_dim: int = 64,
         eps_inf_init: float = 1.0,
         freeze_amplitude: bool = False,
-        num_species: int = 1,
-        per_species_neutral: bool = False,
+        use_polarisation: bool = True,
+        pol_gate: bool = False,
+        pol_gate_lambda: float = 6.0,
+        pol_gate_hops: int = 2,
     ):
         super().__init__()
-        self.num_species = num_species
-        self.per_species_neutral = per_species_neutral
+        # Gauge constants, recorded alongside sigma and beta. lambda is FIXED, not learned:
+        # an unbounded screening length recovers the bulk plateau exactly, and the model has
+        # already demonstrated it will exploit that for absolute-energy fitting.
+        self.use_polarisation = use_polarisation
+        self.pol_gate = pol_gate
+        self.pol_gate_lambda = float(pol_gate_lambda)
+        self.pol_gate_hops = int(pol_gate_hops)
+        self.pol_gate_eps = 1e-8
         self.host_charge = _mlp(feature_dim, hidden_dim, 1)
         self.polarisation = _mlp(feature_dim + counter_dim, hidden_dim, 1)
         self.amplitude = _mlp(feature_dim, hidden_dim, 1)
@@ -388,6 +412,36 @@ class StructuredLatentCharges(torch.nn.Module):
         # s_c: electron channels are negative, hole channels positive.
         self.register_buffer("carrier_signs", torch.tensor([-1.0, -1.0, 1.0, 1.0]))
 
+    def _carrier_gate(
+        self,
+        alpha: torch.Tensor,
+        counts: torch.Tensor,
+        batch: torch.Tensor,
+        edge_index: Optional[torch.Tensor],
+        edge_lengths: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        """Smeared, unsigned carrier density ``g_i = sum_j (sum_c n_c alpha_j^c) phi(r_ij)``.
+
+        Built by repeated propagation on the model's own message-passing graph rather than
+        a second neighbour list: cheaper, and it inherits the model's locality. Two hops at
+        ``r_max = 5`` reaches 10 A, which brackets the 5-8 A lattice screening length -- the
+        response genuinely extends past the carrier, so bare ``alpha`` would be too tight.
+        """
+        density = (alpha * counts[batch]).sum(dim=-1)  # unsigned
+        if edge_index is None or edge_lengths is None:
+            return density
+        lengths = edge_lengths.reshape(-1)
+        sender = edge_index[0]
+        receiver = edge_index[1]
+        phi = 0.5 * (1.0 + torch.cos(math.pi * lengths / self.pol_gate_lambda))
+        phi = torch.where(lengths < self.pol_gate_lambda, phi, torch.zeros_like(phi))
+        gate = density
+        for _ in range(self.pol_gate_hops):
+            gate = gate + scatter_sum(
+                phi * gate[sender], receiver, dim=0, dim_size=density.shape[0]
+            )
+        return gate
+
     def forward(
         self,
         node_feats: torch.Tensor,  # [n_nodes, feature_dim] invariant, geometry only
@@ -396,7 +450,8 @@ class StructuredLatentCharges(torch.nn.Module):
         alpha: torch.Tensor,  # [n_nodes, 4]
         batch: torch.Tensor,  # [n_nodes]
         num_graphs: int,
-        node_attrs: Optional[torch.Tensor] = None,  # [n_nodes, n_species] one-hot Z
+        edge_index: Optional[torch.Tensor] = None,  # [2, n_edges]
+        edge_lengths: Optional[torch.Tensor] = None,  # [n_edges] or [n_edges, 1]
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Returns (q, q_host, q_carrier, p, a)."""
         host_raw = self.host_charge(node_feats).squeeze(-1)
@@ -406,20 +461,25 @@ class StructuredLatentCharges(torch.nn.Module):
         polar_raw = self.polarisation(
             torch.cat([node_feats, counter_emb[batch]], dim=-1)
         ).squeeze(-1)
-        if self.per_species_neutral and node_attrs is not None:
-            # One group per (graph, species). Subtracting the within-species mean makes a
-            # bulk atom exactly zero, since the bulk plateau *is* that mean.
-            species = node_attrs.argmax(dim=-1)
-            group = batch * self.num_species + species
-            polar_mean = scatter_mean(
-                polar_raw, group, dim=0, dim_size=num_graphs * self.num_species
-            )
-            polarisation = polar_raw - polar_mean[group]
+        total_carriers = counts.sum(dim=-1)  # [n_graphs], unsigned
+        if not self.use_polarisation:
+            polarisation = torch.zeros_like(polar_raw)
+            q_pol = torch.zeros_like(polar_raw)
+        elif self.pol_gate:
+            gate = self._carrier_gate(alpha, counts, batch, edge_index, edge_lengths)
+            # Centre under the gate's own weight, so the subtraction lives where the
+            # response does. Clamping the denominator rather than adding to it keeps
+            # sum_i q_pol_i EXACTLY zero whenever any gate weight is present, and the
+            # gate is identically zero at n = 0 so the clamped branch contributes nothing.
+            weight = scatter_sum(gate, batch, dim=0, dim_size=num_graphs)
+            weighted = scatter_sum(gate * polar_raw, batch, dim=0, dim_size=num_graphs)
+            centre = weighted / weight.clamp_min(self.pol_gate_eps)
+            polarisation = polar_raw - centre[batch]
+            q_pol = gate * polarisation
         else:
             polar_mean = scatter_mean(polar_raw, batch, dim=0, dim_size=num_graphs)
             polarisation = polar_raw - polar_mean[batch]
-        total_carriers = counts.sum(dim=-1)  # [n_graphs]
-        q_pol = total_carriers[batch] * polarisation
+            q_pol = total_carriers[batch] * polarisation
 
         host_descriptor = scatter_mean(node_feats, batch, dim=0, dim_size=num_graphs)
         amplitude = torch.nn.functional.softplus(

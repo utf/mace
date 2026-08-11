@@ -93,7 +93,10 @@ class MACEDefect(ScaleShiftMACE):
         les_arguments: Optional[Dict[str, Any]] = None,
         eps_inf_init: float = 1.0,
         freeze_amplitude: bool = False,
-        per_species_neutral: bool = False,
+        use_polarisation: bool = True,
+        pol_gate: bool = False,
+        pol_gate_lambda: float = 6.0,
+        pol_gate_hops: int = 2,
         gauge_counters: Optional[List[List[int]]] = None,
         **kwargs: Any,
     ):
@@ -176,7 +179,10 @@ class MACEDefect(ScaleShiftMACE):
         self.eps_inf_init = eps_inf_init
         self.freeze_amplitude = freeze_amplitude
         self.les_arguments = dict(les_arguments) if les_arguments else None
-        self.per_species_neutral = per_species_neutral
+        self.use_polarisation = use_polarisation
+        self.pol_gate = pol_gate
+        self.pol_gate_lambda = pol_gate_lambda
+        self.pol_gate_hops = pol_gate_hops
         if use_long_range:
             self.latent_ewald = LatentEwald(les_arguments)
             self.latent_charges = StructuredLatentCharges(
@@ -185,8 +191,10 @@ class MACEDefect(ScaleShiftMACE):
                 hidden_dim=carrier_mlp_hidden,
                 eps_inf_init=eps_inf_init,
                 freeze_amplitude=freeze_amplitude,
-                num_species=len(self.atomic_numbers),
-                per_species_neutral=per_species_neutral,
+                use_polarisation=use_polarisation,
+                pol_gate=pol_gate,
+                pol_gate_lambda=pol_gate_lambda,
+                pol_gate_hops=pol_gate_hops,
             )
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
@@ -204,7 +212,10 @@ class MACEDefect(ScaleShiftMACE):
             ("beta", 10.0),
             ("freeze_amplitude", False),
             ("correction_trunk", "shared"),
-            ("per_species_neutral", False),
+            ("use_polarisation", True),
+            ("pol_gate", False),
+            ("pol_gate_lambda", 6.0),
+            ("pol_gate_hops", 2),
         ):
             if not hasattr(self, name):
                 object.__setattr__(self, name, default)
@@ -221,10 +232,15 @@ class MACEDefect(ScaleShiftMACE):
         # The charge assembly is pickled as a submodule, so it needs the same treatment.
         charges = getattr(self, "latent_charges", None)
         if charges is not None:
-            if not hasattr(charges, "per_species_neutral"):
-                object.__setattr__(charges, "per_species_neutral", False)
-            if not hasattr(charges, "num_species"):
-                object.__setattr__(charges, "num_species", len(self.atomic_numbers))
+            for name, default in (
+                ("use_polarisation", True),
+                ("pol_gate", False),
+                ("pol_gate_lambda", 6.0),
+                ("pol_gate_hops", 2),
+                ("pol_gate_eps", 1e-8),
+            ):
+                if not hasattr(charges, name):
+                    object.__setattr__(charges, name, default)
 
     def forward(  # pylint: disable=too-many-branches
         self,
@@ -490,7 +506,8 @@ class MACEDefect(ScaleShiftMACE):
                 alpha=alpha,
                 batch=data["batch"],
                 num_graphs=num_graphs,
-                node_attrs=data["node_attrs"],
+                edge_index=data["edge_index"],
+                edge_lengths=lengths,
             )
             energy_lr_total = self.latent_ewald.energy(
                 latent_charge, positions, cell_les, data["batch"]
@@ -514,7 +531,8 @@ class MACEDefect(ScaleShiftMACE):
                 alpha=alpha_ref,
                 batch=data["batch"],
                 num_graphs=num_graphs,
-                node_attrs=data["node_attrs"],
+                edge_index=data["edge_index"],
+                edge_lengths=lengths,
             )
             delta_lr_ref = (
                 self.latent_ewald.energy(
