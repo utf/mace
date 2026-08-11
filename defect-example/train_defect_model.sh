@@ -136,6 +136,8 @@ FREEZE_AMPLITUDE="${FREEZE_AMPLITUDE:-False}"
 # N. USE_POLARISATION=False ablates the channel; POL_GATE=True gates it on the smeared
 # carrier density instead. Only meaningful when USE_LONG_RANGE=True.
 USE_POLARISATION="${USE_POLARISATION:-True}"
+# Compute q^host from a DETACHED copy of the shared features (arm A1).
+HOST_CHARGE_DETACHED="${HOST_CHARGE_DETACHED:-False}"
 POL_GATE="${POL_GATE:-False}"
 POL_GATE_LAMBDA="${POL_GATE_LAMBDA:-6.0}"
 POL_GATE_HOPS="${POL_GATE_HOPS:-2}"
@@ -332,6 +334,7 @@ python -m mace.cli.run_train \
     --use_long_range="${USE_LONG_RANGE}" \
     --freeze_amplitude="${FREEZE_AMPLITUDE}" \
     --use_polarisation="${USE_POLARISATION}" \
+    --host_charge_detached="${HOST_CHARGE_DETACHED}" \
     --pol_gate="${POL_GATE}" \
     --pol_gate_lambda="${POL_GATE_LAMBDA}" \
     --pol_gate_hops="${POL_GATE_HOPS}" \

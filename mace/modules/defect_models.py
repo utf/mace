@@ -94,6 +94,7 @@ class MACEDefect(ScaleShiftMACE):
         eps_inf_init: float = 1.0,
         freeze_amplitude: bool = False,
         use_polarisation: bool = True,
+        host_charge_detached: bool = False,
         pol_gate: bool = False,
         pol_gate_lambda: float = 6.0,
         pol_gate_hops: int = 2,
@@ -181,6 +182,7 @@ class MACEDefect(ScaleShiftMACE):
         self.freeze_amplitude = freeze_amplitude
         self.les_arguments = dict(les_arguments) if les_arguments else None
         self.use_polarisation = use_polarisation
+        self.host_charge_detached = host_charge_detached
         self.pol_gate = pol_gate
         self.pol_gate_lambda = pol_gate_lambda
         self.pol_gate_hops = pol_gate_hops
@@ -194,6 +196,7 @@ class MACEDefect(ScaleShiftMACE):
                 eps_inf_init=eps_inf_init,
                 freeze_amplitude=freeze_amplitude,
                 use_polarisation=use_polarisation,
+                host_charge_detached=host_charge_detached,
                 pol_gate=pol_gate,
                 pol_gate_lambda=pol_gate_lambda,
                 pol_gate_hops=pol_gate_hops,
@@ -215,6 +218,7 @@ class MACEDefect(ScaleShiftMACE):
             ("freeze_amplitude", False),
             ("correction_trunk", "shared"),
             ("use_polarisation", True),
+            ("host_charge_detached", False),
             ("pol_gate", False),
             ("pol_gate_lambda", 6.0),
             ("pol_gate_hops", 2),
@@ -237,6 +241,7 @@ class MACEDefect(ScaleShiftMACE):
         if charges is not None:
             for name, default in (
                 ("use_polarisation", True),
+                ("host_charge_detached", False),
                 ("pol_gate", False),
                 ("pol_gate_lambda", 6.0),
                 ("pol_gate_hops", 2),
@@ -419,8 +424,9 @@ class MACEDefect(ScaleShiftMACE):
         # by n_c = 0) but not an exact one, since its trunk inputs still move; this is
         # the exact version. Costs one MLP pass, no trunk work.
         logit_gap_intrinsic: Optional[torch.Tensor] = None
+        logits_intrinsic: Optional[torch.Tensor] = None
         if self.logit_seed:
-            _, _, _, logit_gap_intrinsic, _, _ = self.carrier_pooling(
+            _, _, _, logit_gap_intrinsic, _, logits_intrinsic = self.carrier_pooling(
                 node_feats=defect_feats,
                 counter_emb=counter_emb,
                 counts=counts,
@@ -674,6 +680,9 @@ class MACEDefect(ScaleShiftMACE):
             "logit_gap": logit_gap,
             "delta_u": delta_u,
             "logit_gap_intrinsic": logit_gap_intrinsic,
+            # Needed to gate the seed anneal on SITE structure rather than on
+            # gap magnitude, which cannot tell a species gap from a site gap.
+            "carrier_logits_intrinsic": logits_intrinsic,
             "latent_charges": latent_charge,
             "latent_charges_host": q_host,
             "latent_charges_carrier": q_carrier,

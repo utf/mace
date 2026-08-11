@@ -368,6 +368,7 @@ class StructuredLatentCharges(torch.nn.Module):
         eps_inf_init: float = 1.0,
         freeze_amplitude: bool = False,
         use_polarisation: bool = True,
+        host_charge_detached: bool = False,
         pol_gate: bool = False,
         pol_gate_lambda: float = 6.0,
         pol_gate_hops: int = 2,
@@ -377,6 +378,7 @@ class StructuredLatentCharges(torch.nn.Module):
         # an unbounded screening length recovers the bulk plateau exactly, and the model has
         # already demonstrated it will exploit that for absolute-energy fitting.
         self.use_polarisation = use_polarisation
+        self.host_charge_detached = host_charge_detached
         self.pol_gate = pol_gate
         self.pol_gate_lambda = float(pol_gate_lambda)
         self.pol_gate_hops = int(pol_gate_hops)
@@ -454,7 +456,20 @@ class StructuredLatentCharges(torch.nn.Module):
         edge_lengths: Optional[torch.Tensor] = None,  # [n_edges] or [n_edges, 1]
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Returns (q, q_host, q_carrier, p, a)."""
-        host_raw = self.host_charge(node_feats).squeeze(-1)
+        # q^host is a property of the HOST LATTICE, not of the carrier: it exists at
+        # n = 0 and has no reason to share a representation with the carrier readouts.
+        # Sharing one is actively harmful. Producing species-resolved charges (measured
+        # Cs +0.63, Pb +0.24, Cl -0.29 in CsPbCl3) requires species to be salient in
+        # `node_feats`, and E_LR[q^host] sits in the base energy and therefore in the
+        # loss -- so it drives that salience into the same features the logit head reads.
+        # The head then reads the charge ordering back out: logits Cs +16.54, Pb -2.39,
+        # Cl -0.90, monotone in q^host, with a within-species spread of 0.097 against a
+        # species split of 17.4. Attention selects an element rather than a site.
+        #
+        # Detaching removes the pathway outright rather than damping it. The readout still
+        # trains; only the gradient into the shared trunk is cut.
+        host_input = node_feats.detach() if self.host_charge_detached else node_feats
+        host_raw = self.host_charge(host_input).squeeze(-1)
         host_mean = scatter_mean(host_raw, batch, dim=0, dim_size=num_graphs)
         q_host = host_raw - host_mean[batch]
 

@@ -43,6 +43,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
 
+from mace.tools.scatter import scatter_sum
+
 from mace.modules.utils import get_edge_vectors_and_lengths
 from mace.tools.scatter import scatter_mean, scatter_sum
 
@@ -206,6 +208,55 @@ def novelty_from_basis(
 
 
 @torch.no_grad()
+
+def site_logit_structure(
+    logits: torch.Tensor,  # [n_nodes, n_channels]
+    node_attrs: torch.Tensor,  # [n_nodes, n_species] one-hot Z
+    batch: torch.Tensor,  # [n_nodes]
+    num_graphs: int,
+) -> torch.Tensor:
+    """``gap_site = mean_Z std_{i in Z} l_i`` per graph and channel: site structure only.
+
+    The seed anneal has to answer "has the model found its own structure yet". A gap
+    MAGNITUDE cannot answer that, because it cannot distinguish a species gap from a site
+    gap -- and a species gap is free. Measured on a collapsed run: the logits separated Cs
+    from Pb and Cl by 17.4 while varying within Cs by 0.097, a factor of 180, and the raw
+    gap read 24.5 at epoch 1 so the seed was withdrawn immediately. The same run's
+    short-range sibling reached only 6.5 by epoch 5, kept its seed through epoch 6, and
+    localised correctly in exactly that window.
+
+    Taking the standard deviation *within* each species and averaging over species is
+    species-blind by construction: any purely elemental ordering contributes nothing,
+    however large. It is in the same units as the logits, and needs no threshold.
+    """
+    n_species = node_attrs.shape[-1]
+    species = node_attrs.argmax(dim=-1)
+    group = batch * n_species + species
+    size = num_graphs * n_species
+    counts = scatter_sum(
+        torch.ones_like(logits[:, :1]), group, dim=0, dim_size=size
+    )  # [size, 1]
+    mean = scatter_sum(logits, group, dim=0, dim_size=size) / counts.clamp_min(1.0)
+    # Two-pass variance. E[x^2] - E[x]^2 cancels catastrophically here: the logits carry a
+    # large species offset (16.5 in the measured collapse, and the whole point is to be
+    # blind to its size), so the two terms agree to ~13 digits and the difference is noise.
+    # Measured 1.9e-7 of spurious spread on an exactly-constant field, which would grow
+    # with the offset -- i.e. the estimator would drift precisely along the axis this
+    # function must ignore. Centring first costs one extra scatter and removes it.
+    centred = logits - mean[group]
+    variance = (
+        scatter_sum(centred * centred, group, dim=0, dim_size=size)
+        / counts.clamp_min(1.0)
+    ).clamp_min(0.0)
+    # A species present on a single atom has no within-species spread to measure; counting
+    # its zero would dilute the average by however many such species the cell happens to
+    # have, which varies with composition.
+    populated = (counts > 1.5).to(logits.dtype)
+    spread = (variance.sqrt() * populated).view(num_graphs, n_species, -1).sum(dim=1)
+    present = populated.view(num_graphs, n_species, -1).sum(dim=1).clamp_min(1.0)
+    return spread / present
+
+
 def anneal_logit_seed(
     model: torch.nn.Module,
     data_loader,
@@ -255,12 +306,44 @@ def anneal_logit_seed(
     counts = batch.carrier_counts.view(int(batch.num_graphs), -1)
     live = counts.sum(dim=0) > 0
     intrinsic_mean = intrinsic.mean(dim=0)
-    # Target: the gap the seed was supplying at the start.
-    target = float(seeded.mean(dim=0)[live].mean()) if bool(live.any()) else 1.0
-    target = max(target, 1e-6)
+
+    # Readiness is measured on SITE structure, not on gap magnitude. The raw gap answers
+    # "how separated are the logits", which a purely elemental ordering satisfies for free
+    # and which therefore cannot say whether the model has found the defect. Both are
+    # logged side by side; the pair is the diagnostic that exposes this failure.
+    num_graphs = int(batch.num_graphs)
+    # Detached: this is a gating decision, not part of any objective. `logit_gap` is
+    # already a detached diagnostic, but `carrier_logits` is the live tensor, so reading it
+    # without detaching makes `updated` carry grad and the in-place write to the
+    # `logit_seed_gamma` Parameter below fails as an in-place op on a leaf.
+    logits_intrinsic = output.get("carrier_logits_intrinsic")
+    logits_seeded = output.get("carrier_logits")
+    if logits_intrinsic is not None:
+        logits_intrinsic = logits_intrinsic.detach()
+    if logits_seeded is not None:
+        logits_seeded = logits_seeded.detach()
+    site_intrinsic: Optional[torch.Tensor] = None
+    site_seeded: Optional[torch.Tensor] = None
+    if logits_intrinsic is not None and logits_seeded is not None:
+        site_intrinsic = site_logit_structure(
+            logits_intrinsic, batch.node_attrs, batch.batch, num_graphs
+        ).mean(dim=0)
+        site_seeded = site_logit_structure(
+            logits_seeded, batch.node_attrs, batch.batch, num_graphs
+        ).mean(dim=0)
 
     forced = max(0.0, 1.0 - epoch / max(1.0, float(zero_by_epoch)))
-    readiness = (intrinsic_mean / target).clamp(0.0, 1.0)
+    if site_intrinsic is not None and site_seeded is not None:
+        # Same hand-over shape as before: the seed retires as the model's own site
+        # structure approaches what the seed was supplying.
+        target_tensor = site_seeded.clamp_min(1e-6)
+        readiness = (site_intrinsic / target_tensor).clamp(0.0, 1.0)
+        target = float(target_tensor[live].mean()) if bool(live.any()) else 1.0
+    else:
+        # Target: the gap the seed was supplying at the start.
+        target = float(seeded.mean(dim=0)[live].mean()) if bool(live.any()) else 1.0
+        target = max(target, 1e-6)
+        readiness = (intrinsic_mean / target).clamp(0.0, 1.0)
     scale = torch.minimum(torch.full_like(readiness, forced), 1.0 - readiness)
     updated = (gamma_init.to(scale.device) * scale.clamp(min=0.0)).to(
         model.logit_seed_gamma.dtype
@@ -281,9 +364,17 @@ def anneal_logit_seed(
     # whatever the ratchet or anything else has done to gamma.
     if epoch >= zero_by_epoch:
         updated = torch.zeros_like(updated)
-    model.logit_seed_gamma.copy_(updated)
-    return {
+    # `logit_seed_gamma` is a Parameter, so writing it in place is only legal with grad
+    # disabled. This is a control-plane write -- the schedule is not part of any objective
+    # -- so no_grad is correct here rather than incidental.
+    with torch.no_grad():
+        model.logit_seed_gamma.copy_(updated.detach())
+    report = {
         "gamma": [round(float(v), 4) for v in updated],
         "gap_intrinsic": [round(float(v), 3) for v in intrinsic_mean],
         "forced": round(forced, 3),
     }
+    if site_intrinsic is not None and site_seeded is not None:
+        report["gap_site"] = [round(float(v), 4) for v in site_intrinsic]
+        report["gap_site_seeded"] = [round(float(v), 4) for v in site_seeded]
+    return report

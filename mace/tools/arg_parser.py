@@ -1170,6 +1170,15 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=True,
     )
     parser.add_argument(
+        "--host_charge_detached",
+        help="Compute q^host from a DETACHED copy of the shared features, so fitting it "
+        "cannot shape the representation the logit and u readouts consume. q^host needs "
+        "species to be salient, and E_LR[q^host] is in the loss, so sharing a trunk makes "
+        "the attention read off an element ordering instead of a site",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
         "--pol_gate",
         help="Gate q^pol on a smeared UNSIGNED carrier density instead of subtracting a "
         "cell mean. A whole-cell mean gives neutrality, not locality, and leaves every "

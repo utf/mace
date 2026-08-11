@@ -385,6 +385,9 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         # "shared".
         config["freeze_amplitude"] = bool(getattr(model, "freeze_amplitude", False))
         config["use_polarisation"] = bool(getattr(model, "use_polarisation", True))
+        config["host_charge_detached"] = bool(
+            getattr(model, "host_charge_detached", False)
+        )
         config["pol_gate"] = bool(getattr(model, "pol_gate", False))
         config["pol_gate_lambda"] = float(getattr(model, "pol_gate_lambda", 6.0))
         config["pol_gate_hops"] = int(getattr(model, "pol_gate_hops", 2))
