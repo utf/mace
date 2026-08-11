@@ -168,19 +168,22 @@ def test_zero_counter_identity_survives(coupling):
     assert float((out["energy"] - out["base_energy"]).abs().max()) < 1e-10
 
 
-def test_reference_branch_uses_the_same_convention():
-    """delta_energy is a difference of two corrections; a mixed convention would bias it."""
+@pytest.mark.parametrize("coupling", [True, False])
+def test_reference_branch_is_exactly_zero_at_a_closed_shell_reference(coupling):
+    """An identity, not a bound.
+
+    When the reference counter is zero, ``latent_charge_ref == q_host`` exactly, so
+    ``delta_lr_ref`` is ``E(0) = 0`` in the uncoupled branch and ``E(host) - E(host) = 0``
+    in the coupled one. Both must be exactly zero; a mixed convention between the frame and
+    its reference would bias every ``delta_energy`` label by the host self-energy.
+    """
     batch = make_batch([(1, 1, 0, 2)])
-    model = build_model(host_carrier_coupling=False)
+    model = build_model(host_carrier_coupling=coupling)
     out = model(batch.to_dict(), training=False, compute_force=False)
-    implied = out["correction_energy"] - out["delta_energy"]
-    # correction_energy_ref is not exported; recover it and check it is the uncoupled form
-    # by confirming delta_energy is finite and the reference correction has no host self
-    # energy left in it (which would show up as an O(eV) offset on a 6-atom cell).
-    assert torch.isfinite(implied).all()
-    assert float(implied.abs().max()) < 5.0, (
-        f"reference correction {implied.tolist()} looks like it still carries the host "
-        "self-energy"
+    reference = out["delta_lr_ref_energy"]
+    assert float(reference.abs().max()) < 1e-12, (
+        f"delta_lr_ref = {reference.tolist()}, expected exactly 0 at a closed-shell "
+        "reference"
     )
 
 

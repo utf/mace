@@ -512,9 +512,6 @@ class MACEDefect(ScaleShiftMACE):
                 edge_index=data["edge_index"],
                 edge_lengths=lengths,
             )
-            energy_lr_total = self.latent_ewald.energy(
-                latent_charge, positions, cell_les, data["batch"]
-            )
             energy_lr_host = self.latent_ewald.energy(
                 q_host, positions, cell_les, data["batch"]
             )
@@ -522,12 +519,18 @@ class MACEDefect(ScaleShiftMACE):
             # two evaluations see the same charges and this difference is exactly zero.
             base_energy = base_energy + energy_lr_host
             if self.host_carrier_coupling:
-                delta_lr = energy_lr_total - energy_lr_host
+                delta_lr = (
+                    self.latent_ewald.energy(
+                        latent_charge, positions, cell_les, data["batch"]
+                    )
+                    - energy_lr_host
+                )
             else:
                 # Drop the cross term between q^host and the carrier cloud. Since E_LR is
                 # quadratic, E(host + d) - E(host) = E(d) + 2B(host, d), so keeping only
-                # E(d) removes exactly that coupling -- and costs one Ewald evaluation
-                # less rather than more.
+                # E(d) removes exactly that coupling. Both branches cost two Ewald
+                # evaluations; the total-charge one is raised inside the coupled branch so
+                # the uncoupled path does not pay for a result it discards.
                 #
                 # The measurement behind this: pooling both energies under a hand-set
                 # attention gives d(host.carrier) = -1.25 eV in favour of the Cs
@@ -641,6 +644,7 @@ class MACEDefect(ScaleShiftMACE):
             "correction_energy": correction_energy,
             "counter_input_l2": self.carrier_pooling.counter_input_l2(),
             "delta_sr_energy": delta_sr,
+            "delta_lr_ref_energy": delta_lr_ref,
             "node_energy": node_energy,
             "forces": forces,
             "base_forces": base_forces,
