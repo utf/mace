@@ -769,6 +769,7 @@ class DefectLoss(torch.nn.Module):
         size_ema_decay: float = 0.95,
         size_contrast_eps: float = 1e-9,
         size_delocalised_fraction: float = 0.05,
+        size_delocalised_min_atoms: float = 8.0,
         gauge_weight: float = 0.0,
     ) -> None:
         super().__init__()
@@ -797,11 +798,15 @@ class DefectLoss(torch.nn.Module):
         self.size_warmup_epochs = size_warmup_epochs
         self.size_ema_decay = size_ema_decay
         self.size_contrast_eps = size_contrast_eps
-        # Participation fraction above which a channel is refused the delocalised-carrier
-        # exemption. 0.05 sits far above a real localised carrier (2 atoms of 79 is 0.025
-        # only for the very smallest cells, and ~0.001 on the ladder) and far below any
-        # sublattice (0.2 for a perovskite A or B site).
+        # A channel is refused the delocalised-carrier exemption when its participation
+        # exceeds BOTH an absolute floor and a fraction of the cell. Both are needed: the
+        # fraction alone misfires on small cells, where a genuinely localised carrier
+        # occupies a non-trivial share (6 shell atoms of 66 is 0.10), while the floor alone
+        # would stop discriminating once cells get large. Calibrated against measured runs:
+        # the healthy short-range model sits at participation 2.0 and the collapsed
+        # long-range one at 16.1 in a 79-atom cell, where a whole sublattice is 16.
         self.size_delocalised_fraction = size_delocalised_fraction
+        self.size_delocalised_min_atoms = size_delocalised_min_atoms
         self.gauge_weight = gauge_weight
         # Running |c| per channel, used only to place the (detached) threshold. A buffer so
         # it survives checkpointing: restarting with a cold EMA would put every channel in
@@ -1007,10 +1012,10 @@ class DefectLoss(torch.nn.Module):
                 observed.to(self.contrast_ema.dtype) * (1.0 - self.size_ema_decay)
             )
 
-        # Participation ratio 1 / sum_i alpha_i^2 per channel, as a fraction of the cell.
-        # Scale-free, so one threshold works at every cell size: a carrier on a handful of
-        # atoms gives ~0 at any N, while a whole sublattice pins to its fixed fraction
-        # (1/5 for Cs in CsPbCl3) no matter how large the supercell.
+        # Participation ratio 1 / sum_i alpha_i^2 per channel. A localised carrier gives a
+        # handful of atoms at any N; a whole sublattice pins to a fixed fraction of the cell
+        # (1/5 for Cs in CsPbCl3) no matter how large the supercell, which is the signature
+        # being caught.
         alpha = pred["carrier_alpha"]
         inverse = scatter_sum(
             alpha.pow(2), ref["batch"], dim=0, dim_size=num_graphs
@@ -1019,7 +1024,10 @@ class DefectLoss(torch.nn.Module):
             torch.ones_like(alpha[:, :1]), ref["batch"], dim=0, dim_size=num_graphs
         ).clamp_min(1.0)
         spread = (1.0 / inverse) / sizes
-        delocalised = (spread > self.size_delocalised_fraction).any(dim=0)
+        floor = torch.clamp(
+            sizes * self.size_delocalised_fraction, min=self.size_delocalised_min_atoms
+        )
+        delocalised = ((1.0 / inverse) > floor).any(dim=0)
         self.last_size_spread = spread.detach().amax(dim=0)
         threshold = self.size_threshold(counts, delocalised=delocalised)
         self.last_size_exempt = float((~torch.isfinite(threshold) & live).sum())

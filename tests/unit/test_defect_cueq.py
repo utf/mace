@@ -184,7 +184,11 @@ class TestConversionPreservesConstructorArguments:
         model = build_model(use_long_range=True, gauge_counters=counters)
         converted = run_e3nn_to_cueq(copy.deepcopy(model), device="cuda")
         assert converted.gauge_counters.detach().cpu().tolist() == counters
-        out = converted(make_batch([(0, 0, 0, 0)]).to_dict(), training=False)
+        # The batch has to follow the model onto the device. This test is CUDA-gated, so
+        # the omission only surfaced once a run happened on a machine with a GPU.
+        batch = make_batch([(0, 0, 0, 0)])
+        batch = batch.to("cuda")
+        out = converted(batch.to_dict(), training=False)
         assert out["gauge_mean_u"] is not None
         assert out["gauge_mean_u"].shape[1] == len(counters)
 

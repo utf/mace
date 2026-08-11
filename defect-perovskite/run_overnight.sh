@@ -19,6 +19,24 @@ export PATH="$HOME/micromamba/envs/py13/bin:$PATH"
 export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
 REPEATS="${REPEATS:-2,2,2 3,2,2 3,3,2 3,3,3 4,3,3}"
 REPORT="$HOME/runs/perovskite_report.md"
+STATUS="$HOME/runs/perovskite_status.tsv"
+: > "$STATUS"
+
+# Record the outcome of every stage. Without this, each stage runs under `|| continue` with
+# stderr discarded and the report renders "(n/a)" identically for "this crashed" and "not
+# applicable" -- which is how a stale call signature in perov_alpha_check.py crashed on
+# every invocation, went unnoticed, and let training-frame numbers be reported as ladder
+# ones. A report that cannot distinguish those two states reads as complete when it is not.
+record () {                  # record <stage> <exit-code> <logfile>
+    local stage="$1" code="$2" log="$3"
+    if [ "$code" -eq 0 ]; then
+        printf '%s\tOK\t\n' "$stage" >> "$STATUS"
+    else
+        printf '%s\tFAILED(%s)\t%s\n' "$stage" "$code" \
+            "$(grep -E "Error|Traceback|error:" "$log" 2>/dev/null | tail -1 | tr -d '\t' | cut -c1-160)" \
+            >> "$STATUS"
+    fi
+}
 
 ladder () {          # name model extra-flags...
     local name="$1" model="$2"; shift 2
@@ -27,9 +45,11 @@ ladder () {          # name model extra-flags...
         --model "$model" --repeats ${REPEATS} --site 0 --fmax 0.05 --steps 300 \
         --out-json "${HERE}/perov_size_${name}.json" "$@" \
         > "$HOME/runs/perov_ladder_${name}.log" 2>&1
+    record "ladder:${name}" "$?" "$HOME/runs/perov_ladder_${name}.log"
     CUDA_VISIBLE_DEVICES="" python -u "${HERE}/plot_perov_size.py" \
         "${HERE}/perov_size_${name}.json" --out "${HERE}/perov_size_${name}.png" \
         >> "$HOME/runs/perov_ladder_${name}.log" 2>&1
+    record "plot:${name}" "$?" "$HOME/runs/perov_ladder_${name}.log"
     echo "  ladder ${name} done"
 }
 
@@ -50,11 +70,28 @@ for tag in nolr lr; do
     CUDA_VISIBLE_DEVICES="" OMP_NUM_THREADS=16 python -u "${HERE}/perov_alpha_check.py" \
         --model "$model" --repeats 2,2,2 3,2,2 3,3,2 3,3,3 \
         > "$HOME/runs/perov_alpha_${tag}.log" 2>&1
+    record "alpha:${tag}" "$?" "$HOME/runs/perov_alpha_${tag}.log"
+    CUDA_VISIBLE_DEVICES="" OMP_NUM_THREADS=16 python -u "${HERE}/alpha_audit.py" \
+        --model "$model" --frames 4 --repeats 2,2,2 3,3,2 --sites 3 \
+        > "$HOME/runs/perov_alpha_audit_${tag}.log" 2>&1
+    record "alpha_audit:${tag}" "$?" "$HOME/runs/perov_alpha_audit_${tag}.log"
 done
 
 section () { echo; echo "## $1"; echo; }
 {
     echo "# CsPbCl3 V_Cl: overnight results"
+    echo
+    echo "## STAGE STATUS"
+    echo
+    echo "Read this FIRST. Every stage below records its exit code, so a crash is"
+    echo "distinguishable from a section that legitimately has nothing to report."
+    echo '```'
+    if grep -q "FAILED" "$STATUS" 2>/dev/null; then
+        echo "SOME STAGES FAILED -- results below are INCOMPLETE:"
+        echo
+    fi
+    column -t -s "$(printf '\t')" "$STATUS" 2>/dev/null || cat "$STATUS"
+    echo '```'
     echo
     echo "Generated automatically. Ladder from 640 atoms up; the 160-atom cell is excluded"
     echo "because two of its three edges are below the 20 A needed for periodic images to"
@@ -120,12 +157,16 @@ for n in sorted(set(ra) & set(rb)):
 PY
     echo '```'
 
-    section "Attention stability"
+    section "Attention: where the carrier actually sits"
+    echo "Audited on REAL frames from the dataset and several inequivalent defect sites,"
+    echo "not only on tiled supercells of one site. alpha is reported per species, so a"
+    echo "carrier uniform over a sublattice is distinguishable from a localised one."
     for tag in nolr lr; do
         echo "### ${tag}"
         echo '```'
-        grep -E "alpha on shell|<u> pooled|^ +[0-9]+ +[0-9]" \
-            "$HOME/runs/perov_alpha_${tag}.log" 2>/dev/null | tail -12 || echo "(n/a)"
+        sed -n '/REAL V_Cl+ FRAMES/,$p' "$HOME/runs/perov_alpha_audit_${tag}.log" 2>/dev/null \
+            | grep -E "partic|top5|frames|SUPERCELL|PRISTINE|->" | head -30 \
+            || echo "(stage did not produce output -- see STAGE STATUS)"
         echo '```'
     done
 

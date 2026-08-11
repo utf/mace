@@ -211,14 +211,40 @@ class TestGradient:
 
 
 class TestExemption:
-    def test_no_contrast_is_exempt_for_any_dilution(self):
-        ref, pred = make_inputs(cell=None) if False else make_inputs(
-            u_bulk=0.3, u_shell=0.3
-        )
+    def test_no_contrast_is_exempt_when_the_carrier_is_localised(self):
+        """Zero contrast exempts a channel -- but only if its attention is localised.
+
+        The exemption's reasoning holds for the energy: if the weighted pool is within
+        ``tol`` of the mean pool, no amount of dilution can move the energy further. The
+        default cell here has 6 shell atoms of 66, participation 6.8, which is a real
+        localised carrier and keeps the exemption.
+        """
+        ref, pred = make_inputs(u_bulk=0.3, u_shell=0.3)
         loss = build_loss()
         loss.size_penalty(ref, pred)  # primes the EMA
         assert float(loss.size_penalty(ref, pred)) == 0.0
         assert loss.last_size_exempt > 0
+
+    def test_collapsed_attention_is_refused_the_exemption(self):
+        """A flat channel must NOT be exempted, or the constraint disables itself.
+
+        The exemption is self-reinforcing: flat attention drives the contrast to zero, the
+        channel is exempted, the hinge switches off, and nothing pulls the attention back.
+        Observed end to end -- the perovskite long-range run spent its whole life at
+        ``size_f = 1.000`` on all four channels with ``|c| = 0.000``, and finished with its
+        live channel uniform over the Cs sublattice (participation 16.1 of 79 atoms, where
+        a sublattice is 16) and zero weight on the vacancy shell. The short-range run, whose
+        contrast stayed at 0.090, kept participation at 2.0 on the correct two atoms.
+        """
+        # gap = 0 makes alpha exactly uniform, so the contrast is zero AND the carrier is
+        # spread over the whole cell -- the degenerate state, not a delocalised-but-fine one.
+        ref, pred = make_inputs(gap=0.0, u_bulk=0.3, u_shell=0.3)
+        loss = build_loss()
+        loss.size_penalty(ref, pred)
+        loss.size_penalty(ref, pred)
+        assert loss.last_size_exempt == 0, (
+            "a channel whose attention covers the cell must keep the constraint"
+        )
 
     def test_threshold_is_continuous_approaching_t_equals_one(self):
         """``x* -> +inf`` smoothly as ``|c| -> tol``, rather than switching at a branch."""
