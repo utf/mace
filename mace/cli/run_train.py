@@ -1149,9 +1149,19 @@ def run(args) -> None:
                 gamma_init=gamma_init,
             )
             if report:
+                # gap_site and the raw gap are logged TOGETHER, permanently. The pair is
+                # the diagnostic: a raw gap of 24.5 at epoch 1 alongside a gap_site near
+                # zero is a species ordering, not a found defect, and reading only the raw
+                # gap is what retired the seed into a collapsed attention.
+                extra = ""
+                if "gap_site" in report:
+                    extra = (
+                        f", gap_site={report['gap_site']}"
+                        f" (seeded {report['gap_site_seeded']})"
+                    )
                 logging.info(
                     f"Epoch {epoch}: logit-seed anneal gamma={report['gamma']}, "
-                    f"intrinsic gap={report['gap_intrinsic']}"
+                    f"intrinsic gap={report['gap_intrinsic']}{extra}"
                 )
 
     # Section 10: record the settings *with the model*, not only in the checkpoint args.
