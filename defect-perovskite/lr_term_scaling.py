@@ -59,6 +59,10 @@ def main() -> None:
                              "gate (Step B): q^pol gated on the smeared unsigned carrier "
                              "density. Both are parameter-free, so they can be evaluated "
                              "on existing weights before any retraining.")
+    parser.add_argument("--no-host-carrier", action="store_true",
+                        help="section 4 repartition: drop the q^host-carrier cross term "
+                             "from delta_lr. Post-hoc, so it is testable on existing "
+                             "weights before any retrain.")
     parser.add_argument("--pol-gate-lambda", type=float, default=6.0)
     parser.add_argument("--pol-gate-hops", type=int, default=2)
     args = parser.parse_args()
@@ -79,7 +83,9 @@ def main() -> None:
     charges.pol_gate_lambda = args.pol_gate_lambda
     charges.pol_gate_hops = args.pol_gate_hops
     charges.pol_gate_eps = 1e-8
+    model.host_carrier_coupling = not args.no_host_carrier
     print(f"model {args.model.name}   mode = {args.mode}"
+          f"   host_carrier_coupling = {model.host_carrier_coupling}"
           + (f"  lambda = {args.pol_gate_lambda} A, hops = {args.pol_gate_hops}"
              if args.mode == "gate" else ""))
     print(f"sigma = {sigma}  norm_factor = {norm_factor}\n")
@@ -141,7 +147,14 @@ def main() -> None:
 
         n_atoms = len(defect)
         volume = float(torch.det(cell[0]))
-        delta_lr = energy(q_total) - energy(q_host)
+        # Mirror what the model does under the flag, rather than assuming the
+        # subtraction form: with the cross term dropped, delta_lr is the self-energy of
+        # the carrier cloud alone, E(q_total - q_host).
+        delta_lr = (
+            energy(q_total) - energy(q_host)
+            if model.host_carrier_coupling
+            else energy(q_total - q_host)
+        )
         net = float(q_total.sum())
 
         row = dict(

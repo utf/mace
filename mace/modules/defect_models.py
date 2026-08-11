@@ -97,6 +97,7 @@ class MACEDefect(ScaleShiftMACE):
         pol_gate: bool = False,
         pol_gate_lambda: float = 6.0,
         pol_gate_hops: int = 2,
+        host_carrier_coupling: bool = True,
         gauge_counters: Optional[List[List[int]]] = None,
         **kwargs: Any,
     ):
@@ -183,6 +184,7 @@ class MACEDefect(ScaleShiftMACE):
         self.pol_gate = pol_gate
         self.pol_gate_lambda = pol_gate_lambda
         self.pol_gate_hops = pol_gate_hops
+        self.host_carrier_coupling = host_carrier_coupling
         if use_long_range:
             self.latent_ewald = LatentEwald(les_arguments)
             self.latent_charges = StructuredLatentCharges(
@@ -216,6 +218,7 @@ class MACEDefect(ScaleShiftMACE):
             ("pol_gate", False),
             ("pol_gate_lambda", 6.0),
             ("pol_gate_hops", 2),
+            ("host_carrier_coupling", True),
         ):
             if not hasattr(self, name):
                 object.__setattr__(self, name, default)
@@ -518,7 +521,32 @@ class MACEDefect(ScaleShiftMACE):
             # At n = 0 the polarisation and carrier channels vanish identically, so the
             # two evaluations see the same charges and this difference is exactly zero.
             base_energy = base_energy + energy_lr_host
-            delta_lr = energy_lr_total - energy_lr_host
+            if self.host_carrier_coupling:
+                delta_lr = energy_lr_total - energy_lr_host
+            else:
+                # Drop the cross term between q^host and the carrier cloud. Since E_LR is
+                # quadratic, E(host + d) - E(host) = E(d) + 2B(host, d), so keeping only
+                # E(d) removes exactly that coupling -- and costs one Ewald evaluation
+                # less rather than more.
+                #
+                # The measurement behind this: pooling both energies under a hand-set
+                # attention gives d(host.carrier) = -1.25 eV in favour of the Cs
+                # sublattice against 0.18 eV of short-range difference, size-independent
+                # to 18 meV over a 2.25x range. The cross term has the same pooling form
+                # as Delta E_SR = sum_c n_c <u>_alpha -- same alpha, one field learned and
+                # one fixed-shape -- so the two are degenerate and the electrostatic one
+                # wins by 7x. Worse, a classical point-charge potential is deepest at
+                # CATION sites, so it drags the hole onto Cs; no rescaling of q^host or a
+                # can fix a term that points the wrong way.
+                #
+                # The carrier's interaction with the host's own short-ranged Madelung
+                # field belongs in u_i, which is a learned per-site energy on the same
+                # sites and can represent it. The long-range branch keeps only what
+                # Delta E_SR structurally cannot do: the monopole self-interaction and
+                # interactions between separated carriers.
+                delta_lr = self.latent_ewald.energy(
+                    latent_charge - q_host, positions, cell_les, data["batch"]
+                )
 
             # The same at the reference counter. This branch is *not* inert at q = 0:
             # q^carrier is a compensated but pointwise non-zero charge whose self-term is
@@ -534,12 +562,17 @@ class MACEDefect(ScaleShiftMACE):
                 edge_index=data["edge_index"],
                 edge_lengths=lengths,
             )
-            delta_lr_ref = (
-                self.latent_ewald.energy(
-                    latent_charge_ref, positions, cell_les, data["batch"]
+            if self.host_carrier_coupling:
+                delta_lr_ref = (
+                    self.latent_ewald.energy(
+                        latent_charge_ref, positions, cell_les, data["batch"]
+                    )
+                    - energy_lr_host
                 )
-                - energy_lr_host
-            )
+            else:
+                delta_lr_ref = self.latent_ewald.energy(
+                    latent_charge_ref - q_host, positions, cell_les, data["batch"]
+                )
 
             if dilute:
                 dilute_correction = self.latent_ewald.dilute_correction(

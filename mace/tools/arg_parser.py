@@ -1195,6 +1195,17 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=2,
     )
     parser.add_argument(
+        "--host_carrier_coupling",
+        help="Keep the cross term between q^host and the carrier cloud in delta_lr. False "
+        "repartitions the branch so it carries only what Delta E_SR structurally cannot: "
+        "the monopole self-interaction and interactions between separated carriers. The "
+        "cross term has the same pooling form as Delta E_SR = sum_c n_c <u>_alpha, so the "
+        "two are degenerate; measured on CsPbCl3 it favours the Cs sublattice over the "
+        "vacancy shell by 1.25 eV against 0.18 eV of short-range difference",
+        type=str2bool,
+        default=True,
+    )
+    parser.add_argument(
         "--use_long_range",
         help="Enable the latent-Ewald long-range branch (requires the LES library)",
         type=str2bool,

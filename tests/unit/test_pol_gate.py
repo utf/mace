@@ -25,7 +25,22 @@ import torch
 
 from mace.modules.defect_blocks import StructuredLatentCharges
 
-torch.set_default_dtype(torch.float64)
+
+@pytest.fixture(autouse=True)
+def _double_precision():
+    """Per-test, not at import.
+
+    Setting the default dtype at module import is not enough: pytest imports every module
+    before running anything, and another module setting float32 mid-session then changes
+    the numerics here. Observed exactly that -- these tests passed alone and
+    `test_ungated_mean_subtraction_is_the_bug` reported +0.014 instead of ~+1.0 when run
+    after the model tests.
+    """
+    previous = torch.get_default_dtype()
+    torch.set_default_dtype(torch.float64)
+    yield
+    torch.set_default_dtype(previous)
+
 
 
 def _cubic(repeat: int, spacing: float = 3.0):
@@ -64,6 +79,11 @@ REPEATS = (4, 6, 8)
 def _block(**kwargs):
     if kwargs.get("pol_gate"):
         kwargs = {**GATE, **kwargs}
+    # Seed the GLOBAL rng, not just the generator below. `_mlp` initialises its first layer
+    # from the global state, so without this the hidden layer depends on whatever tests ran
+    # before -- these passed alone and failed after the model tests, reporting +0.014 where
+    # ~+1.0 was expected.
+    torch.manual_seed(0)
     block = StructuredLatentCharges(feature_dim=4, counter_dim=3, hidden_dim=8, **kwargs)
     # Non-trivial readouts: zero_last_layer leaves p identically zero, which would pass
     # every scaling check vacuously.
