@@ -1,0 +1,65 @@
+{
+ "model": "/home/alex/runs/perov_D_s3/perov_D_s3.model",
+ "energy_scale": "referenced",
+ "e_vbm_gauge": -1.2,
+ "relaxed": true,
+ "rows": [
+  {
+   "repeat": [
+    2,
+    2,
+    2
+   ],
+   "n_host": 640,
+   "n_defect": 639,
+   "e_host": -2257.30808164264,
+   "e_neutral": -2252.0400422103853,
+   "e_charged": -2256.352306378247,
+   "eps_opt_eV": -4.128420348529744,
+   "transition_level_eV": 4.3122641678614855,
+   "e_relative_eV": 5.268039432254682,
+   "delta_q_sqrtDa_A": 5.5840582967877435,
+   "base_drift_meV_per_atom": 0.0,
+   "converged": true,
+   "removed_index": 56
+  },
+  {
+   "repeat": [
+    3,
+    3,
+    3
+   ],
+   "n_host": 2160,
+   "n_defect": 2159,
+   "e_host": -7618.41477554391,
+   "e_neutral": -7613.183586861834,
+   "e_charged": -7617.460727626523,
+   "eps_opt_eV": -4.031929546657921,
+   "transition_level_eV": 4.277140764689648,
+   "e_relative_eV": 5.231188682076208,
+   "delta_q_sqrtDa_A": 6.674579743781209,
+   "base_drift_meV_per_atom": 0.0,
+   "converged": true,
+   "removed_index": 56
+  },
+  {
+   "repeat": [
+    4,
+    4,
+    4
+   ],
+   "n_host": 5120,
+   "n_defect": 5119,
+   "e_host": -18058.46465314112,
+   "e_neutral": -18053.312441212354,
+   "e_charged": -18057.582597212586,
+   "eps_opt_eV": -3.977015638298326,
+   "transition_level_eV": 4.270156000231509,
+   "e_relative_eV": 5.15221192876561,
+   "delta_q_sqrtDa_A": 7.262172741581867,
+   "base_drift_meV_per_atom": 0.0,
+   "converged": true,
+   "removed_index": 56
+  }
+ ]
+}
