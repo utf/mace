@@ -1161,6 +1161,17 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=False,
     )
     parser.add_argument(
+        "--defect_seed_gate",
+        help="Which readiness measure retires the logit seed. 'gap' uses the raw logit gap "
+        "and is the proven schedule (short-range-only localises 4 of 4 seeds under it). "
+        "'site' uses the species-blind site structure, which is the right quantity in "
+        "principle but currently hands over as a cliff rather than a ramp and cost one "
+        "seed its localisation. Both are logged either way",
+        type=str,
+        choices=["gap", "site"],
+        default="gap",
+    )
+    parser.add_argument(
         "--use_polarisation",
         help="Enable the q^pol channel. False ablates it entirely, leaving delta_lr as "
         "carrier^2 + host.carrier. After gating, the polarisation response is contained "

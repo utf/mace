@@ -45,6 +45,7 @@ NAME="perov_${ARM}_s${SEED}"
 EPS="${EPS_INF:-4.0}"
 ISOLATED="${CARRIER_SELF_ISOLATED:-False}"
 LR_START="${LR_START_EPOCH:-0}"
+GATE="${DEFECT_SEED_GATE:-gap}"
 case "$ARM" in
     A0) DETACH=False ;;
     A1) DETACH=True ;;
@@ -53,7 +54,13 @@ case "$ARM" in
     Z)  DETACH=False; EPS=1e12 ;;
     F)  DETACH=False; ISOLATED=True ;;
     D)  DETACH=False; ISOLATED=True; LR_START=30 ;;
-    *) echo "unknown ARM '$ARM' (want A0, A1, Z, F or D)" >&2; exit 2 ;;
+    # G: D with the PROVEN seed schedule. The site-resolved gate holds gamma high and then
+    # drops it as a step -- on seed 1 it sat at 1.00 through epoch 10 then fell to 0.01 by
+    # epoch 14, and that seed's attention ran away at 12-13, inside the window. The same
+    # configuration on the raw-gap gate localises, and short-range-only training localises
+    # 4 of 4 seeds under it. The measure was right; the schedule was not.
+    G)  DETACH=False; ISOLATED=True; LR_START=30; GATE=gap ;;
+    *) echo "unknown ARM '$ARM' (want A0, A1, Z, F, D or G)" >&2; exit 2 ;;
 esac
 
 rm -rf "$HOME/runs/$NAME" "$HOME/runs/${NAME}.log"
@@ -70,6 +77,7 @@ DEFECT_LOGIT_SEED_GAMMA=1.5 DEFECT_SEED_ANNEAL=True \
 USE_LONG_RANGE=True FREEZE_AMPLITUDE=True EPS_INF="$EPS" \
 USE_POLARISATION=False HOST_CARRIER_COUPLING=False \
 CARRIER_SELF_ISOLATED="$ISOLATED" LR_START_EPOCH="$LR_START" \
+DEFECT_SEED_GATE="$GATE" \
 HOST_CHARGE_DETACHED="$DETACH" \
 DEFECT_SIZE_WEIGHT=1e-4 DEFECT_SIZE_WARMUP_EPOCHS=20 \
 "${REPO}/defect-example/train_defect_model.sh" > "$HOME/runs/${NAME}.log" 2>&1

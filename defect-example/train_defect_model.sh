@@ -149,6 +149,8 @@ HOST_CARRIER_COUPLING="${HOST_CARRIER_COUPLING:-True}"
 CARRIER_SELF_ISOLATED="${CARRIER_SELF_ISOLATED:-False}"
 # Hold the long-range branch out of energy and loss until this epoch.
 LR_START_EPOCH="${LR_START_EPOCH:-0}"
+# Readiness measure for the seed anneal: 'gap' (proven) or 'site'.
+DEFECT_SEED_GATE="${DEFECT_SEED_GATE:-gap}"
 EPS_INF="${EPS_INF:-6.5}"
 EPS_INF_PRIOR_WEIGHT="${EPS_INF_PRIOR_WEIGHT:-0.0}"
 
@@ -345,6 +347,7 @@ python -m mace.cli.run_train \
     --host_carrier_coupling="${HOST_CARRIER_COUPLING}" \
     --carrier_self_isolated="${CARRIER_SELF_ISOLATED}" \
     --lr_start_epoch="${LR_START_EPOCH}" \
+    --defect_seed_gate="${DEFECT_SEED_GATE}" \
     --eps_inf="${EPS_INF}" \
     --eps_inf_prior_weight="${EPS_INF_PRIOR_WEIGHT}" \
     --energy_weight="${ENERGY_WEIGHT}" \

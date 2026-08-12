@@ -264,6 +264,7 @@ def anneal_logit_seed(
     epoch: int,
     zero_by_epoch: int,
     gamma_init: torch.Tensor,
+    gate: str = "gap",
 ) -> Dict[str, float]:
     """Hand the attention back to ``MLP_l``, per channel, on readiness rather than epochs.
 
@@ -333,7 +334,20 @@ def anneal_logit_seed(
         ).mean(dim=0)
 
     forced = max(0.0, 1.0 - epoch / max(1.0, float(zero_by_epoch)))
-    if site_intrinsic is not None and site_seeded is not None:
+    # WHICH readiness measure drives the hand-over. Both are always logged; only the one
+    # named here moves gamma.
+    #
+    # "site" reads the model's own site structure, which is the right quantity in
+    # principle -- a gap magnitude cannot distinguish a species gap from a site gap. But
+    # measured against the proven schedule it does not hand over, it drops off a cliff:
+    # on seed 1 it held gamma at 1.00 through epoch 10 and then fell 0.78 / 0.53 / 0.14 /
+    # 0.01 over epochs 11-14, and that seed's attention ran away at epochs 12-13, inside
+    # the window. The same configuration under "gap" localises. Short-range-only training
+    # localises 4 of 4 seeds under "gap".
+    #
+    # So "gap" is the default until the site gate limits how fast gamma may fall. The
+    # problem is the schedule, not the measure.
+    if gate == "site" and site_intrinsic is not None and site_seeded is not None:
         # Same hand-over shape as before: the seed retires as the model's own site
         # structure approaches what the seed was supplying.
         target_tensor = site_seeded.clamp_min(1e-6)
@@ -373,6 +387,7 @@ def anneal_logit_seed(
         "gamma": [round(float(v), 4) for v in updated],
         "gap_intrinsic": [round(float(v), 3) for v in intrinsic_mean],
         "forced": round(forced, 3),
+        "gate": gate,
     }
     if site_intrinsic is not None and site_seeded is not None:
         report["gap_site"] = [round(float(v), 4) for v in site_intrinsic]
