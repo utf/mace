@@ -62,6 +62,28 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MACE_REPO="${MACE_REPO:-$(cd "${HERE}/.." && pwd)}"
 export PYTHONPATH="${MACE_REPO}${PYTHONPATH:+:${PYTHONPATH}}"
 
+# PYTHONPATH does NOT win if the launch directory is itself a checkout: python puts the
+# current directory first on sys.path, ahead of every PYTHONPATH entry. Since this project
+# is normally driven from a worktree that contains `mace/`, MACE_REPO was silently ignored
+# and runs used the working tree no matter what it was set to -- which invalidated an
+# attempt to compare two revisions by pointing MACE_REPO at an older checkout.
+#
+# Verify rather than assume: ask python which `mace` it actually resolved and compare with
+# MACE_REPO. Cheap, and it fails loudly instead of producing results attributed to the
+# wrong code.
+RESOLVED="$(python -c 'import mace, os; print(os.path.dirname(os.path.dirname(os.path.abspath(mace.__file__))))' 2>/dev/null)"
+if [ -z "${RESOLVED}" ]; then
+    echo "could not import mace at all" >&2
+    exit 1
+fi
+if [ "$(cd "${RESOLVED}" && pwd -P)" != "$(cd "${MACE_REPO}" && pwd -P)" ]; then
+    echo "MACE_REPO is ${MACE_REPO} but python resolved mace from ${RESOLVED}." >&2
+    echo "The launch directory shadows PYTHONPATH; run from a directory that does not" >&2
+    echo "contain a 'mace' package, e.g. (cd /tmp && ...)." >&2
+    exit 1
+fi
+echo "using mace from ${RESOLVED}"
+
 if ! python -c "import mace.modules as m; assert hasattr(m, 'MACEDefect')" 2>/dev/null; then
     echo "the mace on PYTHONPATH has no MACEDefect; expected the defect branch at ${MACE_REPO}" >&2
     exit 1
