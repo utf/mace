@@ -30,7 +30,7 @@ Valid RMSE is meV/atom and meV/A. Sublattice counts: 16 Cs, 16 Pb, 47 Cl.
 | `perov_F_s1` | finite-size `E_LR` | 22 | 15.97 | Cs | 8.1 / 18.4 |
 | `perov_F_s2` | finite-size `E_LR` | 22 | 16.07 | Cs | 3.1 / 18.5 |
 | `perov_F_s3` | finite-size `E_LR` | 22 | 16.07 | Cs | 5.8 / 18.8 |
-| `perov_D_s1` | + branch held to epoch 30 | 60 | 46.71 | Cl | n/a |
+| `perov_D_s1` | + branch held to epoch 30 | 60 | 46.71 | Cl | 3.4 / 11.4 |
 | `perov_D_s2` | + branch held to epoch 30 | 60 | **1.99** | **Pb** | 3.6 / 11.5 |
 | `perov_D_s3` | + branch held to epoch 30 | 60 | **2.02** | **Pb** | **3.1 / 11.5** |
 
@@ -69,6 +69,12 @@ arrives, **3.30 / 11.93 by epoch 59**. It absorbs the branch and ends at referen
 
 **2 of 3 seeds.** Seed 1 was already on Cl before the switch (participation 47.3 at epoch 29)
 and stayed there, so it tests nothing about survival -- it never had a correct answer to lose.
+
+Seed 1 is worth one further note: it reaches **3.4 / 11.4**, marginally the best forces of the
+three and better than the short-range reference, while sitting on the wrong sublattice. That
+is the clearest statement in this whole investigation of why aggregate metrics cannot be the
+gate. A constraint-satisfying model with wrong physics looks healthy in every number a
+training log reports.
 
 ## 3. Why the delayed switch-on works, and what it does not show
 
