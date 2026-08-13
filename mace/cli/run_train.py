@@ -1154,6 +1154,7 @@ def run(args) -> None:
                 zero_by_epoch=args.defect_seed_anneal_epochs,
                 gamma_init=gamma_init,
                 gate=args.defect_seed_gate,
+                max_drop=args.defect_seed_max_drop,
             )
             if report:
                 # gap_site and the raw gap are logged TOGETHER, permanently. The pair is

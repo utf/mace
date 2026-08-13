@@ -173,6 +173,8 @@ CARRIER_SELF_ISOLATED="${CARRIER_SELF_ISOLATED:-False}"
 LR_START_EPOCH="${LR_START_EPOCH:-0}"
 # Readiness measure for the seed anneal: 'gap' (proven) or 'site'.
 DEFECT_SEED_GATE="${DEFECT_SEED_GATE:-gap}"
+# Largest fractional fall in the seed gain per epoch; 1.0 leaves it unbounded.
+DEFECT_SEED_MAX_DROP="${DEFECT_SEED_MAX_DROP:-1.0}"
 EPS_INF="${EPS_INF:-6.5}"
 EPS_INF_PRIOR_WEIGHT="${EPS_INF_PRIOR_WEIGHT:-0.0}"
 
@@ -370,6 +372,7 @@ python -m mace.cli.run_train \
     --carrier_self_isolated="${CARRIER_SELF_ISOLATED}" \
     --lr_start_epoch="${LR_START_EPOCH}" \
     --defect_seed_gate="${DEFECT_SEED_GATE}" \
+    --defect_seed_max_drop="${DEFECT_SEED_MAX_DROP}" \
     --eps_inf="${EPS_INF}" \
     --eps_inf_prior_weight="${EPS_INF_PRIOR_WEIGHT}" \
     --energy_weight="${ENERGY_WEIGHT}" \

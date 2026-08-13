@@ -1172,6 +1172,16 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default="gap",
     )
     parser.add_argument(
+        "--defect_seed_max_drop",
+        help="Largest fractional fall in the seed gain per epoch, 1.0 for no bound. The "
+        "site gate measures the right thing but releases the seed as a step once site "
+        "structure appears, and a seed whose structure appears late loses its attention in "
+        "the two or three epochs that release takes. Bounding the rate turns the same "
+        "measure into a hand-over",
+        type=float,
+        default=1.0,
+    )
+    parser.add_argument(
         "--use_polarisation",
         help="Enable the q^pol channel. False ablates it entirely, leaving delta_lr as "
         "carrier^2 + host.carrier. After gating, the polarisation response is contained "

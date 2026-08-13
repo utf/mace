@@ -265,6 +265,7 @@ def anneal_logit_seed(
     zero_by_epoch: int,
     gamma_init: torch.Tensor,
     gate: str = "gap",
+    max_drop: float = 1.0,
 ) -> Dict[str, float]:
     """Hand the attention back to ``MLP_l``, per channel, on readiness rather than epochs.
 
@@ -362,6 +363,24 @@ def anneal_logit_seed(
     updated = (gamma_init.to(scale.device) * scale.clamp(min=0.0)).to(
         model.logit_seed_gamma.dtype
     )
+    # Bound how fast the seed may be withdrawn. The site measure answers the right
+    # question -- has the model found its own SITE structure -- but as a schedule it is a
+    # cliff: it holds gamma on the forced ramp until structure appears, then the readiness
+    # term collapses it within two or three epochs. Measured on seed 1 it sat at 1.00
+    # through epoch 10 and reached 0.01 by epoch 14, and that seed's attention ran away at
+    # epochs 12-13, inside the window. The same seed on the gap gate, which hands over
+    # smoothly and early, localises. So the measure is right and the release is wrong.
+    #
+    # `max_drop` is the largest fractional fall per epoch. Multiplicative rather than
+    # absolute so it is scale-free in gamma_init. The forced ramp still caps it from above,
+    # so the schedule cannot be stretched past its terminal epoch, and the unconditional
+    # zeroing below still applies.
+    if max_drop < 1.0:
+        previous = model.logit_seed_gamma.detach().clamp(min=0.0)
+        floor = previous * (1.0 - max_drop)
+        ramp = (gamma_init.to(updated.device) * forced).to(updated.dtype)
+        updated = torch.minimum(torch.maximum(updated, floor.to(updated.dtype)), ramp)
+
     # Ratchet: the hand-over never hands back. The readiness term is built from a
     # reference gap that itself shrinks as gamma falls, so an unconstrained schedule can
     # let gamma tick back up when the intrinsic gap dips -- re-imposing a prior the model
@@ -388,6 +407,7 @@ def anneal_logit_seed(
         "gap_intrinsic": [round(float(v), 3) for v in intrinsic_mean],
         "forced": round(forced, 3),
         "gate": gate,
+        "max_drop": max_drop,
     }
     if site_intrinsic is not None and site_seeded is not None:
         report["gap_site"] = [round(float(v), 4) for v in site_intrinsic]
