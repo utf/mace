@@ -116,7 +116,7 @@ outcome, and the cliff hypothesis is falsified.
 cap s1          8.37   Cl 1.000                   4.0 / 15.5
 cap s2          1.97   Pb 1.000  (2 shell)        3.6 / 15.8
 cap s3         16.00   Pb 1.000  (all 16 Pb)      4.8 / 15.6
-cap s4          1.97   Pb 1.000  (2 shell)        n/a
+cap s4          1.97   Pb 1.000  (2 shell)        3.9 / 15.2
 ```
 
 2 of 4 fully correct -- the same headline rate as both other gates. Two observations that
