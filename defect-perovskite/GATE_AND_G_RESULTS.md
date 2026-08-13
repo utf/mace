@@ -98,16 +98,57 @@ Earlier runs are unaffected: `MACE_REPO` and the launch directory both pointed a
 worktree, so the intended code ran. `train_defect_model.sh` now asks python where it
 resolved `mace` from and aborts if that disagrees with `MACE_REPO`.
 
-## 5. Where this leaves it
+## 5. The bounded-decay gate — the cliff hypothesis is falsified
+
+The site measure with `--defect_seed_max_drop 0.25`, four seeds, short-range only, 30 epochs.
+The bound is multiplicative, floored below by the previous gain and capped above by the
+forced ramp, so it cannot stretch the schedule past its terminal epoch.
+
+It did exactly what it was designed to do. On seed 1, gamma was held at 0.44 at epoch 12 and
+0.25 at epoch 14 where the unbounded schedule had already fallen to 0.14 and 0.009 -- three
+to five times higher through precisely the window where that seed's attention ran away.
+
+**And the attention ran away anyway.** So the withdrawal RATE is not what decides the
+outcome, and the cliff hypothesis is falsified.
+
+```
+              partic   species                   valid E / F
+cap s1          8.37   Cl 1.000                   4.0 / 15.5
+cap s2          1.97   Pb 1.000  (2 shell)        3.6 / 15.8
+cap s3         16.00   Pb 1.000  (all 16 Pb)      4.8 / 15.6
+cap s4          1.97   Pb 1.000  (2 shell)        n/a
+```
+
+2 of 4 fully correct -- the same headline rate as both other gates. Two observations that
+are worth keeping even though the hypothesis failed:
+
+* **`cap s3` got the SPECIES right and the site wrong**: all weight on Pb, spread over all
+  sixteen rather than the two under-coordinated ones. Every earlier failure landed on the
+  wrong species. This is a milder failure, and `partic = 16.00` would have been misread as
+  "collapsed onto Cs" without the per-species audit -- 16 is both the Cs count and the Pb
+  count.
+* **`cap s1` was cut off mid-recovery**: 41.0 at epoch 20, 29.1 at 25, 9.50 at 29, still
+  falling when the run ended. Thirty epochs was chosen to cover the collapse window, not a
+  recovery. Its final state is Cl but only 8.4 wide, not the 47 of a full sublattice.
+
+Summary of the three schedules, all short-range only:
+
+| gate | fully correct | failure modes |
+|---|---|---|
+| gap | 2 of 4 | smeared across two species |
+| site | 3 of 4, loses seed 1 | one wrong sublattice |
+| site + 25% cap | 2 of 4 | one wrong species (descending), one right species / wrong site |
+
+## 6. Where this leaves it
 
 * The anneal schedule, not the long-range branch, decides which seeds localise on this
   dataset. Both gates give 2 of 4.
 * The branch itself still does not destroy a settled correct answer: every seed that entered
   epoch 30 localised stayed localised, in D and in G.
-* Neither gate is the answer. The site gate's measure is right in principle and its schedule
-  is wrong; the gap gate's schedule is smooth but its measure cannot tell a species gap from
-  a site gap. A gate on the site-resolved measure with a bounded per-epoch decay rate is the
-  obvious next thing to try, and has not been tried.
+* No gate is the answer, and the bounded-decay variant has now been tried and falsified.
+  All three sit at 2 of 4. Holding the seed three to five times longer through the critical
+  window changed nothing, so the schedule is not the mechanism and further schedule tuning
+  is not worth the GPU time.
 * Read against section 10 of the diagnosis, none of this is surprising: with no paired
   frames the alpha/u degeneracy is essentially unbroken, so attention is decided by the
   seeding schedule rather than by the data. That is a property of the dataset, and SiC's
