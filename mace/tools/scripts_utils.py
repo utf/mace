@@ -406,6 +406,14 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         )
         config["zero_u_init"] = bool(getattr(model, "zero_u_init", True))
         config["correction_trunk"] = str(getattr(model, "correction_trunk", "shared"))
+        # The spectral head. Omitting these would rebuild a spectral arm as an ATTENTION
+        # model -- no shape mismatch to catch it, since the two heads have different
+        # parameters entirely, so the load would drop the Hamiltonian and silently restore
+        # the softmax the arm exists to replace.
+        config["spectral_head"] = bool(getattr(model, "spectral_head", False))
+        if getattr(model, "spectral", None) is not None:
+            config["spectral_num_states"] = int(model.spectral.num_states)
+            config["spectral_smearing"] = float(model.spectral.smearing)
         # A buffer, so the weight transfer would carry the values -- but only if the
         # rebuilt model allocated the same shape, and it defaults to empty. Without this
         # the converted model would either fail the state-dict load or come back with the

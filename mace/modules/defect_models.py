@@ -87,6 +87,9 @@ class MACEDefect(ScaleShiftMACE):
         zero_u_init: bool = True,
         alpha_mode: str = "logits",
         beta: float = 10.0,
+        spectral_head: bool = False,
+        spectral_num_states: int = 6,
+        spectral_smearing: float = 0.020,
         logit_seed_gamma: float = 0.0,
         correction_trunk: str = "shared",
         use_long_range: bool = True,
@@ -166,6 +169,29 @@ class MACEDefect(ScaleShiftMACE):
         )
         feature_dim = carrier_feature_dim * len(self.defect_feature_readouts)
         self.counter_embedding = CounterEmbedding(counter_embedding_dim)
+
+        # Component H. When on, carrier energy is the lowest eigenvalue of a learned
+        # short-ranged Hamiltonian rather than a softmax-weighted mean of site energies, so
+        # localisation is a bound-state threshold instead of an amplitude contest against N.
+        # Both heads expose the same six outputs, so every existing diagnostic keeps working:
+        # `alpha` becomes sum_k w_k psi^2 and the site energy plays the role of u.
+        self.spectral_head = bool(spectral_head)
+        self.spectral = None
+        if self.spectral_head:
+            from mace.modules.defect_spectral import SpectralCarrierHead
+
+            self.spectral = SpectralCarrierHead(
+                feature_dim=feature_dim,
+                counter_dim=counter_embedding_dim,
+                hidden=carrier_mlp_hidden,
+                num_states=spectral_num_states,
+                smearing=spectral_smearing,
+                # r_max arrives through **kwargs and the parent registers it as a buffer;
+                # reuse the trunk's cutoff so the Hamiltonian lives on the same neighbour
+                # list rather than introducing a second, independent range.
+                r_cut=float(self.r_max),
+            )
+
         self.carrier_pooling = CarrierAttentionPooling(
             feature_dim=feature_dim,
             counter_dim=counter_embedding_dim,
@@ -310,6 +336,62 @@ class MACEDefect(ScaleShiftMACE):
                 charge, positions, batch, num_graphs
             )
         return total
+
+    def _carrier_head(
+        self,
+        node_feats: torch.Tensor,
+        counter_emb: torch.Tensor,
+        counts: torch.Tensor,
+        batch: torch.Tensor,
+        num_graphs: int,
+        edge_index: torch.Tensor,
+        edge_length: torch.Tensor,
+        logit_bias: Optional[torch.Tensor] = None,
+    ):
+        """Either carrier head, behind one signature.
+
+        Returns the attention head's six outputs in every case, so the three call sites and
+        every downstream diagnostic stay head-agnostic. The spectral head's analogues:
+
+            alpha             sum_k w_k psi_k^2, a genuine per-cell probability like softmax
+            carrier_readouts  the diagonal site energy eps, which is what u always meant
+            logit_gap         the SPECTRAL gap lambda_band - lambda_bound; large means a
+                              split-off bound level rather than a large logit difference
+            carrier_logits    eps again. Only the size hinge consumes this, and the hinge is
+                              retired under the spectral head -- a bound state's weight is
+                              N-independent by construction, which the size ladder verifies
+                              directly rather than a loss term enforcing.
+
+        `logit_bias` is the novelty seed. It is applied to the DIAGONAL here, where it means
+        "this site looks unusual, so lower its on-site energy" -- the same intent as biasing a
+        logit, expressed in energy. Spectral arms run with the seed off, so it is normally
+        None; honouring it keeps the two heads comparable if a seeded spectral arm is wanted.
+        """
+        if not self.spectral_head:
+            return self.carrier_pooling(
+                node_feats=node_feats,
+                counter_emb=counter_emb,
+                counts=counts,
+                batch=batch,
+                num_graphs=num_graphs,
+                logit_bias=logit_bias,
+            )
+
+        out = self.spectral(
+            node_feats=node_feats,
+            counter_emb=counter_emb,
+            counts=counts,
+            batch=batch,
+            num_graphs=num_graphs,
+            edge_index=edge_index,
+            edge_length=edge_length,
+            site_bias=None if logit_bias is None else -logit_bias,
+        )
+        # delta_u is the spread of the occupied state's site energy over its own support: the
+        # spectral analogue of "how much does u vary where alpha lives".
+        delta_u = (out.alpha * out.site_energy).sum(0) - out.site_energy.mean(0)
+        return (out.delta_sr, out.alpha, out.site_energy, out.gap, delta_u,
+                out.site_energy)
 
     def forward(  # pylint: disable=too-many-branches
         self,
@@ -471,12 +553,14 @@ class MACEDefect(ScaleShiftMACE):
             logit_gap,
             delta_u,
             carrier_logits,
-        ) = self.carrier_pooling(
+        ) = self._carrier_head(
             node_feats=defect_feats,
             counter_emb=counter_emb,
             counts=counts,
             batch=data["batch"],
             num_graphs=num_graphs,
+            edge_index=data["edge_index"],
+            edge_length=lengths,
             logit_bias=logit_bias,
         )
         # Intrinsic gap: the same pooling with the seed switched off, so the logged gap
@@ -487,12 +571,14 @@ class MACEDefect(ScaleShiftMACE):
         logit_gap_intrinsic: Optional[torch.Tensor] = None
         logits_intrinsic: Optional[torch.Tensor] = None
         if self.logit_seed:
-            _, _, _, logit_gap_intrinsic, _, logits_intrinsic = self.carrier_pooling(
+            _, _, _, logit_gap_intrinsic, _, logits_intrinsic = self._carrier_head(
                 node_feats=defect_feats,
                 counter_emb=counter_emb,
                 counts=counts,
                 batch=data["batch"],
                 num_graphs=num_graphs,
+                edge_index=data["edge_index"],
+                edge_length=lengths,
                 logit_bias=None,
             )
 
@@ -529,12 +615,14 @@ class MACEDefect(ScaleShiftMACE):
             gauge_mean_u = torch.stack(gauge_list, dim=1)  # [n_graphs, K, 4]
 
         counter_emb_ref = self.counter_embedding(counts_ref)
-        delta_sr_ref, alpha_ref, _, _, _, _ = self.carrier_pooling(
+        delta_sr_ref, alpha_ref, _, _, _, _ = self._carrier_head(
             node_feats=defect_feats,
             counter_emb=counter_emb_ref,
             counts=counts_ref,
             batch=data["batch"],
             num_graphs=num_graphs,
+            edge_index=data["edge_index"],
+            edge_length=lengths,
             logit_bias=logit_bias,
         )
 

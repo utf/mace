@@ -243,6 +243,14 @@ DEFECT_ZERO_U_INIT="${DEFECT_ZERO_U_INIT:-True}"
 # fixed with BASE_LR_FACTOR=0.0, so the correction trains against a base that cannot absorb
 # the site signal out from under it. Empty means ordinary joint training.
 DEFECT_BASE_INIT="${DEFECT_BASE_INIT:-}"
+
+# Component H. With the spectral head on, retire DEFECT_SIZE_WEIGHT and
+# DEFECT_SEED_ANNEAL: a bound state's weight is N-independent by construction, so the
+# size ladder verifies that property rather than a hinge enforcing it, and there are no
+# logits to seed.
+DEFECT_SPECTRAL_HEAD="${DEFECT_SPECTRAL_HEAD:-False}"
+DEFECT_SPECTRAL_STATES="${DEFECT_SPECTRAL_STATES:-6}"
+DEFECT_SPECTRAL_SMEARING="${DEFECT_SPECTRAL_SMEARING:-0.020}"
 # cuEquivariance acceleration of the trunk. Verified numerically identical to e3nn for
 # the short-range model (tests/unit/test_defect_cueq.py: 9e-14 on energies, 2e-16 on
 # forces in float64). It converts the TRUNK only -- the correction heads are dense MLPs
@@ -361,6 +369,9 @@ python -m mace.cli.run_train \
     --carrier_mlp_hidden="${CARRIER_MLP_HIDDEN}" \
     --defect_zero_u_init="${DEFECT_ZERO_U_INIT}" \
     ${DEFECT_BASE_INIT:+--defect_base_init="${DEFECT_BASE_INIT}"} \
+    --defect_spectral_head="${DEFECT_SPECTRAL_HEAD}" \
+    --defect_spectral_states="${DEFECT_SPECTRAL_STATES}" \
+    --defect_spectral_smearing="${DEFECT_SPECTRAL_SMEARING}" \
     --enable_cueq="${ENABLE_CUEQ}" \
     --defect_logit_seed_gamma="${DEFECT_LOGIT_SEED_GAMMA}" \
     --defect_seed_anneal="${DEFECT_SEED_ANNEAL}" \

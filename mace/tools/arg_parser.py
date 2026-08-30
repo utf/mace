@@ -1140,6 +1140,31 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=1.0,
     )
     parser.add_argument(
+        "--defect_spectral_head",
+        help="Component H: read the carrier energy off the lowest eigenvalue of a learned "
+        "short-ranged Hamiltonian instead of a softmax-weighted mean of site energies. "
+        "Localisation then becomes bound-state formation -- a threshold -- rather than an "
+        "amplitude contest against cell size. Retire the size hinge and seed anneal with it: "
+        "a bound state's weight is N-independent by construction",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--defect_spectral_states",
+        help="Number of lowest eigenpairs kept by the spectral head. Log the truncation "
+        "margin (lambda_m - lambda_occupied)/T_s; it must stay well above 1",
+        type=int,
+        default=6,
+    )
+    parser.add_argument(
+        "--defect_spectral_smearing",
+        help="Thermal smearing T_s in eV over those eigenvalues. Regularises eigenvalue "
+        "crossings, and lets a gapless cell degrade to a band-edge ensemble rather than "
+        "forcing a bound state that is not there",
+        type=float,
+        default=0.020,
+    )
+    parser.add_argument(
         "--defect_base_init",
         help="Path to a Stage-A model whose base branch is copied into this model before "
         "training (component S). Pair with --base_lr_factor 0.0 for Stage B: the correction "

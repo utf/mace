@@ -145,6 +145,10 @@ class SpectralCarrierHead(nn.Module):
         every point of training. Symmetrising the OUTPUT instead would leave H non-symmetric
         during the backward pass and make `eigh` silently wrong about gradients.
         """
+        # MACE's `get_edge_vectors_and_lengths` returns lengths as [n_edges, 1] while the unit
+        # tests pass a flat [n_edges]. Normalise to 1-D so both callers work; a stray trailing
+        # axis here silently becomes a third dimension in the radial basis.
+        r = r.reshape(-1)
         sym = torch.cat([feats_i + feats_j, (feats_i - feats_j).abs(), self._radial(r)],
                         dim=-1)
         return self.hop(sym) * self._envelope(r).unsqueeze(-1)
