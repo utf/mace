@@ -133,6 +133,23 @@ def test_config_extractor_preserves_the_head():
     assert extract_config_mace_model(build(False))["spectral_head"] is False
 
 
+def test_checkpoint_predating_the_spectral_head_still_runs():
+    """Models are persisted by pickling the module, so a checkpoint written before
+    `spectral_head` existed restores without that attribute. Every model trained up to the
+    point this head was added is in that category -- A0, the Stage-A bases, every historical
+    run -- and plain attribute access raises AttributeError on all of them, which is how this
+    was found: scoring A0 against the gates failed to load a single model.
+    """
+    model = build(False)
+    del model.spectral_head
+    del model.spectral
+
+    batch = make_batch()
+    out = model(batch.to_dict(), training=False)
+    assert torch.isfinite(out["energy"]).all()
+    assert out["carrier_alpha"] is not None
+
+
 @pytest.mark.parametrize("spectral", [False, True])
 def test_state_dict_round_trips(spectral):
     src = build(spectral, seed=0)

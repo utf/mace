@@ -367,7 +367,11 @@ class MACEDefect(ScaleShiftMACE):
         logit, expressed in energy. Spectral arms run with the seed off, so it is normally
         None; honouring it keeps the two heads comparable if a seeded spectral arm is wanted.
         """
-        if not self.spectral_head:
+        # getattr, not attribute access: models are persisted by pickling the module, so a
+        # checkpoint written before this attribute existed restores without it. Every model
+        # trained up to now -- A0, the Stage-A bases, every historical run -- is in that
+        # category, and plain access raises AttributeError on all of them.
+        if not getattr(self, "spectral_head", False):
             return self.carrier_pooling(
                 node_feats=node_feats,
                 counter_emb=counter_emb,
