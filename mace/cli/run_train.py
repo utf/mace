@@ -809,6 +809,22 @@ def run(args) -> None:
     model, output_args = configure_model(args, train_loader, atomic_energies, model_foundation, heads, z_table, head_configs)
     model.to(device)
 
+    # Stage B (component S): start from a converged, frozen base so the correction is not
+    # racing the base for the same signal. Loading the weights and zeroing their learning
+    # rate are separate switches, and only the pair gives Stage B -- warn rather than let a
+    # half-configured run look like a staged one.
+    if getattr(args, "defect_base_init", None):
+        from mace.modules.defect_stage import load_stage_a_base
+
+        if model.__class__.__name__ != "MACEDefect":
+            raise RuntimeError("--defect_base_init only applies to MACEDefect")
+        load_stage_a_base(model, args.defect_base_init, device=device)
+        if float(getattr(args, "base_lr_factor", 1.0)) != 0.0:
+            logging.warning(
+                "--defect_base_init was given but --base_lr_factor is "
+                f"{getattr(args, 'base_lr_factor', 1.0)}, not 0.0, so the loaded base will "
+                "drift during training. That is a warm start, not Stage B.")
+
     if model.__class__.__name__ == "MACEDefect":
         # Ship the band edges that referenced the labels with the model, so inference
         # can undo the referencing with exactly the constants training used rather than

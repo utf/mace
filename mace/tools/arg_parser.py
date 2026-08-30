@@ -1140,6 +1140,16 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=1.0,
     )
     parser.add_argument(
+        "--defect_base_init",
+        help="Path to a Stage-A model whose base branch is copied into this model before "
+        "training (component S). Pair with --base_lr_factor 0.0 for Stage B: the correction "
+        "then trains against a fixed base, and the residual at a charged geometry stands in "
+        "for the neutral pair partner the dataset does not contain. Buffers are copied too, "
+        "so the energy reference matches the one Stage A was fitted with",
+        type=str,
+        default=None,
+    )
+    parser.add_argument(
         "--defect_zero_u_init",
         help="Zero-initialise the carrier energy readout MLP_u. ON by default, for "
         "optimisation conditioning: a random u is structureless noise that the optimiser "

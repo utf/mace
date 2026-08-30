@@ -238,6 +238,11 @@ DEFECT_U_L2="${DEFECT_U_L2:-0.0}"
 # the attention still uniform; from zero, u grows along the gradient instead. Measured
 # over three seeds: escape 3/3 with it, 1/3 without. Set False to ablate.
 DEFECT_ZERO_U_INIT="${DEFECT_ZERO_U_INIT:-True}"
+
+# Stage B (component S): copy the base branch from a converged Stage-A model and hold it
+# fixed with BASE_LR_FACTOR=0.0, so the correction trains against a base that cannot absorb
+# the site signal out from under it. Empty means ordinary joint training.
+DEFECT_BASE_INIT="${DEFECT_BASE_INIT:-}"
 # cuEquivariance acceleration of the trunk. Verified numerically identical to e3nn for
 # the short-range model (tests/unit/test_defect_cueq.py: 9e-14 on energies, 2e-16 on
 # forces in float64). It converts the TRUNK only -- the correction heads are dense MLPs
@@ -355,6 +360,7 @@ python -m mace.cli.run_train \
     --counter_embedding_dim="${COUNTER_EMBEDDING_DIM}" \
     --carrier_mlp_hidden="${CARRIER_MLP_HIDDEN}" \
     --defect_zero_u_init="${DEFECT_ZERO_U_INIT}" \
+    ${DEFECT_BASE_INIT:+--defect_base_init="${DEFECT_BASE_INIT}"} \
     --enable_cueq="${ENABLE_CUEQ}" \
     --defect_logit_seed_gamma="${DEFECT_LOGIT_SEED_GAMMA}" \
     --defect_seed_anneal="${DEFECT_SEED_ANNEAL}" \
