@@ -57,15 +57,27 @@ CORRECTION_PREFIXES = ("carrier_", "counter_", "latent_charges", "logit",
                        "defect_", "delta_", "novelty_")
 
 
+# Training bookkeeping: neither base weights nor correction state. `current_epoch` drives the
+# epoch-dependent schedules (long-range gate, size warmup, seed anneal), and the training loop
+# rewrites it every epoch. It must be excluded from BOTH operations here: copying it would
+# seed a Stage-B run with Stage A's final epoch number, and checking it would report the base
+# as unfrozen simply because training progressed -- which is how it was noticed.
+BOOKKEEPING_NAMES = ("current_epoch",)
+
+
 def is_correction_param(name: str) -> bool:
     return any(name.startswith(p) or f".{p}" in name for p in CORRECTION_PREFIXES)
+
+
+def is_bookkeeping(name: str) -> bool:
+    return name.split(".")[-1] in BOOKKEEPING_NAMES
 
 
 def _base_state(model) -> dict:
     """Base-branch parameters AND buffers, keyed by name."""
     out = {}
     for name, tensor in list(model.named_parameters()) + list(model.named_buffers()):
-        if not is_correction_param(name):
+        if not is_correction_param(name) and not is_bookkeeping(name):
             out[name] = tensor
     return out
 

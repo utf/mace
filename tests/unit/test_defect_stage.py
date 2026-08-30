@@ -144,6 +144,34 @@ def test_correction_prefixes_are_documented_constants():
     assert isinstance(CORRECTION_PREFIXES, tuple) and CORRECTION_PREFIXES
 
 
+def test_current_epoch_is_neither_copied_nor_checked(tmp_path):
+    """`current_epoch` is training bookkeeping, not a weight.
+
+    Copying it would seed a Stage-B run with Stage A's final epoch number, which feeds the
+    epoch-dependent schedules (long-range gate, size warmup, seed anneal). Checking it would
+    report the base as unfrozen simply because training advanced -- which is exactly what the
+    end-to-end verifier reported before this was excluded.
+    """
+    source = build(seed=0)
+    if not hasattr(source, "current_epoch"):
+        pytest.skip("model has no current_epoch buffer")
+    with torch.no_grad():
+        source.current_epoch.fill_(137)
+    path = tmp_path / "stage_a.model"
+    torch.save(source, path)
+
+    target = build(seed=1)
+    with torch.no_grad():
+        target.current_epoch.fill_(0)
+    load_stage_a_base(target, path)
+    assert int(target.current_epoch) == 0, "Stage A's epoch counter leaked into Stage B"
+
+    ref = snapshot_base(target)
+    with torch.no_grad():
+        target.current_epoch.fill_(12)
+    assert_base_frozen(target, ref)   # advancing the epoch is not the base moving
+
+
 @pytest.mark.parametrize("name", ["novelty_channel_scale", "novelty_global_scale"])
 def test_novelty_scales_are_correction_state(name):
     """These are logit-seeding scales, and they are registered only when seeding is enabled.

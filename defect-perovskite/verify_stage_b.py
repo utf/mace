@@ -15,7 +15,7 @@ from pathlib import Path
 import torch
 
 import mace  # noqa: F401
-from mace.modules.defect_stage import _base_state, is_correction_param
+from mace.modules.defect_stage import _base_state, is_correction_param  # noqa: F401
 
 
 def main() -> None:
