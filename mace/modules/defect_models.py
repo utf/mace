@@ -393,7 +393,17 @@ class MACEDefect(ScaleShiftMACE):
         )
         # delta_u is the spread of the occupied state's site energy over its own support: the
         # spectral analogue of "how much does u vary where alpha lives".
-        delta_u = (out.alpha * out.site_energy).sum(0) - out.site_energy.mean(0)
+        #
+        # PER GRAPH, shape [n_graphs, C], matching the attention head. Summing over all nodes
+        # instead gave [C], which the training diagnostics then tried to reshape to
+        # [n_graphs, -1] and failed on -- a batch of 8 against 4 values.
+        weighted = scatter_sum(out.alpha * out.site_energy, batch, dim=0,
+                               dim_size=num_graphs)
+        node_count = scatter_sum(torch.ones_like(out.site_energy), batch, dim=0,
+                                 dim_size=num_graphs).clamp_min(1.0)
+        mean_eps = scatter_sum(out.site_energy, batch, dim=0,
+                               dim_size=num_graphs) / node_count
+        delta_u = weighted - mean_eps
         return (out.delta_sr, out.alpha, out.site_energy, out.gap, delta_u,
                 out.site_energy)
 

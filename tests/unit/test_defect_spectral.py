@@ -114,6 +114,43 @@ def test_padding_does_not_leak_into_the_low_spectrum():
         assert np.isclose(mass, 1.0, atol=1e-8), f"cell {g} alpha sums to {mass}, not 1"
 
 
+def test_eigh_converges_on_a_realistically_padded_batch():
+    """A batch mixing 79- and 159-atom cells, the real dataset's two sizes.
+
+    Padding every slot with the SAME energy made that block exactly degenerate, and `eigh`
+    refused an 80-fold repeated eigenvalue with "ill-conditioned or has too many repeated
+    eigenvalues". The earlier padding test used 5- and 2-atom cells, where the degenerate
+    block is three rows and LAPACK copes -- too small to expose it.
+    """
+    h = head(num_states=6)
+    sizes = [79, 159, 79]
+    n = sum(sizes)
+    feats = torch.randn(n, 8, dtype=torch.float64)
+    counter = torch.zeros(len(sizes), 4, dtype=torch.float64)
+    counts = torch.ones(len(sizes), 2, dtype=torch.float64)
+    batch = torch.cat([torch.full((s,), g, dtype=torch.long)
+                       for g, s in enumerate(sizes)])
+
+    # A connected chain within each cell, so every cell has a real spectrum.
+    edges = []
+    off = 0
+    for s in sizes:
+        for i in range(s - 1):
+            edges.append((off + i, off + i + 1))
+            edges.append((off + i + 1, off + i))
+        off += s
+    ei = torch.tensor(edges, dtype=torch.long).T
+    r = torch.full((ei.shape[1],), 3.0, dtype=torch.float64)
+
+    out = h(feats, counter, counts, batch, len(sizes), ei, r)
+    assert torch.isfinite(out.eigenvalues).all()
+    assert torch.isfinite(out.delta_sr).all()
+    for g, s in enumerate(sizes):
+        assert np.isclose(float(out.alpha[batch == g, 0].sum()), 1.0, atol=1e-8)
+        # No padded state may reach the occupied window of a cell that has real states.
+        assert float(out.eigenvalues[g].max()) < 0.5 * 1.0e3
+
+
 def test_alpha_is_normalised_per_cell_and_channel():
     h = head()
     feats, counter, counts, batch, ei, r = two_site_inputs()

@@ -90,6 +90,34 @@ def test_forward_produces_the_same_output_contract():
     assert float(a.sum(0).min()) > 0.99, "spectral alpha is not a per-cell distribution"
 
 
+def test_both_heads_return_identically_shaped_outputs():
+    """Shape parity across the whole six-output contract, on a multi-cell batch.
+
+    The adapter returned delta_u summed over all nodes -- shape [C] where the attention head
+    gives [n_graphs, C]. Nothing in the model objected; the training diagnostics did, several
+    minutes into a real run, with "shape '[8, -1]' is invalid for input of size 4". Per-graph
+    quantities that collapse the graph axis only show up on a batch with more than one cell,
+    which is why this test uses three.
+    """
+    batch = make_batch(n_cells=3)
+    shapes = {}
+    for spectral in (False, True):
+        model = build(spectral)
+        out = model._carrier_head(
+            node_feats=torch.randn(len(batch.batch), model.carrier_pooling.feature_dim),
+            counter_emb=model.counter_embedding(
+                batch.carrier_counts.view(3, -1).float()),
+            counts=batch.carrier_counts.view(3, -1).float(),
+            batch=batch.batch, num_graphs=3,
+            edge_index=batch.edge_index,
+            edge_length=torch.rand(batch.edge_index.shape[1], 1) * 3 + 1,
+        )
+        shapes[spectral] = [tuple(t.shape) for t in out]
+
+    for i, (a, b) in enumerate(zip(shapes[False], shapes[True])):
+        assert a == b, f"output {i} differs: attention {a} vs spectral {b}"
+
+
 def test_alpha_normalised_per_cell_in_a_multi_cell_batch():
     batch = make_batch(n_cells=3)
     out = build(True)(batch.to_dict(), training=False)

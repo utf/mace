@@ -56,10 +56,20 @@ from torch import nn
 __all__ = ["SpectralCarrierHead", "SpectralOutput"]
 
 
-# Padded slots are given a large positive on-site energy so their eigenvalues sit far above
-# the physical spectrum and can never enter the lowest m. Finite rather than inf: the
-# eigensolver must stay well conditioned.
-_PAD_ENERGY = 1.0e4
+# Padded slots are given large positive on-site energies so their eigenvalues sit far above
+# the physical spectrum and can never enter the lowest m.
+#
+# They must also be DISTINCT from each other. Giving every padded slot the same value makes
+# that block exactly degenerate, and a batch mixing 79- and 159-atom cells then hands `eigh`
+# an 80-fold repeated eigenvalue: LAPACK returns "the input matrix is ill-conditioned or has
+# too many repeated eigenvalues" and the run dies. Spacing them by 1 eV keeps them mutually
+# distinct and still far above anything physical.
+#
+# The base is 1e3 rather than 1e4 because the separation only has to be unambiguous, and a
+# smaller dynamic range keeps the matrix better conditioned; physical eigenvalues here are of
+# order 1 eV.
+_PAD_ENERGY = 1.0e3
+_PAD_SPACING = 1.0
 
 
 class SpectralOutput(NamedTuple):
@@ -208,8 +218,11 @@ class SpectralCarrierHead(nn.Module):
 
         # Padded slots sit far above the physical spectrum. Added after the scatters so
         # nothing can accumulate on top of them.
-        pad = torch.arange(n_max, device=device).unsqueeze(0) >= counts_per_graph.unsqueeze(1)
-        pad_bc = pad.repeat_interleave(C, dim=0).to(self.solver_dtype) * _PAD_ENERGY
+        slot = torch.arange(n_max, device=device)
+        pad = slot.unsqueeze(0) >= counts_per_graph.unsqueeze(1)
+        pad_value = _PAD_ENERGY + _PAD_SPACING * slot.to(self.solver_dtype)
+        pad_bc = (pad.repeat_interleave(C, dim=0).to(self.solver_dtype)
+                  * pad_value.unsqueeze(0))
         H += torch.diag_embed(pad_bc)
 
         # t_ij is symmetric by construction, so H already is; this only removes floating-point
