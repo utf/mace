@@ -78,6 +78,7 @@ class SpectralOutput(NamedTuple):
     alpha: torch.Tensor         # [n_nodes, C]   sum_k w_k psi^2
     site_energy: torch.Tensor   # [n_nodes, C]   the diagonal eps
     gap: torch.Tensor           # [n_graphs, C]  lambda_band - lambda_bound
+    eps_mean: torch.Tensor      # [n_graphs, C]  per-frame mean site energy (T5 gauge)
     eigenvalues: torch.Tensor   # [n_graphs, C, m]
     weights: torch.Tensor       # [n_graphs, C, m]
 
@@ -118,6 +119,7 @@ class SpectralCarrierHead(nn.Module):
         decay_init: float = 1.0,      # A, initial decay length
         use_sigma: bool = False,      # H3: dangling-orbital sigma term
         sigma_r1: float = 3.6,        # A, first-shell radius for the dangling vector
+        gauge_penalty: bool = False,  # T5: penalise mean(eps) instead of subtracting it
     ) -> None:
         super().__init__()
         self.num_channels = num_channels
@@ -129,6 +131,7 @@ class SpectralCarrierHead(nn.Module):
         self.use_decay = use_decay
         self.t_min = t_min
         self.decay_r0 = decay_r0
+        self.gauge_penalty = gauge_penalty
 
         # Level position, held separately from the site energies (mandatory gauge anchor).
         #
@@ -295,12 +298,19 @@ class SpectralCarrierHead(nn.Module):
         if site_bias is not None:
             eps_raw = eps_raw + site_bias
 
-        # Gauge anchor: remove the per-frame uniform mode exactly. Undetached, so the mean
-        # itself carries gradient and the constraint is structural rather than a penalty.
+        # Gauge control. eps has an exact uniform mode: adding a constant to every site shifts
+        # every eigenvalue and hence dE_SR, which a trainable base can partly absorb -- that is
+        # what took eps to 12-30 eV before any anchor existed.
+        #
+        # Subtracting the per-frame mean removes the mode exactly, but injects an O(1/N) term
+        # into lambda whenever the well is localised: the mean is ~depth*k/N, measured as
+        # -3*(1 - 1/N) in the toy and ~2.6 meV across the 640-5120 ladder, against a <= 1 meV
+        # gate. So the mean is now REPORTED and penalised in the loss instead of subtracted,
+        # which pins the gauge without making lambda depend on cell size.
         counts_per_graph = torch.bincount(batch, minlength=num_graphs).clamp_min(1)
         mean_eps = (torch.zeros(num_graphs, C, device=device, dtype=eps_raw.dtype)
                     .index_add_(0, batch, eps_raw) / counts_per_graph.unsqueeze(-1))
-        eps = eps_raw - mean_eps[batch]
+        eps = eps_raw if self.gauge_penalty else eps_raw - mean_eps[batch]
 
         src, dst = edge_index[0], edge_index[1]
         if self.use_decay and node_species is None:
@@ -442,6 +452,7 @@ class SpectralCarrierHead(nn.Module):
                           torch.zeros_like(lam[..., 0]))
 
         return SpectralOutput(
+            eps_mean=mean_eps.to(node_feats.dtype),
             delta_sr=delta_sr.to(node_feats.dtype),
             alpha=alpha,
             site_energy=eps,

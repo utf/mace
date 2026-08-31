@@ -772,6 +772,7 @@ class DefectLoss(torch.nn.Module):
         size_delocalised_min_atoms: float = 8.0,
         size_delocalised_leak: float = 0.05,
         gauge_weight: float = 0.0,
+        eps_gauge_weight: float = 0.0,
     ) -> None:
         super().__init__()
         for name, value in (
@@ -810,6 +811,7 @@ class DefectLoss(torch.nn.Module):
         self.size_delocalised_min_atoms = size_delocalised_min_atoms
         self.size_delocalised_leak = size_delocalised_leak
         self.gauge_weight = gauge_weight
+        self.eps_gauge_weight = eps_gauge_weight
         # Running |c| per channel, used only to place the (detached) threshold. A buffer so
         # it survives checkpointing: restarting with a cold EMA would put every channel in
         # the exempt branch for the first few batches and briefly switch the term off.
@@ -911,6 +913,7 @@ class DefectLoss(torch.nn.Module):
 
         loss = loss + self.size_penalty(ref, pred, ddp)
         loss = loss + self.gauge_penalty(ref, pred, ddp)
+        loss = loss + self.eps_gauge(pred, ref, ddp)
         loss = loss + self.regularisation(pred)
         return loss
 
@@ -1104,6 +1107,32 @@ class DefectLoss(torch.nn.Module):
         pristine = 1.0 - self._totals_mask(ref)
         raw = ref.weight * pristine * gauge.pow(2).sum(dim=(-1, -2))
         return self.gauge_weight * reduce_loss(raw, ddp)
+
+    def eps_gauge(self, pred: TensorDict, ref, ddp: bool) -> torch.Tensor:
+        """T5: pin the site-energy gauge with a penalty instead of a subtraction.
+
+        eps has an exact uniform mode -- adding a constant to every site shifts every
+        eigenvalue and hence dE_SR, and a trainable base can partly absorb it, which is how
+        eps reached 12-30 eV before any gauge control existed.
+
+        Subtracting the per-frame mean removes the mode exactly but makes lambda depend on
+        cell size: for a localised well the mean is ~depth*k/N, giving an O(1/N) term
+        (measured -3*(1 - 1/N) in a toy, ~2.6 meV across the 640-5120 ladder against a
+        <= 1 meV gate). Penalising the mean instead pins the gauge without touching the
+        N-dependence of the eigenvalue, and mu_c continues to carry the level position.
+
+        Applied per frame and only on ACTIVE channels: a channel with n_c = 0 contributes
+        nothing to the energy, so its site energies are unconstrained by the data and
+        penalising them would be regularising noise.
+        """
+        zero = torch.zeros((), dtype=ref.weight.dtype, device=ref.weight.device)
+        mean_eps = pred.get("carrier_eps_mean")
+        if self.eps_gauge_weight <= 0.0 or mean_eps is None:
+            return zero
+        counts = ref.carrier_counts.view(int(ref.num_graphs), -1).to(mean_eps.dtype)
+        active = (counts.abs() > 0).to(mean_eps.dtype)
+        raw = ref.weight * (active * mean_eps.pow(2)).sum(dim=-1)
+        return self.eps_gauge_weight * reduce_loss(raw, ddp)
 
     def regularisation(self, pred: TensorDict) -> torch.Tensor:
         """Penalties on the correction readouts, plus the optional prior on ``a``."""

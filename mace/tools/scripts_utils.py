@@ -969,6 +969,7 @@ def get_loss_fn(
             size_warmup_epochs=args.defect_size_warmup_epochs,
             size_ema_decay=args.defect_size_ema,
             gauge_weight=args.defect_gauge_weight,
+            eps_gauge_weight=args.defect_eps_gauge_weight,
         )
     elif args.loss == "l1l2energyforces":
         loss_fn = modules.WeightedEnergyForcesL1L2Loss(

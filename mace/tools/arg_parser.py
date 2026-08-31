@@ -1162,6 +1162,23 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=0.0,
     )
     parser.add_argument(
+        "--defect_eps_gauge_weight",
+        help="T5: weight on (per-frame mean site energy)^2, which pins the uniform "
+        "gauge of eps without subtracting the mean. Subtraction removes the mode "
+        "exactly but makes lambda cell-size dependent (O(1/N) for a localised well, ~2.6 meV "
+        "across the 640-5120 ladder against a <= 1 meV gate). Pair with "
+        "--defect_spectral_gauge_penalty",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--defect_spectral_gauge_penalty",
+        help="Report the mean site energy instead of subtracting it, so the gauge is "
+        "set by --defect_eps_gauge_weight in the loss",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
         "--defect_spectral_states",
         help="Number of lowest eigenpairs kept by the spectral head. Log the truncation "
         "margin (lambda_m - lambda_occupied)/T_s; it must stay well above 1",

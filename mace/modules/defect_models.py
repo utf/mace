@@ -96,6 +96,7 @@ class MACEDefect(ScaleShiftMACE):
         spectral_decay_init: float = 1.0,
         spectral_first_shell: bool = False,
         spectral_sigma: bool = False,
+        spectral_gauge_penalty: bool = False,
         logit_seed_gamma: float = 0.0,
         correction_trunk: str = "shared",
         use_long_range: bool = True,
@@ -207,11 +208,13 @@ class MACEDefect(ScaleShiftMACE):
                 num_elements=int(kwargs["num_elements"]),
                 use_decay=bool(spectral_decay),
                 use_sigma=bool(spectral_sigma),
+                gauge_penalty=bool(spectral_gauge_penalty),
                 t_min=float(spectral_t_min),
                 decay_init=float(spectral_decay_init),
             )
         self.spectral_decay = bool(spectral_decay)
         self.spectral_sigma = bool(spectral_sigma)
+        self.spectral_gauge_penalty = bool(spectral_gauge_penalty)
 
         self.carrier_pooling = CarrierAttentionPooling(
             feature_dim=feature_dim,
@@ -434,6 +437,7 @@ class MACEDefect(ScaleShiftMACE):
         mean_eps = scatter_sum(out.site_energy, batch, dim=0,
                                dim_size=num_graphs) / node_count
         delta_u = weighted - mean_eps
+        self._last_eps_mean = out.eps_mean
         return (out.delta_sr, out.alpha, out.site_energy, out.gap, delta_u,
                 out.site_energy)
 
@@ -904,6 +908,9 @@ class MACEDefect(ScaleShiftMACE):
             "hessian": hessian,
             "node_feats": node_feats_out,
             "carrier_alpha": alpha,
+            # T5: the per-frame mean site energy, so the loss can pin the gauge with a
+            # penalty rather than by subtraction (which made lambda size-dependent).
+            "carrier_eps_mean": getattr(self, "_last_eps_mean", None),
             # The exact inputs the correction readouts consume, exposed so that seeding
             # and diagnostics do not have to re-derive the trunk (defect_seed.py).
             "defect_features": defect_feats,
