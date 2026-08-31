@@ -1180,6 +1180,28 @@ def run(args) -> None:
             if hasattr(target, "current_epoch"):
                 with torch.no_grad():
                     target.current_epoch.fill_(int(epoch))
+
+            # Bandwidth anneal. This runs in epoch_hook rather than post_eval_hook because
+            # it must be in place BEFORE the epoch's gradient steps, not chosen after them.
+            #
+            # The flag was declared, passed by the launcher and documented, but nothing ever
+            # wrote hop_scale, so it stayed at the 1.0 it is registered with and the anneal
+            # arm was identical to the plain arm. Every unit test set hop_scale by hand, so
+            # the head's behaviour was covered while the schedule that drives it was not.
+            s0 = float(getattr(args, "defect_spectral_anneal_s0", 0.0) or 0.0)
+            spectral = getattr(target, "spectral", None)
+            if s0 > 0 and spectral is not None and hasattr(spectral, "hop_scale"):
+                from mace.modules.defect_spectral import bandwidth_scale
+
+                span = int(getattr(args, "defect_spectral_anneal_epochs", 20))
+                scale = bandwidth_scale(epoch, s0, span)
+                with torch.no_grad():
+                    spectral.hop_scale.fill_(scale)
+                if epoch <= span:
+                    logging.info(
+                        f"Bandwidth anneal: epoch {epoch}, hop_scale {scale:.4f} "
+                        f"(s0={s0}, over {span} epochs)")
+
             if not anneal_seed:
                 return
             report = anneal_logit_seed(

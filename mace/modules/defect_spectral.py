@@ -54,7 +54,30 @@ import numpy as np
 import torch
 from torch import nn
 
-__all__ = ["SpectralCarrierHead", "SpectralOutput"]
+__all__ = ["SpectralCarrierHead", "SpectralOutput", "bandwidth_scale"]
+
+
+def bandwidth_scale(epoch: int, s0: float, anneal_epochs: int) -> float:
+    """Bandwidth anneal factor: s(e) = s0^(1 - e/E_a) for e <= E_a, then 1.
+
+    All hoppings are multiplied by this, so the Hamiltonian starts with a band s0 times
+    wider and narrows to its trained width by E_a. A level can then separate from the band
+    gradually, instead of having to tunnel out of an already-converged delocalised solution.
+
+    This lives here, as a pure function of the epoch, so it can be tested against its own
+    definition. The schedule was previously implicit: `--defect_spectral_anneal_s0` was
+    declared in the parser and passed by the launcher, but nothing ever assigned hop_scale,
+    which therefore sat at its registered 1.0 for the whole run. The anneal arm was byte-
+    identical to the plain arm, and no test caught it because every test set hop_scale by
+    hand. s0 <= 0 disables the anneal.
+    """
+    # A zero-length anneal is a disabled anneal, not an instantaneous one: returning s0 at
+    # epoch 0 would widen the band for exactly one epoch and call it a schedule.
+    if s0 <= 0 or int(anneal_epochs) <= 0:
+        return 1.0
+    span = int(anneal_epochs)
+    e = min(max(int(epoch), 0), span)
+    return float(s0) ** (1.0 - e / span)
 
 
 # Padded slots are given large positive on-site energies so their eigenvalues sit far above
