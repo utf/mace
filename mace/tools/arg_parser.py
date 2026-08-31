@@ -1150,6 +1150,18 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=False,
     )
     parser.add_argument(
+        "--defect_spectral_r_cut",
+        help="Range of the carrier Hamiltonian, in Angstrom. 0 means the trunk's receptive "
+        "field (r_max * num_interactions), which is the natural scale: the site energies and "
+        "hoppings are functions of features that already aggregate everything within it. "
+        "This is NOT the message-passing cutoff -- at r_max = 5.0 the two Pb sharing the hole "
+        "(median 5.32 A apart, bridged in bulk by the atom that is now the vacancy) have no "
+        "edge at all in 64% of frames, so the correct state is unrepresentable. The graph is "
+        "built at this cutoff and the trunk filtered back to r_max",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
         "--defect_spectral_states",
         help="Number of lowest eigenpairs kept by the spectral head. Log the truncation "
         "margin (lambda_m - lambda_occupied)/T_s; it must stay well above 1",

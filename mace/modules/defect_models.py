@@ -90,6 +90,7 @@ class MACEDefect(ScaleShiftMACE):
         spectral_head: bool = False,
         spectral_num_states: int = 6,
         spectral_smearing: float = 0.020,
+        spectral_r_cut: float = 0.0,
         logit_seed_gamma: float = 0.0,
         correction_trunk: str = "shared",
         use_long_range: bool = True,
@@ -177,6 +178,14 @@ class MACEDefect(ScaleShiftMACE):
         # `alpha` becomes sum_k w_k psi^2 and the site energy plays the role of u.
         self.spectral_head = bool(spectral_head)
         self.spectral = None
+        # 0.0 means "the trunk's receptive field", r_max * num_interactions. That is the
+        # natural scale: eps_i and t_ij are functions of node features that already aggregate
+        # everything within the receptive field, so a shorter Hamiltonian discards locality
+        # the model has already computed. It also covers the whole shell Pb-Pb distribution
+        # (median 5.32 A, worst case 6.80 A), which 5.0 A misses entirely and 8.0 A only half
+        # covers.
+        self.spectral_r_cut = float(spectral_r_cut) if spectral_r_cut > 0 else (
+            float(self.r_max) * int(self.num_interactions))
         if self.spectral_head:
             from mace.modules.defect_spectral import SpectralCarrierHead
 
@@ -186,10 +195,7 @@ class MACEDefect(ScaleShiftMACE):
                 hidden=carrier_mlp_hidden,
                 num_states=spectral_num_states,
                 smearing=spectral_smearing,
-                # r_max arrives through **kwargs and the parent registers it as a buffer;
-                # reuse the trunk's cutoff so the Hamiltonian lives on the same neighbour
-                # list rather than introducing a second, independent range.
-                r_cut=float(self.r_max),
+                r_cut=self.spectral_r_cut,
             )
 
         self.carrier_pooling = CarrierAttentionPooling(
@@ -436,6 +442,31 @@ class MACEDefect(ScaleShiftMACE):
         vectors = ctx.vectors
         lengths = ctx.lengths
         cell = ctx.cell
+
+        # The carrier Hamiltonian needs a LONGER range than the trunk's message passing.
+        #
+        # Measured on this dataset: the two under-coordinated Pb that share the hole sit a
+        # median 5.32 A apart, and the atom that would bridge them in bulk IS the vacancy. At
+        # the trunk's 5.0 A cutoff only 36% of frames even have an edge between them, and the
+        # smooth envelope gives those a median weight of 0.00000 -- so the physically correct
+        # two-site state was not representable at all. The head's range is a property of the
+        # carrier, not of the message passing; they coincided only because both reused r_max.
+        #
+        # The graph is therefore built at the head's cutoff and the trunk is filtered back to
+        # r_max here. Filtering is an optimisation rather than a correctness fix: the radial
+        # cutoff already sends contributions beyond r_max to exactly zero, so the trunk's
+        # result is identical either way -- it just avoids paying for 8x the edges.
+        head_edge_index, head_lengths = data["edge_index"], lengths
+        # getattr for the same reason as in _carrier_head: checkpoints pickled before these
+        # attributes existed restore without them. Plain access here reintroduced exactly the
+        # regression that broke loading every historical model an hour ago.
+        if (getattr(self, "spectral_head", False)
+                and float(getattr(self, "spectral_r_cut", 0.0)) > float(self.r_max)):
+            keep = (lengths.reshape(-1) <= float(self.r_max)).nonzero(as_tuple=True)[0]
+            data = dict(data)
+            data["edge_index"] = head_edge_index[:, keep]
+            vectors = vectors[keep]
+            lengths = lengths[keep]
         node_heads = ctx.node_heads
         interaction_kwargs = ctx.interaction_kwargs
         lammps_natoms = interaction_kwargs.lammps_natoms
@@ -573,8 +604,8 @@ class MACEDefect(ScaleShiftMACE):
             counts=counts,
             batch=data["batch"],
             num_graphs=num_graphs,
-            edge_index=data["edge_index"],
-            edge_length=lengths,
+            edge_index=head_edge_index,
+            edge_length=head_lengths,
             logit_bias=logit_bias,
         )
         # Intrinsic gap: the same pooling with the seed switched off, so the logged gap
@@ -635,8 +666,8 @@ class MACEDefect(ScaleShiftMACE):
             counts=counts_ref,
             batch=data["batch"],
             num_graphs=num_graphs,
-            edge_index=data["edge_index"],
-            edge_length=lengths,
+            edge_index=head_edge_index,
+            edge_length=head_lengths,
             logit_bias=logit_bias,
         )
 

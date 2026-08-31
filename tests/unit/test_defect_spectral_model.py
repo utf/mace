@@ -101,16 +101,21 @@ def test_both_heads_return_identically_shaped_outputs():
     """
     batch = make_batch(n_cells=3)
     shapes = {}
+    # Follow the global default dtype rather than hardcoding .float(): several test modules
+    # set the default to float64 at import time, so under the full suite this ran a float64
+    # model against float32 inputs and failed on dtype, while passing in isolation.
+    dt = torch.get_default_dtype()
     for spectral in (False, True):
         model = build(spectral)
+        counts = batch.carrier_counts.view(3, -1).to(dt)
         out = model._carrier_head(
-            node_feats=torch.randn(len(batch.batch), model.carrier_pooling.feature_dim),
-            counter_emb=model.counter_embedding(
-                batch.carrier_counts.view(3, -1).float()),
-            counts=batch.carrier_counts.view(3, -1).float(),
+            node_feats=torch.randn(len(batch.batch), model.carrier_pooling.feature_dim,
+                                   dtype=dt),
+            counter_emb=model.counter_embedding(counts),
+            counts=counts,
             batch=batch.batch, num_graphs=3,
             edge_index=batch.edge_index,
-            edge_length=torch.rand(batch.edge_index.shape[1], 1) * 3 + 1,
+            edge_length=torch.rand(batch.edge_index.shape[1], 1, dtype=dt) * 3 + 1,
         )
         shapes[spectral] = [tuple(t.shape) for t in out]
 

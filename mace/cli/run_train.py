@@ -86,6 +86,26 @@ def main() -> None:
     run(args)
 
 
+
+def graph_cutoff(args) -> float:
+    """Radius the neighbour graph is built at.
+
+    Normally r_max. With the spectral head this must be the CARRIER Hamiltonian's range,
+    which is longer: the two Pb that share the hole sit a median 5.32 A apart and are bridged
+    in bulk by the atom that is now the vacancy, so at r_max = 5.0 they have no edge in 64% of
+    frames and the correct two-site state cannot be represented at all.
+
+    The trunk is filtered back to r_max in MACEDefect.forward, so it sees exactly the graph it
+    always did -- and would even without the filter, since the radial cutoff sends anything
+    beyond r_max to zero. The filter only avoids paying for the extra edges.
+    """
+    if not getattr(args, "defect_spectral_head", False):
+        return float(args.r_max)
+    explicit = float(getattr(args, "defect_spectral_r_cut", 0.0) or 0.0)
+    if explicit > 0:
+        return max(float(args.r_max), explicit)
+    return float(args.r_max) * int(args.num_interactions)
+
 def run(args) -> None:
     """
     This script runs the training/fine tuning for mace
@@ -727,7 +747,7 @@ def run(args) -> None:
         if head_config.valid_file is None and head_config.collections.valid:
             valid_sets[head_config.head_name] = [
                 data.AtomicData.from_config(
-                    config, z_table=z_table, cutoff=args.r_max, heads=heads
+                    config, z_table=z_table, cutoff=graph_cutoff(args), heads=heads
                 )
                 for config in head_config.collections.valid
             ]
@@ -1269,7 +1289,7 @@ def run(args) -> None:
             for name, subset in head_config.collections.tests:
                 test_sets[head_config.head_name + "_" + name] = [
                     data.AtomicData.from_config(
-                        config, z_table=z_table, cutoff=args.r_max, heads=heads
+                        config, z_table=z_table, cutoff=graph_cutoff(args), heads=heads
                     )
                     for config in subset
                 ]
