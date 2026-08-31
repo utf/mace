@@ -236,6 +236,7 @@ class SpectralCarrierHead(nn.Module):
         edge_length: torch.Tensor,     # [n_edges]
         site_bias: Optional[torch.Tensor] = None,   # [n_nodes, C]
         node_species: Optional[torch.Tensor] = None,  # [n_nodes] element indices
+        clamp_mask: Optional[torch.Tensor] = None,  # [n_nodes] bool, DIAGNOSTIC ONLY
     ) -> SpectralOutput:
         device = node_feats.device
         n_nodes = node_feats.shape[0]
@@ -288,6 +289,33 @@ class SpectralCarrierHead(nn.Module):
         H.index_put_((edge_bc, local[src].repeat_interleave(C),
                       local[dst].repeat_interleave(C)),
                      (-t).reshape(-1).to(self.solver_dtype), accumulate=True)
+
+        # R1 clamped-state probe (DIAGNOSTIC ONLY -- production configs must refuse this).
+        #
+        # Restrict the eigenproblem to a subspace by pushing every atom OUTSIDE the mask to
+        # the padded energy. Solving on the subspace, rather than projecting afterwards, keeps
+        # the orbital composition optimal within the mask and leaves Hellmann-Feynman
+        # gradients valid -- so "how well can this head fit the forces if the carrier is
+        # forced onto these atoms?" is answered honestly for each candidate site set.
+        if clamp_mask is not None:
+            # A TRUE restriction: zero the couplings to excluded atoms and isolate them at the
+            # padded energy, so H is exactly block-diagonal and the masked block's eigenvalues
+            # are exactly those of H restricted to the mask.
+            #
+            # An energy penalty alone is not enough. Raising the excluded diagonals to 1e3
+            # while leaving the off-diagonals intact leaves second-order mixing of order
+            # t^2/dE ~ 3e-5 eV, and the state leaks off the mask by the same amount. R1
+            # compares force fits BETWEEN masks, so a systematic leak of that size is exactly
+            # the kind of bias that would make the comparison meaningless.
+            #
+            # H is [G*C, N, N] here; the reshape to [G, C, N, N] happens after the padding.
+            keep = torch.zeros(num_graphs * C, n_max, device=device,
+                               dtype=self.solver_dtype)
+            keep.index_put_((node_bc, local_rep),
+                            clamp_mask.to(self.solver_dtype).repeat_interleave(C),
+                            accumulate=True)
+            H = H * keep.unsqueeze(-1) * keep.unsqueeze(-2)
+            H = H + torch.diag_embed((1.0 - keep) * _PAD_ENERGY)
 
         # Padded slots sit far above the physical spectrum. Added after the scatters so
         # nothing can accumulate on top of them.

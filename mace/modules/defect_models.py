@@ -94,6 +94,7 @@ class MACEDefect(ScaleShiftMACE):
         spectral_decay: bool = False,
         spectral_t_min: float = 0.02,
         spectral_decay_init: float = 1.0,
+        spectral_first_shell: bool = False,
         logit_seed_gamma: float = 0.0,
         correction_trunk: str = "shared",
         use_long_range: bool = True,
@@ -180,6 +181,9 @@ class MACEDefect(ScaleShiftMACE):
         # Both heads expose the same six outputs, so every existing diagnostic keeps working:
         # `alpha` becomes sum_k w_k psi^2 and the site energy plays the role of u.
         self.spectral_head = bool(spectral_head)
+        self.spectral_first_shell = bool(spectral_first_shell)
+        self.spectral_feature_dim = (carrier_feature_dim if spectral_first_shell
+                                     else feature_dim)
         self.spectral = None
         # 0.0 means "the trunk's receptive field", r_max * num_interactions. That is the
         # natural scale: eps_i and t_ij are functions of node features that already aggregate
@@ -193,7 +197,7 @@ class MACEDefect(ScaleShiftMACE):
             from mace.modules.defect_spectral import SpectralCarrierHead
 
             self.spectral = SpectralCarrierHead(
-                feature_dim=feature_dim,
+                feature_dim=self.spectral_feature_dim,
                 counter_dim=counter_embedding_dim,
                 hidden=carrier_mlp_hidden,
                 num_states=spectral_num_states,
@@ -396,8 +400,11 @@ class MACEDefect(ScaleShiftMACE):
                 logit_bias=logit_bias,
             )
 
+        head_feats = node_feats
+        if getattr(self, "spectral_first_shell", False):
+            head_feats = node_feats[:, : self.spectral_feature_dim]
         out = self.spectral(
-            node_feats=node_feats,
+            node_feats=head_feats,
             counter_emb=counter_emb,
             counts=counts,
             batch=batch,

@@ -417,6 +417,11 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         # Explicit, not recomputed from the default: a converted model must keep the range it
         # was trained with even if the default changes, and the trunk filter keys off it.
         config["spectral_r_cut"] = float(getattr(model, "spectral_r_cut", 0.0))
+        config["spectral_decay"] = bool(getattr(model, "spectral_decay", False))
+        config["spectral_first_shell"] = bool(
+            getattr(model, "spectral_first_shell", False))
+        if getattr(model, "spectral", None) is not None:
+            config["spectral_t_min"] = float(model.spectral.t_min)
         # A buffer, so the weight transfer would carry the values -- but only if the
         # rebuilt model allocated the same shape, and it defaults to empty. Without this
         # the converted model would either fail the state-dict load or come back with the
