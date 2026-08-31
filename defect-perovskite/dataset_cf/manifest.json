@@ -1,0 +1,30 @@
+{
+  "folds": 4,
+  "seed": 0,
+  "pristine": 639,
+  "neutral_defective": 1191,
+  "charged": 1047,
+  "per_fold": {
+    "0": {
+      "train": 1379,
+      "valid": 153,
+      "null_oof": 298
+    },
+    "1": {
+      "train": 1379,
+      "valid": 153,
+      "null_oof": 298
+    },
+    "2": {
+      "train": 1379,
+      "valid": 153,
+      "null_oof": 298
+    },
+    "3": {
+      "train": 1380,
+      "valid": 153,
+      "null_oof": 297
+    }
+  },
+  "eval_qp1": 1047
+}
