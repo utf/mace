@@ -147,8 +147,10 @@ def main() -> None:
     print(f"\n=== E0 recheck: hub/bulk-Pb |dF| against the cross-fit null ===")
     print(f"  null median {nh['median']:.2f}  charged median {ch['median']:.2f}  "
           f"excess x{ch['median'] / max(nh['median'], 1e-12):.2f}")
-    print("  (E0 reported 1.9 against a 1.5-1.6 null drawn from 60 frames that did not "
-          "cover the charged d-range)")
+    print("  (E0's own null gave charged 3.93 / null 2.29 = x1.72 on seed 1 and "
+          "4.01 / 2.06 = x1.95 on seed 2, from 60 frames that did not cover the charged\n"
+          "   d-range. The 1.9 figure quoted elsewhere is R0's hub/CAGE ratio -- a different\n"
+          "   statistic, and not what this line compares against.)")
 
     payload = dict(
         bins=dict(edges=edges.tolist(), null=nb, charged=cb),
