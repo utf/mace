@@ -41,9 +41,10 @@ __all__ = ["locate_vacancy", "VacancySite"]
 class VacancySite:
     """Where the vacancy is, which Pb form its shell, and how trustworthy that is."""
 
-    def __init__(self, position, shell, cost, runner_up, n_bridges):
+    def __init__(self, position, shell, cost, runner_up, n_bridges, cage=None):
         self.position = position          # cartesian, may lie outside the cell
-        self.shell = shell                # the two Pb indices bridging the empty site
+        self.shell = shell                # "hub": the two Pb bridging the empty site
+        self.cage = cage                  # "spokes": the ten Cl ligating those two Pb
         self.cost = cost                  # nearest Cl to the vacancy bridge, A
         self.runner_up = runner_up        # same for the next-emptiest bridge, A
         self.n_bridges = n_bridges
@@ -136,9 +137,27 @@ def locate_vacancy(atoms):
 
     nearest = dist.min(axis=1)
     others = np.delete(nearest, v)
+
+    # The ligand cage: the Cl occupying the other bridges of the two vacancy-sharing Pb.
+    # Each shell Pb keeps five of its six octahedral bridges, so the cage is ten atoms.
+    #
+    # Derived from the SAME assignment that found the vacancy, rather than by a distance
+    # cutoff around each Pb: the assignment is what survives thermal distortion, and the
+    # hub/cage distinction is the whole question this cycle turns on -- a cage defined by a
+    # cutoff would blur exactly the boundary being measured.
+    #
+    # Usually ten atoms, but nine in about half of these frames: the cell is short enough
+    # that the two hub Pb are often neighbours through TWO periodic images, so they share a
+    # second bridge besides the vacancy and its Cl is counted once rather than twice. That
+    # is the structure, not a defect in the assignment.
+    hub = {int(bi[v]), int(bj[v])}
+    cl_of_bridge = {int(c): int(cl[r]) for r, c in zip(rows, cols)}
+    cage = [cl_of_bridge[b] for b in range(len(mid))
+            if b != v and ({int(bi[b]), int(bj[b])} & hub) and b in cl_of_bridge]
+
     return VacancySite(position=mid[v], shell=np.array([bi[v], bj[v]]),
                        cost=float(nearest[v]), runner_up=float(others.max()),
-                       n_bridges=len(mid))
+                       n_bridges=len(mid), cage=np.array(sorted(set(cage)), dtype=int))
 
 
 def distance_to_vacancy(atoms, site):

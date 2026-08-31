@@ -50,6 +50,7 @@ from __future__ import annotations
 
 from typing import NamedTuple, Optional
 
+import numpy as np
 import torch
 from torch import nn
 
@@ -110,6 +111,11 @@ class SpectralCarrierHead(nn.Module):
         eps_init_scale: float = 0.01,
         hop_init_scale: float = 0.05,
         solver_dtype: torch.dtype = torch.float64,
+        num_elements: int = 1,
+        use_decay: bool = False,      # H1
+        t_min: float = 0.02,          # eV, hopping floor
+        decay_r0: float = 3.0,        # A, reference distance
+        decay_init: float = 1.0,      # A, initial decay length
     ) -> None:
         super().__init__()
         self.num_channels = num_channels
@@ -118,6 +124,28 @@ class SpectralCarrierHead(nn.Module):
         self.r_cut = r_cut
         self.radial_dim = radial_dim
         self.solver_dtype = solver_dtype
+        self.use_decay = use_decay
+        self.t_min = t_min
+        self.decay_r0 = decay_r0
+
+        # Level position, held separately from the site energies (mandatory gauge anchor).
+        #
+        # eps has an exact uniform mode: adding a constant c to every site shifts every
+        # eigenvalue by c and dE_SR by n_c * c. With a trainable base that shift is partly
+        # absorbable, so eps wandered to 12-30 eV in E2 while carrying no extra information.
+        # Removing the per-frame mean kills the mode exactly, and mu_c restores the one degree
+        # of freedom that was doing real work -- where the level sits -- as a single scalar
+        # rather than as an offset smeared across N site energies.
+        self.mu = nn.Parameter(torch.zeros(num_channels))
+
+        # H1: per-species-pair decay length. The envelope says what is REACHABLE (10 A, so the
+        # hub Pb pair is coupled at all); the decay says what is actually COUPLED. Without it,
+        # a 10 A Hamiltonian is nearly a complete graph and every state is broad -- E2 at 10 A
+        # sat at participation ~37. Floored at 0.3 A so it cannot collapse to a delta.
+        if use_decay:
+            self.decay_raw = nn.Parameter(
+                torch.full((num_elements, num_elements),
+                           float(np.log(np.expm1(max(decay_init - 0.3, 1e-3))))))
 
         # Diagonal: site energies, conditioned on the carrier counters so one head serves all
         # four channels and the electron/hole distinction lives entirely in this conditioning.
@@ -143,11 +171,30 @@ class SpectralCarrierHead(nn.Module):
         return torch.sin(n * torch.pi * x) / x.clamp_min(1e-6)
 
     def _envelope(self, r: torch.Tensor) -> torch.Tensor:
-        """Polynomial cutoff going to zero with zero slope at r_cut."""
+        """Smooth truncation at r_cut: zero value and zero slope, as forces require.
+
+        Two shapes, because the envelope's job changes once H1's decay exists.
+
+        Without decay the envelope is the ONLY thing shaping the hopping with distance, so it
+        must taper: the standard (1-x)^3 (1+3x+6x^2).
+
+        With decay, the exponential does the physics and the envelope should only truncate.
+        The tapering form then actively harms: at 10 A reach it gives the worst-case hub Pb
+        pair (6.80 A) a weight of 0.19, below the 0.3 the pre-flight requires, and the check
+        failed on 10 of 60 frames. (1 - x^6)^2 is ~0.95 at the median hub separation and 0.81
+        at the worst case, while still vanishing smoothly at r_cut.
+        """
         x = (r / self.r_cut).clamp(max=1.0)
+        if self.use_decay:
+            return (1.0 - x ** 6) ** 2
         return (1.0 - x) ** 3 * (1.0 + 3.0 * x + 6.0 * x * x)
 
-    def hopping(self, feats_i, feats_j, r):
+    def decay_length(self, species_i, species_j):
+        """Per-species-pair decay length, symmetric in (i, j) and floored at 0.3 A."""
+        raw = 0.5 * (self.decay_raw + self.decay_raw.T)      # symmetric by construction
+        return 0.3 + nn.functional.softplus(raw[species_i, species_j])
+
+    def hopping(self, feats_i, feats_j, r, species_i=None, species_j=None):
         """t_ij, symmetric in (i, j) by construction rather than by penalty.
 
         The MLP is fed only symmetric functions of the pair -- the sum and the absolute
@@ -161,7 +208,22 @@ class SpectralCarrierHead(nn.Module):
         r = r.reshape(-1)
         sym = torch.cat([feats_i + feats_j, (feats_i - feats_j).abs(), self._radial(r)],
                         dim=-1)
-        return self.hop(sym) * self._envelope(r).unsqueeze(-1)
+        raw = self.hop(sym)
+
+        if not self.use_decay:
+            return raw * self._envelope(r).unsqueeze(-1)
+
+        # H1: t = [t_min + softplus(B)] * exp(-(r - r0)/l) * envelope.
+        #
+        # The floor matters as much as the decay. Without it the head can drive t to zero and
+        # recover the softmax limit -- independent site energies with no coupling -- which is
+        # the regime the spectral head exists to leave. With it, every reachable pair stays
+        # coupled by at least t_min and localisation must come from contrast, not from
+        # disconnecting the graph.
+        amp = self.t_min + nn.functional.softplus(raw)
+        ell = self.decay_length(species_i, species_j).unsqueeze(-1)
+        decay = torch.exp(-(r.unsqueeze(-1) - self.decay_r0) / ell)
+        return amp * decay * self._envelope(r).unsqueeze(-1)
 
     def forward(
         self,
@@ -173,23 +235,34 @@ class SpectralCarrierHead(nn.Module):
         edge_index: torch.Tensor,      # [2, n_edges]
         edge_length: torch.Tensor,     # [n_edges]
         site_bias: Optional[torch.Tensor] = None,   # [n_nodes, C]
+        node_species: Optional[torch.Tensor] = None,  # [n_nodes] element indices
     ) -> SpectralOutput:
         device = node_feats.device
         n_nodes = node_feats.shape[0]
         C = self.num_channels
 
-        eps = self.site(torch.cat([node_feats, counter_emb[batch]], dim=-1))   # [n, C]
+        eps_raw = self.site(torch.cat([node_feats, counter_emb[batch]], dim=-1))   # [n, C]
         if site_bias is not None:
-            eps = eps + site_bias
+            eps_raw = eps_raw + site_bias
+
+        # Gauge anchor: remove the per-frame uniform mode exactly. Undetached, so the mean
+        # itself carries gradient and the constraint is structural rather than a penalty.
+        counts_per_graph = torch.bincount(batch, minlength=num_graphs).clamp_min(1)
+        mean_eps = (torch.zeros(num_graphs, C, device=device, dtype=eps_raw.dtype)
+                    .index_add_(0, batch, eps_raw) / counts_per_graph.unsqueeze(-1))
+        eps = eps_raw - mean_eps[batch]
 
         src, dst = edge_index[0], edge_index[1]
-        t = self.hopping(node_feats[src], node_feats[dst], edge_length)        # [e, C]
+        if self.use_decay and node_species is None:
+            raise ValueError("H1 decay needs node_species; the head was given none")
+        t = self.hopping(node_feats[src], node_feats[dst], edge_length,
+                         None if node_species is None else node_species[src],
+                         None if node_species is None else node_species[dst])   # [e, C]
 
         # Pack the per-graph Hamiltonians into a padded dense batch. Training cells here are
         # 79-398 atoms, so dense `eigh` is exact, millisecond-scale, and differentiates
         # cleanly -- and the smearing below regularises the eigenvalue crossings that make
         # eigendecomposition derivatives delicate.
-        counts_per_graph = torch.bincount(batch, minlength=num_graphs)
         n_max = int(counts_per_graph.max())
         offsets = torch.cumsum(counts_per_graph, 0) - counts_per_graph
         local = torch.arange(n_nodes, device=device) - offsets[batch]          # index in cell
@@ -240,7 +313,10 @@ class SpectralCarrierHead(nn.Module):
         # honest answer for a pristine cell, not a failure to be forced.
         w = torch.softmax(-lam / self.smearing, dim=-1)
 
-        carrier_energy = (w * lam).sum(-1)                     # [G, C]
+        # dE_SR = n_c * (lambda + mu_c). lambda now measures the level RELATIVE to the frame's
+        # mean site energy, because the uniform mode was removed; mu_c carries its absolute
+        # position as one learned scalar per channel.
+        carrier_energy = (w * lam).sum(-1) + self.mu.to(lam.dtype).unsqueeze(0)   # [G, C]
         delta_sr = (counts.to(carrier_energy.dtype) * carrier_energy).sum(-1)
 
         dens = (psi.pow(2) * w.unsqueeze(-2)).sum(-1)          # [G, C, N]

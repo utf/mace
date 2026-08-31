@@ -1,0 +1,10 @@
+{
+  "purpose": "E0 diagnostic / Stage A base training",
+  "source": "/home/alex/src/mace/.claude/worktrees/size-extensivity/defect-perovskite/dataset_pbe",
+  "null_split_seed": 0,
+  "train_n0": 1616,
+  "valid_n0": 154,
+  "eval_qp1": 1047,
+  "eval_q0_null": 60,
+  "note": "Null frames are held out of valid.xyz so they take no part in checkpoint selection; the (+) map is only meaningful as an excess over this null."
+}

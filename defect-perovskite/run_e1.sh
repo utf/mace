@@ -22,7 +22,16 @@ REPO="$(cd "${HERE}/.." && pwd)"
 export PATH="$HOME/micromamba/envs/py13/bin:$PATH"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 DATA="${DATA:-$HERE/dataset_pbe}"
-CONCURRENCY="${CONCURRENCY:-4}"
+SEEDS="${SEEDS:-1 2 3 4 5 6 7 8}"
+# GPUS_LIST empty means "one device, whatever CUDA picks" -- the single-GPU workstation.
+# Setting it pins one explicit device per run so several cards can share the arm.
+GPUS=(${GPUS_LIST:-})
+RUNS_PER_GPU="${RUNS_PER_GPU:-1}"
+if [ ${#GPUS[@]} -gt 0 ]; then
+    CONCURRENCY=$(( ${#GPUS[@]} * RUNS_PER_GPU ))
+else
+    CONCURRENCY="${CONCURRENCY:-4}"
+fi
 
 # Alternate the two Stage-A bases across seeds so the arm's rate is not a property of one
 # base. They agreed closely in E0 (shell/bulk 3.93 vs 4.01) so this should not matter -- which
@@ -37,10 +46,12 @@ mkdir -p "$HOME/runs"
 echo "code: $(git -C "$REPO" rev-parse --short HEAD) dirty=$(git -C "$REPO" status --porcelain | wc -l) files"
 
 run () {
-    local seed="$1" name="e1_s$1"
+    local seed="$1" gpu="${2:-}" name="e1_s$1"
     local base="$BASE1"
     [ $((seed % 2)) -eq 0 ] && base="$BASE2"
     rm -rf "$HOME/runs/$name" "$HOME/runs/${name}.log"
+    (
+    [ -n "$gpu" ] && export CUDA_VISIBLE_DEVICES="$gpu"
     NAME="$name" WORK_DIR="$HOME/runs/$name" DATA_DIR="$DATA" \
     MACE_REPO="$REPO" \
     MAX_NUM_EPOCHS="${EPOCHS:-140}" NUM_CHANNELS="${CHANNELS:-128}" MAX_L=1 \
@@ -56,12 +67,17 @@ run () {
     DEFECT_BASE_INIT="$base" BASE_LR_FACTOR=0.0 \
     DEFECT_SIZE_WEIGHT="${SIZE_WEIGHT:-1e-4}" DEFECT_SIZE_WARMUP_EPOCHS=20 \
     "${HERE}/../defect-example/train_defect_model.sh" > "$HOME/runs/${name}.log" 2>&1
+    )
     echo "  e1_s${seed} done (exit $?) base=$(basename "$base")"
 }
 
 pids=()
-for seed in $(seq 1 8); do
-    run "$seed" &
+i=0
+for seed in $SEEDS; do
+    gpu=""
+    [ ${#GPUS[@]} -gt 0 ] && gpu=${GPUS[$(( i % ${#GPUS[@]} ))]}
+    i=$(( i + 1 ))
+    run "$seed" "$gpu" &
     pids+=($!)
     sleep 15
     while [ "$(jobs -rp | wc -l)" -ge "$CONCURRENCY" ]; do sleep 20; done

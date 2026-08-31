@@ -91,6 +91,9 @@ class MACEDefect(ScaleShiftMACE):
         spectral_num_states: int = 6,
         spectral_smearing: float = 0.020,
         spectral_r_cut: float = 0.0,
+        spectral_decay: bool = False,
+        spectral_t_min: float = 0.02,
+        spectral_decay_init: float = 1.0,
         logit_seed_gamma: float = 0.0,
         correction_trunk: str = "shared",
         use_long_range: bool = True,
@@ -196,7 +199,12 @@ class MACEDefect(ScaleShiftMACE):
                 num_states=spectral_num_states,
                 smearing=spectral_smearing,
                 r_cut=self.spectral_r_cut,
+                num_elements=int(kwargs["num_elements"]),
+                use_decay=bool(spectral_decay),
+                t_min=float(spectral_t_min),
+                decay_init=float(spectral_decay_init),
             )
+        self.spectral_decay = bool(spectral_decay)
 
         self.carrier_pooling = CarrierAttentionPooling(
             feature_dim=feature_dim,
@@ -353,6 +361,7 @@ class MACEDefect(ScaleShiftMACE):
         edge_index: torch.Tensor,
         edge_length: torch.Tensor,
         logit_bias: Optional[torch.Tensor] = None,
+        node_species: Optional[torch.Tensor] = None,
     ):
         """Either carrier head, behind one signature.
 
@@ -396,6 +405,7 @@ class MACEDefect(ScaleShiftMACE):
             edge_index=edge_index,
             edge_length=edge_length,
             site_bias=None if logit_bias is None else -logit_bias,
+            node_species=node_species,
         )
         # delta_u is the spread of the occupied state's site energy over its own support: the
         # spectral analogue of "how much does u vary where alpha lives".
@@ -456,6 +466,7 @@ class MACEDefect(ScaleShiftMACE):
         # r_max here. Filtering is an optimisation rather than a correctness fix: the radial
         # cutoff already sends contributions beyond r_max to exactly zero, so the trunk's
         # result is identical either way -- it just avoids paying for 8x the edges.
+        head_species = data["node_attrs"].argmax(dim=-1)
         head_edge_index, head_lengths = data["edge_index"], lengths
         # getattr for the same reason as in _carrier_head: checkpoints pickled before these
         # attributes existed restore without them. Plain access here reintroduced exactly the
@@ -606,6 +617,7 @@ class MACEDefect(ScaleShiftMACE):
             num_graphs=num_graphs,
             edge_index=head_edge_index,
             edge_length=head_lengths,
+            node_species=head_species,
             logit_bias=logit_bias,
         )
         # Intrinsic gap: the same pooling with the seed switched off, so the logged gap
@@ -668,6 +680,7 @@ class MACEDefect(ScaleShiftMACE):
             num_graphs=num_graphs,
             edge_index=head_edge_index,
             edge_length=head_lengths,
+            node_species=head_species,
             logit_bias=logit_bias,
         )
 
