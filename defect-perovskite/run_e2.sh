@@ -25,6 +25,9 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 DATA="${DATA:-$HERE/dataset_pbe}"
 GPUS=(${GPUS_LIST:-0 1 2 3})          # four devices, never more
 RUNS_PER_GPU="${RUNS_PER_GPU:-2}"
+# Name prefix, so a rerun at a different Hamiltonian range does not overwrite the one it
+# is being compared against.
+ARM="${ARM:-e2}"
 CONCURRENCY=$(( ${#GPUS[@]} * RUNS_PER_GPU ))
 
 mkdir -p "$HOME/runs"
@@ -32,7 +35,7 @@ echo "code: $(git -C "$REPO" rev-parse --short HEAD) dirty=$(git -C "$REPO" stat
 echo "using GPUs: ${GPUS[*]} -- ${RUNS_PER_GPU} run(s) each, ${CONCURRENCY} concurrent"
 
 run () {
-    local seed="$1" gpu="$2" name="e2_s$1"
+    local seed="$1" gpu="$2" name="${ARM}_s$1"
     rm -rf "$HOME/runs/$name" "$HOME/runs/${name}.log"
     CUDA_VISIBLE_DEVICES="$gpu" \
     NAME="$name" WORK_DIR="$HOME/runs/$name" DATA_DIR="$DATA" \
@@ -50,7 +53,7 @@ run () {
     DEFECT_SEED_ANNEAL=False DEFECT_LOGIT_SEED_GAMMA=0.0 \
     DEFECT_SIZE_WEIGHT=0.0 \
     "${HERE}/../defect-example/train_defect_model.sh" > "$HOME/runs/${name}.log" 2>&1
-    echo "  e2_s${seed} done (exit $?) gpu=${gpu}"
+    echo "  ${ARM}_s${seed} done (exit $?) gpu=${gpu}"
 }
 
 pids=()
@@ -64,4 +67,4 @@ for seed in $(seq 1 8); do
     while [ "$(jobs -rp | wc -l)" -ge "$CONCURRENCY" ]; do sleep 20; done
 done
 wait "${pids[@]}"
-echo "E2 complete"
+echo "${ARM} complete"
