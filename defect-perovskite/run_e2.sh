@@ -10,9 +10,13 @@
 # is N-independent by construction, so the size ladder verifies that property rather than a
 # hinge enforcing it, and there are no logits to seed.
 #
-# GPU BUDGET: four at a time on this machine, by instruction. CUDA_VISIBLE_DEVICES is set per
-# run to one explicit device, so four runs never contend for the same card and nothing
-# enumerates a device this arm was not given.
+# GPU BUDGET: four devices at a time on this machine, by instruction. CUDA_VISIBLE_DEVICES is
+# set per run to one explicit device, so nothing enumerates a card this arm was not given.
+#
+# DEVICE COUNT AND PROCESS COUNT ARE SEPARATE. Measured with four runs going: 25-34% GPU
+# utilisation, 2.7 GB of 24 GB per run, CPU load 4.3 of 32 cores. These runs are nowhere near
+# GPU-bound, so packing two per card fits all eight seeds into a single pass -- still four
+# devices, roughly half the wall-clock.
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${HERE}/.." && pwd)"
@@ -20,11 +24,12 @@ export PATH="$HOME/micromamba/envs/py13/bin:$PATH"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 DATA="${DATA:-$HERE/dataset_pbe}"
 GPUS=(${GPUS_LIST:-0 1 2 3})          # four devices, never more
-CONCURRENCY=${#GPUS[@]}
+RUNS_PER_GPU="${RUNS_PER_GPU:-2}"
+CONCURRENCY=$(( ${#GPUS[@]} * RUNS_PER_GPU ))
 
 mkdir -p "$HOME/runs"
 echo "code: $(git -C "$REPO" rev-parse --short HEAD) dirty=$(git -C "$REPO" status --porcelain | wc -l) files"
-echo "using GPUs: ${GPUS[*]} (${CONCURRENCY} concurrent)"
+echo "using GPUs: ${GPUS[*]} -- ${RUNS_PER_GPU} run(s) each, ${CONCURRENCY} concurrent"
 
 run () {
     local seed="$1" gpu="$2" name="e2_s$1"
@@ -50,7 +55,9 @@ run () {
 
 pids=()
 for seed in $(seq 1 8); do
-    gpu=${GPUS[$(( (seed - 1) % CONCURRENCY ))]}
+    # Round-robin over DEVICES, not over the concurrency limit, so with 8 seeds and 4 cards
+    # each card gets exactly two.
+    gpu=${GPUS[$(( (seed - 1) % ${#GPUS[@]} ))]}
     run "$seed" "$gpu" &
     pids+=($!)
     sleep 15
