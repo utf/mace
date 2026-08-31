@@ -1198,6 +1198,12 @@ def get_params_options(
         "carrier_pooling",
         "defect_feature_readouts",
         "latent_charges",
+        # The spectral head. Omitting it left its 12 parameters in no group at all, so the
+        # Hamiltonian would have stayed at initialisation for the entire run -- and a
+        # near-flat eps with small hopping is exactly what "no bound state anywhere" looks
+        # like, so both spectral arms would have completed and reported that component H does
+        # not localise. The orphan guard below caught it on the first real run.
+        "spectral",
     ):
         module = getattr(model, module_name, None)
         if module is not None:

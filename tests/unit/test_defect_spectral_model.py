@@ -133,6 +133,47 @@ def test_config_extractor_preserves_the_head():
     assert extract_config_mace_model(build(False))["spectral_head"] is False
 
 
+def test_spectral_parameters_reach_an_optimizer_group():
+    """Every spectral parameter must be in a group, or the Hamiltonian never trains.
+
+    This is the failure the repo's orphan guard caught on the first real run: the head's 12
+    tensors were in no group, so eps and t would have stayed at initialisation for the whole
+    arm. That state -- near-flat site energies, small hopping -- is exactly what "no bound
+    state anywhere" looks like, so E2 and E3 would have run to completion and reported that
+    component H does not localise. A silent wrong answer, not a crash.
+    """
+    import argparse
+
+    from mace.tools.arg_parser import build_default_arg_parser
+    from mace.tools.scripts_utils import get_params_options
+
+    model = build(True)
+    # Take every default from the real parser rather than listing the handful this function
+    # happens to read today: that list has already grown twice while writing this test, and
+    # a stale hand-built namespace fails on an unrelated attribute rather than on the thing
+    # under test.
+    defaults = {a.dest: a.default for a in build_default_arg_parser()._actions}
+    args = argparse.Namespace(**defaults)
+    args.lr = 0.01
+    options = get_params_options(args, model)
+
+    covered = {id(p) for g in options["params"] for p in g["params"]}
+    orphans = [n for n, p in model.named_parameters()
+               if p.requires_grad and id(p) not in covered]
+    assert not orphans, f"parameters in no optimizer group: {orphans}"
+
+    spectral_ids = {id(p) for p in model.spectral.parameters()}
+    assert spectral_ids <= covered, "spectral head is not covered"
+
+    # And it must not land in a base group, or Stage B's frozen base would freeze it too.
+    base_groups = {"embedding", "interactions_decay", "interactions_no_decay",
+                   "products", "readouts"}
+    for g in options["params"]:
+        if g.get("name") in base_groups:
+            assert not (spectral_ids & {id(p) for p in g["params"]}), \
+                "spectral head is in a base group and would be frozen by Stage B"
+
+
 def test_checkpoint_predating_the_spectral_head_still_runs():
     """Models are persisted by pickling the module, so a checkpoint written before
     `spectral_head` existed restores without that attribute. Every model trained up to the
