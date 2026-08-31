@@ -5,7 +5,10 @@
 # because the base cannot adapt to charged geometries at all; a joint base launders the site
 # signal. So: Stage-A init, base LR = 0 through epoch 30 (passing seeds settle by ~30), then
 # base LR = 0.01x head LR. The drift guard (in run_train) reverts the base to its epoch-30
-# weights if validation hub mass falls by more than 0.05 after release.
+# weights if localisation degrades after release. Its triggers are LABEL-FREE -- alpha overlap,
+# N_eff, active/null ratio -- not hub mass: keying it on hub mass would put the vacancy
+# assignment into a training decision. The guard arms only if the carrier is localised at the
+# release epoch, since otherwise a rollback protects nothing.
 #
 # Gauge: T5 penalty, not the mean subtraction -- the subtraction made lambda cell-size
 # dependent at ~2.6 meV across the ladder, against a <= 1 meV gate.
