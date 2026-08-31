@@ -117,8 +117,14 @@ def test_both_heads_return_identically_shaped_outputs():
             edge_index=batch.edge_index,
             edge_length=torch.rand(batch.edge_index.shape[1], 1, dtype=dt) * 3 + 1,
         )
-        shapes[spectral] = [tuple(t.shape) for t in out]
+        # The last element is an extras dict (eps_mean for the gauge penalty), not a tensor.
+        # Both heads must still return the same arity, or the three call sites in forward
+        # would need head-specific unpacking.
+        assert isinstance(out[-1], dict), "extras slot is not a dict"
+        shapes[spectral] = [tuple(t.shape) for t in out[:-1]]
+        shapes[(spectral, "arity")] = len(out)
 
+    assert shapes[(False, "arity")] == shapes[(True, "arity")], "heads differ in arity"
     for i, (a, b) in enumerate(zip(shapes[False], shapes[True])):
         assert a == b, f"output {i} differs: attention {a} vs spectral {b}"
 

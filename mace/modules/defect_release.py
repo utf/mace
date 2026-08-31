@@ -54,6 +54,7 @@ class BaseRelease:
         self.snapshot: Optional[Dict[str, torch.Tensor]] = None
         self.released = False
         self.reverted = False
+        self.armed = False
 
     def _base_state(self):
         from mace.modules.defect_stage import is_correction_param, is_bookkeeping
@@ -81,9 +82,18 @@ class BaseRelease:
         self.reference = dict(state or {})
         self.snapshot = {n: p.detach().clone() for n, p in self._base_state().items()}
         self._set_base_lr(self.release_factor, base_lr)
+
+        # Arm only if there is localisation to protect. If the carrier is still spread at the
+        # release epoch -- null ratio already past its threshold -- then rolling the base back
+        # later preserves nothing and merely freezes the base for the rest of the run. Better
+        # to let it train and say so.
+        ratio = self.reference.get("null_ratio")
+        self.armed = not (ratio is not None and ratio > self.null_ratio_max)
         logging.info(
             f"Base released at epoch {epoch} with lr factor {self.release_factor}; "
-            f"reference state {self.reference}")
+            f"reference state {self.reference}; guard "
+            f"{'armed' if self.armed else 'NOT armed (carrier not localised at release, '
+               'so there is nothing for a rollback to protect)'}")
 
     def _trigger(self, state: Dict[str, float]) -> Optional[str]:
         """Which label-free condition, if any, says the carrier moved."""
@@ -104,7 +114,11 @@ class BaseRelease:
     def on_epoch_end(self, epoch: int,
                      state: Optional[Dict[str, float]] = None) -> None:
         """Roll the base back if releasing it cost the carrier its localisation."""
-        if not self.released or self.reverted or self.snapshot is None or not state:
+        # Never on the release epoch itself: start and end are called in the same hook, so
+        # checking here would compare the reference against itself with zero epochs of drift
+        # -- which fired an immediate rollback the first time this ran.
+        if (not self.released or not self.armed or self.reverted
+                or self.snapshot is None or not state or epoch <= self.release_epoch):
             return
         reason = self._trigger(state)
         if reason is None:

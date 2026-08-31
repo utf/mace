@@ -100,6 +100,37 @@ def test_revert_on_null_ratio():
     assert rel.reverted
 
 
+def test_no_revert_on_the_release_epoch_itself():
+    """Release and check happen in the same hook call, so the first comparison would be the
+    reference against itself with zero epochs of drift. The first real smoke run did exactly
+    that and rolled back instantly."""
+    model, opt, rel = make()
+    rel.on_epoch_start(30, base_lr=0.01, state=SETTLED)
+    rel.on_epoch_end(30, state=dict(alpha_overlap=0.1, n_eff=99.0, null_ratio=0.99))
+    assert not rel.reverted
+    assert base_lr(opt) > 0.0, "base was refrozen on the release epoch"
+
+
+def test_guard_does_not_arm_when_nothing_is_localised_at_release():
+    """A guard exists to protect localisation. If the carrier is still spread when the base
+    is released, a later rollback preserves nothing and just freezes the base for the rest of
+    the run -- so the guard stays disarmed and says so."""
+    model, opt, rel = make()
+    rel.on_epoch_start(30, base_lr=0.01,
+                       state=dict(alpha_overlap=1.0, n_eff=64.0, null_ratio=0.87))
+    assert rel.released
+    assert not rel.armed
+    rel.on_epoch_end(35, state=dict(alpha_overlap=0.1, n_eff=99.0, null_ratio=0.99))
+    assert not rel.reverted, "disarmed guard fired anyway"
+    assert base_lr(opt) > 0.0, "base was frozen despite the guard being disarmed"
+
+
+def test_guard_arms_when_the_carrier_is_localised_at_release():
+    model, opt, rel = make()
+    rel.on_epoch_start(30, base_lr=0.01, state=SETTLED)
+    assert rel.armed
+
+
 def test_revert_leaves_the_correction_alone():
     """Only the base is under the guard; the head keeps whatever it learned."""
     model, opt, rel = make()

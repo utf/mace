@@ -399,14 +399,18 @@ class MACEDefect(ScaleShiftMACE):
         # trained up to now -- A0, the Stage-A bases, every historical run -- is in that
         # category, and plain access raises AttributeError on all of them.
         if not getattr(self, "spectral_head", False):
-            return self.carrier_pooling(
+            # Same six outputs as always, plus an empty extras dict so both heads return the
+            # same arity. The extras carry eps_mean for the gauge penalty; returning it beats
+            # stashing it on the module, which put a graph-connected tensor in __dict__ and
+            # broke deepcopy -- and therefore the cuEq conversion at the end of every run.
+            return tuple(self.carrier_pooling(
                 node_feats=node_feats,
                 counter_emb=counter_emb,
                 counts=counts,
                 batch=batch,
                 num_graphs=num_graphs,
                 logit_bias=logit_bias,
-            )
+            )) + ({},)
 
         head_feats = node_feats
         if getattr(self, "spectral_first_shell", False):
@@ -437,9 +441,8 @@ class MACEDefect(ScaleShiftMACE):
         mean_eps = scatter_sum(out.site_energy, batch, dim=0,
                                dim_size=num_graphs) / node_count
         delta_u = weighted - mean_eps
-        self._last_eps_mean = out.eps_mean
         return (out.delta_sr, out.alpha, out.site_energy, out.gap, delta_u,
-                out.site_energy)
+                out.site_energy, {"eps_mean": out.eps_mean})
 
     def forward(  # pylint: disable=too-many-branches
         self,
@@ -632,6 +635,7 @@ class MACEDefect(ScaleShiftMACE):
             logit_gap,
             delta_u,
             carrier_logits,
+            head_extras,
         ) = self._carrier_head(
             node_feats=defect_feats,
             counter_emb=counter_emb,
@@ -653,7 +657,8 @@ class MACEDefect(ScaleShiftMACE):
         logit_gap_intrinsic: Optional[torch.Tensor] = None
         logits_intrinsic: Optional[torch.Tensor] = None
         if self.logit_seed:
-            _, _, _, logit_gap_intrinsic, _, logits_intrinsic = self._carrier_head(
+            (_, _, _, logit_gap_intrinsic, _, logits_intrinsic,
+             _) = self._carrier_head(
                 node_feats=defect_feats,
                 counter_emb=counter_emb,
                 counts=counts,
@@ -697,7 +702,7 @@ class MACEDefect(ScaleShiftMACE):
             gauge_mean_u = torch.stack(gauge_list, dim=1)  # [n_graphs, K, 4]
 
         counter_emb_ref = self.counter_embedding(counts_ref)
-        delta_sr_ref, alpha_ref, _, _, _, _ = self._carrier_head(
+        delta_sr_ref, alpha_ref, _, _, _, _, _ = self._carrier_head(
             node_feats=defect_feats,
             counter_emb=counter_emb_ref,
             counts=counts_ref,
@@ -910,7 +915,7 @@ class MACEDefect(ScaleShiftMACE):
             "carrier_alpha": alpha,
             # T5: the per-frame mean site energy, so the loss can pin the gauge with a
             # penalty rather than by subtraction (which made lambda size-dependent).
-            "carrier_eps_mean": getattr(self, "_last_eps_mean", None),
+            "carrier_eps_mean": head_extras.get("eps_mean"),
             # The exact inputs the correction readouts consume, exposed so that seeding
             # and diagnostics do not have to re-derive the trunk (defect_seed.py).
             "defect_features": defect_feats,

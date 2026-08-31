@@ -420,6 +420,13 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         config["spectral_decay"] = bool(getattr(model, "spectral_decay", False))
         config["spectral_first_shell"] = bool(
             getattr(model, "spectral_first_shell", False))
+        # sigma and the gauge penalty were omitted here while being correctly wired
+        # everywhere else, so training had them ON and the SAVED model -- rebuilt from
+        # this config during the cuEq conversion -- silently had them OFF. Every
+        # downstream score would have been of a different model than the one trained.
+        config["spectral_sigma"] = bool(getattr(model, "spectral_sigma", False))
+        config["spectral_gauge_penalty"] = bool(
+            getattr(model, "spectral_gauge_penalty", False))
         if getattr(model, "spectral", None) is not None:
             config["spectral_t_min"] = float(model.spectral.t_min)
         # A buffer, so the weight transfer would carry the values -- but only if the

@@ -1231,6 +1231,59 @@ def run(args) -> None:
         with torch.no_grad():
             _target.current_epoch.fill_(int(start_epoch))
 
+
+    # Two-timescale base (plan T4): frozen while attention settles, then released slowly,
+    # with a LABEL-FREE rollback guard. Built only when a release epoch is configured, so
+    # every other run is untouched.
+    base_release = None
+    if int(getattr(args, "defect_base_release_epoch", 0)) > 0:
+        from mace.modules.defect_release import BaseRelease
+
+        base_release = BaseRelease(
+            model, optimizer,
+            release_epoch=int(args.defect_base_release_epoch),
+            release_factor=float(args.defect_base_release_factor),
+        )
+        logging.info(
+            f"Base release scheduled at epoch {args.defect_base_release_epoch} "
+            f"with factor {args.defect_base_release_factor}")
+
+    def _release_hook(epoch, _model, _opt, eval_metrics):
+        """Release and guard, on label-free diagnostics only.
+
+        alpha_overlap is computed by the model's own diagnostics against the attention
+        recorded at the release epoch; n_eff and the active/null channel ratio come from the
+        same per-epoch carrier metrics that are already logged. None of them needs the
+        vacancy assignment.
+        """
+        if base_release is None:
+            return
+        state = {}
+        for key, name in (("defect_n_eff", "n_eff"),
+                          ("defect_null_ratio", "null_ratio")):
+            value = eval_metrics.get(key)
+            if value is not None:
+                state[name] = float(value)
+
+        # alpha_overlap: cosine similarity between the current attention over the validation
+        # set and the attention at the release epoch. The vector bookkeeping lives here so
+        # BaseRelease keeps a float-only interface; the reference is captured on the first
+        # call at or after the release epoch, which is the same epoch BaseRelease snapshots
+        # the base weights.
+        vec = eval_metrics.get("defect_alpha_vec")
+        if vec is not None:
+            vec = vec.detach().reshape(-1).float()
+            ref = getattr(_release_hook, "_alpha_ref", None)
+            if ref is not None and ref.numel() == vec.numel():
+                denom = float(ref.norm() * vec.norm())
+                if denom > 0:
+                    state["alpha_overlap"] = float((ref @ vec) / denom)
+            if ref is None and epoch >= int(args.defect_base_release_epoch):
+                _release_hook._alpha_ref = vec.clone()
+
+        base_release.on_epoch_start(epoch, base_lr=float(args.lr), state=state)
+        base_release.on_epoch_end(epoch, state=state)
+
     tools.train(
         model=model,
         loss_fn=loss_fn,
@@ -1259,6 +1312,7 @@ def run(args) -> None:
         rank=rank,
         data_aug_magmom=args.data_aug_magmom,
         epoch_hook=defect_seed_hook,
+        post_eval_hook=_release_hook,
     )
 
     logging.info("")

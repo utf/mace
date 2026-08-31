@@ -132,6 +132,9 @@ class SpectralCarrierHead(nn.Module):
         self.t_min = t_min
         self.decay_r0 = decay_r0
         self.gauge_penalty = gauge_penalty
+        # Bandwidth anneal factor, set per epoch from outside. A buffer so it travels
+        # with the model and is visible in checkpoints rather than being a hidden global.
+        self.register_buffer("hop_scale", torch.ones(()))
 
         # Level position, held separately from the site energies (mandatory gauge anchor).
         #
@@ -262,7 +265,7 @@ class SpectralCarrierHead(nn.Module):
         raw = self.hop(sym)
 
         if not self.use_decay:
-            return raw * self._envelope(r).unsqueeze(-1)
+            return self.hop_scale * raw * self._envelope(r).unsqueeze(-1)
 
         # H1: t = [t_min + softplus(B)] * exp(-(r - r0)/l) * envelope.
         #
@@ -274,7 +277,7 @@ class SpectralCarrierHead(nn.Module):
         amp = self.t_min + nn.functional.softplus(raw)
         ell = self.decay_length(species_i, species_j).unsqueeze(-1)
         decay = torch.exp(-(r.unsqueeze(-1) - self.decay_r0) / ell)
-        return amp * decay * self._envelope(r).unsqueeze(-1)
+        return self.hop_scale * amp * decay * self._envelope(r).unsqueeze(-1)
 
     def forward(
         self,

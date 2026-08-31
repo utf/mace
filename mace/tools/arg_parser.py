@@ -1150,6 +1150,31 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=False,
     )
     parser.add_argument(
+        "--defect_spectral_decay",
+        help="H1: physical hopping decay with a floor, t = [t_min + softplus(B)] * "
+        "exp(-(r - r0)/l) * envelope, with per-species-pair decay lengths. Without it a 10 A "
+        "Hamiltonian is nearly a complete graph and every state is broad",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--defect_spectral_first_shell",
+        help="H2: build the site energies and hopping prefactor from first-interaction-block "
+        "features rather than the concatenation of all blocks. On-site energies are local in "
+        "every tight-binding model, and final-layer features carry the whole receptive field, "
+        "which lets the head place alpha away from where its own forces act",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--defect_spectral_sigma",
+        help="H3: dangling-orbital sigma term. Couples atoms whose coordination gaps face "
+        "each other, which is the vacancy pair and essentially nothing else. Geometry only; "
+        "silent for substitutionals by construction",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
         "--defect_spectral_r_cut",
         help="Range of the carrier Hamiltonian, in Angstrom. 0 means the trunk's receptive "
         "field (r_max * num_interactions), which is the natural scale: the site energies and "
@@ -1160,6 +1185,35 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         "built at this cutoff and the trunk filtered back to r_max",
         type=float,
         default=0.0,
+    )
+    parser.add_argument(
+        "--defect_base_release_epoch",
+        help="Epoch at which the frozen Stage-A base is released to a slow learning rate "
+        "(plan T4). 0 disables the two-timescale schedule entirely. Passing seeds settle by "
+        "~30, so releasing there adapts the base without letting it re-absorb the site "
+        "signal during the epochs that decide localisation",
+        type=int,
+        default=0,
+    )
+    parser.add_argument(
+        "--defect_base_release_factor",
+        help="Base learning rate after release, as a multiple of the head's",
+        type=float,
+        default=0.01,
+    )
+    parser.add_argument(
+        "--defect_spectral_anneal_s0",
+        help="Bandwidth anneal: all hoppings are scaled by s0^(1 - e/E_a) for e <= E_a, "
+        "then 1. Starting wide and narrowing lets a level separate from the band gradually "
+        "rather than having to tunnel out of a converged solution. 0 disables it",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--defect_spectral_anneal_epochs",
+        help="E_a for the bandwidth anneal",
+        type=int,
+        default=20,
     )
     parser.add_argument(
         "--defect_eps_gauge_weight",

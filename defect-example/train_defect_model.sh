@@ -249,6 +249,21 @@ DEFECT_BASE_INIT="${DEFECT_BASE_INIT:-}"
 # size ladder verifies that property rather than a hinge enforcing it, and there are no
 # logits to seed.
 DEFECT_SPECTRAL_HEAD="${DEFECT_SPECTRAL_HEAD:-False}"
+DEFECT_SPECTRAL_DECAY="${DEFECT_SPECTRAL_DECAY:-False}"
+DEFECT_SPECTRAL_FIRST_SHELL="${DEFECT_SPECTRAL_FIRST_SHELL:-False}"
+DEFECT_SPECTRAL_SIGMA="${DEFECT_SPECTRAL_SIGMA:-False}"
+DEFECT_SPECTRAL_GAUGE_PENALTY="${DEFECT_SPECTRAL_GAUGE_PENALTY:-False}"
+DEFECT_EPS_GAUGE_WEIGHT="${DEFECT_EPS_GAUGE_WEIGHT:-0.0}"
+DEFECT_SPECTRAL_ANNEAL_S0="${DEFECT_SPECTRAL_ANNEAL_S0:-0.0}"
+DEFECT_SPECTRAL_ANNEAL_EPOCHS="${DEFECT_SPECTRAL_ANNEAL_EPOCHS:-20}"
+# Two-timescale base (plan T4). 0 keeps the base frozen for the whole run.
+DEFECT_BASE_RELEASE_EPOCH="${DEFECT_BASE_RELEASE_EPOCH:-0}"
+DEFECT_BASE_RELEASE_FACTOR="${DEFECT_BASE_RELEASE_FACTOR:-0.01}"
+DEFECT_SPECTRAL_R_CUT="${DEFECT_SPECTRAL_R_CUT:-0.0}"
+# Pre-existing gaps: both flags have been in the parser without the launcher ever
+# passing them, so every run has silently used their defaults.
+DEFECT_SIZE_EMA="${DEFECT_SIZE_EMA:-0.0}"
+DEFECT_TOTALS_DETACH_BASE="${DEFECT_TOTALS_DETACH_BASE:-False}"
 DEFECT_SPECTRAL_STATES="${DEFECT_SPECTRAL_STATES:-6}"
 DEFECT_SPECTRAL_SMEARING="${DEFECT_SPECTRAL_SMEARING:-0.020}"
 # cuEquivariance acceleration of the trunk. Verified numerically identical to e3nn for
@@ -370,6 +385,18 @@ python -m mace.cli.run_train \
     --defect_zero_u_init="${DEFECT_ZERO_U_INIT}" \
     ${DEFECT_BASE_INIT:+--defect_base_init="${DEFECT_BASE_INIT}"} \
     --defect_spectral_head="${DEFECT_SPECTRAL_HEAD}" \
+    --defect_spectral_r_cut="${DEFECT_SPECTRAL_R_CUT}" \
+    --defect_size_ema="${DEFECT_SIZE_EMA}" \
+    --defect_totals_detach_base="${DEFECT_TOTALS_DETACH_BASE}" \
+    --defect_spectral_decay="${DEFECT_SPECTRAL_DECAY}" \
+    --defect_spectral_first_shell="${DEFECT_SPECTRAL_FIRST_SHELL}" \
+    --defect_spectral_sigma="${DEFECT_SPECTRAL_SIGMA}" \
+    --defect_spectral_gauge_penalty="${DEFECT_SPECTRAL_GAUGE_PENALTY}" \
+    --defect_eps_gauge_weight="${DEFECT_EPS_GAUGE_WEIGHT}" \
+    --defect_spectral_anneal_s0="${DEFECT_SPECTRAL_ANNEAL_S0}" \
+    --defect_spectral_anneal_epochs="${DEFECT_SPECTRAL_ANNEAL_EPOCHS}" \
+    --defect_base_release_epoch="${DEFECT_BASE_RELEASE_EPOCH}" \
+    --defect_base_release_factor="${DEFECT_BASE_RELEASE_FACTOR}" \
     --defect_spectral_states="${DEFECT_SPECTRAL_STATES}" \
     --defect_spectral_smearing="${DEFECT_SPECTRAL_SMEARING}" \
     --enable_cueq="${ENABLE_CUEQ}" \

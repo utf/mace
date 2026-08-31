@@ -258,6 +258,7 @@ def train(
     rank: Optional[int] = 0,
     data_aug_magmom: Optional[bool] = False,
     epoch_hook: Optional[Any] = None,
+    post_eval_hook: Optional[Any] = None,
 ):
     lowest_loss = np.inf
     valid_loss = np.inf
@@ -376,6 +377,12 @@ def train(
                             epoch,
                             valid_loader_name,
                         )
+                        # Decisions that depend on how the epoch actually went -- the
+                        # two-timescale base release and its rollback guard -- run here,
+                        # with the validation metrics in hand. epoch_hook fires before any
+                        # gradient step and cannot see them.
+                        if post_eval_hook is not None:
+                            post_eval_hook(epoch, model, optimizer, eval_metrics)
                         if log_wandb:
                             wandb_log_dict[valid_loader_name] = {
                                 "epoch": epoch,
@@ -749,6 +756,7 @@ class MACELoss(Metric):
             "defect_shape_computed", default=torch.tensor(0.0), dist_reduce_fx="sum"
         )
         self.add_state("defect_participation", default=[], dist_reduce_fx="cat")
+        self.add_state("defect_alpha_vec", default=[], dist_reduce_fx="cat")
         self.add_state("defect_u_mean", default=[], dist_reduce_fx="cat")
         self.add_state("defect_u_std", default=[], dist_reduce_fx="cat")
         self.add_state("defect_logit_gap", default=[], dist_reduce_fx="cat")
@@ -855,6 +863,17 @@ class MACELoss(Metric):
             carriers = batch.carrier_counts.view(num_graphs, -1).sum(dim=-1) > 0
             if bool(carriers.any()):
                 self.defect_participation.append(participation[carriers])
+                # The attention on the active channel, flattened over the carrier-bearing
+                # frames of this batch. The base-release guard compares it against the
+                # release epoch to detect the carrier moving -- which needs no knowledge of
+                # where the defect is, only that the state is not where it was.
+                counts_g = batch.carrier_counts.view(num_graphs, -1)
+                active = counts_g.abs().argmax(dim=-1)
+                node_active = active[index]
+                alpha_active = alpha.gather(
+                    1, node_active.unsqueeze(-1)).squeeze(-1)
+                keep_nodes = carriers[index]
+                self.defect_alpha_vec.append(alpha_active[keep_nodes].detach())
                 self.defect_u_mean.append(mean_u[carriers])
                 self.defect_u_std.append(std_u[carriers])
                 gap = output.get("logit_gap")
@@ -1048,6 +1067,24 @@ class MACELoss(Metric):
             defect_delta_fs = self.convert(self.defect_delta_fs)
             aux["mae_delta_f"] = compute_mae(defect_delta_fs)
             aux["rmse_delta_f"] = compute_rmse(defect_delta_fs)
+        if self.defect_alpha_vec:
+            aux["defect_alpha_vec"] = torch.cat(
+                [v.detach().reshape(-1) for v in self.defect_alpha_vec], dim=0)
+        if self.defect_shape_computed and self.defect_participation:
+            part = torch.cat([p.detach() for p in self.defect_participation], dim=0)
+            pooled_part = part.mean(dim=0)
+            # Active channel vs the mean of the rest. The inactive channels carry n_c = 0,
+            # get no gradient through dE_SR, and so act as a free per-run baseline for "what
+            # does an unsupervised channel look like on this cell". A ratio near 1 means
+            # supervision has produced no structure the unsupervised channels lack.
+            if pooled_part.numel() >= 2:
+                active_idx = int(torch.argmin(pooled_part))
+                mask = torch.ones_like(pooled_part, dtype=torch.bool)
+                mask[active_idx] = False
+                null_mean = float(pooled_part[mask].mean())
+                aux["defect_n_eff"] = float(pooled_part[active_idx])
+                aux["defect_null_ratio"] = (
+                    float(pooled_part[active_idx]) / null_mean if null_mean > 0 else None)
         if self.defect_shape_computed:
             # Averaged over carrier-bearing frames, kept per channel: the channels are
             # not interchangeable, and in a dataset where one channel is never occupied
