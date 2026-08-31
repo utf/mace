@@ -95,6 +95,7 @@ class MACEDefect(ScaleShiftMACE):
         spectral_t_min: float = 0.02,
         spectral_decay_init: float = 1.0,
         spectral_first_shell: bool = False,
+        spectral_sigma: bool = False,
         logit_seed_gamma: float = 0.0,
         correction_trunk: str = "shared",
         use_long_range: bool = True,
@@ -205,10 +206,12 @@ class MACEDefect(ScaleShiftMACE):
                 r_cut=self.spectral_r_cut,
                 num_elements=int(kwargs["num_elements"]),
                 use_decay=bool(spectral_decay),
+                use_sigma=bool(spectral_sigma),
                 t_min=float(spectral_t_min),
                 decay_init=float(spectral_decay_init),
             )
         self.spectral_decay = bool(spectral_decay)
+        self.spectral_sigma = bool(spectral_sigma)
 
         self.carrier_pooling = CarrierAttentionPooling(
             feature_dim=feature_dim,
@@ -366,6 +369,8 @@ class MACEDefect(ScaleShiftMACE):
         edge_length: torch.Tensor,
         logit_bias: Optional[torch.Tensor] = None,
         node_species: Optional[torch.Tensor] = None,
+        clamp_mask: Optional[torch.Tensor] = None,
+        edge_vector: Optional[torch.Tensor] = None,
     ):
         """Either carrier head, behind one signature.
 
@@ -413,6 +418,8 @@ class MACEDefect(ScaleShiftMACE):
             edge_length=edge_length,
             site_bias=None if logit_bias is None else -logit_bias,
             node_species=node_species,
+            clamp_mask=clamp_mask,
+            edge_vector=edge_vector,
         )
         # delta_u is the spread of the occupied state's site energy over its own support: the
         # spectral analogue of "how much does u vary where alpha lives".
@@ -474,7 +481,12 @@ class MACEDefect(ScaleShiftMACE):
         # cutoff already sends contributions beyond r_max to exactly zero, so the trunk's
         # result is identical either way -- it just avoids paying for 8x the edges.
         head_species = data["node_attrs"].argmax(dim=-1)
-        head_edge_index, head_lengths = data["edge_index"], lengths
+        # R1 clamped-state probe. DIAGNOSTIC ONLY -- it consumes the vacancy assignment,
+        # so it travels in the data dict under a private key rather than as a model
+        # setting, and is absent from every production path.
+        head_clamp = data.get("_clamp_mask", None)
+        head_edge_index, head_lengths, head_vectors = (
+            data["edge_index"], lengths, vectors)
         # getattr for the same reason as in _carrier_head: checkpoints pickled before these
         # attributes existed restore without them. Plain access here reintroduced exactly the
         # regression that broke loading every historical model an hour ago.
@@ -625,6 +637,8 @@ class MACEDefect(ScaleShiftMACE):
             edge_index=head_edge_index,
             edge_length=head_lengths,
             node_species=head_species,
+            clamp_mask=head_clamp,
+            edge_vector=head_vectors,
             logit_bias=logit_bias,
         )
         # Intrinsic gap: the same pooling with the seed switched off, so the logged gap
@@ -688,6 +702,8 @@ class MACEDefect(ScaleShiftMACE):
             edge_index=head_edge_index,
             edge_length=head_lengths,
             node_species=head_species,
+            clamp_mask=head_clamp,
+            edge_vector=head_vectors,
             logit_bias=logit_bias,
         )
 

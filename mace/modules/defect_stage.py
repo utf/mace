@@ -53,8 +53,14 @@ __all__ = ["CORRECTION_PREFIXES", "is_correction_param", "load_stage_a_base",
 # seeding off does not have them at all -- which is how they were caught: classified as base,
 # they made every Stage-B load fail as an architecture mismatch. They are correction state and
 # should be left at Stage B's own initialisation.
+#
+# `spectral` is the carrier Hamiltonian: it produces dE_SR and exists only when the spectral
+# head is enabled, so it is correction state by definition. Left unclassified it was treated
+# as base, which made every Stage-A load demand a Hamiltonian from a checkpoint that predates
+# it -- and, worse, would have FROZEN the Hamiltonian in any staged run, silently turning the
+# decisive arm into an untrained head. Same failure shape as novelty_ above.
 CORRECTION_PREFIXES = ("carrier_", "counter_", "latent_charges", "logit",
-                       "defect_", "delta_", "novelty_")
+                       "defect_", "delta_", "novelty_", "spectral")
 
 
 # Training bookkeeping: neither base weights nor correction state. `current_epoch` drives the

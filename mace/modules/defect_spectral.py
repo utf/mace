@@ -116,6 +116,8 @@ class SpectralCarrierHead(nn.Module):
         t_min: float = 0.02,          # eV, hopping floor
         decay_r0: float = 3.0,        # A, reference distance
         decay_init: float = 1.0,      # A, initial decay length
+        use_sigma: bool = False,      # H3: dangling-orbital sigma term
+        sigma_r1: float = 3.6,        # A, first-shell radius for the dangling vector
     ) -> None:
         super().__init__()
         self.num_channels = num_channels
@@ -146,6 +148,26 @@ class SpectralCarrierHead(nn.Module):
             self.decay_raw = nn.Parameter(
                 torch.full((num_elements, num_elements),
                            float(np.log(np.expm1(max(decay_init - 0.3, 1e-3))))))
+
+        # H3: dangling-orbital sigma term.
+        #
+        # R0 found the missing physics in the data: the residual force on the two
+        # vacancy-sharing Pb lies ALONG their common axis (anisotropy 6.6-7.8 against ~0.9 for
+        # the carrier-free null), is 15-19x the null, and scales with their separation. That
+        # is a sigma bond between two dangling orbitals pointing at each other -- something a
+        # purely scalar hopping cannot express, because it has no notion of direction.
+        #
+        # v_i = -sum_j f_cut(r_ij) rhat_ij points INTO whatever is missing from atom i's
+        # coordination shell: ~0 in bulk by symmetry, large and axial for an atom facing a
+        # vacancy. It is smooth, equivariant and thresholdless -- no defect label anywhere,
+        # and identically silent for substitutionals, which is why this is a mechanism probe
+        # rather than the general answer (H4 is).
+        self.use_sigma = use_sigma
+        if use_sigma:
+            self.sigma_amp = _mlp([2 * feature_dim + radial_dim, hidden, num_channels],
+                                  final_scale=0.1)
+            self.sigma_site = _mlp([feature_dim, hidden, num_channels], final_scale=0.1)
+            self.sigma_r1 = sigma_r1
 
         # Diagonal: site energies, conditioned on the carrier counters so one head serves all
         # four channels and the electron/hole distinction lives entirely in this conditioning.
@@ -188,6 +210,32 @@ class SpectralCarrierHead(nn.Module):
         if self.use_decay:
             return (1.0 - x ** 6) ** 2
         return (1.0 - x) ** 3 * (1.0 + 3.0 * x + 6.0 * x * x)
+
+    def dangling_vectors(self, edge_index, edge_vector, n_nodes):
+        """v_i = -sum_j f_cut(r_ij; r1) * rhat_ij -- points into whatever is missing.
+
+        Equivariant by construction (it is a sum of unit vectors, so it rotates with the
+        frame), smooth, and thresholdless. In a complete coordination shell the terms cancel
+        by symmetry and v_i ~ 0; an atom facing a vacancy gets a large vector pointing at it.
+
+        No defect label is involved: this is a function of geometry alone, and it is
+        identically silent for a substitutional, which is exactly why H3 is a mechanism probe
+        rather than the general solution.
+        """
+        src, dst = edge_index[0], edge_index[1]
+        r = edge_vector.norm(dim=-1, keepdim=True).clamp_min(1e-9)
+        rhat = edge_vector / r
+        # First-shell weight: ~1 across the bond region, falling to zero with zero slope at
+        # r1. The standard (1-x)^3(1+3x+6x^2) taper is useless here -- a real Pb-Cl bond at
+        # 2.85 A against r1 = 3.6 A sits at x = 0.79, where it returns 0.066, so every ligand
+        # contributes almost nothing and removing one leaves no measurable vector. What this
+        # term needs is a plateau over the coordination shell and a sharp edge just below the
+        # next shell (Pb-Cs at ~4 A), not a gradual decay.
+        x = (r / self.sigma_r1).clamp(max=1.0)
+        w = (1.0 - x ** 16) ** 2
+        v = torch.zeros(n_nodes, 3, device=edge_vector.device, dtype=edge_vector.dtype)
+        v.index_add_(0, src, -w * rhat)
+        return v
 
     def decay_length(self, species_i, species_j):
         """Per-species-pair decay length, symmetric in (i, j) and floored at 0.3 A."""
@@ -237,6 +285,7 @@ class SpectralCarrierHead(nn.Module):
         site_bias: Optional[torch.Tensor] = None,   # [n_nodes, C]
         node_species: Optional[torch.Tensor] = None,  # [n_nodes] element indices
         clamp_mask: Optional[torch.Tensor] = None,  # [n_nodes] bool, DIAGNOSTIC ONLY
+        edge_vector: Optional[torch.Tensor] = None,  # [n_edges, 3], needed by H3
     ) -> SpectralOutput:
         device = node_feats.device
         n_nodes = node_feats.shape[0]
@@ -259,6 +308,30 @@ class SpectralCarrierHead(nn.Module):
         t = self.hopping(node_feats[src], node_feats[dst], edge_length,
                          None if node_species is None else node_species[src],
                          None if node_species is None else node_species[dst])   # [e, C]
+
+        # H3: sigma coupling between dangling orbitals that face each other.
+        #
+        # (v_i . rhat_ij)(v_j . rhat_ji) is large and positive only when BOTH atoms have a
+        # hole in their coordination shell pointing along the bond -- the vacancy pair, and
+        # essentially nothing else. It is ~0 on ligands (whose shells are complete) and ~0 in
+        # bulk (where v cancels by symmetry), so it adds a channel the scalar hopping cannot
+        # express without touching anything else.
+        if self.use_sigma:
+            if edge_vector is None:
+                raise ValueError("H3 sigma term needs edge_vector; the head was given none")
+            v = self.dangling_vectors(edge_index, edge_vector, n_nodes)
+            rr = edge_vector.norm(dim=-1, keepdim=True).clamp_min(1e-9)
+            rhat = edge_vector / rr
+            proj_i = (v[src] * rhat).sum(-1, keepdim=True)
+            proj_j = -(v[dst] * rhat).sum(-1, keepdim=True)   # rhat_ji = -rhat_ij
+            sym = torch.cat([node_feats[src] + node_feats[dst],
+                             (node_feats[src] - node_feats[dst]).abs(),
+                             self._radial(edge_length.reshape(-1))], dim=-1)
+            amp = self.sigma_amp(sym)
+            t = t + amp * proj_i * proj_j * self._envelope(edge_length.reshape(-1)).unsqueeze(-1)
+
+            # And an on-site term: |v_i|^2 measures how incomplete atom i's shell is.
+            eps = eps + self.sigma_site(node_feats) * (v * v).sum(-1, keepdim=True)
 
         # Pack the per-graph Hamiltonians into a padded dense batch. Training cells here are
         # 79-398 atoms, so dense `eigh` is exact, millisecond-scale, and differentiates
@@ -297,6 +370,13 @@ class SpectralCarrierHead(nn.Module):
         # the orbital composition optimal within the mask and leaves Hellmann-Feynman
         # gradients valid -- so "how well can this head fit the forces if the carrier is
         # forced onto these atoms?" is answered honestly for each candidate site set.
+        # Energies for slots that must sit above the physical spectrum, spaced 1 eV apart so
+        # they are mutually distinct. Shared by the clamp and the padding: giving them all the
+        # SAME value makes that block exactly degenerate, and eigh refuses. The padding hit
+        # this first with 80 identical slots; the clamp reintroduced it with 77.
+        slot = torch.arange(n_max, device=device)
+        pad_value = _PAD_ENERGY + _PAD_SPACING * slot.to(self.solver_dtype)
+
         if clamp_mask is not None:
             # A TRUE restriction: zero the couplings to excluded atoms and isolate them at the
             # padded energy, so H is exactly block-diagonal and the masked block's eigenvalues
@@ -315,13 +395,11 @@ class SpectralCarrierHead(nn.Module):
                             clamp_mask.to(self.solver_dtype).repeat_interleave(C),
                             accumulate=True)
             H = H * keep.unsqueeze(-1) * keep.unsqueeze(-2)
-            H = H + torch.diag_embed((1.0 - keep) * _PAD_ENERGY)
+            H = H + torch.diag_embed((1.0 - keep) * pad_value.unsqueeze(0))
 
         # Padded slots sit far above the physical spectrum. Added after the scatters so
         # nothing can accumulate on top of them.
-        slot = torch.arange(n_max, device=device)
         pad = slot.unsqueeze(0) >= counts_per_graph.unsqueeze(1)
-        pad_value = _PAD_ENERGY + _PAD_SPACING * slot.to(self.solver_dtype)
         pad_bc = (pad.repeat_interleave(C, dim=0).to(self.solver_dtype)
                   * pad_value.unsqueeze(0))
         H += torch.diag_embed(pad_bc)

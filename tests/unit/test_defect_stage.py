@@ -172,6 +172,20 @@ def test_current_epoch_is_neither_copied_nor_checked(tmp_path):
     assert_base_frozen(target, ref)   # advancing the epoch is not the base moving
 
 
+@pytest.mark.parametrize("name", ["spectral.mu", "spectral.site.0.weight",
+                                  "spectral.hop.2.bias", "spectral.decay_raw"])
+def test_spectral_head_is_correction_state(name):
+    """The carrier Hamiltonian produces dE_SR, so it is correction state.
+
+    Classified as base it did two harmful things: every Stage-A load demanded a Hamiltonian
+    from a checkpoint written before the head existed, and -- the dangerous one -- a staged
+    run would have FROZEN it, turning the decisive arm into an untrained head that localises
+    nothing. Exactly the failure the optimizer-group orphan guard caught earlier, in a
+    different place.
+    """
+    assert is_correction_param(name)
+
+
 @pytest.mark.parametrize("name", ["novelty_channel_scale", "novelty_global_scale"])
 def test_novelty_scales_are_correction_state(name):
     """These are logit-seeding scales, and they are registered only when seeding is enabled.
