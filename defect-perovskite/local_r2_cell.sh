@@ -17,7 +17,7 @@ exec >> "$HOME/runs/local_r2_cell.log" 2>&1
 echo "=== local R2 cell starting $(date +%F' '%H:%M:%S) ==="
 
 echo "waiting for the cross-fit bases to release the GPU..."
-while pgrep -f "run_train --name=cf_base" > /dev/null; do sleep 60; done
+while pgrep -f "run_train --name=cf_[b]ase" > /dev/null; do sleep 60; done
 echo "cross-fit bases finished at $(date +%H:%M:%S); settling"
 sleep 45
 

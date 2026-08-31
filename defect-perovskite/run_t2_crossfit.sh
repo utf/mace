@@ -11,7 +11,7 @@ mkdir -p "$HOME/runs"
 exec >> "$HOME/runs/t2_crossfit.log" 2>&1
 echo "=== T2 cross-fit analysis queued $(date +%F' '%H:%M:%S) ==="
 
-while pgrep -f "run_train --name=cf_base" > /dev/null; do sleep 60; done
+while pgrep -f "run_train --name=cf_[b]ase" > /dev/null; do sleep 60; done
 echo "bases finished at $(date +%H:%M:%S)"
 sleep 20
 
