@@ -161,7 +161,7 @@ def make_batches(frames, z_table, cutoff, batch_size, device):
 # --------------------------------------------------------------------------- capture
 
 
-def capture(model, batch):
+def capture(model, batch, clamp_mask=None):
     """One forward pass returning both the head internals and the model output.
 
     The head's own `internals` hook is used rather than a re-assembled H: for H3 the
@@ -178,7 +178,10 @@ def capture(model, batch):
     head.forward = wrapped
     try:
         with torch.no_grad():
-            out = model(batch.to_dict(), training=False, compute_force=False)
+            d = batch.to_dict()
+            if clamp_mask is not None:
+                d["_clamp_mask"] = clamp_mask
+            out = model(d, training=False, compute_force=False)
     finally:
         head.forward = original
     if "lam" not in grabbed:

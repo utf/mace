@@ -48,7 +48,8 @@ from mace.modules.defect_stage import is_correction_param
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from e0_residual_maps import _assert_repo  # noqa: E402
-from r1_matrix import evaluate, fresh_model, graph_cutoff_for, make_batches, masks_for  # noqa: E402
+from r1_matrix import (evaluate, fresh_model, graph_cutoff_for, make_batches,
+                       masks_for, stacked)  # noqa: E402
 from ta_band_edge import (PRISTINE_NATOMS, capture, channel_of, load_frames,  # noqa: E402
                           select, with_hole_counter)
 from tb_edge import lambda1_grad, localisation_length, neff_and_nulls  # noqa: E402
@@ -212,11 +213,19 @@ def log_profile(model, log, when):
 
 def run_cell(arch_path, base_path, seed, batches, frame_masks, near_masks, pristine_pool,
              pristine_frames, pristine_far_masks, device, epochs, lr, f_m, e_gap,
-             w_e, w_g, t_ref_r, log):
+             w_e, w_g, t_ref_r, log, sign="off", clamp=None):
     from mace.modules.defect_spectral_v3 import install_local_head
 
     model, _ = fresh_model(arch_path, base_path, seed, device, response=True)
-    install_local_head(model, t_ref_r=t_ref_r)
+    install_local_head(model, t_ref_r=t_ref_r, single_manifold=True)
+    # The single variable under test. install_local_head sets (+1,+1,-1,-1); OFF restores the
+    # all-ones convention so the two arms differ in exactly this buffer and nothing else.
+    with torch.no_grad():
+        if sign == "off":
+            model.spectral.channel_sign.fill_(1.0)
+    log(f"      arm {sign.upper()}: channel_sign "
+        f"{model.spectral.channel_sign.tolist()}"
+        + (f", clamp={clamp}" if clamp else ""))
     prof_init = log_profile(model, log, "init")
     # L_gap is a scalar equality mu can satisfy outright; do that rather than spend the first
     # epochs letting it dominate the loss on its way to the same place.
@@ -239,7 +248,9 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, near_masks, prist
         for batch, frames in batches:
             d = batch.to_dict()
             d["positions"] = batch.positions.detach().clone().requires_grad_(True)
-            d["_clamp_mask"] = None
+            d["_clamp_mask"] = (None if clamp is None
+                                else stacked([frame_masks[id(f)] for f in frames],
+                                             clamp, device))
             out = model(d, training=True, compute_force=True)
             f_loss = ((out["forces"] - batch.forces) ** 2).mean()
 
@@ -289,7 +300,7 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, near_masks, prist
                 f"gap {row['gap']:.4g} (resid {row['gap_residual']:.3f} eV)  "
                 f"Delta_bind {row['delta_bind']:+.4f}")
 
-    metrics = evaluate(model, batches, frame_masks, device)
+    metrics = evaluate(model, batches, frame_masks, device, clamp=clamp)
     metrics.update(seed=seed, f_m=f_m, m=m, e_gap=e_gap, w_e=w_e, w_g=w_g,
                    arch=str(arch_path), history=hist)
 
@@ -339,7 +350,9 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, near_masks, prist
     act, nul, lens, d_pri, d_far, region, occ = [], [], [], [], [], [], []
     gi = 0
     for batch, frames in batches:
-        internals, out = capture(model, batch)
+        cm = (None if clamp is None
+              else stacked([frame_masks[id(f)] for f in frames], clamp, device))
+        internals, out = capture(model, batch, clamp_mask=cm)
         a, n = neff_and_nulls(out, batch, channel)
         act += a; nul += n
         lens += localisation_length(internals["psi"], internals["w"], batch.positions,
@@ -458,6 +471,18 @@ def main() -> None:
     ap.add_argument("--n-pristine", type=int, default=64)
     ap.add_argument("--pristine-batch", type=int, default=8)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--sign", choices=["on", "off"], default="off",
+                    help="ON = hole channels contribute -(Lambda + mu_c). The ONLY difference "
+                         "between the A/B arms: both use the counter-free single manifold, so "
+                         "'bit-identical otherwise' holds exactly. For this dataset every "
+                         "charged frame carries the same counter (0,0,1,0), so the counter "
+                         "embedding is a constant vector and dropping it shifts eps by a "
+                         "constant the gauge absorbs -- which is why OFF here still reproduces "
+                         "the F1/F2 phenomenology measured on counter-dependent heads.")
+    ap.add_argument("--clamp", default=None,
+                    help="C1: restrict the carrier to a mask (e.g. hub2). Fixes hub mass by "
+                         "construction so the energy-channel claim is tested in isolation "
+                         "from placement.")
     ap.add_argument("--save-dir", type=Path, default=None,
                     help="write each cell's trained model here. Follow-up diagnostics "
                          "(the hopping-offset comparison, T-A on the trained head) need the "
@@ -573,7 +598,8 @@ def main() -> None:
                 model, met = run_cell(args.arch, args.base, seed, batches, frame_masks,
                                       near_masks, pristine_pool, pristine_frames,
                                       pristine_far_masks, args.device, args.epochs,
-                                      args.lr, f_m, e_gap, w_e, w_g, t_ref_r, log)
+                                      args.lr, f_m, e_gap, w_e, w_g, t_ref_r, log,
+                                      sign=args.sign, clamp=args.clamp)
             except RuntimeError as exc:
                 if "E_GAP BREACH" not in str(exc):
                     raise
@@ -583,9 +609,11 @@ def main() -> None:
                 continue
             if args.save_dir is not None:
                 args.save_dir.mkdir(parents=True, exist_ok=True)
-                dest = args.save_dir / f"v3_fm{f_m}_gap{e_gap}_s{seed}.model"
+                dest = args.save_dir / f"v3_{args.sign}_fm{f_m}_gap{e_gap}_s{seed}.model"
                 torch.save(model, dest)
                 met["saved_model"] = str(dest)
+            met["sign_arm"] = args.sign
+            met["clamp"] = args.clamp
             met["gap_source"] = gap_src
             met["seconds"] = time.time() - t0
             rows.append(met)
