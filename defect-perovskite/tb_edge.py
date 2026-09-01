@@ -127,16 +127,19 @@ def localisation_length(psi, w, positions, batch, channel, ng, cell=None):
             out.append(float(torch.sqrt((wgt * r2).sum())))
             continue
         C = cell[3 * g:3 * g + 3] if cell.dim() == 2 and cell.shape[0] == 3 * ng else cell[g]
-        inv = torch.linalg.inv(C.to(p.dtype))
-        frac = p @ inv                                        # [n, 3]
+        # Everything in float64: the cell and the positions do not always arrive in the same
+        # dtype, and an inverse taken in float32 is a poor idea regardless.
+        C = C.to(torch.float64)
+        pp, ww = p.to(torch.float64), wgt.to(torch.float64)
+        frac = pp @ torch.linalg.inv(C)                        # [n, 3]
         ang = 2.0 * torch.pi * frac
-        cbar = (wgt.unsqueeze(-1) * torch.cos(ang)).sum(0)
-        sbar = (wgt.unsqueeze(-1) * torch.sin(ang)).sum(0)
+        cbar = (ww.unsqueeze(-1) * torch.cos(ang)).sum(0)
+        sbar = (ww.unsqueeze(-1) * torch.sin(ang)).sum(0)
         f0 = torch.atan2(sbar, cbar) / (2.0 * torch.pi)        # circular mean, in [-0.5, 0.5]
         df = frac - f0
         df = df - torch.round(df)                              # minimum image
-        disp = df @ C.to(p.dtype)
-        out.append(float(torch.sqrt((wgt * (disp ** 2).sum(-1)).sum())))
+        disp = df @ C
+        out.append(float(torch.sqrt((ww * (disp ** 2).sum(-1)).sum())))
     return out
 
 

@@ -63,6 +63,76 @@ def reach_report(batch, r_max: float, cutoff: float,
     }
 
 
+def envelope_at(r: float, r_couple: float, use_decay: bool = True) -> float:
+    """The head's own coupling envelope, as a pure function of distance.
+
+    Duplicated from the head deliberately at exactly one point -- here -- so the reach test
+    can be evaluated without constructing a head, and kept honest by
+    `test_envelope_matches_the_head` rather than by inspection.
+    """
+    x = min(float(r) / float(r_couple), 1.0)
+    if use_decay:
+        return (1.0 - x ** 6) ** 2
+    return (1.0 - x) ** 3 * (1.0 + 3.0 * x + 6.0 * x * x)
+
+
+def assert_coupling_envelope(batch, r_couple: float, window=(5.2, 6.8),
+                             floor: float = 0.3, frame_fraction: float = 0.99,
+                             strict: bool = True) -> Dict[str, float]:
+    """V3 test 4: the vacancy-flanking separations are genuinely coupled, label-free.
+
+    The plan phrases this as "the flanking pair coupled with f_env >= 0.3 in >= 99% of charged
+    frames", which as written needs the vacancy assignment inside the training loop and would
+    breach hard rule 1. The structural equivalent does not: the flanking pair sits at
+    5.2-6.8 A, so it is enough that (a) the envelope at the FAR end of that window clears the
+    floor, which is a pure function of r_couple and needs no graph at all, and (b) essentially
+    every frame actually has an edge in the window. Neither statement mentions where the
+    defect is.
+    """
+    lengths = _edge_lengths(batch)
+    if lengths is None or lengths.numel() == 0:
+        logging.warning("Coupling envelope check: batch carried no edges")
+        return {}
+    f_far = envelope_at(window[1], r_couple)
+    in_win = (lengths >= window[0]) & (lengths < window[1])
+
+    idx = batch["batch"] if isinstance(batch, dict) else getattr(batch, "batch", None)
+    if idx is None:
+        frac_frames = float(in_win.any())
+    else:
+        src = batch["edge_index"][0] if isinstance(batch, dict) else batch.edge_index[0]
+        gid = idx[src]
+        n_g = int(gid.max()) + 1 if gid.numel() else 1
+        has = torch.zeros(n_g, dtype=torch.bool, device=lengths.device)
+        has[gid[in_win]] = True
+        frac_frames = float(has.float().mean())
+
+    report = {"f_env_at_window_far_end": f_far,
+              "edges_in_window": float(in_win.sum()),
+              "frames_with_a_window_edge": frac_frames,
+              "r_couple": float(r_couple)}
+    logging.info(
+        f"Coupling envelope: f_env({window[1]} A; r_couple={r_couple:.1f}) = {f_far:.3f}, "
+        f"{int(in_win.sum())} edges in {window[0]}-{window[1]} A, "
+        f"{frac_frames:.1%} of frames carry one")
+
+    if f_far < floor:
+        msg = (f"COUPLING FAILURE: the envelope at {window[1]} A is {f_far:.3f}, below the "
+               f"{floor} floor, so a flanking pair at that separation is effectively "
+               f"uncoupled and the two-site state cannot be represented. Raise r_couple.")
+        if strict:
+            raise RuntimeError(msg)
+        logging.error(msg)
+    if frac_frames < frame_fraction:
+        msg = (f"COUPLING FAILURE: only {frac_frames:.1%} of frames have an edge in the "
+               f"{window[0]}-{window[1]} A window, below the required {frame_fraction:.0%}. "
+               f"The graph is too short for the flanking separations this system has.")
+        if strict:
+            raise RuntimeError(msg)
+        logging.error(msg)
+    return report
+
+
 def assert_carrier_reach(batch, r_max: float, cutoff: float, tolerance: float = 0.95,
                          strict: bool = True) -> Dict[str, float]:
     """Log the reach of the loss's own graph; abort if it was built at r_max.
