@@ -34,7 +34,8 @@ from typing import Optional, Sequence, Tuple
 import numpy as np
 from ase import Atoms
 
-__all__ = ["tile_with_pristine", "retained_mass", "interface_rms"]
+__all__ = ["tile_with_pristine", "retained_mass", "interface_rms",
+           "interface_mass", "read_dilution"]
 
 
 def interface_rms(defective: Atoms, pristine: Atoms, axis: int, width: float = 2.0) -> float:
@@ -111,3 +112,51 @@ def retained_mass(alpha: np.ndarray, mask: np.ndarray) -> float:
     if total <= 0:
         return float("nan")
     return float(alpha[mask].sum() / total)
+
+
+def interface_mass(alpha: np.ndarray, positions: np.ndarray, cell, axis: int,
+                   original_len: int, width: float = 3.0) -> float:
+    """Fraction of the carrier's amplitude sitting within `width` of either join plane.
+
+    The tiled cell is built from two MD snapshots that were never equilibrated together, so
+    the join is a thermal discontinuity the model has never seen. Interface matching reduces
+    it but cannot remove it. If alpha piles up AT the join rather than in either block,
+    retained mass lands near 0.5 for a reason that has nothing to do with binding -- and
+    would be misread as band-like.
+
+    The interface atoms are NOT excluded from the constraint or the mask; excluding them
+    would change what retained mass measures. Randomising the block, the axis and the
+    interface-matched choice is what stops the head LEARNING an interface well; this log is
+    what catches a transient one.
+    """
+    total = float(alpha.sum())
+    if total <= 0:
+        return float("nan")
+    la = float(np.asarray(cell)[axis, axis])
+    half = la / 2.0                      # the original block ends here
+    a = positions[:, axis]
+    near = (np.abs(a - half) < width) | (a < width) | (a > la - width)
+    return float(alpha[near].sum() / total)
+
+
+def read_dilution(retained: float, interface: float,
+                  band_value: float = 79.0 / 159.0) -> str:
+    """The agreed reading rule, so the two logs are never interpreted ad hoc.
+
+    retained ~1, interface low  -> bound in the original block (the hub gate then decides
+                                   whether it is on the hub or somewhere else)
+    retained ~1, interface high -> an artefact well on the original side of the join:
+                                   the constraint is satisfied but the state is wrong
+    retained ~0.5, interface high -> straddling artefact; NOT to be read as band-like
+    retained ~0.5, interface low  -> genuinely band-like
+    """
+    if not np.isfinite(retained) or not np.isfinite(interface):
+        return "unknown"
+    high_if = interface > 0.25
+    bound_like = retained > 0.85
+    band_like = abs(retained - band_value) < 0.12
+    if bound_like:
+        return "interface-artefact-well" if high_if else "bound-in-original-block"
+    if band_like:
+        return "straddling-artefact" if high_if else "band-like"
+    return "intermediate-interface-artefact" if high_if else "intermediate"

@@ -81,7 +81,10 @@ def test_axis_varies_across_calls():
 
 
 def test_retained_mass_separates_bound_from_band():
-    n_orig, n_tot = 79, 158
+    """Real counts: a 79-atom defective cell plus an 80-atom pristine block is 159, so a
+    uniform state retains 79/159 = 0.497 -- not 0.500. The tiled cell must match the real
+    159-atom DFT cells, since R_model is compared against R_DFT measured on those."""
+    n_orig, n_tot = 79, 159
     mask = np.zeros(n_tot, dtype=bool)
     mask[:n_orig] = True
 
@@ -90,9 +93,45 @@ def test_retained_mass_separates_bound_from_band():
     assert retained_mass(bound, mask) == pytest.approx(1.0)
 
     band = np.full(n_tot, 1.0 / n_tot)                # uniform over the doubled cell
-    assert retained_mass(band, mask) == pytest.approx(n_orig / n_tot, abs=1e-6)
+    assert retained_mass(band, mask) == pytest.approx(79.0 / 159.0, abs=1e-6)
+    assert retained_mass(band, mask) < 0.5
+
+
+def test_real_shaped_tiling_gives_159_atoms():
+    """79 defective + 80 pristine = 159, matching the DFT large cells exactly."""
+    rng = np.random.default_rng(7)
+    d = cubic(n_side=4, drop=True)        # 63 atoms, stands in for the 79-atom defective
+    pool = [cubic(n_side=4, jitter=0.05, seed=s) for s in range(3)]   # 64, the pristine
+    tiled, mask, _ = tile_with_pristine(d, pool, rng)
+    assert len(tiled) == len(d) + len(pool[0]) == 127
+    assert mask.sum() == len(d), "original block is the defective cell, one atom short"
+    assert len(tiled) % 2 == 1, "a single vacancy in a doubled cell gives an odd count"
 
 
 def test_retained_mass_handles_zero_amplitude():
     mask = np.ones(4, dtype=bool)
     assert np.isnan(retained_mass(np.zeros(4), mask))
+
+
+def test_reading_rule_separates_the_four_cases():
+    """The log is only useful if it is read the same way every time."""
+    from mace.data.dilution import read_dilution
+
+    assert read_dilution(0.98, 0.05) == "bound-in-original-block"
+    assert read_dilution(0.98, 0.40) == "interface-artefact-well"
+    assert read_dilution(0.497, 0.40) == "straddling-artefact"
+    assert read_dilution(0.497, 0.05) == "band-like"
+    assert read_dilution(float("nan"), 0.1) == "unknown"
+
+
+def test_interface_mass_spots_amplitude_piled_at_the_join():
+    """retained ~0.5 from a straddling state must not be read as band-like."""
+    from mace.data.dilution import interface_mass
+
+    cell = np.diag([20.0, 10.0, 10.0])          # doubled along x, original ends at x=10
+    pos = np.array([[10.1, 0, 0], [9.9, 0, 0], [5.0, 0, 0], [15.0, 0, 0]])
+    piled = np.array([0.45, 0.45, 0.05, 0.05])
+    assert interface_mass(piled, pos, cell, 0, 2) > 0.85
+
+    spread = np.array([0.05, 0.05, 0.45, 0.45])
+    assert interface_mass(spread, pos, cell, 0, 2) < 0.2
