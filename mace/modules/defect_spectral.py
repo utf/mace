@@ -333,7 +333,15 @@ class SpectralCarrierHead(nn.Module):
         n_nodes = node_feats.shape[0]
         C = self.num_channels
 
-        eps_raw = self.site(torch.cat([node_feats, counter_emb[batch]], dim=-1))   # [n, C]
+        # V2 (T-B): a counted on-site term, eps_i = e(z_i) + sum_j phi(z_i, z_j, r_ij), with
+        # no trunk features in eps. Installed by surgery on a built model and absent by
+        # default, so a head that never had it runs exactly the path it always did --
+        # test_rigid_onsite.py asserts the bit-identity rather than trusting this comment.
+        rigid = getattr(self, "rigid_onsite", None)
+        if rigid is not None:
+            eps_raw = rigid(node_species, edge_index, edge_length, n_nodes)     # [n, C]
+        else:
+            eps_raw = self.site(torch.cat([node_feats, counter_emb[batch]], dim=-1))  # [n, C]
         if site_bias is not None:
             eps_raw = eps_raw + site_bias
 
