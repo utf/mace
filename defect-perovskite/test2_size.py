@@ -108,7 +108,8 @@ def main() -> None:
     ap.add_argument("--folds-dir", type=Path, default=here / "dataset_cf")
     ap.add_argument("--runs", type=Path, default=Path.home() / "runs")
     ap.add_argument("--folds", type=int, default=4)
-    ap.add_argument("--tol", type=float, default=0.05)
+    # +/- 0.10 A recovers the four long-d large-cell frames that found no match at 0.05.
+    ap.add_argument("--tol", type=float, default=0.10)
     ap.add_argument("--cutoff", type=float, default=5.0)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--seed", type=int, default=0)
@@ -159,6 +160,26 @@ def main() -> None:
               f"(+/- {args.tol} A in d)")
         print(f"  median {res['median']:.2f}   95% CI [{res['lo']:.2f}, {res['hi']:.2f}]"
               f"   mean {res['mean']:.2f}")
+
+    # The control that actually protects R_DFT: how large is base extrapolation error at 159
+    # atoms COMPARED WITH the charged signal there? The null's own 79/159 ratio is a ratio of
+    # two small noisy numbers, so its wide CI is expected and is not evidence that base error
+    # scales with size. This magnitude comparison is the meaningful check.
+    def med_abs(rows, big):
+        sel = [abs(r["axial"]) for r in rows
+               if (r["n_atoms"] >= 100) == big]
+        return float(np.median(sel)) if sel else float("nan")
+
+    mag = dict(charged_159=med_abs(ch_rows, True), null_159=med_abs(nl_rows, True),
+               charged_79=med_abs(ch_rows, False), null_79=med_abs(nl_rows, False))
+    mag["null_over_charged_159"] = mag["null_159"] / max(mag["charged_159"], 1e-30)
+    mag["null_over_charged_79"] = mag["null_79"] / max(mag["charged_79"], 1e-30)
+    out["magnitudes"] = mag
+    print("\n=== null magnitude control (must be << 1; target < 0.2) ===")
+    print(f"  at 159 atoms: |null| {mag['null_159']:.4f}  |charged| {mag['charged_159']:.4f}"
+          f"   ratio {mag['null_over_charged_159']:.3f}")
+    print(f"  at  79 atoms: |null| {mag['null_79']:.4f}  |charged| {mag['charged_79']:.4f}"
+          f"   ratio {mag['null_over_charged_79']:.3f}")
 
     r = out["charged"]["result"]
     if r:

@@ -1313,6 +1313,16 @@ def run(args) -> None:
         base_release.on_epoch_start(epoch, base_lr=float(args.lr), state=state)
         base_release.on_epoch_end(epoch, state=state)
 
+    # Reach assertion on the LOSS'S OWN loader, not a reimplementation of it. graph_cutoff
+    # was previously verified only where it was not used, and the resulting 5 A graph -- in
+    # which the two vacancy-sharing Pb have no edge -- voided a 20-seed screen. A check that
+    # runs on a different code path than the loss is worse than none, because it passes.
+    if getattr(args, "defect_spectral_head", False):
+        from mace.modules.defect_reach import assert_carrier_reach
+
+        assert_carrier_reach(next(iter(train_loader)), float(args.r_max),
+                             graph_cutoff(args))
+
     tools.train(
         model=model,
         loss_fn=loss_fn,
