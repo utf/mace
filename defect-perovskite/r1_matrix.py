@@ -97,15 +97,32 @@ def masks_for(atoms, rng):
     cage = np.zeros(n, dtype=bool)
     cage[cage_idx] = True
 
-    # lig2: the most nearly trans pair of ligands -- the 2-atom control with the right
-    # species and the right neighbourhood, differing from hub2 only in WHICH sites.
-    best, pair = -1.0, (int(cage_idx[0]), int(cage_idx[min(1, len(cage_idx) - 1)]))
+    # lig2: a genuine TRANS pair through the vacancy -- two ligands on opposite sides of the
+    # vacancy centre, at a separation comparable to the hub pair.
+    #
+    # An earlier version took the most widely separated cage pair, which lands at a median
+    # 10.5 A: beyond the hopping range, coupled in only 38% of frames, |H_ij| = 0. That made
+    # the control two ISOLATED atoms and turned hub2-vs-lig2 into coupled-vs-uncoupled -- the
+    # very defect that voided the original R1, reintroduced in the control instead of the
+    # treatment. The control must differ from hub2 in WHICH sites, not in whether the pair is
+    # a pair at all.
+    #
+    # DISTANCE-MATCHED to the hub pair. Antipodality about the vacancy was tried and gives a
+    # median 7.7 A -- 88% coupled but at |H_ij| = 0.007 eV against the hub's 0.097, i.e. a
+    # thirteenfold weaker pair. The cage spans BOTH Pb, so any trans pair across it is far.
+    #
+    # Matching the separation matches the coupling regime, which is precisely what has to be
+    # held fixed: the control must differ from hub2 in WHICH SITES, not in how strongly the
+    # two sites talk to each other. Otherwise the comparison measures coupling again.
+    d_target = float(dist[0, 0])
+    best, pair = float("inf"), (int(cage_idx[0]), int(cage_idx[min(1, len(cage_idx) - 1)]))
     for i in range(len(cage_idx)):
         for j in range(i + 1, len(cage_idx)):
             _, d_ij = get_distances(pos[cage_idx[i]][None], pos[cage_idx[j]][None],
                                     cell=cell, pbc=pbc)
-            if float(d_ij[0, 0]) > best:
-                best, pair = float(d_ij[0, 0]), (int(cage_idx[i]), int(cage_idx[j]))
+            score = abs(float(d_ij[0, 0]) - d_target)
+            if score < best:
+                best, pair = score, (int(cage_idx[i]), int(cage_idx[j]))
     lig2 = np.zeros(n, dtype=bool)
     lig2[list(pair)] = True
 
@@ -152,7 +169,7 @@ def stacked(frame_masks, which, device):
                         dtype=torch.bool, device=device)
 
 
-def assert_hub_coupled(model, batches, frame_masks, device, threshold=0.99):
+def coupling_fraction(model, batches, frame_masks, device, which='hub2'):
     """The void-R1 failure mode, stated as a test: is the hub pair actually coupled?
 
     Restricted to the hub2 mask the Hamiltonian is 2x2; if its off-diagonal is at the floor
@@ -174,13 +191,16 @@ def assert_hub_coupled(model, batches, frame_masks, device, threshold=0.99):
             for batch, frames in batches[:4]:
                 fm = [frame_masks[id(a)] for a in frames]
                 d = batch.to_dict()
-                d["_clamp_mask"] = stacked(fm, "hub2", device)
+                d["_clamp_mask"] = stacked(fm, which, device)
                 model(d, training=False, compute_force=False)
                 H, local = grabbed["H"], grabbed["local"]
                 idx = batch.batch.detach().cpu().numpy()
                 for k, atoms in enumerate(frames):
                     sel = np.where(idx == k)[0]
-                    a, b = fm[k]["hub_idx"]
+                    if which == "hub2":
+                        a, b = fm[k]["hub_idx"]
+                    else:
+                        a, b = (int(x) for x in np.where(fm[k][which])[0][:2])
                     sa, sb = int(local[sel[a]]), int(local[sel[b]])
                     total += 1
                     if abs(float(H[k, 2, sa, sb])) > 1e-4:
@@ -188,11 +208,10 @@ def assert_hub_coupled(model, batches, frame_masks, device, threshold=0.99):
     finally:
         head.forward = original
     frac = coupled / max(total, 1)
-    if frac < threshold:
+    if which == "hub2" and frac < 0.99:
         raise RuntimeError(
-            f"HUB COUPLING FAILURE: the hub pair is coupled in only {frac:.1%} of frames "
-            f"(need >= {threshold:.0%}). The hub2 mask is two isolated atoms and this "
-            "matrix would repeat the void R1. Check the neighbour graph.")
+            f"HUB COUPLING FAILURE: the hub pair is coupled in only {frac:.1%} of frames. "
+            "The hub2 mask is two isolated atoms and this matrix would repeat the void R1.")
     return frac
 
 
@@ -376,8 +395,14 @@ def main() -> None:
 
     model_probe, n_copied = fresh_model(args.arch, args.base, 0, args.device)
     print(f"  base weights copied: {n_copied} tensors", flush=True)
-    frac = assert_hub_coupled(model_probe, batches, frame_masks, args.device)
-    print(f"  hub pair coupled in {frac:.1%} of checked frames", flush=True)
+    for two in ("hub2", "lig2"):
+        if two in args.masks:
+            f = coupling_fraction(model_probe, batches, frame_masks, args.device, two)
+            print(f"  {two}: coupled in {f:.0%} of checked frames", flush=True)
+            if two == "lig2" and f < 0.9:
+                raise SystemExit(
+                    f"lig2 is coupled in only {f:.0%} of frames -- it is two isolated atoms, "
+                    "so hub2-vs-lig2 would compare coupling rather than site choice.")
     del model_probe
 
     rows = []
