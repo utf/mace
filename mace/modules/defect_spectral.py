@@ -48,7 +48,7 @@ Hard guardrail: dE_SR IS the smeared eigenvalue. There is no auxiliary MLP on to
 
 from __future__ import annotations
 
-from typing import NamedTuple, Optional
+from typing import Dict, NamedTuple, Optional
 
 import numpy as np
 import torch
@@ -315,7 +315,20 @@ class SpectralCarrierHead(nn.Module):
         node_species: Optional[torch.Tensor] = None,  # [n_nodes] element indices
         clamp_mask: Optional[torch.Tensor] = None,  # [n_nodes] bool, DIAGNOSTIC ONLY
         edge_vector: Optional[torch.Tensor] = None,  # [n_edges, 3], needed by H3
+        internals: Optional[Dict[str, torch.Tensor]] = None,  # DIAGNOSTIC ONLY, see below
     ) -> SpectralOutput:
+        """`internals`, when a dict is passed, is filled with H, psi, lam, w, eps and the
+        node->(graph, slot) maps, STILL ATTACHED TO THE GRAPH.
+
+        D1 needs to split the head's own axial force into on-site and hopping parts, which
+        means contracting against the H the head actually assembled -- for H3 that includes
+        the sigma term -- rather than against a formula re-derived in the analysis script.
+        Re-deriving would silently drop whatever the head does that the formula forgets.
+
+        Nothing is stored on the module: a tensor stashed as an attribute is not deepcopy-safe
+        and would break the cuEq conversion. Default None means production forward is
+        bit-identical; `test_internals_capture.py` asserts that.
+        """
         device = node_feats.device
         n_nodes = node_feats.shape[0]
         C = self.num_channels
@@ -450,10 +463,20 @@ class SpectralCarrierHead(nn.Module):
         lam = evals[..., :m]                                   # [G, C, m]
         psi = evecs[..., :m]                                   # [G, C, N, m]
 
+        if internals is not None:
+            internals["H"] = H
+            internals["psi"] = psi
+            internals["lam"] = lam
+            internals["eps"] = eps
+            internals["batch"] = batch
+            internals["local"] = local
+
         # Thermal smearing over the lowest m. Concentrates on the bound state when one exists
         # and degrades gracefully to a band-edge ensemble when none does -- which is the
         # honest answer for a pristine cell, not a failure to be forced.
         w = torch.softmax(-lam / self.smearing, dim=-1)
+        if internals is not None:
+            internals["w"] = w
 
         # dE_SR = n_c * (lambda + mu_c). lambda now measures the level RELATIVE to the frame's
         # mean site energy, because the uniform mode was removed; mu_c carries its absolute
