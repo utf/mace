@@ -275,6 +275,9 @@ def main() -> None:
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--lr", type=float, default=0.01)
     ap.add_argument("--seeds", type=int, default=3)
+    ap.add_argument("--seed-start", type=int, default=1,
+                    help="first seed index; lets a second machine add seeds 4-6 to another's "
+                         "1-3 instead of recomputing them")
     ap.add_argument("--variants", nargs="+", default=["v1"])
     ap.add_argument("--margins", nargs="+", type=float, default=[0.2, 0.5])
     ap.add_argument("--w-edge", type=float, default=None,
@@ -350,7 +353,7 @@ def main() -> None:
     for variant in args.variants:
         for m in args.margins:
             w_e = args.w_edge if args.w_edge is not None else f0 / (0.5 * m) ** 2
-            for seed in range(1, args.seeds + 1):
+            for seed in range(args.seed_start, args.seed_start + args.seeds):
                 t0 = time.time()
                 log(f"  --- {variant}  m={m}  seed {seed}  (w_e={w_e:.4g})")
                 model, met = run_cell(args.arch, args.base, seed, batches, frame_masks,
