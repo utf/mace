@@ -163,10 +163,30 @@ def analyse_frame(model, atoms, z_table, cutoff, device):
     diagH = torch.diagonal(H_c)
     d_beta = torch.diagonal(beta)
 
+    # F1: the hopping force nets two physically distinct pieces and they must be separated.
+    #
+    #   hub-hub   the bond-removal signature. For a bonding-signed H the ground state is
+    #             nodeless (Perron-Frobenius), so beta_ab >= 0; with t'(d) < 0 the force
+    #             -dE/dd = 2 beta_ab t'(d) is INWARD for any occupancy. The head cannot write
+    #             the physically required +t_hub(d) at all, and its only moves are to hold
+    #             t_hub at the decay prior or to one-side the state so beta_ab ~ 0.
+    #   hub-ligand  a hub Pb pulled toward its five remaining ligands: net OUTWARD by
+    #             missing-neighbour asymmetry, and only weakly dependent on d(Pb-Pb).
+    #
+    # Pooled as one "hop" term these cancel and the evasion is invisible, which is why S1
+    # read as "the hopping force already points the right way".
+    off = beta * H_c
+    off = off - torch.diag(torch.diagonal(off))
+    hub_d = hub.to(off.device)
+    both = hub_d.unsqueeze(1) & hub_d.unsqueeze(0)      # the a-b edge (and b-a)
+    one = hub_d.unsqueeze(1) ^ hub_d.unsqueeze(0)       # exactly one endpoint is a hub Pb
     parts = {
         "on_hub": (d_beta[hub] * diagH[hub]).sum(),
         "on_non": (d_beta[~hub] * diagH[~hub]).sum(),
-        "hop": (beta * H_c).sum() - (d_beta * diagH).sum(),
+        "hop": off.sum(),
+        "hop_hubhub": (off * both).sum(),
+        "hop_hublig": (off * one).sum(),
+        "hop_rest": (off * ~(both | one)).sum(),
     }
     out = {}
     for name, scalar in parts.items():
@@ -183,7 +203,14 @@ def analyse_frame(model, atoms, z_table, cutoff, device):
     out["residual"] = out["axial_full"] - (out["axial_on_hub"] + out["axial_on_non"]
                                            + out["axial_hop"])
 
+    # F1: two-sidedness of the hub pair. Suppressing beta_ab by driving the amplitude onto one
+    # of the two Pb is the other way out of the inward hub-hub force, and it is invisible in
+    # N_eff -- a state on one Pb plus its shell is just as "localised" as one on both.
+    aa, bb = float(alpha[a]), float(alpha[b])
     out.update(n_eff=n_eff, d_hub=d_hub, channel=c,
+               alpha_hub_a=aa, alpha_hub_b=bb,
+               two_sided=float(min(aa, bb) / max(max(aa, bb), 1e-30)),
+               beta_ab=float(beta[a, b]),
                hub_hop=float(abs(H_c[a, b].detach())),
                eps_std_all=float(eps_c.std()),
                mass=mass, within=within, n_atoms=n)
@@ -249,6 +276,13 @@ def main() -> None:
         residual=med("residual"),
         leak_frac=float(np.median(per_frame)), hop_frac=float(np.median(hop_frac)),
         hub_hop=med("hub_hop"), eps_std_all=med("eps_std_all"), d_hub=med("d_hub"),
+        # F1: the split that makes the evasion visible, plus the two-sidedness that is the
+        # other way of suppressing beta_ab without changing N_eff.
+        axial_hop_hubhub=med("axial_hop_hubhub"),
+        axial_hop_hublig=med("axial_hop_hublig"),
+        axial_hop_rest=med("axial_hop_rest"),
+        two_sided=med("two_sided"), beta_ab=med("beta_ab"),
+        alpha_hub_a=med("alpha_hub_a"), alpha_hub_b=med("alpha_hub_b"),
         mass={k: float(np.median([r["mass"].get(k, 0.0) for r in rows]))
               for k in rows[0]["mass"]},
         within={k: float(np.median([r["within"].get(k, 0.0) for r in rows]))
