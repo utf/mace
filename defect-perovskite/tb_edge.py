@@ -309,6 +309,11 @@ def main() -> None:
     ap.add_argument("--n-pristine", type=int, default=64)
     ap.add_argument("--pristine-batch", type=int, default=8)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--save-dir", type=Path, default=None,
+                    help="write each cell's trained model here. Follow-up diagnostics "
+                         "(the hopping-offset comparison, T-A on the trained head) need the "
+                         "model, and it was not saved for V1/V2 -- so those analyses cannot "
+                         "be run on them at all without a full re-run.")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
 
@@ -386,6 +391,11 @@ def main() -> None:
                 ch = channel_of(batches[0][0])
                 raw, matched = escape_report(model, big_charged, big_pristine, z_table,
                                              cutoff, args.device, ch)
+                if args.save_dir is not None:
+                    args.save_dir.mkdir(parents=True, exist_ok=True)
+                    dest = args.save_dir / f"{variant}_m{m}_s{seed}.model"
+                    torch.save(model, dest)
+                    met["saved_model"] = str(dest)
                 met["escape_raw"] = raw
                 met["escape_gauge_matched"] = matched
                 met["seconds"] = time.time() - t0
