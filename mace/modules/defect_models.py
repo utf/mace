@@ -91,6 +91,8 @@ class MACEDefect(ScaleShiftMACE):
         spectral_num_states: int = 6,
         spectral_smearing: float = 0.020,
         spectral_r_cut: float = 0.0,
+        spectral_local: bool = False,
+        spectral_r_couple: float = 0.0,
         spectral_decay: bool = False,
         spectral_t_min: float = 0.02,
         spectral_decay_init: float = 1.0,
@@ -207,7 +209,33 @@ class MACEDefect(ScaleShiftMACE):
         # covers.
         self.spectral_r_cut = float(spectral_r_cut) if spectral_r_cut > 0 else (
             float(self.r_max) * int(self.num_interactions))
-        if self.spectral_head:
+        # V3: matrix elements from the detached block-1 descriptor, two length constants.
+        # Built here rather than only by surgery so a saved V3 model rebuilt from its own
+        # extracted config comes back as V3 -- the round trip the cuEq conversion performs.
+        self.spectral_local = bool(spectral_local)
+        self.spectral_r_couple = (float(spectral_r_couple) if spectral_r_couple > 0
+                                  else self.spectral_r_cut)
+        if self.spectral_head and self.spectral_local:
+            from mace.modules.defect_spectral_v3 import LocalSpectralHead
+
+            if not self.spectral_first_shell:
+                raise ValueError(
+                    "spectral_local needs spectral_first_shell=True: otherwise the head is "
+                    "handed every block's features concatenated, and the descriptor is not "
+                    "local at r_max.")
+            self.spectral = LocalSpectralHead(
+                feature_dim=self.spectral_feature_dim,
+                counter_dim=counter_embedding_dim,
+                num_elements=int(kwargs["num_elements"]),
+                r_max=float(self.r_max),
+                r_couple=float(self.spectral_r_couple),
+                hidden=carrier_mlp_hidden,
+                num_states=spectral_num_states,
+                smearing=spectral_smearing,
+                gauge_penalty=bool(spectral_gauge_penalty),
+                t_min=float(spectral_t_min),
+            )
+        elif self.spectral_head:
             from mace.modules.defect_spectral import SpectralCarrierHead
 
             self.spectral = SpectralCarrierHead(
@@ -869,6 +897,13 @@ class MACEDefect(ScaleShiftMACE):
             resp_feats = defect_feats
             if getattr(self, "spectral_first_shell", False):
                 resp_feats = defect_feats[:, : self.spectral_feature_dim]
+            # V3 detaches here too. Section 2 of the plan asks for a trunk-feature effective
+            # charge AND for the trunk to train on the base loss only; in T-B the trunk is
+            # frozen so the two readings coincide, which is precisely why the choice is made
+            # here rather than discovered at the from-scratch step. Under spectral_local NO
+            # head term carries gradient into the trunk, in any run configuration.
+            if getattr(self, "spectral_local", False):
+                resp_feats = resp_feats.detach()
             delta_resp = self.carrier_response(
                 node_feats=resp_feats, node_species=data["node_attrs"].argmax(-1),
                 alpha=alpha, counts=counts, batch=data["batch"],

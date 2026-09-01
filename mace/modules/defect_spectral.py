@@ -154,6 +154,7 @@ class SpectralCarrierHead(nn.Module):
         self.use_decay = use_decay
         self.t_min = t_min
         self.decay_r0 = decay_r0
+        self.counter_dim = int(counter_dim)   # recorded so a subclass can rebuild `site`
         self.gauge_penalty = gauge_penalty
         # Bandwidth anneal factor, set per epoch from outside. A buffer so it travels
         # with the model and is visible in checkpoints rather than being a hidden global.
@@ -271,6 +272,23 @@ class SpectralCarrierHead(nn.Module):
         raw = 0.5 * (self.decay_raw + self.decay_raw.T)      # symmetric by construction
         return 0.3 + nn.functional.softplus(raw[species_i, species_j])
 
+    def _site_energies(self, node_feats, counter_emb, batch, node_species,
+                       edge_index, edge_length, edge_vector, n_nodes):
+        """eps_raw, [n_nodes, C], before the gauge and before `site_bias`.
+
+        Split out of `forward` so V3 can override the on-site form without a second copy of
+        the eigensolve underneath it. Behaviour here is exactly what forward did inline.
+
+        V2 (T-B): a counted on-site term, eps_i = e(z_i) + sum_j phi(z_i, z_j, r_ij), with no
+        trunk features in eps. Installed by surgery on a built model and absent by default, so
+        a head that never had it runs exactly the path it always did -- test_rigid_onsite.py
+        asserts the bit-identity rather than trusting this comment.
+        """
+        rigid = getattr(self, "rigid_onsite", None)
+        if rigid is not None:
+            return rigid(node_species, edge_index, edge_length, n_nodes)        # [n, C]
+        return self.site(torch.cat([node_feats, counter_emb[batch]], dim=-1))   # [n, C]
+
     def hopping(self, feats_i, feats_j, r, species_i=None, species_j=None):
         """t_ij, symmetric in (i, j) by construction rather than by penalty.
 
@@ -333,15 +351,8 @@ class SpectralCarrierHead(nn.Module):
         n_nodes = node_feats.shape[0]
         C = self.num_channels
 
-        # V2 (T-B): a counted on-site term, eps_i = e(z_i) + sum_j phi(z_i, z_j, r_ij), with
-        # no trunk features in eps. Installed by surgery on a built model and absent by
-        # default, so a head that never had it runs exactly the path it always did --
-        # test_rigid_onsite.py asserts the bit-identity rather than trusting this comment.
-        rigid = getattr(self, "rigid_onsite", None)
-        if rigid is not None:
-            eps_raw = rigid(node_species, edge_index, edge_length, n_nodes)     # [n, C]
-        else:
-            eps_raw = self.site(torch.cat([node_feats, counter_emb[batch]], dim=-1))  # [n, C]
+        eps_raw = self._site_energies(node_feats, counter_emb, batch, node_species,
+                                      edge_index, edge_length, edge_vector, n_nodes)
         if site_bias is not None:
             eps_raw = eps_raw + site_bias
 

@@ -96,11 +96,19 @@ def lambda1_grad(model, batch_dict, channel):
     return masked.min(dim=-1).values                        # [G]
 
 
-def localisation_length(psi, w, positions, batch, channel, ng):
-    """Fit of |psi|^2 against distance from its own centroid.
+def localisation_length(psi, w, positions, batch, channel, ng, cell=None):
+    """Amplitude-weighted RMS radius of the carrier density, under periodic boundaries.
 
-    Reported as the amplitude-weighted RMS radius, which is what a localisation length means
-    for a state that may not be exponential. A band state returns ~ the cell radius.
+    The first version of this took a plain Cartesian centroid and plain differences, with no
+    minimum-image convention. Under PBC that is not a slightly worse estimate, it is a wrong
+    one: it reported 1.10 A for a V1 state whose N_eff was 51, i.e. a state spread over most
+    of the cell. Every number it produced has been discarded.
+
+    A periodic centroid has no arithmetic mean, so each fractional axis is averaged on the
+    circle (weighted mean of the unit vector at angle 2*pi*f, back through atan2) and
+    displacements are wrapped into [-0.5, 0.5) before being taken back to Cartesian. A band
+    state then returns ~ the cell radius instead of an artefact, which is the behaviour that
+    makes the metric readable at all.
     """
     dens = (psi[:, channel].pow(2) * w[:, channel].unsqueeze(-2)).sum(-1)   # [G, N]
     out = []
@@ -112,10 +120,23 @@ def localisation_length(psi, w, positions, batch, channel, ng):
         if s <= 0:
             out.append(float("nan"))
             continue
-        wgt = (d / s).unsqueeze(-1)
-        centroid = (wgt * p).sum(0)
-        r2 = ((p - centroid) ** 2).sum(-1)
-        out.append(float(torch.sqrt((wgt.squeeze(-1) * r2).sum())))
+        wgt = (d / s)
+        if cell is None:
+            centroid = (wgt.unsqueeze(-1) * p).sum(0)
+            r2 = ((p - centroid) ** 2).sum(-1)
+            out.append(float(torch.sqrt((wgt * r2).sum())))
+            continue
+        C = cell[3 * g:3 * g + 3] if cell.dim() == 2 and cell.shape[0] == 3 * ng else cell[g]
+        inv = torch.linalg.inv(C.to(p.dtype))
+        frac = p @ inv                                        # [n, 3]
+        ang = 2.0 * torch.pi * frac
+        cbar = (wgt.unsqueeze(-1) * torch.cos(ang)).sum(0)
+        sbar = (wgt.unsqueeze(-1) * torch.sin(ang)).sum(0)
+        f0 = torch.atan2(sbar, cbar) / (2.0 * torch.pi)        # circular mean, in [-0.5, 0.5]
+        df = frac - f0
+        df = df - torch.round(df)                              # minimum image
+        disp = df @ C.to(p.dtype)
+        out.append(float(torch.sqrt((wgt * (disp ** 2).sum(-1)).sum())))
     return out
 
 

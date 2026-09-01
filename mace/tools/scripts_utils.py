@@ -420,6 +420,12 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         config["spectral_decay"] = bool(getattr(model, "spectral_decay", False))
         config["spectral_first_shell"] = bool(
             getattr(model, "spectral_first_shell", False))
+        # V3. Recorded here on the day the head was written, not when a from-scratch run
+        # first needs it: this extractor is the layer that has twice dropped a flag that was
+        # correct everywhere else, and a saved V3 model rebuilt through this config as a plain
+        # H3 head would be a different Hamiltonian wearing the same checkpoint name.
+        config["spectral_local"] = bool(getattr(model, "spectral_local", False))
+        config["spectral_r_couple"] = float(getattr(model, "spectral_r_couple", 0.0))
         # sigma and the gauge penalty were omitted here while being correctly wired
         # everywhere else, so training had them ON and the SAVED model -- rebuilt from
         # this config during the cuEq conversion -- silently had them OFF. Every
