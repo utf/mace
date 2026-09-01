@@ -426,6 +426,12 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         # H3 head would be a different Hamiltonian wearing the same checkpoint name.
         config["spectral_local"] = bool(getattr(model, "spectral_local", False))
         config["spectral_r_couple"] = float(getattr(model, "spectral_r_couple", 0.0))
+        # The carrier sign convention travels with the checkpoint. A single-manifold head
+        # rebuilt through this config as a four-manifold one would minimise for the hole as
+        # well as the electron -- the exact error this mode exists to fix -- with no shape
+        # clash to catch it.
+        config["spectral_single_manifold"] = bool(
+            getattr(model, "spectral_single_manifold", False))
         # sigma and the gauge penalty were omitted here while being correctly wired
         # everywhere else, so training had them ON and the SAVED model -- rebuilt from
         # this config during the cuEq conversion -- silently had them OFF. Every

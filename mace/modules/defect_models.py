@@ -93,6 +93,7 @@ class MACEDefect(ScaleShiftMACE):
         spectral_r_cut: float = 0.0,
         spectral_local: bool = False,
         spectral_r_couple: float = 0.0,
+        spectral_single_manifold: bool = False,
         spectral_decay: bool = False,
         spectral_t_min: float = 0.02,
         spectral_decay_init: float = 1.0,
@@ -213,6 +214,7 @@ class MACEDefect(ScaleShiftMACE):
         # Built here rather than only by surgery so a saved V3 model rebuilt from its own
         # extracted config comes back as V3 -- the round trip the cuEq conversion performs.
         self.spectral_local = bool(spectral_local)
+        self.spectral_single_manifold = bool(spectral_single_manifold)
         self.spectral_r_couple = (float(spectral_r_couple) if spectral_r_couple > 0
                                   else self.spectral_r_cut)
         if self.spectral_head and self.spectral_local:
@@ -234,6 +236,7 @@ class MACEDefect(ScaleShiftMACE):
                 smearing=spectral_smearing,
                 gauge_penalty=bool(spectral_gauge_penalty),
                 t_min=float(spectral_t_min),
+                single_manifold=self.spectral_single_manifold,
             )
         elif self.spectral_head:
             from mace.modules.defect_spectral import SpectralCarrierHead

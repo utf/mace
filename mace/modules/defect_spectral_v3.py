@@ -79,7 +79,7 @@ class LocalSpectralHead(SpectralCarrierHead):
                  r_max: float, r_couple: float, elem_dim: int = 8,
                  hidden: int = 64, radial_dim: int = 8, decay_init: float = 1.0,
                  t_ref_r: Optional[float] = None, t_ref_value: float = 0.5,
-                 **kw) -> None:
+                 single_manifold: bool = False, **kw) -> None:
         # The deficit envelope and the decay reference are both r_max; the coupling reach is
         # r_couple. use_decay and use_sigma are not optional in V3 -- the decay is what keeps
         # a 10 A Hamiltonian from being a complete graph, and the sigma term is the only
@@ -102,10 +102,30 @@ class LocalSpectralHead(SpectralCarrierHead):
         # only through the pair decay length, which cannot express an element-dependent on-site
         # level at all -- and an on-site level per element is the cheapest true statement in
         # any tight-binding model.
-        self.site = _mlp([feature_dim + counter_dim + elem_dim, hidden, hidden,
-                          self.num_channels], final_scale=0.01)
+        # ONE electron Hamiltonian, sign from the counters.
+        #
+        # H_e is a single manifold: eps_i(D_i, E(z_i)) with NO counter conditioning, H_ij =
+        # -t_ij with the bonding sign. Its lowest smeared eigenvalue Lambda is an added
+        # electron's level. The hole's contribution is -(Lambda + mu_h), applied through
+        # `channel_sign` -- because a hole removed from a bonding state has energy -eps + t(d),
+        # which RISES as the pair closes, and no minimum eigenvalue can represent that: a
+        # minimum lies at or below the smallest diagonal, while the hole's level lies above its
+        # on-site energy by t.
+        #
+        # The four channels are kept at the interface by broadcasting one manifold across
+        # them, so `channel_of`, the D1 scripts, the four-channel training log and every other
+        # consumer keep working unchanged. Spin channels share H_e; mu_c stays per channel.
+        self.single_manifold = bool(single_manifold)
+        out_dim = 1 if self.single_manifold else self.num_channels
+        site_in = (feature_dim + elem_dim if self.single_manifold
+                   else feature_dim + counter_dim + elem_dim)
+        self.site = _mlp([site_in, hidden, hidden, out_dim], final_scale=0.01)
         self.hop = _mlp([2 * feature_dim + 2 * elem_dim + radial_dim, hidden, hidden,
-                         self.num_channels], final_scale=0.05)
+                         out_dim], final_scale=0.05)
+        if self.single_manifold:
+            s = torch.ones(self.num_channels)
+            s[2:] = -1.0                     # (e_maj, e_min, h_maj, h_min) -> (+1, +1, -1, -1)
+            self.channel_sign.copy_(s)
 
         # Connectivity is fixed through the AMPLITUDE, not the decay length.
         #
@@ -165,6 +185,11 @@ class LocalSpectralHead(SpectralCarrierHead):
         if node_species is None:
             raise ValueError("V3 on-site term needs node_species; the head was given none")
         e = self.elem(node_species)
+        if getattr(self, "single_manifold", False):
+            # Counter-free by construction, which also removes a trap: pristine frames can now
+            # be scored natively for Delta_bind, so the hole-counter override and its
+            # canonicalisation/m_s_ref_doubled bookkeeping drop out of that path entirely.
+            return self.site(torch.cat([node_feats, e], dim=-1)).expand(-1, self.num_channels)
         return self.site(torch.cat([node_feats, counter_emb[batch], e], dim=-1))
 
     def hopping(self, feats_i, feats_j, r, species_i=None, species_j=None):
@@ -181,15 +206,18 @@ class LocalSpectralHead(SpectralCarrierHead):
         e_i, e_j = self.elem(species_i), self.elem(species_j)
         sym = torch.cat([feats_i + feats_j, (feats_i - feats_j).abs(),
                          e_i + e_j, (e_i - e_j).abs(), self._radial(r)], dim=-1)
-        amp = self.t_min + nn.functional.softplus(self.hop(sym))
+        raw = self.hop(sym)
+        if getattr(self, "single_manifold", False):
+            raw = raw.expand(-1, self.num_channels)
+        amp = self.t_min + nn.functional.softplus(raw)
         ell = self.decay_length(species_i, species_j).unsqueeze(-1)
         decay = torch.exp(-(r.unsqueeze(-1) - self.decay_r0) / ell)
         return self.hop_scale * amp * decay * self._envelope(r).unsqueeze(-1)
 
 
 def install_local_head(model, r_couple: Optional[float] = None, elem_dim: int = 8,
-                       t_ref_r: Optional[float] = None,
-                       t_ref_value: float = 0.5) -> LocalSpectralHead:
+                       t_ref_r: Optional[float] = None, t_ref_value: float = 0.5,
+                       single_manifold: bool = False) -> LocalSpectralHead:
     """Replace a built model's spectral head with the V3 form, in place.
 
     Asserts the descriptor really is block 1. `MACEDefect` selects it by slicing the first
@@ -222,7 +250,7 @@ def install_local_head(model, r_couple: Optional[float] = None, elem_dim: int = 
         counter_dim=int(head.counter_dim),
         num_elements=int(model.atomic_numbers.numel()),
         r_max=r_max, r_couple=couple, elem_dim=elem_dim,
-        t_ref_r=t_ref_r, t_ref_value=t_ref_value,
+        t_ref_r=t_ref_r, t_ref_value=t_ref_value, single_manifold=single_manifold,
         num_channels=head.num_channels, num_states=head.num_states,
         smearing=head.smearing, radial_dim=head.radial_dim,
         t_min=head.t_min, gauge_penalty=bool(head.gauge_penalty),
@@ -231,4 +259,5 @@ def install_local_head(model, r_couple: Optional[float] = None, elem_dim: int = 
     dtype = next(head.parameters()).dtype
     model.spectral = new.to(device=device, dtype=dtype)
     model.spectral_local = True          # read by the response channel's detach decision
+    model.spectral_single_manifold = bool(single_manifold)
     return model.spectral

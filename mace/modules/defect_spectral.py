@@ -170,6 +170,12 @@ class SpectralCarrierHead(nn.Module):
         # rather than as an offset smeared across N site energies.
         self.mu = nn.Parameter(torch.zeros(num_channels))
 
+        # s_c in dE_SR = sum_c s_c n_c (Lambda + mu_c). Ones by default: the head as originally
+        # specified minimised for both carriers, which is right for an added electron and wrong
+        # for a hole. A buffer rather than a constant so it travels with the checkpoint and a
+        # saved model cannot silently acquire a different convention on reload.
+        self.register_buffer("channel_sign", torch.ones(num_channels))
+
         # H1: per-species-pair decay length. The envelope says what is REACHABLE (10 A, so the
         # hub Pb pair is coupled at all); the decay says what is actually COUPLED. Without it,
         # a 10 A Hamiltonian is nearly a complete graph and every state is broad -- E2 at 10 A
@@ -501,7 +507,23 @@ class SpectralCarrierHead(nn.Module):
         # mean site energy, because the uniform mode was removed; mu_c carries its absolute
         # position as one learned scalar per channel.
         carrier_energy = (w * lam).sum(-1) + self.mu.to(lam.dtype).unsqueeze(0)   # [G, C]
-        delta_sr = (counts.to(carrier_energy.dtype) * carrier_energy).sum(-1)
+        # Per-channel sign on the energy contribution. Lambda is the lowest eigenvalue of a
+        # bonding-signed H, which is an ADDED ELECTRON's level: eps - t(d), falling as a pair
+        # closes. A hole removed from a bonding state is the negative of that -- -eps + t(d),
+        # RISING as the pair closes -- and a minimum eigenvalue cannot represent it, since a
+        # minimum lies at or below the smallest diagonal while the hole's level lies ABOVE its
+        # on-site energy by t. The sign therefore has to come from the counter, not from the
+        # solver. Registered as a buffer of ones by default, so every existing head is
+        # bit-identical and the 24 saved V3 checkpoints keep meaning what they meant.
+        # getattr, not attribute access: heads pickled before this buffer existed restore a
+        # __dict__ without it, and every saved checkpoint would otherwise fail to forward.
+        # Absent means the original convention, which is what those checkpoints were trained
+        # under -- so they keep meaning exactly what they meant.
+        sign = getattr(self, "channel_sign", None)
+        if sign is None:
+            sign = torch.ones(C, device=carrier_energy.device, dtype=carrier_energy.dtype)
+        delta_sr = (sign.to(carrier_energy.dtype).unsqueeze(0)
+                    * counts.to(carrier_energy.dtype) * carrier_energy).sum(-1)
 
         dens = (psi.pow(2) * w.unsqueeze(-2)).sum(-1)          # [G, C, N]
         alpha = dens[batch, :, local].to(node_feats.dtype)     # [n_nodes, C]
