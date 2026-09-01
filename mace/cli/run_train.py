@@ -670,7 +670,7 @@ def run(args) -> None:
             if apply_pseudolabels_to_pt_head_configs(
                 foundation_model=model_foundation,
                 pt_head_config=head_config,
-                r_max=args.r_max,
+                r_max=graph_cutoff(args),
                 device=device,
                 batch_size=args.batch_size,
                 force_stress=args.pseudolabel_replay_compute_stress,
@@ -685,7 +685,14 @@ def run(args) -> None:
         if ase_files:
             dataset = load_dataset_for_path(
             file_path=ase_files,
-            r_max=args.r_max,
+            # graph_cutoff, NOT r_max. With the spectral head the carrier Hamiltonian is
+            # longer-ranged than the trunk, and the trunk is filtered back to r_max inside
+            # the model. Building the TRAINING graph at r_max instead left the two
+            # vacancy-sharing Pb -- median 5.4 A apart -- with no edge in 0/40 frames, so the
+            # two-site state the R2 screen was looking for could not be represented at all.
+            # graph_cutoff was previously applied only to the valid-file FALLBACK path, which
+            # runs with an explicit valid_file never executes.
+            r_max=graph_cutoff(args),
             z_table=z_table,
             head_config=head_config,
             heads=heads,
@@ -697,7 +704,7 @@ def run(args) -> None:
         for file in non_ase_files:
             dataset = load_dataset_for_path(
             file_path=file,
-            r_max=args.r_max,
+            r_max=graph_cutoff(args),
             z_table=z_table,
             head_config=head_config,
             heads=heads,
@@ -719,7 +726,7 @@ def run(args) -> None:
             if valid_ase_files:
                 valid_dataset = load_dataset_for_path(
                     file_path=valid_ase_files,
-                    r_max=args.r_max,
+                    r_max=graph_cutoff(args),
                     z_table=z_table,
                     head_config=head_config,
                     heads=heads,
@@ -730,7 +737,7 @@ def run(args) -> None:
             for valid_file in valid_non_ase_files:
                 valid_dataset = load_dataset_for_path(
                 file_path=valid_file,
-                r_max=args.r_max,
+                r_max=graph_cutoff(args),
                 z_table=z_table,
                 head_config=head_config,
                 heads=heads,
@@ -1375,14 +1382,14 @@ def run(args) -> None:
                 for test_file in test_files:
                     name = os.path.splitext(os.path.basename(test_file))[0]
                     test_sets[name] = data.HDF5Dataset(
-                        test_file, r_max=args.r_max, z_table=z_table, heads=heads, head=head_config.head_name
+                        test_file, r_max=graph_cutoff(args), z_table=z_table, heads=heads, head=head_config.head_name
                     )
             else:
                 test_folders = glob(head_config.test_dir + "/*")
                 for folder in test_folders:
                     name = os.path.splitext(os.path.basename(test_file))[0]
                     test_sets[name] = data.dataset_from_sharded_hdf5(
-                        folder, r_max=args.r_max, z_table=z_table, heads=heads, head=head_config.head_name
+                        folder, r_max=graph_cutoff(args), z_table=z_table, heads=heads, head=head_config.head_name
                     )
         for test_name, test_set in test_sets.items():
             test_sampler = None
