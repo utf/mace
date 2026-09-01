@@ -134,6 +134,39 @@ def init_mu_for_gap(model, pristine_batch, e_gap, log):
         f"{shift:+.3f} -> L_gap residual 0 at step 0")
 
 
+def init_mu_for_energy(model, batches, channel, log, n_batch=3):
+    """Set mu so the head's ENERGY contribution starts at the median target, sign-aware.
+
+    The previous initialiser solved L_gap (lambda_e + mu_e + lambda_h + mu_h = E_gap) and knew
+    nothing about `channel_sign`. Flipping the sign therefore left mu initialised for the other
+    convention, and the ON arm began 4700x from any fit -- force loss 14.96 against a 0.0032
+    baseline. That is an initialisation bug and it would have been read as evidence about the
+    sign.
+
+    Solve instead   s_c * (Lambda_init + mu_c) = median(dE_target)   per active channel, where
+    dE_target = E_ref - E_base on the same frames. Both conventions then start at the right
+    energy scale, which is what the regression test asserts.
+    """
+    lam, tgt = [], []
+    with torch.no_grad():
+        for batch, frames in batches[:n_batch]:
+            d = batch.to_dict()
+            lam.append(lambda1_grad(model, d, channel).detach().cpu().numpy())
+            out = model(d, training=False, compute_force=False)
+            e_base = out["base_energy"] if "base_energy" in out else out.get("energy")
+            ref = torch.as_tensor([float(f.info["REF_energy"]) for f in frames],
+                                  device=e_base.device, dtype=e_base.dtype)
+            tgt.append((ref - e_base).detach().cpu().numpy())
+    lam = float(np.mean(np.concatenate(lam)))
+    tgt = float(np.median(np.concatenate(tgt)))
+    with torch.no_grad():
+        s = float(model.spectral.channel_sign[channel])
+        # s*(lam + mu) = tgt  ->  mu = s*tgt - lam
+        model.spectral.mu[channel] = s * tgt - lam
+    log(f"      mu init (energy, sign-aware): s={s:+.0f}  Lambda {lam:+.3f}  "
+        f"target median {tgt:+.3f}  -> mu[{channel}] {float(model.spectral.mu[channel]):+.3f}")
+
+
 def far_block_lambda1(internals, batch, near_masks, channel):
     """lambda_1 of H restricted to atoms BEYOND r_max of the vacancy.
 
@@ -227,9 +260,11 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, near_masks, prist
         f"{model.spectral.channel_sign.tolist()}"
         + (f", clamp={clamp}" if clamp else ""))
     prof_init = log_profile(model, log, "init")
-    # L_gap is a scalar equality mu can satisfy outright; do that rather than spend the first
-    # epochs letting it dominate the loss on its way to the same place.
-    init_mu_for_gap(model, pristine_pool[0], e_gap, log)
+    # Sign-aware energy initialisation. Must come after channel_sign is set, and replaces the
+    # L_gap initialiser for the active channel: L_gap is retired for the single-manifold head
+    # (a pristine HOLE energy is a VB-manifold quantity this head does not represent), and the
+    # thing that actually needs initialising is the energy scale.
+    init_mu_for_energy(model, batches, channel_of(batches[0][0]), log)
     model.train()
     for n, p in model.named_parameters():
         p.requires_grad_(is_correction_param(n) or ".spectral." in n)
