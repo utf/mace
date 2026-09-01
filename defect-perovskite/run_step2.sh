@@ -30,9 +30,9 @@ run () { local gpu=$1 out=$2; shift 2
 }
 
 echo "=== step 2 (response channel) starting $(date +%F' '%H:%M:%S) ==="
-run 0 $R/step2_hub.json  hub2 &
-run 1 $R/step2_lig.json  lig2 &
-run 2 $R/step2_rand.json rand2_0 rand2_1 rand2_2 &
-run 3 $R/step2_rest.json nbhd12 free &
+run 4 $R/step2_hub.json  hub2 &
+run 5 $R/step2_lig.json  lig2 &
+run 6 $R/step2_rand.json rand2_0 rand2_1 rand2_2 &
+run 7 $R/step2_rest.json nbhd12 free &
 wait
 echo "=== step 2 complete $(date +%F' '%H:%M:%S) ==="

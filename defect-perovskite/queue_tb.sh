@@ -59,9 +59,9 @@ run () {   # gpu variant margin seed_start
 }
 
 echo "=== T-B starting $(date +%F' '%H:%M:%S) ==="
-run 0 v1 0.2 1 &
-run 1 v1 0.5 1 &
-run 2 v2 0.2 4 &
-run 3 v2 0.5 4 &
+run 4 v1 0.2 1 &
+run 5 v1 0.5 1 &
+run 6 v2 0.2 4 &
+run 7 v2 0.5 4 &
 wait
 echo "=== T-B complete $(date +%F' '%H:%M:%S) ==="

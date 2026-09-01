@@ -25,7 +25,11 @@ REPO="$(cd "${HERE}/.." && pwd)"
 export PATH="$HOME/micromamba/envs/py13/bin:$PATH"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 DATA="${DATA:-$HERE/dataset_pbe}"
-GPUS=(${GPUS_LIST:-0 1 2 3})
+# GPU 0-3 are off-limits on b3 by instruction (2026-09-01): GPU3 has a recurring
+# hardware fault -- it has now died three times -- and 0-2 are reserved. Four cards,
+# so this still satisfies the standing at-most-four-devices rule. Override with
+# GPUS_LIST if you are on a different machine.
+GPUS=(${GPUS_LIST:-4 5 6 7})
 RUNS_PER_GPU="${RUNS_PER_GPU:-2}"
 CONCURRENCY=$(( ${#GPUS[@]} * RUNS_PER_GPU ))
 HEADS="${HEADS:-h2 h3}"
