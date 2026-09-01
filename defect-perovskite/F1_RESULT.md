@@ -11,6 +11,18 @@ positive = the hub pair pushed apart.
 | hub–hub ≤ 0 or ≈ 0 in all six localised cells | **6 / 6 confirmed** |
 | two-sidedness ≪ 0.5 in localised cells | **0 / 6** — values 0.53, 0.67, 0.70, 0.76, 0.80, 0.82 |
 | hub–ligand carries the positive share | **no** — hub–ligand ≈ 0 in localised cells |
+| \|H_ab\| at the realised decay prior | **no** — 1.6–4.2x the prior, mean **2.44x** |
+
+Prior comparison at matched d (5.61 A), localised cells:
+
+| cell | \|H_ab\| | realised prior | ratio |
+|---|---|---|---|
+| fm0.2/2.2 s4 | 0.0667 | 0.0318 | 2.10 |
+| fm0.2/2.2 s5 | 0.0526 | 0.0321 | 1.64 |
+| fm0.2/2.4 s5 | 0.0686 | 0.0320 | 2.15 |
+| fm0.2/2.4 s6 | 0.0523 | 0.0333 | 1.57 |
+| fm0.3 s1 | 0.1341 | 0.0316 | 4.24 |
+| fm0.3 s4 | 0.0935 | 0.0317 | 2.95 |
 
 The explicit stop condition — *hub–hub positive and substantial in the localised cells* — is
 **not** met. hub–hub is negative in all six. But the confirm condition as written ("if 1–2
