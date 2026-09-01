@@ -266,6 +266,12 @@ def head(**kw):
     return LocalSpectralHead(**d).double()
 
 
+def test_decay_init_is_physical():
+    """l stays in the ~0.7-1.0 A range physical hopping actually decays over."""
+    h = head()
+    assert 0.7 <= float(h.decay_length(torch.tensor([2]), torch.tensor([2]))[0]) <= 1.2
+
+
 def two_site(h, r=3.0):
     feats = torch.randn(2, 8, dtype=torch.float64)
     counter = torch.zeros(1, 4, dtype=torch.float64)
@@ -323,20 +329,31 @@ def test_hopping_symmetric_in_ij():
     assert torch.equal(a, b)
 
 
-def test_init_hopping_not_collapsed_at_the_flanking_distance():
-    """Re-referencing the decay at r_max must not start the head disconnected.
+def test_realised_hopping_profile_at_init():
+    """Connectivity is set by the AMPLITUDE, and judged on the realised profile.
 
-    exp(-(r - r0)/l) with r0 moved from 3.0 to r_max divides every element by e^((r_max-3)/l),
-    which at the parent's l_init = 1.0 is enough to leave only the t_min floor -- precisely
-    the decoupled regime the floor exists to prevent. Checked at the separation the flanking
-    pair actually occupies.
+    The decay length is physics (~0.7-1.0 A) and is not the knob for initial magnitude:
+    stretching it to 2.5 A to compensate for the moved reference gives t(10)/t(2.85) ~ 6%
+    across ~100 neighbours, which is the long-ranged nearly-complete graph whose lowest state
+    is the in-phase superatom mode -- what E2 measured at 10 A reach. So l stays at 1.0 and
+    the amplitude bias is calibrated instead, against the three targets below.
     """
-    h = head(r_max=5.0, r_couple=10.0)
-    f = torch.randn(2, 8, dtype=torch.float64)
-    sp = torch.tensor([2, 2])
-    for r_val in (5.3, 6.8):
-        r = torch.full((1,), r_val, dtype=torch.float64)
-        t = h.hopping(f[:1], f[1:], r, sp[:1], sp[1:]).abs().max().item()
-        assert t > 5.0 * h.t_min, (
-            f"t at {r_val} A is {t:.4g}, barely above the floor {h.t_min}: the head starts "
-            "effectively disconnected")
+    h = head(r_max=5.0, r_couple=10.0, decay_init=1.0, t_ref_r=2.85, t_ref_value=0.5)
+    t = h.hopping_profile([2.85, 5.6, 8.0, 10.0])
+    assert 0.3 <= t[0] <= 1.0, f"first-neighbour t = {t[0]:.4g}, outside 0.3-1.0 eV"
+    assert 0.05 <= t[1] / t[0] <= 0.20, f"t(5.6)/t(2.85) = {t[1] / t[0]:.3%}, outside 5-20%"
+    assert t[3] / t[0] < 0.01, f"t(10)/t(2.85) = {t[3] / t[0]:.3%}, not below 1%"
+
+
+def test_long_decay_would_make_a_nearly_complete_graph():
+    """The rejected setting, pinned so nobody reinstates it as a magnitude fix.
+
+    At l = 2.5 A the ratio at the coupling reach is ~an order of magnitude larger than at
+    l = 1.0, which is the difference between a sparse Hamiltonian and one where every pair in
+    a 10 A ball is comparably coupled.
+    """
+    short = head(r_max=5.0, r_couple=10.0, decay_init=1.0, t_ref_r=2.85)
+    long_ = head(r_max=5.0, r_couple=10.0, decay_init=2.5, t_ref_r=2.85)
+    rs = [2.85, 8.0]
+    s, l = short.hopping_profile(rs), long_.hopping_profile(rs)
+    assert l[1] / l[0] > 5.0 * (s[1] / s[0])

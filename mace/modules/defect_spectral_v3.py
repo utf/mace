@@ -32,12 +32,24 @@ the Pb-Cl bond and the Pb-Cs second shell) and `decay_r0 = 3.0 A` (a reference d
 same provenance). The plan's deficit formula already specifies r_max for the first; the second
 is referenced at r_max so the exponential uses only sanctioned constants.
 
-That re-referencing changes the initial magnitude and the change is not cosmetic:
-exp(-(r - r0)/l) at r0 = 3.0, l = 1.0 becomes exp(-(r - 5.0)/l), so a naive port would divide
-every hopping by e^2 and start the head effectively disconnected -- the regime the t_min floor
-exists to prevent. `decay_init` is therefore raised to 2.5 A, which puts the flanking pair
-(5.3-6.8 A) near unity and the 10 A envelope edge at ~0.14. The two-site closed form and the
-init-magnitude check are asserted in tests/unit/test_spectral_v3.py rather than argued here.
+Re-referencing changes the initial magnitude, and the fix for that goes through the
+AMPLITUDE, not the decay length. Lengthening l to 2.5 A restores the magnitude but gives
+t(10 A)/t(2.85 A) ~ 6% across ~100 neighbours -- the long-ranged, nearly complete graph whose
+lowest state is the in-phase superatom mode, which is what E2 measured at 10 A reach. Physical
+hopping decays over ~0.7-1.0 A, so `decay_init` stays at 1.0 and the initial scale is set by
+calibrating the amplitude bias instead (`t_ref_r`, `t_ref_value`).
+
+The calibration target is the REALISED profile, which is what the physics constrains:
+
+    t(first neighbour, ~2.85 A)   0.3-1.0 eV
+    t(2 x bond, ~5.6 A)           5-20% of that
+    t(r_couple, 10 A)             < 1% of that
+
+`t_ref_r` is a calibration input and not a cutoff -- it is used once, at construction, and
+never appears in the functional form. The harness passes the measured median nearest-neighbour
+distance of the data, so no material-specific length enters the head. `hopping_profile` reports
+the realised values at init and at the end of every run, the latter being the
+effective-coupling-length diagnostic.
 
 THE DETACH BOUNDARY, decided explicitly because the plan admits two readings. Section 2 says
 the response channel takes a "trunk-feature effective charge and polarisability", and also
@@ -65,7 +77,8 @@ class LocalSpectralHead(SpectralCarrierHead):
 
     def __init__(self, *, feature_dim: int, counter_dim: int, num_elements: int,
                  r_max: float, r_couple: float, elem_dim: int = 8,
-                 hidden: int = 64, radial_dim: int = 8, decay_init: float = 2.5,
+                 hidden: int = 64, radial_dim: int = 8, decay_init: float = 1.0,
+                 t_ref_r: Optional[float] = None, t_ref_value: float = 0.5,
                  **kw) -> None:
         # The deficit envelope and the decay reference are both r_max; the coupling reach is
         # r_couple. use_decay and use_sigma are not optional in V3 -- the decay is what keeps
@@ -93,6 +106,47 @@ class LocalSpectralHead(SpectralCarrierHead):
                           self.num_channels], final_scale=0.01)
         self.hop = _mlp([2 * feature_dim + 2 * elem_dim + radial_dim, hidden, hidden,
                          self.num_channels], final_scale=0.05)
+
+        # Connectivity is fixed through the AMPLITUDE, not the decay length.
+        #
+        # Lengthening the decay to compensate for the moved reference was the wrong lever: at
+        # l = 2.5 A the profile gives t(10 A)/t(2.85 A) ~ 6% over ~100 neighbours, which is the
+        # long-ranged, nearly complete graph that produced the superatom ground state in E2.
+        # Physical hopping decays over ~0.7-1.0 A, so l stays there and the initial magnitude
+        # is set by calibrating the amplitude instead.
+        #
+        # `t_ref_r` is a calibration input, NOT a cutoff: it appears once, at construction, to
+        # place the initial scale, and never in the functional form. The harness passes the
+        # MEASURED median nearest-neighbour distance of the data rather than a constant, so no
+        # material-specific length is baked into the head.
+        if t_ref_r is not None:
+            with torch.no_grad():
+                r = torch.tensor([float(t_ref_r)])
+                factor = float(torch.exp(-(r - self.decay_r0) / float(decay_init))
+                               * self._envelope(r))
+                target_amp = float(t_ref_value) / max(factor, 1e-12)
+                excess = max(target_amp - float(self.t_min), 1e-6)
+                # softplus^-1, so amp = t_min + softplus(bias) lands on target_amp
+                bias = float(torch.log(torch.expm1(torch.tensor(excess))))
+                self.hop[-1].bias.fill_(bias)
+
+    def hopping_profile(self, distances, species_i: int = 0, species_j: int = 0,
+                        feature_dim: Optional[int] = None):
+        """Realised |t| at the given distances, for zero features -- the diagnostic item 6 asks
+        for. Logged at init and at the end of every run; the end-of-run values are the
+        effective-coupling-length measurement."""
+        dev = next(self.parameters()).device
+        dt = next(self.parameters()).dtype
+        n = len(distances)
+        d = feature_dim if feature_dim is not None else self.hop[0].in_features
+        fdim = (d - 2 * self.elem.embedding_dim - self.radial_dim) // 2
+        f = torch.zeros(n, fdim, device=dev, dtype=dt)
+        r = torch.tensor([float(x) for x in distances], device=dev, dtype=dt)
+        si = torch.full((n,), int(species_i), device=dev, dtype=torch.long)
+        sj = torch.full((n,), int(species_j), device=dev, dtype=torch.long)
+        with torch.no_grad():
+            t = self.hopping(f, f, r, si, sj)
+        return t.abs().max(dim=-1).values.detach().cpu().numpy()
 
     # -------------------------------------------------------------- descriptor boundary
 
@@ -133,8 +187,9 @@ class LocalSpectralHead(SpectralCarrierHead):
         return self.hop_scale * amp * decay * self._envelope(r).unsqueeze(-1)
 
 
-def install_local_head(model, r_couple: Optional[float] = None,
-                       elem_dim: int = 8) -> LocalSpectralHead:
+def install_local_head(model, r_couple: Optional[float] = None, elem_dim: int = 8,
+                       t_ref_r: Optional[float] = None,
+                       t_ref_value: float = 0.5) -> LocalSpectralHead:
     """Replace a built model's spectral head with the V3 form, in place.
 
     Asserts the descriptor really is block 1. `MACEDefect` selects it by slicing the first
@@ -167,6 +222,7 @@ def install_local_head(model, r_couple: Optional[float] = None,
         counter_dim=int(head.counter_dim),
         num_elements=int(model.atomic_numbers.numel()),
         r_max=r_max, r_couple=couple, elem_dim=elem_dim,
+        t_ref_r=t_ref_r, t_ref_value=t_ref_value,
         num_channels=head.num_channels, num_states=head.num_states,
         smearing=head.smearing, radial_dim=head.radial_dim,
         t_min=head.t_min, gauge_penalty=bool(head.gauge_penalty),

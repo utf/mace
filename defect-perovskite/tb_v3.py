@@ -42,7 +42,8 @@ import numpy as np
 import torch
 
 import mace  # noqa: F401  (before e3nn)
-from mace.data.dilution import retained_mass, tile_with_pristine
+from mace.data.dilution import (interface_mass, read_dilution, retained_mass,
+                                tile_with_pristine)
 from mace.modules.defect_stage import is_correction_param
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -61,18 +62,27 @@ E_MAJ, H_MAJ = 0, 2          # channel indices: (e_maj, e_min, h_maj, h_min)
 # --------------------------------------------------------------------------- gap provenance
 
 GAP_SOURCES = {
-    # Literature PBE, scalar-relativistic, no SOC -- matching the labels, which are the
-    # paper's low-fidelity PBE set. Deliberately NOT the paper's Table III 3.08 eV (tuned
-    # HSE + SOC, ~0.9 eV too high against these labels), NOT PBE+SOC (~1.3 eV; SOC moves the
-    # Pb-6p band by ~1 eV and the labels are scalar-relativistic), NOT experiment (2.93 eV).
+    # DEFAULT. The dataset's own band edges (band_edges.json, e_cbm_cell +1.2 / e_vbm_cell
+    # -1.2) are the reference the energy labels are already stated against, so they have
+    # better provenance here than a literature number that may be for the cubic phase.
+    # Orthorhombic tilting is expected to widen the PBE gap slightly over cubic.
+    "dataset_band_edges": 2.4,
+    # Sensitivity arm. Literature PBE, scalar-relativistic, no SOC -- matching the labels,
+    # which are the paper's low-fidelity PBE set. Deliberately NOT the paper's Table III
+    # 3.08 eV (tuned HSE + SOC, ~0.9 eV too high against these labels), NOT PBE+SOC (~1.3 eV;
+    # SOC moves the Pb-6p band by ~1 eV and the labels are scalar-relativistic), NOT the
+    # experimental 2.93 eV.
     "literature_pbe_nosoc": 2.2,
 }
+# The 0.2 eV between them moves m by 0.04 eV at f_m = 0.2 and the cap is soft, so no decision
+# turns on the choice. Both are recorded; replace with the thermal-mean Kohn-Sham gap from the
+# Zenodo bulk outputs if those are ever downloaded.
 
 
 def resolve_gap(value, source):
     if value is not None:
         return float(value), source or "explicit"
-    return GAP_SOURCES["literature_pbe_nosoc"], "literature_pbe_nosoc(2.21-2.22 eV)"
+    return GAP_SOURCES["dataset_band_edges"], "dataset_band_edges(+/-1.2 eV -> 2.4)"
 
 
 # --------------------------------------------------------------------------- candidate region
@@ -99,6 +109,28 @@ def candidate_mask(atoms, r_max):
     centre = pos[a] + 0.5 * vec[0, 0]
     dv, _ = get_distances(centre[None], pos, cell=cell, pbc=pbc)
     return np.linalg.norm(dv[0], axis=-1) <= float(r_max)
+
+
+def init_mu_for_gap(model, pristine_batch, e_gap, log):
+    """Set mu_e + mu_h so L_gap is satisfied exactly at step 0.
+
+    L_gap is a single scalar equality that mu_e + mu_h can zero outright, so it collapses
+    immediately and is inert with respect to H -- its job is to pin the two channel offsets to
+    each other, which only becomes informative in a host where both channels carry data.
+    Leaving it to find that by gradient descent means starting orders of magnitude above the
+    force loss and briefly destroying the fit for nothing. The shift is split evenly so any
+    existing difference between the two offsets survives.
+    """
+    with torch.no_grad():
+        lam_e = float(lambda1_grad(model, pristine_batch, E_MAJ).mean())
+        lam_h = float(lambda1_grad(model, pristine_batch, H_MAJ).mean())
+        mu = model.spectral.mu
+        current = lam_e + float(mu[E_MAJ]) + lam_h + float(mu[H_MAJ])
+        shift = (float(e_gap) - current) / 2.0
+        mu[E_MAJ] += shift
+        mu[H_MAJ] += shift
+    log(f"      mu init: lambda_e {lam_e:+.3f}, lambda_h {lam_h:+.3f}, shifted each mu by "
+        f"{shift:+.3f} -> L_gap residual 0 at step 0")
 
 
 def far_block_lambda1(internals, batch, near_masks, channel):
@@ -161,12 +193,34 @@ def gap_loss(model, pristine_batch, e_gap, w_g):
 # --------------------------------------------------------------------------- one cell
 
 
+PROFILE_R = (2.85, 5.6, 8.0, 10.0)          # where the realised hopping profile is reported
+
+
+def log_profile(model, log, when):
+    """Report the realised |t| at the profile distances -- init, and end of run.
+
+    The end-of-run values are the effective-coupling-length diagnostic: what the head actually
+    settled on, as opposed to what it was initialised to.
+    """
+    prof = model.spectral.hopping_profile(PROFILE_R)
+    first = prof[0] if prof[0] > 0 else float("nan")
+    txt = "  ".join(f"t({r:.2f})={v:.4f} ({100 * v / first:5.2f}%)"
+                    for r, v in zip(PROFILE_R, prof))
+    log(f"      hopping profile [{when}]: {txt}")
+    return {f"t_{r}": float(v) for r, v in zip(PROFILE_R, prof)}
+
+
 def run_cell(arch_path, base_path, seed, batches, frame_masks, near_masks, pristine_pool,
-             pristine_frames, device, epochs, lr, f_m, e_gap, w_e, w_g, log):
+             pristine_frames, pristine_far_masks, device, epochs, lr, f_m, e_gap,
+             w_e, w_g, t_ref_r, log):
     from mace.modules.defect_spectral_v3 import install_local_head
 
     model, _ = fresh_model(arch_path, base_path, seed, device, response=True)
-    install_local_head(model)
+    install_local_head(model, t_ref_r=t_ref_r)
+    prof_init = log_profile(model, log, "init")
+    # L_gap is a scalar equality mu can satisfy outright; do that rather than spend the first
+    # epochs letting it dominate the loss on its way to the same place.
+    init_mu_for_gap(model, pristine_pool[0], e_gap, log)
     model.train()
     for n, p in model.named_parameters():
         p.requires_grad_(is_correction_param(n) or ".spectral." in n)
@@ -241,11 +295,46 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, near_masks, prist
 
     # ---- gates, all evaluation-only
     model.eval()
-    ref = []
+    ref, ref_trunc = [], []
     with torch.no_grad():
-        for pb in pristine_pool:
+        for k, pb in enumerate(pristine_pool):
             ref.append(lambda1_grad(model, pb, channel).detach().cpu().numpy())
+    # LIKE-WITH-LIKE reference. lambda_1 of the defect cell's far block is the lowest
+    # eigenvalue of a TRUNCATED matrix, and interlacing puts that above the full matrix's
+    # regardless of how the elements compare -- so differencing it against the full pristine
+    # lambda_1 measures the truncation, not the binding. The pristine cells are therefore
+    # truncated the same way (the same exclusion radius about a fixed site) and the two
+    # truncated values are compared, so the truncation term cancels. Element-level identity
+    # beyond r_max, which test 2 asserts, remains the constructive guarantee.
+    for pb, fm in zip(pristine_pool, pristine_far_masks):
+        internals_p = {}
+        head = model.spectral
+        orig = head.forward
+
+        def _wrap(*a, **k):
+            k["internals"] = internals_p
+            return orig(*a, **k)
+
+        head.forward = _wrap
+        try:
+            with torch.no_grad():
+                model(pb, training=False, compute_force=False)
+        finally:
+            head.forward = orig
+        bidx = pb["batch"].detach().cpu().numpy()
+        H = internals_p["H"]
+        for g, far in enumerate(fm):
+            n = int((bidx == g).sum())
+            f = far[:n]
+            if f.sum() < 2:
+                continue
+            sel = torch.as_tensor(np.where(f)[0], device=H.device)
+            ev = torch.linalg.eigvalsh(H[g, channel][sel][:, sel])
+            ev = ev[ev < 500.0]
+            if ev.numel():
+                ref_trunc.append(float(ev.min()))
     ref_mean = float(np.mean(np.concatenate(ref)))
+    ref_trunc_mean = float(np.mean(ref_trunc)) if ref_trunc else float("nan")
 
     act, nul, lens, d_pri, d_far, region, occ = [], [], [], [], [], [], []
     gi = 0
@@ -262,7 +351,8 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, near_masks, prist
         lam_d = lam_d.min(dim=-1).values.detach().cpu().numpy()
         d_pri += (ref_mean - lam_d).tolist()
         fb = far_block_lambda1(internals, batch, nm, channel)
-        d_far += [float(f - l) for f, l in zip(fb, lam_d)]
+        # Truncated-to-truncated, so the truncation offset cancels.
+        d_far += [float(ref_trunc_mean - f) for f in fb]
 
         # Mass inside the candidate region, and the region's size.
         alpha = out["carrier_alpha"][:, channel].detach().cpu().numpy()
@@ -287,10 +377,25 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, near_masks, prist
     metrics["candidate_region_size"] = float(np.nanmean(region))
     metrics["mass_in_region"] = float(np.nanmean(occ))
     metrics["lambda1_pristine_final"] = ref_mean
+    metrics["lambda1_pristine_truncated"] = ref_trunc_mean
 
     # ---- retained mass under 2x1x1 dilution with a pristine block
-    metrics["retained_mass"] = dilution_gate(model, batches, pristine_frames, device,
-                                             channel, rng)
+    metrics["retained_mass"], metrics["interface_mass"] = dilution_gate(
+        model, batches, pristine_frames, device, channel, rng)
+    metrics["dilution_reading"] = read_dilution(metrics["retained_mass"],
+                                                metrics["interface_mass"])
+
+    metrics["profile_init"] = prof_init
+    metrics["profile_final"] = log_profile(model, log, "final")
+
+    # ---- gate verdicts, region-relative and stated explicitly
+    reg = metrics["candidate_region_size"]
+    metrics["gate_neff"] = bool(metrics["neff"] <= reg) if np.isfinite(reg) else False
+    metrics["gate_ratio"] = bool(metrics["null_ratio"] <= 0.15)
+    metrics["gate_delta"] = bool(m <= metrics["delta_bind_vs_pristine"] <= e_gap)
+    metrics["gate_retained"] = bool(metrics["retained_mass"] >= 0.9)
+    metrics["gates_passed"] = int(metrics["gate_neff"]) + int(metrics["gate_ratio"]) \
+        + int(metrics["gate_delta"]) + int(metrics["gate_retained"])
     return model, metrics
 
 
@@ -303,11 +408,11 @@ def dilution_gate(model, batches, pristine_frames, device, channel, rng, n_frame
     """
     z_table = tools.AtomicNumberTable([int(z) for z in model.atomic_numbers])
     cutoff = graph_cutoff_for(model)
-    vals = []
+    vals, iface = [], []
     frames = [f for _, fr in batches for f in fr][:n_frames]
     for f in frames:
         try:
-            tiled, mask, _axis = tile_with_pristine(f, pristine_frames, rng)
+            tiled, mask, axis = tile_with_pristine(f, pristine_frames, rng)
         except Exception:                                   # noqa: BLE001
             continue
         if tiled is None:
@@ -321,7 +426,14 @@ def dilution_gate(model, batches, pristine_frames, device, channel, rng, n_frame
                 o = model(b.to_dict(), training=False, compute_force=False)
             a = o["carrier_alpha"][:, channel].detach().cpu().numpy()
             vals.append(retained_mass(a, mask[:a.size]))
-    return float(np.nanmean(vals)) if vals else float("nan")
+            # Retained mass ALONE is ambiguous and was reported without this once already:
+            # ~0.5 with low interface mass is a genuinely band-like state, ~0.5 with high
+            # interface mass is a straddling artefact sitting on the join and must not be
+            # read as band-like. The two are only separable with both numbers.
+            iface.append(interface_mass(a, tiled.get_positions(), tiled.get_cell(),
+                                        axis, len(f)))
+    return (float(np.nanmean(vals)) if vals else float("nan"),
+            float(np.nanmean(iface)) if iface else float("nan"))
 
 
 def main() -> None:
@@ -403,6 +515,33 @@ def main() -> None:
     pristine_pool = [b.to_dict() for b, _ in pool]
     log(f"  pristine pool: {len(pristine)} frames in {len(pristine_pool)} draws")
 
+    # Amplitude calibration reference: the MEASURED median nearest-neighbour distance, not a
+    # constant. Used once at construction to place the initial hopping scale; it never enters
+    # the functional form, so no material-specific length is introduced.
+    b0 = batches[0][0]
+    _ei = b0.edge_index
+    _vec = b0.positions[_ei[1]] - b0.positions[_ei[0]]
+    if getattr(b0, "shifts", None) is not None and b0.shifts.numel() == _vec.numel():
+        _vec = _vec + b0.shifts
+    _len = torch.linalg.norm(_vec, dim=-1)
+    _nn = torch.full((int(b0.num_nodes),), float("inf"), device=_len.device)
+    _nn = _nn.index_reduce(0, _ei[0], _len, "amin", include_self=True)
+    t_ref_r = float(np.median(_nn[torch.isfinite(_nn)].detach().cpu().numpy()))
+    log(f"  measured median nearest-neighbour distance {t_ref_r:.3f} A "
+        f"(hopping amplitude calibrated here; not a cutoff)")
+
+    # Pristine frames truncated the SAME way as the defect far block, so the truncation
+    # cancels in the comparison. A fixed site per frame keeps it deterministic.
+    from ase.geometry import get_distances
+    pristine_far_masks = []
+    for _b, _fr in pool:
+        _masks = []
+        for _a in _fr:
+            _pos = _a.get_positions()
+            _dv, _ = get_distances(_pos[0][None], _pos, cell=_a.get_cell(), pbc=_a.pbc)
+            _masks.append(np.linalg.norm(_dv[0], axis=-1) > r_max)
+        pristine_far_masks.append(_masks)
+
     # w_e from this harness's own epoch-0 force loss, as before.
     if args.w_edge is None:
         probe, _ = fresh_model(args.arch, args.base, 1, args.device, response=True)
@@ -433,8 +572,8 @@ def main() -> None:
             try:
                 model, met = run_cell(args.arch, args.base, seed, batches, frame_masks,
                                       near_masks, pristine_pool, pristine_frames,
-                                      args.device, args.epochs, args.lr, f_m, e_gap,
-                                      w_e, w_g, log)
+                                      pristine_far_masks, args.device, args.epochs,
+                                      args.lr, f_m, e_gap, w_e, w_g, t_ref_r, log)
             except RuntimeError as exc:
                 if "E_GAP BREACH" not in str(exc):
                     raise
@@ -454,8 +593,9 @@ def main() -> None:
                 f"{met['candidate_region_size']:.0f}  ratio {met['null_ratio']:.3f}  "
                 f"D_bind {met['delta_bind_vs_pristine']:+.4f} (far {met['delta_bind_vs_far_block']:+.4f}, "
                 f"agree {met['delta_bind_agreement']:.4f})  region_mass {met['mass_in_region']:.3f}  "
-                f"retained {met['retained_mass']:.3f}  axial {met['axial_red']:+.3f}  "
-                f"loc {met['loc_length']:.2f} A")
+                f"retained {met['retained_mass']:.3f} (iface {met['interface_mass']:.3f}, "
+                f"{met['dilution_reading']})  axial {met['axial_red']:+.3f}  "
+                f"loc {met['loc_length']:.2f} A  gates {met['gates_passed']}/4")
             args.out.write_text(json.dumps(rows, indent=2, default=float))
             del model
             torch.cuda.empty_cache()
