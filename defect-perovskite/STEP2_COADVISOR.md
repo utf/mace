@@ -1,9 +1,21 @@
-# Carrier localisation in V_Cl+ CH3NH3PbCl3 — status, 1 Sep 2026
+# Carrier localisation in V_Cl+ orthorhombic CsPbCl3 — status, 1 Sep 2026
+
+*Dataset: Mosquera-Lois & Walsh, PRX Energy **4**, 043008 (2025). Labels are that
+paper's low-fidelity PBE set (scalar-relativistic, no SOC).*
+
 
 **Question.** Our defect model (MACE trunk + tight-binding carrier head) must decide
 whether the hole in a chlorine vacancy is *bound* to the two vacancy-adjacent Pb ("hub")
 or *delocalised* over the cell. DFT says bound: the force-response ratio against DFT is
 R = 0.95, CI [0.66, 1.34] over 13/17 matched frames, with a null magnitude 5–7% of signal.
+
+> **Cell-size caveat on R_DFT.** The 80-atom training cell is a 2x2x1 orthorhombic
+> expansion with c = 11.2 A, which constrains Pb-Pb separations above ~5.5 A when the
+> vacancy axis lies along c. The 79-atom d(Pb-Pb) distribution is therefore partly
+> cell-limited. The matched-d comparison against the 2x2x2 (159-atom) frames is
+> unaffected in principle, but the unmatched long-d frames are exactly the ones this
+> constraint removes from the small cell.
+
 The open question is whether the model reproduces that, and if so, why.
 
 ## Background: where we were

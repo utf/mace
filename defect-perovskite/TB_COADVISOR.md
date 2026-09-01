@@ -1,4 +1,8 @@
-# Is the missing object the host band edge? — V_Cl+ CH3NH3PbCl3, 1 Sep 2026
+# Is the missing object the host band edge? — V_Cl+ orthorhombic CsPbCl3, 1 Sep 2026
+
+*Dataset: Mosquera-Lois & Walsh, PRX Energy **4**, 043008 (2025). Labels are that
+paper's low-fidelity PBE set (scalar-relativistic, no SOC).*
+
 
 **Short version.** We tested whether our model fails to bind the hole because nothing in it
 knows where the host band edge is. The diagnostic says yes: the model places the carrier level
@@ -11,8 +15,17 @@ nothing pins the absolute host reference it is measured against.
 
 Our defect model is a MACE trunk with a tight-binding carrier head. DFT says the hole in the
 chlorine vacancy is bound to the two vacancy-adjacent Pb (force-response ratio R = 0.95,
-CI [0.66, 1.34], 13/17 matched frames). The model does not reproduce that: trained from
-scratch, the carrier is delocalised in 8/8 seeds.
+CI [0.66, 1.34], 13/17 matched frames).
+
+> **Cell-size caveat on R_DFT.** The 80-atom training cell is a 2x2x1 orthorhombic
+> expansion with c = 11.2 A, which constrains Pb-Pb separations above ~5.5 A when the
+> vacancy axis lies along c. The 79-atom d(Pb-Pb) distribution is therefore partly
+> cell-limited. The matched-d comparison against the 2x2x2 (159-atom) frames is
+> unaffected in principle, but the unmatched long-d frames are exactly the ones this
+> constraint removes from the small cell.
+
+The model does not reproduce that: trained from scratch, the carrier is delocalised in
+8/8 seeds.
 
 Earlier work established that this is not a representability problem. Adding an electrostatic
 response channel — the carrier's own potential acting on every ion, with a learned effective
