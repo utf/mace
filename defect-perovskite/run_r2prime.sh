@@ -32,14 +32,17 @@ ARMS="${ARMS:-arm1 arm1b}"
 SEEDS="${SEEDS:-1 2 3 4 5 6 7 8}"
 HEAD="${HEAD:-h3}"
 EPOCHS="${EPOCHS:-50}"
-DCL_W="${DCL_W:-0.0}"          # set from the calibration run; 0 disables
+# DCL is deferred to step 3: forcing compactness on a head whose compact states cannot
+# reproduce the force footprint (R1: every clamp ~0, free ~0.8) would buy worse forces and
+# an arbitrary compact site -- which R1 already told us. Its flags are NOT declared yet;
+# declaring inert flags is how the bandwidth anneal sat dead for a whole cycle.
 
 BASE1="$HOME/runs/e0_base_s1/e0_base_s1.model"
 BASE2="$HOME/runs/e0_base_s2/e0_base_s2.model"
 
 mkdir -p "$HOME/runs"
 echo "code: $(git -C "$REPO" rev-parse --short HEAD) dirty=$(git -C "$REPO" status --porcelain | wc -l) files"
-echo "arms: $ARMS | head: $HEAD | seeds: $SEEDS | GPUs ${GPUS[*]} x${RUNS_PER_GPU} | dcl_w=$DCL_W"
+echo "arms: $ARMS | head: $HEAD | seeds: $SEEDS | GPUs ${GPUS[*]} x${RUNS_PER_GPU}"
 
 run () {
     local arm="$1" seed="$2" gpu="$3"
@@ -51,15 +54,13 @@ run () {
     # so there is no release stage and therefore no rollback guard -- the guard exists to
     # protect a release, and with nothing released it would only ever freeze a base that was
     # never frozen.
-    local base_init="" base_lr=1.0 release_epoch=0 dcl="$DCL_W"
+    local base_init="" base_lr=1.0 release_epoch=0
     if [ "$arm" = "arm2" ]; then
         base_init="$BASE1"
         [ $((seed % 2)) -eq 0 ] && base_init="$BASE2"
         base_lr=0.0
         release_epoch=30
-        dcl=0.0
     fi
-    [ "$arm" = "arm1b" ] && dcl=0.0
 
     rm -rf "$HOME/runs/$name" "$HOME/runs/${name}.log"
     (
@@ -77,8 +78,7 @@ run () {
     DEFECT_SPECTRAL_ANNEAL_S0=4.0 DEFECT_SPECTRAL_ANNEAL_EPOCHS=20 \
     DEFECT_SEED_ANNEAL=False DEFECT_LOGIT_SEED_GAMMA=0.0 \
     DEFECT_SIZE_WEIGHT=0.0 \
-    DEFECT_TWO_SIZE_UPWEIGHT=0.25 \
-    DEFECT_DILUTION_WEIGHT="$dcl" DEFECT_DILUTION_RAMP=10 DEFECT_DILUTION_FRACTION=0.25 \
+    DEFECT_TWO_SIZE_UPWEIGHT="${UPWEIGHT:-0.25}" \
     DEFECT_BASE_INIT="$base_init" BASE_LR_FACTOR="$base_lr" \
     DEFECT_BASE_RELEASE_EPOCH="$release_epoch" DEFECT_BASE_RELEASE_FACTOR=0.01 \
         "${REPO}/defect-example/train_defect_model.sh" > "$HOME/runs/${name}.log" 2>&1

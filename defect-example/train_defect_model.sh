@@ -254,6 +254,7 @@ DEFECT_SPECTRAL_FIRST_SHELL="${DEFECT_SPECTRAL_FIRST_SHELL:-False}"
 DEFECT_SPECTRAL_SIGMA="${DEFECT_SPECTRAL_SIGMA:-False}"
 DEFECT_SPECTRAL_GAUGE_PENALTY="${DEFECT_SPECTRAL_GAUGE_PENALTY:-False}"
 DEFECT_EPS_GAUGE_WEIGHT="${DEFECT_EPS_GAUGE_WEIGHT:-0.0}"
+DEFECT_TWO_SIZE_UPWEIGHT="${DEFECT_TWO_SIZE_UPWEIGHT:-0.0}"
 DEFECT_SPECTRAL_ANNEAL_S0="${DEFECT_SPECTRAL_ANNEAL_S0:-0.0}"
 DEFECT_SPECTRAL_ANNEAL_EPOCHS="${DEFECT_SPECTRAL_ANNEAL_EPOCHS:-20}"
 # Two-timescale base (plan T4). 0 keeps the base frozen for the whole run.
@@ -393,6 +394,7 @@ python -m mace.cli.run_train \
     --defect_spectral_sigma="${DEFECT_SPECTRAL_SIGMA}" \
     --defect_spectral_gauge_penalty="${DEFECT_SPECTRAL_GAUGE_PENALTY}" \
     --defect_eps_gauge_weight="${DEFECT_EPS_GAUGE_WEIGHT}" \
+    --defect_two_size_upweight="${DEFECT_TWO_SIZE_UPWEIGHT}" \
     --defect_spectral_anneal_s0="${DEFECT_SPECTRAL_ANNEAL_S0}" \
     --defect_spectral_anneal_epochs="${DEFECT_SPECTRAL_ANNEAL_EPOCHS}" \
     --defect_base_release_epoch="${DEFECT_BASE_RELEASE_EPOCH}" \

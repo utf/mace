@@ -1313,6 +1313,18 @@ def run(args) -> None:
         base_release.on_epoch_start(epoch, base_lr=float(args.lr), state=state)
         base_release.on_epoch_end(epoch, state=state)
 
+    # Two-size upweight, applied to the dataset the loss iterates. Placed here, next to the
+    # reach assertion, because both are properties of the data the optimiser actually sees --
+    # the class of thing this project has repeatedly got wrong by configuring somewhere else.
+    if float(getattr(args, "defect_two_size_upweight", 0.0) or 0.0) > 0:
+        from mace.data.two_size import apply_two_size_upweight
+
+        factor, share = apply_two_size_upweight(
+            train_set, target_share=float(args.defect_two_size_upweight))
+        logging.info(
+            f"Two-size upweight: factor {factor:.2f}, realised charged-force-loss share "
+            f"{share:.1%} (target {float(args.defect_two_size_upweight):.0%})")
+
     # Reach assertion on the LOSS'S OWN loader, not a reimplementation of it. graph_cutoff
     # was previously verified only where it was not used, and the resulting 5 A graph -- in
     # which the two vacancy-sharing Pb have no edge -- voided a 20-seed screen. A check that

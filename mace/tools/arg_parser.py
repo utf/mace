@@ -1202,6 +1202,16 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=0.01,
     )
     parser.add_argument(
+        "--defect_two_size_upweight",
+        help="Target share of the CHARGED force loss carried by charged frames at the "
+        "larger cell size (0 disables). Those 17 frames carry the only measurement that "
+        "separates a bound carrier from a band state (Test 2, R_DFT = 0.95), and at natural "
+        "weighting they are ~3% of the charged force loss. Cell size is a property of the "
+        "box, not a defect label",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
         "--defect_spectral_anneal_s0",
         help="Bandwidth anneal: all hoppings are scaled by s0^(1 - e/E_a) for e <= E_a, "
         "then 1. Starting wide and narrowing lets a level separate from the band gradually "
