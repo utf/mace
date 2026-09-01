@@ -1,4 +1,11 @@
-# T2 null control, and the R2 H3/noanneal cell
+# T2 null control, and the R2 localisation screen
+
+> **Amended 2026-09-01.** The R2 section originally reported two H3/anneal seeds as
+> "localised" because they crossed the guard's 0.80 null-ratio threshold. That threshold is
+> an arming condition for the rollback guard, **not** a localisation criterion, and reading
+> it as one was wrong. Those seeds sit at N_eff 40 and 43 on ~80-atom cells -- a state over
+> half the cell, the same broad state E2 produced at participation ~37. The corrected tally
+> is **0/20**. The recommendation to power a 16-seed anneal study is withdrawn with it.
 
 Two results from 2026-08-31. They point in opposite directions, which is the useful part: the
 labels do carry a site-resolved carrier fingerprint (T2), and the spectral head does not
@@ -54,46 +61,62 @@ different statistic -- an earlier version of this write-up compared against it b
 
 Every frame was usable: 298/298 null and 262/262 charged per fold, no vacancy-location skips.
 
-## R2, H3/noanneal: a clean negative on localisation
+## R2: no head localises the carrier -- 0/20
 
-H3 = first-shell features + the dangling-orbital sigma term. 8 seeds, 50-epoch screen, base
-frozen to epoch 30 then released at 0.01x, T5 gauge penalty on, size loss off (diagnostic
-only), `clamped=[0,0,0,0]` throughout so no vacancy label reaches training.
+H2 = site energies and hopping prefactor from first-interaction-block features. H3 = H2 plus
+the dangling-orbital sigma term. Anneal = hoppings scaled by s(e) = 4^(1 - e/20), so the band
+starts 4x wider than its trained width and narrows. All cells: 50-epoch screen, base frozen
+through epoch 30 then released at 0.01x, soft gauge anchor, size loss off (diagnostic only),
+`clamped=[0,0,0,0]` throughout so no vacancy label reaches training.
 
-At the epoch-30 release, all four wave-1 seeds:
+Null ratio at the epoch-30 release (N_eff of the supervised channel over the mean of the three
+n_c = 0 channels, which take no gradient and so form a free per-run baseline):
 
-| seed | n_eff | active/null ratio | guard |
-|---|---|---|---|
-| s1 | 64.83 | 0.8751 | not armed |
-| s2 | 62.60 | 0.8680 | not armed |
-| s3 | 62.90 | 0.8444 | not armed |
-| s4 | 63.78 | 0.8691 | not armed |
+| cell | seeds | ratios at release |
+|---|---|---|
+| H3 / no anneal | 4 | 0.844, 0.868, 0.869, 0.875 |
+| H3 / anneal | 8 | 0.555, 0.581, 0.844, 0.880, 0.880, 0.889, 0.899, 0.931 |
+| H2 / no anneal | 8 | 0.808, 0.846, 0.848, 0.850, 0.870, 0.880, 0.898, 0.900 |
 
-**H3 does not localise the carrier.** N_eff sits at 62-65 in ~80-atom cells where the hub is
-two atoms; the supervised channel is only ~13% more contracted than its own unsupervised
-baseline. The trend is real but far too slow: mean ratio went 0.888 at epoch ~10 to 0.864 at
-epoch 30, about -0.0012/epoch, so reaching the 0.80 threshold would need ~58 more epochs
-against the 20 remaining.
+**None of these is a localised carrier.** The lowest two -- H3/anneal s5 and s8, at ratio
+0.555 and 0.581 -- correspond to N_eff 40.2 and 42.8 on ~80-atom cells, i.e. a state spread
+over more than half the cell. That is the same broad state E2 produced at participation ~37,
+not a defect level. A carrier on the vacancy pair with ligand tails is N_eff ~ 3-6, a ratio
+of ~0.05, an order of magnitude away. Their species mass is being measured in D1; the
+expectation is a Cl-sublattice band state rather than anything vacancy-centred.
 
-The reason this is a *strong* negative rather than an inconclusive one: **epochs 0-30 had the
-base fully frozen**, so M1 laundering was structurally impossible. The head had an uncontested
-opportunity to localise, with the gradient going nowhere else, and did not take it. The
-failure cannot be blamed on the base competing for the signal.
+The 0.80 figure that those two seeds crossed is the guard's ARMING condition -- the point
+below which a rollback has something to protect -- and was never a localisation criterion.
+The gate used from here on is **N_eff <= 8, null ratio <= 0.15, and a split-off gap much
+larger than the smearing T_s = 20 meV**, with the hub gate (the two vacancy-sharing Pb as the
+top-2 weights, >= 0.5 jointly, Cs < 0.05) logged as a metric only.
 
-The guard being disarmed in 4/4 seeds is not a malfunction -- it is the guard correctly
-reporting there is nothing to protect. But it does mean epochs 30-50 run with the base
-adapting and no rollback, so **anything that improves after epoch 30 is confounded by base
-drift and must not be read as the head localising.** The interpretable window is 0-30.
+So the honest tally across every head variant and both schedules is **0/20**. H2 vs H3 made
+no difference, and the anneal made no qualitative difference either.
 
-What H3 *is* doing: the active channel's gap widened from 3.35-4.05 to 3.94-4.88 eV while the
-nulls stayed flat at 2.4-2.7, with std_u at 0.59-1.48 against ~0.005 in the nulls. The sigma
-term produces a strong channel-specific Hamiltonian perturbation that expresses itself as a
-global gap opening rather than spatial contraction onto the vacancy pair.
+**The negative is strong, not inconclusive:** epochs 0-30 had the base fully frozen, so
+laundering by a co-adapting base was structurally impossible. Every head had an uncontested
+opportunity to localise, with the gradient going nowhere else, and none took it.
+
+**What the heads do instead.** In every arm, the supervised channel develops site energies
+with 100-300x the spread of its unsupervised counterparts (std_u 0.3-2.2 against 0.003-0.01)
+and a markedly more peaked attention distribution, while remaining spatially delocalised. So
+"does the head learn something charge-specific" is not where these arms fail; "does that
+become a localised state" is. That dissociation is the subject of D1: a delocalised alpha can
+still reproduce a concentrated axial force if eps_i is an MLP over neighbourhood features
+with a 5 A reach, because eps_i can be made steeply sensitive to R_hub for every atom whose
+features see the hub. Every head tried so far shares that freedom, which is the likeliest
+reason H2 and H3 behave identically.
+
+**One real guard finding survives:** both low-ratio seeds eroded measurably after the base was
+released (0.555 -> 0.663 and 0.581 -> 0.631 by epoch 49) without tripping the rollback
+thresholds, which were set for catastrophic collapse rather than slow drift. The guard needs
+tightening regardless of what replaces the head.
 
 ## Reading the two together
 
-T2 says the fingerprint is in the labels, across the whole overlap range, at x7-12 the null.
-R2 says this head does not convert it into a localised state even when handed a frozen base.
-So the gap is in the head's ability to localise, not in the information content of the data --
-which is the more tractable of the two failures, and rules out "the labels don't carry it" as
-the explanation.
+T2 says the fingerprint is in the labels, across the whole overlap range, at x7-12 the null,
+with a coherent sign. R2 says no head tried converts it into a localised state, even handed a
+frozen base and an uncontested gradient. The gap is therefore in the head, not in the
+information content of the data -- which rules out "the labels don't carry it" and points at
+the on-site term's flexibility as the thing to remove.
