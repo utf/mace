@@ -139,8 +139,16 @@ def masks_for(atoms, rng):
     noPb12 = np.zeros(n, dtype=bool)
     noPb12[order] = True
 
+    # Shell-resolved masks for the fine structure. A cage-centred state also produces an
+    # axial hub force: each hub Pb sits inside five ligand charges instead of six, so the net
+    # field on it is axial by the same missing-neighbour asymmetry that made the hopping
+    # fingerprint non-specific. Hub- and cage-centred states therefore both reproduce the
+    # COARSE footprint, and what separates them is finer -- the relative Cl-versus-Cs force
+    # magnitudes and the d(Pb-Pb) dependence.
     out = dict(hub2=hub, lig2=lig2, cage10=cage, nbhd12=hub | cage, noPb12=noPb12,
                free=np.ones(n, dtype=bool), is_pb=is_pb,
+               lig_shell=cage, cs_shell=(sym == "Cs"),
+               d_hub=float(dist[0, 0]),
                hub_idx=(a, b), axis=axis)
     for k in range(3):
         r = np.zeros(n, dtype=bool)
@@ -231,6 +239,9 @@ def axial_stats(err_head, err_base, fm, sel):
 def evaluate(model, batches, frame_masks, device):
     model.eval()
     head_ax, base_ax, tgt, cor, pb_frac = [], [], [], [], []
+    d_list = []
+    shell_sq = {"lig": 0.0, "cs": 0.0}
+    shell_n = {"lig": 0, "cs": 0}
     sq_all = cnt_all = 0.0
     sq_nb = cnt_nb = 0.0
     if True:
@@ -252,6 +263,13 @@ def evaluate(model, batches, frame_masks, device):
                 base_ax += bs
                 tgt.append(t)
                 cor.append(c)
+                d_list.append(fm[k]["d_hub"])
+                _e = err_h[sel]
+                for _name, _key in (("lig", "lig_shell"), ("cs", "cs_shell")):
+                    _m = fm[k][_key]
+                    if _m.any():
+                        shell_sq[_name] += float((_e[_m] ** 2).sum())
+                        shell_n[_name] += _e[_m].size
                 e = err_h[sel]
                 sq_all += float((e ** 2).sum())
                 cnt_all += e.size
@@ -274,10 +292,17 @@ def evaluate(model, batches, frame_masks, device):
         rmse_all=float(np.sqrt(sq_all / max(cnt_all, 1))) * 1000.0,
         rmse_nbhd=float(np.sqrt(sq_nb / max(cnt_nb, 1))) * 1000.0,
         pb_fraction=float(np.mean(pb_frac)) if pb_frac else float("nan"),
+        rmse_lig_shell=float(np.sqrt(shell_sq["lig"] / max(shell_n["lig"], 1))) * 1000.0,
+        rmse_cs_shell=float(np.sqrt(shell_sq["cs"] / max(shell_n["cs"], 1))) * 1000.0,
+        # Slope of the predicted axial correction against d(Pb-Pb). The hub hopping carries a
+        # d-dependence a cage-centred state has no reason to reproduce, so this is fine
+        # structure that can separate them when axial_red alone cannot.
+        slope_vs_d=(float(np.polyfit(np.array(d_list), np.array(cor), 1)[0])
+                    if len(d_list) > 2 else float("nan")),
     )
 
 
-def fresh_model(arch_path, base_path, seed, device):
+def fresh_model(arch_path, base_path, seed, device, response=False):
     """Architecture from a current-code model, base weights from Stage-A, head freshly drawn.
 
     Three sources rather than one, deliberately:
@@ -293,7 +318,11 @@ def fresh_model(arch_path, base_path, seed, device):
 
     arch = torch.load(arch_path, map_location="cpu", weights_only=False)
     torch.manual_seed(seed)
-    model = arch.__class__(**extract_config_mace_model(arch))
+    cfg = extract_config_mace_model(arch)
+    if response:
+        cfg["response_channel"] = True
+        cfg["use_long_range"] = True    # the response needs the Ewald kernel
+    model = arch.__class__(**cfg)
 
     base = torch.load(base_path, map_location="cpu", weights_only=False)
     base_sd, sd = base.state_dict(), model.state_dict()
@@ -309,8 +338,8 @@ def fresh_model(arch_path, base_path, seed, device):
 
 
 def run_cell(arch_path, base_path, mask, loss_arm, seed, batches, frame_masks, device,
-             epochs, lr):
-    model, _ = fresh_model(arch_path, base_path, seed, device)
+             epochs, lr, response=False):
+    model, _ = fresh_model(arch_path, base_path, seed, device, response)
     model.train()
     for n, p in model.named_parameters():
         p.requires_grad_(is_correction_param(n))
@@ -351,6 +380,8 @@ def main() -> None:
                     default=Path.home() / "runs" / "e0_base_s1" / "e0_base_s1.model",
                     help="Stage-A base whose weights are frozen")
     ap.add_argument("--head", default="h3")
+    ap.add_argument("--response", action="store_true",
+                    help="step 2: enable the carrier-field response channel")
     ap.add_argument("--data", type=Path, default=here / "dataset_pbe" / "valid.xyz")
     ap.add_argument("--frames", type=int, default=48)
     ap.add_argument("--batch-size", type=int, default=4)
@@ -393,7 +424,8 @@ def main() -> None:
 
     batches = make_batches(keep, z_table, cutoff, args.batch_size, args.device)
 
-    model_probe, n_copied = fresh_model(args.arch, args.base, 0, args.device)
+    model_probe, n_copied = fresh_model(args.arch, args.base, 0, args.device,
+                                        args.response)
     print(f"  base weights copied: {n_copied} tensors", flush=True)
     for two in ("hub2", "lig2"):
         if two in args.masks:
@@ -411,13 +443,16 @@ def main() -> None:
         for loss_arm in args.losses:
             for seed in range(1, n_seeds + 1):
                 r = run_cell(args.arch, args.base, mask, loss_arm, seed, batches,
-                             frame_masks, args.device, args.epochs, args.lr)
+                             frame_masks, args.device, args.epochs, args.lr,
+                             args.response)
                 r["head"] = args.head
                 rows.append(r)
                 print(f"  {args.head:3s} {mask:9s} {loss_arm:5s} s{seed}  "
                       f"axial_red {r['axial_red']:+.3f}  r {r['pearson']:+.3f}  "
                       f"ratio {r['ratio']:.2f}  rmse_nbhd {r['rmse_nbhd']:.1f}  "
-                      f"Pb {r['pb_fraction']:.2f}", flush=True)
+                      f"lig {r['rmse_lig_shell']:.0f} cs {r['rmse_cs_shell']:.0f} "
+                      f"slope {r['slope_vs_d']:+.3f} Pb {r['pb_fraction']:.2f}",
+                      flush=True)
                 args.out.write_text(json.dumps(rows, indent=2, default=float))
 
     print(f"\nwrote {args.out}  ({len(rows)} cells)")

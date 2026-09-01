@@ -97,6 +97,7 @@ class MACEDefect(ScaleShiftMACE):
         spectral_first_shell: bool = False,
         spectral_sigma: bool = False,
         spectral_gauge_penalty: bool = False,
+        response_channel: bool = False,
         logit_seed_gamma: float = 0.0,
         correction_trunk: str = "shared",
         use_long_range: bool = True,
@@ -186,6 +187,17 @@ class MACEDefect(ScaleShiftMACE):
         self.spectral_first_shell = bool(spectral_first_shell)
         self.spectral_feature_dim = (carrier_feature_dim if spectral_first_shell
                                      else feature_dim)
+        # Step 2: the host's energetic response to the carrier's own potential. Built on the
+        # SAME features the spectral head consumes -- defect_feats, whose width is
+        # spectral_feature_dim, not carrier_feature_dim. Off by default, so every existing
+        # configuration is unchanged.
+        self.response_channel = response_channel
+        if response_channel:
+            from mace.modules.defect_response import CarrierResponse
+
+            self.carrier_response = CarrierResponse(
+                feature_dim=self.spectral_feature_dim,
+                num_elements=int(kwargs["num_elements"]))
         self.spectral = None
         # 0.0 means "the trunk's receptive field", r_max * num_interactions. That is the
         # natural scale: eps_i and t_ij are functions of node features that already aggregate
@@ -841,7 +853,30 @@ class MACEDefect(ScaleShiftMACE):
         # The correction at this frame's own counter is what the total energy carries;
         # the paired difference is what the delta labels supervise. They coincide only
         # when the reference is the closed-shell state.
-        correction_energy = delta_sr + delta_lr
+        # Carrier-field response. alpha comes from H on carrier-blind features, V follows
+        # from alpha, E_resp follows from V -- no self-consistent loop, forces by autograd.
+        # dL/dalpha still reaches eps and t through this term, which is how it can select a
+        # site without a built-in potential doing the selecting.
+        delta_resp = torch.zeros_like(delta_sr)
+        if getattr(self, "response_channel", False) and self.use_long_range:
+            from mace.modules.defect_response import self_potential_of
+
+            self_pot = self_potential_of(self.latent_ewald, data["cell"])
+            # Same slice the spectral head takes: with first-shell features on, the head
+            # consumes node_feats[:, :spectral_feature_dim] while defect_feats is the full
+            # concatenation. The response must read the same features, or it would be
+            # conditioned on the whole receptive field the head deliberately excludes.
+            resp_feats = defect_feats
+            if getattr(self, "spectral_first_shell", False):
+                resp_feats = defect_feats[:, : self.spectral_feature_dim]
+            delta_resp = self.carrier_response(
+                node_feats=resp_feats, node_species=data["node_attrs"].argmax(-1),
+                alpha=alpha, counts=counts, batch=data["batch"],
+                positions=data["positions"], cell=data["cell"],
+                ewald=self.latent_ewald, self_potential=self_pot,
+                num_graphs=num_graphs)
+
+        correction_energy = delta_sr + delta_lr + delta_resp
         correction_energy_ref = delta_sr_ref + delta_lr_ref
         delta_energy = correction_energy - correction_energy_ref
         total_energy = base_energy + correction_energy
@@ -899,6 +934,7 @@ class MACEDefect(ScaleShiftMACE):
             "correction_energy": correction_energy,
             "counter_input_l2": self.carrier_pooling.counter_input_l2(),
             "delta_sr_energy": delta_sr,
+            "delta_resp_energy": delta_resp,
             "delta_lr_ref_energy": delta_lr_ref,
             "node_energy": node_energy,
             "forces": forces,

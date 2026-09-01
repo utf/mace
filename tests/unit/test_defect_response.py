@@ -102,3 +102,48 @@ def test_scales_with_counter_multiplicity():
     e1 = mod(feats, species, alpha, one, batch, r, cell, FakeEwald(), num_graphs=1)
     e2 = mod(feats, species, alpha, two, batch, r, cell, FakeEwald(), num_graphs=1)
     assert torch.allclose(e2, 2 * e1, atol=1e-6)
+
+
+def test_response_channel_survives_the_config_round_trip():
+    """The extractor has silently dropped settings twice: spectral_head once, then sigma and
+    gauge_penalty together, each time leaving a saved artefact that differed from the trained
+    model with no shape mismatch to catch it."""
+    import numpy as np
+    from e3nn import o3
+
+    from mace import modules
+    from mace.modules.defect_models import MACEDefect
+    from mace.tools.scripts_utils import extract_config_mace_model
+
+    torch.manual_seed(0)
+    model = MACEDefect(
+        r_max=4.0, num_bessel=6, num_polynomial_cutoff=5, max_ell=1,
+        interaction_cls=modules.interaction_classes[
+            "RealAgnosticResidualInteractionBlock"],
+        interaction_cls_first=modules.interaction_classes[
+            "RealAgnosticResidualInteractionBlock"],
+        num_interactions=2, num_elements=3,
+        hidden_irreps=o3.Irreps("16x0e + 16x1o"), MLP_irreps=o3.Irreps("8x0e"),
+        gate=torch.nn.functional.silu, atomic_energies=np.zeros((1, 3)),
+        avg_num_neighbors=8.0, atomic_numbers=[17, 55, 82], correlation=2,
+        atomic_inter_scale=1.0, atomic_inter_shift=0.0,
+        carrier_feature_dim=16, counter_embedding_dim=8, carrier_mlp_hidden=16,
+        use_long_range=False, spectral_head=True, response_channel=True)
+
+    assert model.response_channel is True
+    assert hasattr(model, "carrier_response")
+
+    config = extract_config_mace_model(model)
+    assert "response_channel" in config, "extractor drops response_channel"
+    rebuilt = model.__class__(**config)
+    assert rebuilt.response_channel is True, "response channel lost in the round trip"
+    assert hasattr(rebuilt, "carrier_response")
+
+
+def test_default_is_off_so_existing_configs_are_unchanged():
+    import inspect
+
+    from mace.modules.defect_models import MACEDefect
+
+    sig = inspect.signature(MACEDefect.__init__)
+    assert sig.parameters["response_channel"].default is False

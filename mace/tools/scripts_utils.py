@@ -427,6 +427,7 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         config["spectral_sigma"] = bool(getattr(model, "spectral_sigma", False))
         config["spectral_gauge_penalty"] = bool(
             getattr(model, "spectral_gauge_penalty", False))
+        config["response_channel"] = bool(getattr(model, "response_channel", False))
         if getattr(model, "spectral", None) is not None:
             config["spectral_t_min"] = float(model.spectral.t_min)
         # A buffer, so the weight transfer would carry the values -- but only if the
