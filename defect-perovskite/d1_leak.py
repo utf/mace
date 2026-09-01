@@ -190,6 +190,22 @@ def analyse_frame(model, atoms, z_table, cutoff, device):
     return out
 
 
+
+def graph_cutoff_for(model, override=None):
+    """Neighbour-list radius the head was TRAINED with.
+
+    run_train builds the graph at the spectral Hamiltonian's range (10 A here) and filters the
+    trunk back to r_max inside the model. An analysis that rebuilds batches at r_max instead
+    silently drops every 5-10 A edge, so the head is handed a truncated H: the hub pair at a
+    median 5.43 A then has no edge at all and reports |H_ab| = 0 with no hopping term, which
+    is an artefact of the analysis and not a property of the model. Derived from the model so
+    it cannot drift from what training used.
+    """
+    if override:
+        return float(override)
+    return max(float(model.r_max), float(getattr(model, "spectral_r_cut", 0.0) or 0.0))
+
+
 def main() -> None:
     here = Path(__file__).resolve().parent
     ap = argparse.ArgumentParser(description=__doc__)
@@ -197,7 +213,8 @@ def main() -> None:
     ap.add_argument("--config-from", type=Path, default=None)
     ap.add_argument("--data", type=Path, default=here / "dataset_cf" / "eval_qp1.xyz")
     ap.add_argument("--limit", type=int, default=50)
-    ap.add_argument("--cutoff", type=float, default=5.0)
+    ap.add_argument("--cutoff", type=float, default=None,
+                    help="override; default = the model's own graph cutoff")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--label", default="")
     ap.add_argument("--out", type=Path, default=None)
@@ -205,10 +222,12 @@ def main() -> None:
 
     _assert_repo()
     model = load_model(args.model, args.device, args.config_from)
+    cutoff = graph_cutoff_for(model, args.cutoff)
+    print(f"  graph cutoff {cutoff:.1f} A (model r_max {float(model.r_max):.1f})")
     z_table = tools.AtomicNumberTable(sorted({17, 55, 82}))
     frames = read(args.data, ":")[: args.limit]
 
-    rows = [r for r in (analyse_frame(model, a, z_table, args.cutoff, args.device)
+    rows = [r for r in (analyse_frame(model, a, z_table, cutoff, args.device)
                         for a in frames) if r is not None]
     if not rows:
         raise SystemExit("no frames analysable")
