@@ -397,7 +397,37 @@ Two identical invocations of `mace.cli.run_train` through the launcher, protocol
 final config (γ = 3, Gaussian 0.05, exp envelope L = 1.0, `loss_gap` weight 1.0 with
 composition 3:1:1, head-only, Stage-A base frozen).
 
-SMOKE_RESULTS_PLACEHOLDER
+Every call site fires, on real data, and is visible in the log:
+
+```
+Stage-3 protocol: Harrison initialisation at bond length 2.861 A
+Stage-3 protocol: head-only, 29 parameter tensors frozen
+WARNING: Stage-3 protocol: c-shift NOT calibrated -- no frame in the first batch carries
+         a net carrier ... the head starts at c = 0, which is a choice this run did not
+         make deliberately
+Stage-3 protocol: init gate edges 0.258/0.073 eV (need <= 1.20), bandwidth 32.84 eV
+         (need >= 4.80) -> PASS
+Stage-3 protocol: {"c_shift_calibrated": ..., "e_gap": 2.4, "harrison_init": true,
+         "smearing_family": "gaussian", "smearing_width": 0.05, "stage": 3, "warmup": 5}
+Stage-3 warmup: epoch 0, lr x0.200
+Stage-3 warmup: epoch 1, lr x0.400
+```
+
+The c-shift line is the protocol behaving correctly and it is worth reading twice. This
+particular fold's first batch is all neutral, so `Delta_n = 0`, the ratio is undefined, and
+the function returns `None` rather than a silent `0.0` that would look like a calibration
+that had happened. It warned, and the run continued.
+
+**And that is how the third bug surfaced.** The summary on the same line said
+`"c_shift_calibrated": true` — because it reported `stage >= 3`, the intent, rather than the
+outcome. A run that skipped its calibration was about to record in its own artefact that it
+had performed one. Fixed to report what happened and the value; unit-tested both ways.
+
+The repeat-floor comparison and the saved-model round trip were still running when this was
+written; the config round trip itself is covered by unit test (build `power`, extract, rebuild,
+assert the knob survived), and the call-site evidence above is what section 3 needed.
+
+
 
 ---
 
