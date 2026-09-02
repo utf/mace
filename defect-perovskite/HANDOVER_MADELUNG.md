@@ -18,8 +18,9 @@ Branch `size-extensivity`, unpushed. HEAD `de43deb`. **Nothing is running on eit
 | D-2 error binning | done, resonance prediction **refuted** |
 | Stage 1 — Edit 1 + Edit 2 | done, **all five gates pass** |
 | Stage 2 — Edit 3 | done, **superatom gate passes, force parity fails** |
-| Stage 3 — Edit 4 | module + toy tables built and passing; **not integrated, not run** |
-| Stage 4, joint run | not started |
+| Stage 3 — Edit 4 | integrated, gradient path validated, **running** |
+| Stage 4 — occupation interface | done, tested; SCC hook reserved as an interface only |
+| §6 joint run | enumerated in `JOINT_RUN_PLAN.md`, **one decision blocks launch** |
 
 Results: `D_RESULTS.md`, `STAGE1_RESULTS.md`, `STAGE2_RESULTS.md`. Coadvisor note:
 `MADELUNG_COADVISOR.md`. Choices awaiting confirmation: `BUILD_CHOICES.md`.
@@ -39,16 +40,25 @@ response to it? Our reading is the latter — one orbital per atom cannot repres
 p-derived valence band this hole lives in, and Edit 4 is built and gated. **What must not
 happen is loosening Edit 3's bounds until the fit returns**; that buys back the superatom.
 
-## To resume Stage 3
+## What Stage 3 cost, and what it found in the code
 
-`mace/modules/defect_counting.py` and `tests/extensions/defect/test_counting_head.py` (19
-tests, passing) exist. Still needed:
+Dense `eigh` autograd does not survive force matching: the loss needs the second derivative
+of the eigenvalues, and `eigh`'s double backward builds it from eigenvector response with
+`1/(λᵢ−λⱼ)`. It returned NaN on the first real batch. The production path is now
+`head_energy_hf` — `E = Tr(P H) − T S` with `P`, `S` held fixed — which gives exact values
+and exact forces and a well-conditioned second derivative.
 
-1. Wire `SlaterKosterH` + `head_energy` into `MACEDefect` behind a `counting_head` flag, the
-   way `madelung_on_site` is wired.
-2. `loss_gap = (mean_pristine(ε_{N+1} − ε_N) − E_gap)²`, `E_gap = 2.4 eV`.
-3. `stage_run.py --stage 3` currently raises `NotImplementedError` on purpose — replace it.
-4. Validate the windowed shift-invert path against dense `eigh` **before** the ladder uses it.
+Validating it against the dense route found two further bugs that inspection had not: the
+occupations were carrying gradient (adding a spurious `−μ f(1−f)/T` to `dF/dε`, invisible on
+a spectrum symmetric about μ = 0 — which is what the original test used), and the two spin
+density matrices were averaged where they must be summed, halving the monopole.
+
+**The windowed shift-invert solver is not built** — deferred to pre-R3 and recorded as a
+deviation in `BUILD_CHOICES.md`. It is a ladder-size concern; nothing currently runs through
+it.
+
+Stage 3 also needs **lr 0.05**: at the shared 0.01 it does not train at all. The Stage-2 arm
+was re-run at 0.05 alongside so the comparison stays matched.
 
 ## Live process lessons from today
 
