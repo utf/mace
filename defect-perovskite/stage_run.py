@@ -83,7 +83,8 @@ def measure_t_ref(batch) -> float:
     return float(np.median(nn[torch.isfinite(nn)].detach().cpu().numpy()))
 
 
-def build(arch_path, base_path, seed, device, stage, madelung, eps_inf, t_ref, log):
+def build(arch_path, base_path, seed, device, stage, madelung, eps_inf, t_ref, log,
+          counting_overrides=None):
     from mace.modules.defect_spectral_v3 import install_local_head
 
     # Nominal charges as the initialisation, not zeros. At Z = 0 the Madelung term is
@@ -94,7 +95,8 @@ def build(arch_path, base_path, seed, device, stage, madelung, eps_inf, t_ref, l
     model, _ = fresh_model(arch_path, base_path, seed, device,
                            madelung=COMPOSITION if madelung else None, eps_inf=eps_inf,
                            z_init=Z_INIT if madelung else None,
-                           counting=(stage >= 3))
+                           counting=(stage >= 3),
+                           counting_overrides=counting_overrides)
     if stage < 3:
         install_local_head(model, t_ref_r=t_ref)
         if stage >= 2:
@@ -111,8 +113,19 @@ def build(arch_path, base_path, seed, device, stage, madelung, eps_inf, t_ref, l
         harrison_initialise(model.spectral, [int(z) for z in model.atomic_numbers],
                             bond_length=t_ref)
     model = model.to(device)
+    head = getattr(model, "spectral", None)
+    knobs = ""
+    if head is not None and hasattr(head, "h"):
+        # The knobs read off the BUILT OBJECT, not off the arguments. Every config check in
+        # this programme that trusted the argument chain has eventually been wrong about
+        # something -- most recently a run that trained at Gaussian 0.025 under a 0.05
+        # banner because the family and the width came from different places.
+        knobs = (f", gamma {head.h.on_site_range}, hop_range {head.h.hop_range}"
+                 f", envelope {getattr(head.h, 'envelope', 'exp')}"
+                 f", decay {head.h.decay_length}"
+                 f", smearing {getattr(head, 'smearing_family', '?')} {head.t_el}")
     log(f"      stage {stage}, madelung {'ON' if madelung else 'OFF'}, "
-        f"eps_inf {eps_inf}, seed {seed}")
+        f"eps_inf {eps_inf}, seed {seed}{knobs}")
     return model
 
 

@@ -314,7 +314,7 @@ def evaluate(model, batches, frame_masks, device, clamp=None, ctx=None):
 
 
 def fresh_model(arch_path, base_path, seed, device, response=None, madelung=None,
-                eps_inf=4.0, z_init=None, counting=False):
+                eps_inf=4.0, z_init=None, counting=False, counting_overrides=None):
     """Architecture from a current-code model, base weights from Stage-A, head freshly drawn.
 
     Three sources rather than one, deliberately:
@@ -342,6 +342,14 @@ def fresh_model(arch_path, base_path, seed, device, response=None, madelung=None
         # Edit 4 REPLACES the spectral head; install_local_head/install_bounded_elements must
         # not also run, or the model would carry two heads both writing delta_sr.
         cfg["counting_head"] = True
+        # Counting-head knobs, applied to the CONFIG so they travel through
+        # `extract_config_mace_model` on the way back out. Setting them on the head after
+        # construction would build the head at the old value and leave the model attribute
+        # -- the one the config round-trip reads -- disagreeing with the object that trains.
+        for key, value in (counting_overrides or {}).items():
+            if not key.startswith("counting_"):
+                raise ValueError(f"counting_overrides key {key!r} is not a counting knob")
+            cfg[key] = value
     if madelung is not None:
         # Edit 1 replaces the response channel. `madelung` is the pristine stoichiometry in
         # the model's own species order; the Ewald kernel is built for the on-site term even

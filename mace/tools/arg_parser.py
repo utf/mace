@@ -1231,6 +1231,26 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default="gaussian",
     )
     parser.add_argument(
+        "--defect_counting_envelope",
+        help="radial envelope on the hopping integrals. 'exp' is exp(-(r - d_ref)/L), what "
+        "Stage 3 ran; 'power' is Harrison's own (d_ref/r)^2, which is also the rule V0 is "
+        "initialised from. Measured at the vacancy-flanking Pb-Pb bond, 'exp' delivers "
+        "t/t_Harrison = 0.14 +- 0.07 with the learned pair modulation pinned at its +50% "
+        "bound on the close frames -- the head straining against the envelope and losing",
+        type=str,
+        choices=("exp", "power"),
+        default="exp",
+    )
+    parser.add_argument(
+        "--defect_counting_decay_length",
+        help="L in the 'exp' envelope, in Angstrom. Ignored by --defect_counting_envelope "
+        "power. Matching Harrison's log-slope at d_ref needs 1.4 and matching it at the hub "
+        "bond needs about 2.9, which is why retuning this only moves which separation is "
+        "wrong",
+        type=float,
+        default=1.0,
+    )
+    parser.add_argument(
         "--defect_madelung_on_site",
         help="Edit 1: put the host Madelung potential of learnable per-species charges on "
         "the on-site energies, eps_i = eps_local_i - phi_LR_i / eps_inf. Variational, unlike "

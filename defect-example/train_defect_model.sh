@@ -258,6 +258,10 @@ DEFECT_COUNTING_ON_SITE_RANGE="${DEFECT_COUNTING_ON_SITE_RANGE:-3.0}"
 DEFECT_COUNTING_HOP_RANGE="${DEFECT_COUNTING_HOP_RANGE:-0.5}"
 DEFECT_COUNTING_SMEARING="${DEFECT_COUNTING_SMEARING:-gaussian}"
 DEFECT_COUNTING_T_EL="${DEFECT_COUNTING_T_EL:-0.05}"
+# The radial envelope on the hoppings. "exp" is what Stage 3 ran; "power" is
+# Harrison's d^-2, the rule V0 is initialised from. DECAY_LENGTH is ignored by "power".
+DEFECT_COUNTING_ENVELOPE="${DEFECT_COUNTING_ENVELOPE:-exp}"
+DEFECT_COUNTING_DECAY_LENGTH="${DEFECT_COUNTING_DECAY_LENGTH:-1.0}"
 DEFECT_MADELUNG_ON_SITE="${DEFECT_MADELUNG_ON_SITE:-false}"
 DEFECT_MADELUNG_EPS_INF="${DEFECT_MADELUNG_EPS_INF:-4.0}"
 # Pristine stoichiometry and nominal charges in the model's own species order. Empty unless
@@ -406,6 +410,8 @@ python -m mace.cli.run_train \
     --defect_counting_hop_range="${DEFECT_COUNTING_HOP_RANGE}" \
     --defect_counting_smearing="${DEFECT_COUNTING_SMEARING}" \
     --defect_counting_t_el="${DEFECT_COUNTING_T_EL}" \
+    --defect_counting_envelope="${DEFECT_COUNTING_ENVELOPE}" \
+    --defect_counting_decay_length="${DEFECT_COUNTING_DECAY_LENGTH}" \
     --defect_madelung_on_site="${DEFECT_MADELUNG_ON_SITE}" \
     --defect_madelung_eps_inf="${DEFECT_MADELUNG_EPS_INF}" \
     --defect_madelung_composition="${DEFECT_MADELUNG_COMPOSITION}" \

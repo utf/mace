@@ -301,6 +301,8 @@ def _defect_madelung_kwargs(args) -> dict:
         counting_on_site_range=float(getattr(args, "defect_counting_on_site_range", 3.0)),
         counting_hop_range=float(getattr(args, "defect_counting_hop_range", 0.5)),
         counting_smearing_family=str(getattr(args, "defect_counting_smearing", "gaussian")),
+        counting_envelope=str(getattr(args, "defect_counting_envelope", "exp")),
+        counting_decay_length=float(getattr(args, "defect_counting_decay_length", 1.0)),
         counting_t_el=float(getattr(args, "defect_counting_t_el", 0.05)),
         madelung_on_site=on_site,
         madelung_eps_inf=float(getattr(args, "defect_madelung_eps_inf", 4.0)),

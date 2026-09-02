@@ -460,6 +460,13 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         config["counting_hop_range"] = float(getattr(model, "counting_hop_range", 0.5))
         config["counting_smearing_family"] = str(
             getattr(model, "counting_smearing_family", "gaussian"))
+        # The radial envelope is a config knob, not a constant, because the two families
+        # are a live experimental choice. Reading it off the HEAD rather than the model
+        # attribute would be safer still, but the head is not always present at this point;
+        # the pre-seed read-back closes that by building and interrogating the object.
+        config["counting_envelope"] = str(getattr(model, "counting_envelope", "exp"))
+        config["counting_decay_length"] = float(
+            getattr(model, "counting_decay_length", 1.0))
         config["madelung_on_site"] = bool(getattr(model, "madelung_on_site", False))
         config["madelung_eps_inf"] = float(getattr(model, "madelung_eps_inf", 4.0))
         if getattr(model, "madelung", None) is not None:

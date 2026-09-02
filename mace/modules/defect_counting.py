@@ -131,6 +131,11 @@ SMEARING_FAMILY = "gaussian"
 # saturation audit; see CountingHead.__init__ for the measurement.
 ON_SITE_RANGE_DEFAULT = 3.0
 SMEARING_WIDTH = 0.05            # eV
+# The radial envelope on the hopping integrals. "exp" is what Stage 3 ran; "power" is
+# Harrison's own d^-2, which is also what `v0` is initialised from. See
+# `SlaterKosterH.radial` for the measurement that separates them.
+ENVELOPES = ("exp", "power")
+ENVELOPE_DEFAULT = "exp"
 # The LIVE setting, read by every fill, every entropy and the density-response backward.
 _FAMILY = SMEARING_FAMILY
 _WIDTH = SMEARING_WIDTH
@@ -308,13 +313,17 @@ class SlaterKosterH(nn.Module):
     def __init__(self, num_elements: int, feature_dim: int, elem_dim: int = 8,
                  hidden: int = 64, d_ref: float = 2.8, decay_length: float = 1.0,
                  r_cut: float = 10.0, on_site_range: float = 1.0,
-                 hop_range: float = 0.5) -> None:
+                 hop_range: float = 0.5, envelope: str = ENVELOPE_DEFAULT) -> None:
         super().__init__()
         from mace.modules.defect_bounded import ETA_SS_SIGMA, HBAR2_OVER_M
         from mace.modules.defect_spectral import _mlp
 
+        if envelope not in ENVELOPES:
+            raise ValueError(f"unknown radial envelope {envelope!r}; expected one of "
+                             f"{sorted(ENVELOPES)}")
         self.d_ref, self.decay_length, self.r_cut = float(d_ref), float(decay_length), \
             float(r_cut)
+        self.envelope = str(envelope)
         self.on_site_range, self.hop_range = float(on_site_range), float(hop_range)
         self.elem = nn.Embedding(num_elements, elem_dim)
 
@@ -339,8 +348,35 @@ class SlaterKosterH(nn.Module):
         return m[species_i, species_j]
 
     def radial(self, r: torch.Tensor) -> torch.Tensor:
+        """The distance dependence of every hopping integral, times the cutoff taper.
+
+        TWO FAMILIES, and the choice is a measurement rather than a preference (see
+        `defect-perovskite/b7_envelope_choice.py`).
+
+        `"exp"` is what Stage 3 ran: `exp(-(r - d_ref) / decay_length)`. It equals 1 at
+        `d_ref` by construction, which is where `v0` is initialised from Harrison's rule, and
+        then falls far faster than Harrison does. At the vacancy-flanking Pb-Pb separation of
+        5-7 A the measured `t / t_Harrison` is 0.14 +- 0.07 while the learned pair modulation
+        -- the head's only lever on that bond -- sits pinned at its +50% bound on the close
+        frames. The head is straining against this function and losing.
+
+        `"power"` is Harrison's own `(d_ref / r)^2`, so the envelope and the initialisation
+        stop disagreeing about what the radial dependence is. It is not a free constant being
+        retuned: it REMOVES one. An exponential cannot carry a power law's log-slope at two
+        separations at once -- matching at `d_ref` needs 1.4 A and matching at the hub bond
+        needs about 2.9 A -- so retuning `decay_length` only moves which separation is wrong.
+
+        Both keep the same `(1 - (r/r_cut)^6)^2` taper, so the graph stays finite and the
+        two differ in exactly one factor.
+
+        `getattr` rather than `self.envelope`: models pickled before this attribute existed
+        must keep evaluating, and they were all exponential.
+        """
         x = (r / self.r_cut).clamp(max=1.0)
-        return torch.exp(-(r - self.d_ref) / self.decay_length) * (1.0 - x ** 6) ** 2
+        taper = (1.0 - x ** 6) ** 2
+        if getattr(self, "envelope", ENVELOPE_DEFAULT) == "power":
+            return (self.d_ref / r.clamp_min(1e-9)) ** 2 * taper
+        return torch.exp(-(r - self.d_ref) / self.decay_length) * taper
 
     def integrals(self, feats_i, feats_j, r, species_i, species_j) -> torch.Tensor:
         """The four radial integrals per edge, [n_edges, 4]."""
@@ -493,7 +529,8 @@ class CountingHead(nn.Module):
                  t_el: float = SMEARING_WIDTH, num_channels: int = 4,
                  on_site_range: float = ON_SITE_RANGE_DEFAULT,
                  hop_range: float = 0.5,
-                 smearing_family: str = SMEARING_FAMILY) -> None:
+                 smearing_family: str = SMEARING_FAMILY,
+                 envelope: str = ENVELOPE_DEFAULT) -> None:
         """`on_site_range` is gamma, the half-width of the bounded on-site correction.
 
         THE DEFAULT IS 3 eV, NOT 1. At gamma = 1 the audit found every chlorine in every seed
@@ -507,7 +544,8 @@ class CountingHead(nn.Module):
         self.h = SlaterKosterH(num_elements=num_elements, feature_dim=feature_dim,
                                elem_dim=elem_dim, hidden=hidden, d_ref=d_ref,
                                decay_length=decay_length, r_cut=r_cut,
-                               on_site_range=on_site_range, hop_range=hop_range)
+                               on_site_range=on_site_range, hop_range=hop_range,
+                               envelope=envelope)
         self.smearing_family = str(smearing_family)
         self.t_el = float(t_el)
         self.num_channels = int(num_channels)
