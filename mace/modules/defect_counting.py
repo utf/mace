@@ -127,6 +127,9 @@ def spin_targets(n_total: int, counts: Sequence[int]) -> Tuple[float, float]:
 # work, because "the answer does not depend on the smearing" is a claim that needs a second
 # family to test and not an assertion.
 SMEARING_FAMILY = "gaussian"
+# gamma, the bounded on-site correction half-width. Widened from 1.0 after the
+# saturation audit; see CountingHead.__init__ for the measurement.
+ON_SITE_RANGE_DEFAULT = 3.0
 SMEARING_WIDTH = 0.05            # eV
 # The LIVE setting, read by every fill, every entropy and the density-response backward.
 _FAMILY = SMEARING_FAMILY
@@ -487,11 +490,25 @@ class CountingHead(nn.Module):
     def __init__(self, num_elements: int, feature_dim: int, atomic_numbers,
                  elem_dim: int = 8, hidden: int = 64, d_ref: float = 2.8,
                  decay_length: float = 1.0, r_cut: float = 10.0,
-                 t_el: float = T_EL, num_channels: int = 4) -> None:
+                 t_el: float = SMEARING_WIDTH, num_channels: int = 4,
+                 on_site_range: float = ON_SITE_RANGE_DEFAULT,
+                 hop_range: float = 0.5,
+                 smearing_family: str = SMEARING_FAMILY) -> None:
+        """`on_site_range` is gamma, the half-width of the bounded on-site correction.
+
+        THE DEFAULT IS 3 eV, NOT 1. At gamma = 1 the audit found every chlorine in every seed
+        pinned at the bound -- 100% saturated, pre-tanh -3.60 +- 0.19, tanh(-3.6) = -0.9985 --
+        while both cations sat comfortably inside the linear region. A pinned parameter has
+        gradient sech^2 ~ 0.004: it looks like it is learning and it is not. 3 eV is the scale
+        of the missing-anion Madelung shift, which is what the bound has to be able to
+        express.
+        """
         super().__init__()
         self.h = SlaterKosterH(num_elements=num_elements, feature_dim=feature_dim,
                                elem_dim=elem_dim, hidden=hidden, d_ref=d_ref,
-                               decay_length=decay_length, r_cut=r_cut)
+                               decay_length=decay_length, r_cut=r_cut,
+                               on_site_range=on_site_range, hop_range=hop_range)
+        self.smearing_family = str(smearing_family)
         self.t_el = float(t_el)
         self.num_channels = int(num_channels)
         # Valence per SPECIES INDEX, resolved once from the model's own atomic-number table.
@@ -529,6 +546,25 @@ class CountingHead(nn.Module):
         without a second code path -- the thing the four-channel counter scheme could never
         represent. Ground-state fill remains the default.
         """
+        from mace.modules.defect_spectral import SpectralOutput
+
+        # The head's own smearing family, for the whole of this forward. Restored at exit so
+        # two models with different conventions can be evaluated in one process without one
+        # of them silently inheriting the other's.
+        previous = use_smearing(getattr(self, "smearing_family", SMEARING_FAMILY),
+                                float(self.t_el))
+        try:
+            return self._forward(
+                node_feats, counter_emb, counts, batch, num_graphs, edge_index,
+                edge_length, site_bias, node_species, clamp_mask, edge_vector, madelung,
+                occupations, internals, positions, force_out)
+        finally:
+            use_smearing(*previous)
+
+    def _forward(self, node_feats, counter_emb, counts, batch, num_graphs, edge_index,
+                 edge_length, site_bias=None, node_species=None, clamp_mask=None,
+                 edge_vector=None, madelung=None, occupations=None, internals=None,
+                 positions=None, force_out=None):
         from mace.modules.defect_spectral import SpectralOutput
 
         if node_species is None or edge_vector is None:

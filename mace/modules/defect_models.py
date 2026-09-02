@@ -101,6 +101,9 @@ class MACEDefect(ScaleShiftMACE):
         spectral_sigma: bool = False,
         spectral_gauge_penalty: bool = False,
         counting_head: bool = False,
+        counting_on_site_range: float = 3.0,
+        counting_hop_range: float = 0.5,
+        counting_smearing_family: str = "gaussian",
         counting_t_el: float = 0.025,
         madelung_on_site: bool = False,
         madelung_eps_inf: float = 4.0,
@@ -219,6 +222,9 @@ class MACEDefect(ScaleShiftMACE):
                 composition=madelung_composition,
                 z_init=madelung_z_init)
         self.counting_head = bool(counting_head)
+        self.counting_on_site_range = float(counting_on_site_range)
+        self.counting_hop_range = float(counting_hop_range)
+        self.counting_smearing_family = str(counting_smearing_family)
         self.counting_t_el = float(counting_t_el)
         self.spectral = None
         # 0.0 means "the trunk's receptive field", r_max * num_interactions. That is the
@@ -267,6 +273,9 @@ class MACEDefect(ScaleShiftMACE):
                 feature_dim=self.spectral_feature_dim,
                 atomic_numbers=[int(z) for z in kwargs["atomic_numbers"]],
                 d_ref=2.8, r_cut=float(self.spectral_r_cut),
+                on_site_range=float(counting_on_site_range),
+                hop_range=float(counting_hop_range),
+                smearing_family=str(counting_smearing_family),
                 t_el=float(counting_t_el))
         elif self.spectral_head:
             from mace.modules.defect_spectral import SpectralCarrierHead

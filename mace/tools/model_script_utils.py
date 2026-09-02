@@ -298,6 +298,9 @@ def _defect_madelung_kwargs(args) -> dict:
             "replaces the spectral head and is built on that branch")
     return dict(
         counting_head=counting,
+        counting_on_site_range=float(getattr(args, "defect_counting_on_site_range", 3.0)),
+        counting_hop_range=float(getattr(args, "defect_counting_hop_range", 0.5)),
+        counting_smearing_family=str(getattr(args, "defect_counting_smearing", "gaussian")),
         madelung_on_site=on_site,
         madelung_eps_inf=float(getattr(args, "defect_madelung_eps_inf", 4.0)),
         madelung_composition=composition,

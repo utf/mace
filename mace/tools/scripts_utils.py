@@ -451,6 +451,15 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         # cuEq conversion performs exactly that round trip at the end of every run.
         config["counting_head"] = bool(getattr(model, "counting_head", False))
         config["counting_t_el"] = float(getattr(model, "counting_t_el", 0.025))
+        # The bounded-element half-widths and the smearing family travel with the checkpoint.
+        # gamma was widened from 1.0 to 3.0 after the saturation audit, and a model rebuilt
+        # through this config at the old value would have every chlorine pinned again --
+        # silently, since nothing about a saturated tanh raises an error.
+        config["counting_on_site_range"] = float(
+            getattr(model, "counting_on_site_range", 3.0))
+        config["counting_hop_range"] = float(getattr(model, "counting_hop_range", 0.5))
+        config["counting_smearing_family"] = str(
+            getattr(model, "counting_smearing_family", "gaussian"))
         config["madelung_on_site"] = bool(getattr(model, "madelung_on_site", False))
         config["madelung_eps_inf"] = float(getattr(model, "madelung_eps_inf", 4.0))
         if getattr(model, "madelung", None) is not None:

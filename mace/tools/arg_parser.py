@@ -1198,6 +1198,31 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=False,
     )
     parser.add_argument(
+        "--defect_counting_on_site_range",
+        help="gamma, the half-width of the bounded on-site correction, in eV. The audit "
+        "found every chlorine pinned at gamma = 1 in 6/6 seeds (pre-tanh -3.60 +- 0.19) "
+        "while both cations stayed linear; 3.0 is the scale of the missing-anion Madelung "
+        "shift, which is what the bound must be able to express",
+        type=float,
+        default=3.0,
+    )
+    parser.add_argument(
+        "--defect_counting_hop_range",
+        help="half-width of the bounded hopping correction, as a fraction of V0. 20% "
+        "saturated at 0.5, which is real but secondary to the on-site channel",
+        type=float,
+        default=0.5,
+    )
+    parser.add_argument(
+        "--defect_counting_smearing",
+        help="occupation family for the counting head. 'gaussian' matches the label "
+        "pipeline (doped's ISMEAR = 0 default, SIGMA = 0.05 eV); 'fermi' is retained for "
+        "sensitivity work. The width comes from --defect_counting_t_el",
+        type=str,
+        choices=("gaussian", "fermi"),
+        default="gaussian",
+    )
+    parser.add_argument(
         "--defect_madelung_on_site",
         help="Edit 1: put the host Madelung potential of learnable per-species charges on "
         "the on-site energies, eps_i = eps_local_i - phi_LR_i / eps_inf. Variational, unlike "

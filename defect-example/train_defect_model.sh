@@ -252,6 +252,11 @@ DEFECT_SPECTRAL_HEAD="${DEFECT_SPECTRAL_HEAD:-False}"
 # Edit 4 and Edit 1. Off by default: a run that does not ask for the counting head must
 # build exactly the model it built before these flags existed.
 DEFECT_COUNTING_HEAD="${DEFECT_COUNTING_HEAD:-false}"
+# gamma widened from 1.0 after the saturation audit; Gaussian matches the labels' own
+# smearing (doped ISMEAR = 0, SIGMA = 0.05 eV).
+DEFECT_COUNTING_ON_SITE_RANGE="${DEFECT_COUNTING_ON_SITE_RANGE:-3.0}"
+DEFECT_COUNTING_HOP_RANGE="${DEFECT_COUNTING_HOP_RANGE:-0.5}"
+DEFECT_COUNTING_SMEARING="${DEFECT_COUNTING_SMEARING:-gaussian}"
 DEFECT_MADELUNG_ON_SITE="${DEFECT_MADELUNG_ON_SITE:-false}"
 DEFECT_MADELUNG_EPS_INF="${DEFECT_MADELUNG_EPS_INF:-4.0}"
 # Pristine stoichiometry and nominal charges in the model's own species order. Empty unless
@@ -396,6 +401,9 @@ python -m mace.cli.run_train \
     ${DEFECT_BASE_INIT:+--defect_base_init="${DEFECT_BASE_INIT}"} \
     --defect_spectral_head="${DEFECT_SPECTRAL_HEAD}" \
     --defect_counting_head="${DEFECT_COUNTING_HEAD}" \
+    --defect_counting_on_site_range="${DEFECT_COUNTING_ON_SITE_RANGE}" \
+    --defect_counting_hop_range="${DEFECT_COUNTING_HOP_RANGE}" \
+    --defect_counting_smearing="${DEFECT_COUNTING_SMEARING}" \
     --defect_madelung_on_site="${DEFECT_MADELUNG_ON_SITE}" \
     --defect_madelung_eps_inf="${DEFECT_MADELUNG_EPS_INF}" \
     --defect_madelung_composition="${DEFECT_MADELUNG_COMPOSITION}" \
