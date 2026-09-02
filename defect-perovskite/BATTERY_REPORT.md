@@ -490,9 +490,27 @@ The hub edge's four integrals scaled by ×1.25 and ×1.5 in the trained models, 
 | **×1.25** | 0.00064 (**−0.8%**) | **4/6 seeds** | **−0.0675 ± 0.0127** |
 | ×1.50 | 0.00068 (+5.5%) | 4/6 seeds | −0.0887 ± 0.0204 |
 
+Per seed, and this is where the pooled "4/6" turns out to understate what happened:
+
+| seed | at bound (ss/sp/ppσ/ppπ) | force loss ×1.0 | ×1.25 | change | F4 ×1.0 | ×1.25 | ×1.5 |
+|---|---|---|---|---|---|---|---|
+| 1 | **100/0/100/100** | 0.00062 | 0.00066 | **+6.5%** | −0.0614 | −0.0904 | −0.1233 |
+| 2 | **100/0/100/100** | 0.00063 | 0.00065 | **+3.2%** | −0.0494 | −0.0758 | −0.1066 |
+| 3 | 0/0/0/0 | 0.00064 | 0.00062 | −3.1% | −0.0526 | −0.0664 | −0.0818 |
+| 4 | 0/0/0/0 | 0.00066 | 0.00063 | −4.5% | −0.0429 | −0.0550 | −0.0684 |
+| 5 | 0/0/0/0 | 0.00065 | 0.00063 | −3.1% | −0.0461 | −0.0650 | −0.0865 |
+| 6 | 0/0/0/0 | 0.00068 | 0.00065 | −4.4% | −0.0411 | −0.0527 | −0.0658 |
+
+**The split is exact.** The two seeds at the bound are the two the scaling makes *worse*; the
+four interior seeds are the four it helps. Not a weak 4/6 majority — a clean partition by
+whether the head was already pressed against its stop. The seeds that had spent the bound had
+also already taken what the bond could give, and pushing further overshoots; the seeds with
+room gain a little. That is a sharper statement of "the stop is not the lever" than the
+registered rule itself makes, and it comes from the data the rule was scored on.
+
 The registered rule was *force loss falls **and** F4 moves past −0.08*. The first clause is
-met; the second is not — F4 reaches −0.0675. **F12 fails**, and the branch is the one written
-in advance: the stop is not the lever, superexchange moves up the R3 list, and the joint run
+met on the pooled mean; the second is not — F4 reaches −0.0675. **F12 fails**, and the branch
+is the one written in advance: the stop is not the lever, superexchange moves up the R3 list, and the joint run
 proceeds on the current bound. No head-only rerun was spent.
 
 Two things worth carrying forward rather than discarding with the forecast. The direction is
