@@ -1214,6 +1214,14 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=0.5,
     )
     parser.add_argument(
+        "--defect_counting_t_el",
+        help="smearing width for the counting head, in eV. 0.05 matches the label "
+        "pipeline (doped's SIGMA default at ISMEAR = 0). The previous 0.025 was k_B * 300 K "
+        "and had no connection to the labels",
+        type=float,
+        default=0.05,
+    )
+    parser.add_argument(
         "--defect_counting_smearing",
         help="occupation family for the counting head. 'gaussian' matches the label "
         "pipeline (doped's ISMEAR = 0 default, SIGMA = 0.05 eV); 'fermi' is retained for "

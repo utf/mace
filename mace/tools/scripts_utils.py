@@ -450,7 +450,7 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         # a rebuilt model that quietly loses the Madelung term is a different model, and the
         # cuEq conversion performs exactly that round trip at the end of every run.
         config["counting_head"] = bool(getattr(model, "counting_head", False))
-        config["counting_t_el"] = float(getattr(model, "counting_t_el", 0.025))
+        config["counting_t_el"] = float(getattr(model, "counting_t_el", 0.05))
         # The bounded-element half-widths and the smearing family travel with the checkpoint.
         # gamma was widened from 1.0 to 3.0 after the saturation audit, and a model rebuilt
         # through this config at the old value would have every chlorine pinned again --

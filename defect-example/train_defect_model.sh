@@ -257,6 +257,7 @@ DEFECT_COUNTING_HEAD="${DEFECT_COUNTING_HEAD:-false}"
 DEFECT_COUNTING_ON_SITE_RANGE="${DEFECT_COUNTING_ON_SITE_RANGE:-3.0}"
 DEFECT_COUNTING_HOP_RANGE="${DEFECT_COUNTING_HOP_RANGE:-0.5}"
 DEFECT_COUNTING_SMEARING="${DEFECT_COUNTING_SMEARING:-gaussian}"
+DEFECT_COUNTING_T_EL="${DEFECT_COUNTING_T_EL:-0.05}"
 DEFECT_MADELUNG_ON_SITE="${DEFECT_MADELUNG_ON_SITE:-false}"
 DEFECT_MADELUNG_EPS_INF="${DEFECT_MADELUNG_EPS_INF:-4.0}"
 # Pristine stoichiometry and nominal charges in the model's own species order. Empty unless
@@ -404,6 +405,7 @@ python -m mace.cli.run_train \
     --defect_counting_on_site_range="${DEFECT_COUNTING_ON_SITE_RANGE}" \
     --defect_counting_hop_range="${DEFECT_COUNTING_HOP_RANGE}" \
     --defect_counting_smearing="${DEFECT_COUNTING_SMEARING}" \
+    --defect_counting_t_el="${DEFECT_COUNTING_T_EL}" \
     --defect_madelung_on_site="${DEFECT_MADELUNG_ON_SITE}" \
     --defect_madelung_eps_inf="${DEFECT_MADELUNG_EPS_INF}" \
     --defect_madelung_composition="${DEFECT_MADELUNG_COMPOSITION}" \

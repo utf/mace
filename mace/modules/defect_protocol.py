@@ -128,7 +128,7 @@ def apply_harrison(model, atomic_numbers: Sequence[int], bond_length: float) -> 
 
 
 def protocol_summary(stage: int, e_gap: float, w_gap: float, warmup: int,
-                     clip: float, freeze_z: bool) -> Dict[str, object]:
+                     clip: float, freeze_z: bool, model=None) -> Dict[str, object]:
     """What a run will actually do, as a dict to be logged and saved beside the results.
 
     A run whose artefact does not record its own protocol is a run whose numbers cannot be
@@ -136,7 +136,13 @@ def protocol_summary(stage: int, e_gap: float, w_gap: float, warmup: int,
     """
     from mace.modules.defect_counting import smearing
 
+    # The HEAD's own setting when a model is given. The module-level default is only what the
+    # process starts with, and reporting it while the head runs at a different width is
+    # exactly the mismatch that trained six seeds at Gaussian 0.025 under a 0.05 banner.
     family, width = smearing()
+    if model is not None and getattr(model, "spectral", None) is not None:
+        family = str(getattr(model.spectral, "smearing_family", family))
+        width = float(getattr(model.spectral, "t_el", width))
     return dict(stage=int(stage), e_gap=float(e_gap), w_gap=float(w_gap),
                 warmup=int(warmup), grad_clip=float(clip), freeze_z=bool(freeze_z),
                 smearing_family=family, smearing_width=float(width),

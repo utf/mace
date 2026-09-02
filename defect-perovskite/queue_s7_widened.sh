@@ -27,11 +27,34 @@ grep -q 'ON_SITE_RANGE_DEFAULT = 3.0' mace/modules/defect_counting.py || {
     echo "ABORT: stale tree -- gamma is not widened"; exit 1; }
 grep -q 'SMEARING_FAMILY = "gaussian"' mace/modules/defect_counting.py || {
     echo "ABORT: stale tree -- Gaussian smearing absent"; exit 1; }
+grep -q 'counting_t_el: float = 0.05' mace/modules/defect_models.py || {
+    echo "ABORT: stale tree -- the smearing WIDTH is not the labels' 0.05"; exit 1; }
 
 echo "=== step 2c: Z endpoints, and the eps0/correction degeneracy ==="
 CUDA_VISIBLE_DEVICES=7 python -u defect-perovskite/s7_z_endpoints.py \
     --old "$R"/s3wired_models/s3_on_s*.model --new "$R"/s5_models/s3_on_s*.model \
     --out "$R/s7_z_endpoints.json" > "$R/s7_z_endpoints.log" 2>&1 &
+
+# The saved model is checked BEFORE the seeds run, not after. The first attempt at this run
+# trained at Gaussian 0.025 -- family switched, width left at the old k_B*300K default -- and
+# would have been reported as the labels' convention. Nothing about that raises an error.
+echo "=== config check on a freshly built model ==="
+CHK_ARCH="$ARCH" CHK_BASE="$BASE" CHK_W="$W" python - <<'PYCHK' || exit 1
+import os
+import sys
+sys.path.insert(0, os.environ["CHK_W"] + "/defect-perovskite")
+from stage_run import build
+# Paths through the environment, not through the heredoc: a quoted heredoc does not expand
+# shell variables, so "$ARCH" arrived as four literal characters and torch.load failed on it.
+m = build(os.environ["CHK_ARCH"], os.environ["CHK_BASE"], 1, "cpu", 3, True, 4.0, 2.861,
+          lambda *a: None)
+g, w = float(m.spectral.h.on_site_range), float(m.spectral.t_el)
+fam = getattr(m.spectral, "smearing_family", "missing")
+print(f"  gamma {g}  smearing {fam} {w}")
+ok = (abs(g - 3.0) < 1e-9) and (fam == "gaussian") and (abs(w - 0.05) < 1e-9)
+print("  CONFIG OK" if ok else "  CONFIG WRONG -- refusing to spend seeds")
+sys.exit(0 if ok else 1)
+PYCHK
 
 echo "=== step 1 branch: six seeds, gamma = 3 eV, Gaussian 0.05 ==="
 cell () {  # gpu seedstart tag

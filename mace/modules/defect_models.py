@@ -104,7 +104,11 @@ class MACEDefect(ScaleShiftMACE):
         counting_on_site_range: float = 3.0,
         counting_hop_range: float = 0.5,
         counting_smearing_family: str = "gaussian",
-        counting_t_el: float = 0.025,
+        # The LABELS' width, 0.05 eV, not 25 meV. The old default was a k_B * 300 K
+        # coincidence, and leaving it here while switching the family to Gaussian
+        # would have trained six seeds at Gaussian 0.025 and reported them as the
+        # labels' convention -- which is what the saved-model check caught.
+        counting_t_el: float = 0.05,
         madelung_on_site: bool = False,
         madelung_eps_inf: float = 4.0,
         madelung_composition: Optional[Sequence[float]] = None,
