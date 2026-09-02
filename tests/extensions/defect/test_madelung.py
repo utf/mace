@@ -39,15 +39,21 @@ def ewald():
     return LatentEwald(None).double()
 
 
-def phi_of(ewald, charges, positions, cell, drop_self=True):
+def phi_of(ewald, charges, positions, cell, drop_self=False):
+    """`drop_self` is retained as a keyword and refused: the self-image subtraction is gone.
+
+    Kept rather than deleted so that an archived call site fails loudly instead of silently
+    computing the other convention.
+    """
+    if drop_self:
+        raise ValueError("the self-image subtraction was removed; phi_LR is the full sum")
     q = torch.as_tensor(charges, dtype=torch.float64)
     r = torch.as_tensor(positions, dtype=torch.float64)
     c = torch.as_tensor(cell, dtype=torch.float64).reshape(1, 3, 3)
     b = torch.zeros(len(q), dtype=torch.long)
-    sp = self_potential_of(ewald, c) if drop_self else None
     # site_potential keeps the graph whenever grad is enabled -- that is the point of
     # keying create_graph to the ambient mode -- so a value-only helper detaches here.
-    return site_potential(ewald, q, r, c, b, self_potential=sp).detach()
+    return site_potential(ewald, q, r, c, b).detach()
 
 
 # --------------------------------------------------------------------------- toy structures
@@ -191,7 +197,7 @@ class TestG0Convention:
         c = torch.as_tensor(cell).reshape(1, 3, 3)
         b = torch.zeros(len(q), dtype=torch.long)
 
-        v_full = site_potential(ewald, q, r, c, b, self_potential=None).detach()
+        v_full = site_potential(ewald, q, r, c, b).detach()
         energy = ewald.energy(q, r, c, b).sum()
         assert float(0.5 * (q * v_full).sum()) == pytest.approx(float(energy), rel=1e-10)
 
@@ -213,7 +219,7 @@ class TestG0Convention:
         # Both legs keep the self term. Subtracting it from one and not the other would put
         # the self energy into the "background" and the test would fail for a reason that has
         # nothing to do with the G = 0 convention.
-        with_bg = site_potential(ewald, q, r, c, b, self_potential=None)
+        with_bg = site_potential(ewald, q, r, c, b)
 
         def raw_energy(qq):
             e, _, _ = ewald.ewald(q=qq, r=r, cell=c, batch=b)
@@ -266,9 +272,7 @@ class TestForcesInEvalMode:
         phi = site_potential(
             ewald, torch.as_tensor(charges), positions,
             torch.as_tensor(cell).reshape(1, 3, 3),
-            torch.zeros(len(charges), dtype=torch.long),
-            self_potential=self_potential_of(ewald,
-                                             torch.as_tensor(cell).reshape(1, 3, 3)))
+            torch.zeros(len(charges), dtype=torch.long))
         return (torch.as_tensor(weights) * (-phi / EPS_INF)).sum()
 
     def test_autograd_matches_finite_differences(self, ewald):

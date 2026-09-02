@@ -185,3 +185,55 @@ across heads). d/delta_L is the quantity of record.
 **Float32 lesson:** the head runs float64 permanently; construction-time assert on dtype
 (occupation arguments ~700 and mu-bisection to 1e-10 are outside float32 by construction, not
 by accident).
+
+## Entry 7 (replaces the previous #7) — the full-sum Madelung convention
+
+Recorded verbatim from the plan of 2026-09-02.
+
+**Convention settled: full-sum kernel.** The infinite periodic ion lattice is one set of
+charges under any supercell description; the site potential excluding only the true
+self-term (j = i, R = 0) is description-invariant, and only its partition into
+"in-cell" vs "image" depends on the box. The reductio "A_ii varies with L ⇒ ε_i is
+description-dependent" fails because the j ≠ i sum varies compensatingly. The images
+of ion i are real atoms; a carrier sitting on atom i feels them; A_ii·Z_i belongs in
+H. Under the subtraction convention the host φ entering H is *not* the periodic
+potential the labels saw — it is that potential minus a supercell-dependent fraction
+of a sublattice, which was the defect.
+
+**Ledger (analyst's, rewritten):** the structural error of the last cycle was the
+*capitulation* — endorsing the description-dependence reductio, with "verified point
+by point", without running the compensation check — not the original two-density
+resolution, which stands. Entry replaces the previous #7.
+
+**Statement of record (assert, never implement around):**
+"Image corrections enter through exactly two places: E_LR's periodic/isolated switch
+and the per-(charge, size) reference constants. H is gauge-invariant — the same
+periodic ion-lattice potential in training and in isolated evaluation. There is no
+separate carrier–host term; the interaction is Σ_i (P − P_ref)_ii ε_i through φ_LR,
+with forces by Hellmann–Feynman."
+
+### What this invalidates, and what it does not
+
+Every number produced with `phi_LR` under the subtraction convention was computed with a
+supercell-dependent host potential. That is Stages 1-3 and every gate scored on their
+models. It does NOT invalidate the section-1 wiring evidence (the density response is a
+statement about the gradient, independent of the kernel), the tiling test's element and
+spectrum clauses, or the F4 head-versus-base discrimination (both slopes were measured
+through the same kernel). It DOES mean the six wired models must be retrained before their
+gate numbers stand — which is section 5.
+
+### The measurement that settled it
+
+`self_potential_of` returns, to ~1.5% at every size, the Makov-Payne potential of a point
+charge in jellium:
+
+| L (A) | 5.6 | 11.2 | 16.8 | 22.4 | 33.6 |
+|---|---|---|---|---|---|
+| kernel A_ii | -7.320 | -3.666 | -2.450 | -1.843 | -1.235 |
+| -alpha_M C / L | -7.297 | -3.648 | -2.432 | -1.824 | -1.216 |
+
+A Gaussian self-energy would add a constant +11.49 eV/e at sigma = 1 and is absent. So what
+was being subtracted was entirely ion i's own periodic images, and the plan's instruction to
+"keep the Gaussian self-energy removal" has nothing left to remove: LES's k != 0 sum carries
+no self term. `test_madelung_convention.py::TestKernelCalibration` pins this identity so the
+claim is checked rather than remembered.

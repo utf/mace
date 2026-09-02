@@ -511,12 +511,12 @@ class MACEDefect(ScaleShiftMACE):
                     "madelung_on_site needs positions, cell and node_species; a call site "
                     "that omits them would silently drop the term and train a different "
                     "model than the one configured")
-            from mace.modules.defect_madelung import self_potential_of
-
+            # `cell`, never `cell_les`. H carries the periodic ion-lattice potential in
+            # every mode -- the isolated switch belongs to E_LR alone, and there is no
+            # branch here to reach it. Full lattice sum: no self-image subtraction.
             madelung = self.madelung.on_site_shift(
                 self.latent_ewald, node_species, positions, cell, batch,
-                eps_inf=self.madelung_eps_inf,
-                self_potential=self_potential_of(self.latent_ewald, cell))
+                eps_inf=self.madelung_eps_inf)
 
         head_kwargs = dict(
             node_feats=head_feats,

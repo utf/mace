@@ -27,10 +27,15 @@ field, which the lattice has not had time to respond to. It is threaded from
 ``ForwardContext``, never read from ``model.eps_inf_init`` -- the retained checkpoints carry
 6.5 there while both launchers pass 4.0.
 
-CONVENTION, decided here and recorded because Stage 3 depends on it. ``phi_LR`` is the smooth
-(reciprocal-space) part of the Ewald potential of {Z}, with the same smearing, the same
-``G = 0`` treatment and the same background as ``E_LR``; the self term is excluded and there
-is no per-cell alignment. The real-space part is absorbed by the learned local term, which is
+CONVENTION, SETTLED: THE FULL SUM. ``phi_LR`` is the smooth (reciprocal-space) part of the
+Ewald potential of {Z}, with the same smearing, the same ``G = 0`` treatment and the same
+background as ``E_LR``; only the true self term (``j = i``, ``R = 0``) is excluded, and there
+is no per-cell alignment and no self-image subtraction. The previous convention subtracted
+``A_ii``, which measurement showed to be the Makov-Payne self-image potential ``-alpha_M/L``
+-- ion i's own periodic images, which are real atoms of the crystal that a carrier on site i
+feels, and which a different supercell merely relabels. Removing them made ``phi_LR`` a
+function of the box rather than of the crystal, by ~0.3 eV * Z_i between the 79- and
+159-atom training cells. The real-space part is absorbed by the learned local term, which is
 what makes ``Z`` identifiable at all. In Stages 1 and 2 the existing difference gauge removes
 the per-cell mean of ``eps``, so what acts there is the Madelung **contrast** (test 2). The
 absolute offset becomes load-bearing only in Stage 3, where ``eps0`` is ungauged and the
@@ -54,12 +59,27 @@ __all__ = ["site_potential", "self_potential_of", "MadelungOnSite"]
 
 
 def self_potential_of(ewald, cell: torch.Tensor) -> torch.Tensor:
-    """``A_ii``: the smeared potential of a unit charge at its own centre, per cell.
+    """``A_ii``, the potential a lone unit charge feels in its own cell. **DIAGNOSTIC ONLY.**
 
-    Taken from the kernel rather than from a formula, so it cannot drift from whatever
-    convention LES actually uses. A single unit charge alone in the cell has energy
-    ``A_ii / 2``, so ``A_ii`` is twice that. It depends on the cell -- through the images and
-    the background -- but not on where the atom sits.
+    NO LONGER SUBTRACTED FROM ``phi_LR``, and the reason is what this function turns out to
+    measure. LES sums over ``k != 0`` only, which is the jellium neutralisation, and its
+    kernel already excludes the true self term. What is left is exactly the Makov-Payne
+    self-image potential of a point charge in jellium, ``-alpha_M / L``:
+
+        L (A)   5.6      11.2     16.8     22.4     33.6
+        A_ii   -7.320   -3.666   -2.450   -1.843   -1.235
+        -a/L   -7.297   -3.648   -2.432   -1.824   -1.216     (alpha_M = 2.8373, cubic)
+
+    Agreement to ~1.5% at every size, and there is no additive Gaussian self-energy present
+    (that would be +11.49 eV/e at sigma = 1 and would swamp the table). So subtracting `A_ii`
+    was removing the potential of ion i's OWN PERIODIC IMAGES -- real atoms of the crystal
+    that a carrier on site i genuinely feels, and which a different supercell choice merely
+    relabels as separate atoms. That made ``phi_LR`` depend on the box rather than on the
+    crystal.
+
+    Kept, because the identity above is the calibration of the shared kernel's ``G = 0``
+    convention and `test_madelung_convention.py` asserts it. It must not re-enter the
+    potential: `site_potential` refuses a `self_potential` argument outright.
     """
     cell = cell.view(-1, 3, 3)
     out = []
@@ -74,11 +94,30 @@ def self_potential_of(ewald, cell: torch.Tensor) -> torch.Tensor:
 def site_potential(ewald, charges: torch.Tensor, positions: torch.Tensor,
                    cell: torch.Tensor, batch: torch.Tensor,
                    self_potential: Optional[torch.Tensor] = None) -> torch.Tensor:
-    """``V_i = dE/dq_i``, self term removed. The potential at each atom from all the others.
+    """``V_i = dE/dq_i``: the FULL SUM over the infinite ion lattice, self term excluded.
+
+    STATEMENT OF RECORD, to be asserted and never implemented around:
+
+        Image corrections enter through exactly two places: E_LR's periodic/isolated switch
+        and the per-(charge, size) reference constants. H is gauge-invariant -- the same
+        periodic ion-lattice potential in training and in isolated evaluation. There is no
+        separate carrier-host term; the interaction is `sum_i (P - P_ref)_ii eps_i` through
+        `phi_LR`, with forces by Hellmann-Feynman.
+
+    THE CONVENTION, and why it changed. The infinite periodic ion lattice is ONE set of
+    charges under any supercell description. The site potential that excludes only the true
+    self term (`j = i`, `R = 0`) is description-invariant; only its partition into "in-cell"
+    and "image" contributions depends on the box. The reductio that a cell-dependent `A_ii`
+    makes `eps_i` description-dependent fails, because the `j != i` sum varies
+    compensatingly. Under the old subtraction the potential entering H was not the periodic
+    potential the labels saw -- it was that potential minus a supercell-dependent fraction of
+    a sublattice.
 
     Differentiating the Ewald energy with respect to the charges is exact and reuses the
-    production kernel. ``E = q^T A q / 2``, so ``dE/dq_i = (A q)_i = V_i``, which INCLUDES the
-    diagonal ``A_ii q_i``; ``A_ii`` is one constant per cell and is subtracted.
+    production kernel. ``E = q^T A q / 2``, so ``dE/dq_i = (A q)_i = V_i``. LES sums over
+    ``k != 0`` only and its kernel carries no self term, so ``(A q)_i`` is already the full
+    lattice sum with the self term absent -- nothing further is subtracted. See
+    `self_potential_of` for the measurement that establishes this.
 
     ``create_graph`` follows the ambient grad mode, NOT ``module.training``. Keying it to
     training mode is a silent force bug: at evaluation with forces requested, the potential
@@ -86,13 +125,16 @@ def site_potential(ewald, charges: torch.Tensor, positions: torch.Tensor,
     with forces still returned. The A1 finite-difference check runs in eval mode for exactly
     this reason.
     """
+    if self_potential is not None:
+        raise ValueError(
+            "site_potential no longer accepts a self-potential: A_ii is the Makov-Payne "
+            "self-IMAGE term, not a self-energy, and subtracting it removes real atoms of "
+            "the crystal and makes phi_LR depend on the supercell. The argument is refused "
+            "rather than ignored so a caller cannot quietly reinstate the old convention.")
     q = charges.clone().requires_grad_(True)
     with torch.enable_grad():
         energy = ewald.energy(q, positions, cell, batch).sum()
-        v = torch.autograd.grad(energy, q, create_graph=torch.is_grad_enabled())[0]
-    if self_potential is not None:
-        v = v - self_potential[batch] * charges
-    return v
+        return torch.autograd.grad(energy, q, create_graph=torch.is_grad_enabled())[0]
 
 
 def project_neutral_(z: torch.Tensor, composition: torch.Tensor) -> torch.Tensor:
@@ -132,11 +174,16 @@ class MadelungOnSite(nn.Module):
         """The post-step hook. Cheap enough to call unconditionally."""
         project_neutral_(self.z.data, self.composition)
 
-    def potential(self, ewald, node_species, positions, cell, batch,
-                  self_potential: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """``phi_LR`` at every atom, from {Z}."""
-        return site_potential(ewald, self.charges(node_species), positions, cell, batch,
-                              self_potential=self_potential)
+    def potential(self, ewald, node_species, positions, cell, batch) -> torch.Tensor:
+        """``phi_LR`` at every atom, from {Z}. Full lattice sum; see `site_potential`.
+
+        `cell` is ALWAYS the periodic cell, in every mode. There is no isolated branch here
+        and there must not be one: H carries the same periodic ion-lattice potential in
+        training and in isolated evaluation, and only E_LR switches. The null-cell trick that
+        selects LES's isolated evaluator is applied to `cell_les` in the long-range branch
+        alone; this function is never handed it.
+        """
+        return site_potential(ewald, self.charges(node_species), positions, cell, batch)
 
     def on_site_shift(self, ewald, node_species, positions, cell, batch, eps_inf: float,
                       self_potential: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -145,6 +192,8 @@ class MadelungOnSite(nn.Module):
         Returned as the shift rather than the potential so that the sign lives in one place
         and every caller inherits it.
         """
-        phi = self.potential(ewald, node_species, positions, cell, batch,
-                             self_potential=self_potential)
-        return -phi / float(eps_inf)
+        if self_potential is not None:
+            raise ValueError(
+                "on_site_shift no longer accepts a self-potential; see site_potential for "
+                "why the subtraction was removed")
+        return -self.potential(ewald, node_species, positions, cell, batch) / float(eps_inf)

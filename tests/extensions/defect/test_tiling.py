@@ -198,16 +198,21 @@ class TestSizeExtensivity:
 
 
 class TestTiledMadelung:
-    """phi_LR at equivalent sites must be identical under tiling.
+    """phi_LR at equivalent sites must be identical under tiling. Section 2(a).
 
-    The Ewald self-term is one constant PER CELL, not per atom, and subtracting a per-atom
-    version would leave a residue that scales with cell size -- invisible at one size and
-    fatal to every size-extensivity claim in the programme.
+    This was the failing test that settled the convention. Under the old self-image
+    subtraction, Cl sat at +4.542 eV in a 2x2x2 cell and +5.869 in its 4x2x2 tiling -- the
+    same crystal, described twice. Under the full sum it is invariant, because a supercell
+    adds only k-points at which the structure factor vanishes.
+
+    It now passes FOR THE RIGHT REASON, which is worth stating: not because a tolerance was
+    loosened, but because (A Z)_i is the description-invariant object and the subtraction
+    that broke it is gone.
     """
 
     @staticmethod
     def potentials(atoms, z_values):
-        from mace.modules.defect_madelung import self_potential_of, site_potential
+        from mace.modules.defect_madelung import site_potential
         from mace.modules.latent_ewald import LatentEwald
 
         ewald = LatentEwald().double()
@@ -217,30 +222,15 @@ class TestTiledMadelung:
         cell = torch.tensor(np.array(atoms.get_cell()), dtype=torch.float64)
         batch = torch.zeros(len(atoms), dtype=torch.long)
         with torch.no_grad():
-            return site_potential(ewald, q, pos, cell, batch,
-                                  self_potential=self_potential_of(ewald, cell)), species
+            return site_potential(ewald, q, pos, cell, batch), species
 
-    @pytest.mark.xfail(strict=True, reason=(
-        "KNOWN DEFECT, measured 2026-09-02. phi_LR at chemically equivalent sites of the "
-        "SAME crystal changes by eV between supercell choices: Cl sits at +4.542 eV in a "
-        "2x2x2 cell, +5.869 in its 4x2x2 tiling, +5.758 at 3x3x3. The whole change is "
-        "exactly -delta(A_ii) * q_i -- it comes entirely from the `self_potential_of` "
-        "subtraction, whose A_ii scales as 1/L (-7.320, -3.666, -2.340, -1.843, -1.235 eV "
-        "at L = 5.6, 11.2, 22.4, 22.4, 33.6 A), the Makov-Payne signature. (A q)_i itself "
-        "is supercell-invariant. Consequence: with eps_inf = 4, the same physical site gets "
-        "on-site energies differing by ~0.3 eV * Z_i between the 79- and 159-atom training "
-        "cells, which is a first-order size dependence in Edit 1's term at the two sizes the "
-        "dataset actually contains. Whether the lattice self-image SHOULD be removed is a "
-        "modelling decision -- defensible for a charged defect, wrong for a neutral crystal "
-        "-- so this is xfail-strict rather than a silent fix: the suite stays honest and the "
-        "test turns green the moment the convention is settled."))
     def test_the_site_potential_is_unchanged_by_tiling(self, cells):
         z_values = [-1.0, 1.0, 2.0]           # exactly neutral against 3:1:1
-        try:
-            vs, sp_s = self.potentials(cells["small"], z_values)
-            vb, sp_b = self.potentials(cells["big"], z_values)
-        except Exception as exc:                    # pragma: no cover
-            pytest.skip(f"LatentEwald unavailable in this environment: {exc}")
+        # No try/except. A broad one here turned a real failure into a skip once already:
+        # when site_potential began refusing the self-potential argument, this test reported
+        # "skipped" instead of "the caller is using the retired convention".
+        vs, sp_s = self.potentials(cells["small"], z_values)
+        vb, sp_b = self.potentials(cells["big"], z_values)
         for sp in range(3):
             a = torch.sort(vs[sp_s == sp]).values
             b = torch.sort(vb[sp_b == sp]).values

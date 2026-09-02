@@ -134,6 +134,19 @@ def resolve_fills(n_total: int, counts: Sequence[int], occupation=None):
     return now, ref
 
 
+def changed_level_index(n_total: int, counts: Sequence[int], occupation=None) -> int:
+    """0-based index of the majority level whose OCCUPATION the counters changed.
+
+    Not "the highest occupied level". For an added electron the two coincide; for a REMOVED
+    one the highest occupied level sits below the vacated defect state, and reading it
+    measures a valence level's properties instead -- which looks like a clean null rather
+    than like a bug. `max(n_maj, n_maj_ref) - 1` is the changed level under either
+    convention, and the frames in hand carry `(0, 0, 1, 0)`, a hole.
+    """
+    (n_maj, _), (n_maj_ref, _) = resolve_fills(n_total, counts, occupation)
+    return int(round(max(n_maj, n_maj_ref))) - 1
+
+
 def fermi_fill(eps: torch.Tensor, n_electrons: float, t_el: float = T_EL,
                tol: float = 1e-10, max_iter: int = 200) -> torch.Tensor:
     """Fermi-Dirac occupations at the `mu` that puts exactly `n_electrons` in the spectrum.

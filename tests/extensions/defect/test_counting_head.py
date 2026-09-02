@@ -919,3 +919,36 @@ class TestForceResponseWiring:
                  edge_length=vec.pow(2).sum(-1, keepdim=True).sqrt(),
                  node_species=torch.tensor([0, 2, 0, 0, 1, 0]), edge_vector=vec,
                  positions=None, force_out={})
+
+
+class TestChangedLevelIndex:
+    """Section 2(e). The frontier estimator picks the level whose OCCUPATION changed.
+
+    An index that assumes an added electron reads a valence level when the counters encode a
+    removed one -- and a valence level has a weak, flat dependence on the vacancy geometry,
+    so the mistake presents as a clean null rather than as an error. The frames in hand carry
+    (0, 0, 1, 0), a hole, so this is the case that actually runs.
+    """
+
+    def test_an_added_electron_gives_the_level_it_entered(self):
+        from mace.modules.defect_counting import changed_level_index
+        n_total = 20                       # neutral fill 10 / 10
+        assert changed_level_index(n_total, (1, 0, 0, 0)) == 10
+
+    def test_a_removed_electron_gives_the_level_it_vacated(self):
+        """The case the naive index gets wrong: it would return 8, one below."""
+        from mace.modules.defect_counting import changed_level_index
+        assert changed_level_index(20, (0, 0, 1, 0)) == 9
+
+    def test_no_counters_gives_the_neutral_frontier(self):
+        from mace.modules.defect_counting import changed_level_index
+        assert changed_level_index(20, (0, 0, 0, 0)) == 9
+
+    def test_an_odd_electron_count_uses_the_majority_channel(self):
+        from mace.modules.defect_counting import changed_level_index
+        assert changed_level_index(21, (0, 0, 0, 0)) == 10       # ceil(21/2) = 11
+        assert changed_level_index(21, (1, 0, 0, 0)) == 11
+
+    def test_a_stated_occupation_is_honoured(self):
+        from mace.modules.defect_counting import changed_level_index
+        assert changed_level_index(20, (0, 0, 0, 0), occupation=(12.0, 8.0)) == 11

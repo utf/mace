@@ -49,23 +49,14 @@ from ta_band_edge import capture, load_frames, select  # noqa: E402
 
 def frontier_level(model, batch, frames, ctx) -> float:
     """The highest occupied majority eigenvalue of one graph."""
-    from mace.modules.defect_counting import VALENCE, spin_targets
+    from mace.modules.defect_counting import VALENCE, changed_level_index
 
     internals, _ = capture(model, batch, ctx=ctx, frames=frames)
     lam = internals["lam"][0, 0]
     lam = lam[lam < 500.0]                      # strip the padding sentinel
     n_total = sum(VALENCE[int(z)] for z in frames[0].get_atomic_numbers())
     counts = batch.carrier_counts.reshape(-1).tolist()
-    n_maj, _ = spin_targets(n_total, counts)
-    n_maj_ref = float((n_total + 1) // 2)
-    # THE LEVEL WHOSE OCCUPATION CHANGED, which is not the same as the highest occupied one.
-    # For an added electron (n_maj = ref + 1) that is index n_maj - 1, the level the carrier
-    # went into. For a REMOVED electron (n_maj = ref - 1) the highest occupied level is one
-    # below the defect state, and indexing it would measure the d-dependence of a valence
-    # level instead -- a plausible flat correlation from the wrong quantity. `max` picks the
-    # changed level under both conventions, and the counters are printed so which one the
-    # data uses is on record rather than assumed.
-    k = int(round(max(n_maj, n_maj_ref))) - 1
+    k = changed_level_index(n_total, counts)
     if k < 0 or k >= lam.numel():
         return float("nan")
     return float(lam[k])

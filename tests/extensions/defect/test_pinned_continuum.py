@@ -35,7 +35,7 @@ from e3nn import o3
 
 from mace import data, modules, tools
 from mace.data.defects import prepare_defect_configurations
-from mace.modules.defect_madelung import self_potential_of, site_potential
+from mace.modules.defect_madelung import site_potential
 from mace.modules.defect_models import MACEDefect
 from mace.modules.latent_ewald import LatentEwald
 from mace.tools import torch_geometric
@@ -244,7 +244,7 @@ class TestPinnedContinuum:
             b = torch.zeros(len(atoms), dtype=torch.long)
             return site_potential(ewald, charges,
                                   torch.as_tensor(atoms.get_positions()), c, b,
-                                  self_potential=self_potential_of(ewald, c)).detach()
+                                  ).detach()
 
         return -(phi(vac, zv)[far] - phi(pristine, zp)[mapped[far]]) / EPS_INF
 

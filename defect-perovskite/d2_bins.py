@@ -40,7 +40,7 @@ from ase.geometry import get_distances
 from ase.io import read
 
 from mace import tools
-from mace.modules.defect_madelung import self_potential_of, site_potential
+from mace.modules.defect_madelung import site_potential
 from mace.modules.latent_ewald import LatentEwald
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -100,8 +100,10 @@ def phi_proxy(atoms, ewald, device, radius=5.0):
                      dtype=torch.float64, device=device)
     b = torch.zeros(len(atoms), dtype=torch.long, device=device)
     with torch.no_grad():
-        self_pot = self_potential_of(ewald, cell)
-        phi = site_potential(ewald, q, pos, cell, b, self_potential=self_pot)
+        # Full lattice sum. This diagnostic predates the convention change and is kept
+        # runnable, but its archived numbers were taken under the self-image subtraction and
+        # are not comparable with anything produced after it.
+        phi = site_potential(ewald, q, pos, cell, b)
     centre = atoms.get_positions()[list(site.shell)].mean(axis=0)[None]
     _, dd = get_distances(centre, atoms.get_positions(), cell=atoms.get_cell(),
                           pbc=atoms.pbc)
