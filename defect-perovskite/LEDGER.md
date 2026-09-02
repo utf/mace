@@ -237,3 +237,73 @@ was being subtracted was entirely ion i's own periodic images, and the plan's in
 "keep the Gaussian self-energy removal" has nothing left to remove: LES's k != 0 sum carries
 no self term. `test_madelung_convention.py::TestKernelCalibration` pins this identity so the
 claim is checked rather than remembered.
+
+---
+
+## Entry 8 — the forward-only battery: F4 decomposed, no rerun spent
+
+**Closure.** F4's "unexplained amplitude" is closed as a mystery and replaced by a
+decomposition in which every factor is measured. The three that matter:
+
+1. **Label availability.** 98.4% of the charged frames are 79-atom. Their energy residual's
+   d-slope is +0.3641 over the full range and +0.0806 [−0.1108, +0.2720] inside the window
+   where the base's own training set is dense — consistent with zero. The carrier-free neutral
+   null at the same size gives +0.1317 [+0.1131, +0.1503]: the small-cell "trend" is base
+   error, and it points the opposite way to the physics.
+2. **Loss coverage.** The Stage-3 objective is forces plus `loss_gap`. `delta_sr` carries no
+   energy term, so F4 has never been a fitted quantity in any Stage-3 run. In the fitted
+   channel the head tracks the labels at both sizes, sign flip included: axial force slope
+   +0.2641 ± 0.0220 at 79 atoms against a label +0.4202, and −0.3635 ± 0.0495 at 159 against
+   −0.1901.
+3. **Coupling.** The direct hub Pb–Pb bond carries 70% of the head's d-response (deleting it
+   leaves 30%), and the envelope supplies t/t_Harrison = 0.183 ± 0.112 there, with the learned
+   pair modulation pinned at its bound on 33% of hub bonds.
+
+**The reference survives its own null.** `d(E_label − E_base)/dd = −0.1338 [−0.1446, −0.1230]`
+on the 17 charged 159-atom frames; the neutral cells at the same size, same base, same
+geometries give +0.0800 [−0.0503, +0.2102]. The gate rests on carrier physics.
+
+**Closure, negative and load-bearing.** F7 fires as a diagnosis and its remedy is
+contraindicated. At Harrison initialisation, every longer-ranged envelope LOWERS the level's
+d-slope monotonically — exp L = 1.0 gives dλ/dd = +0.3211, L = 1.4 gives +0.2268, L = 2.0
++0.1172, the d^-2 power law +0.1242, L = 3.0 +0.0575 — because dt/dd = t · dln t/dd and the
+exponential's log-slope is three times steeper, while the denser spectrum a longer envelope
+produces costs more than the coupling buys. The current setting is already the maximum.
+**No six-seed rerun was spent.**
+
+**Closure.** The +2.1 eV move in λ_frontier between the γ = 1 and γ = 3 cohorts is a rigid
+gauge shift: depth below the conduction manifold changed by 25 meV, from +0.1277 ± 0.0235 to
++0.1025 ± 0.0259 eV. The earlier reading — "the widened bound letting the on-site correction go
+where it was pinned" — is retracted.
+
+**Open, and now precisely stated.** The on-site correction channel is INERT, not merely
+unsaturated: within-shell spread of order 1 meV, every species within 0.01 pre-tanh of every
+other, a near-uniform +0.27 eV on every atom. A uniform on-site shift contributes exactly zero
+force, and the Stage-3 loss is forces plus a pristine-gap term, so the constant mode is an
+unidentified gauge direction by construction. Deferred to R3 per the decision tree. Under the
+joint run's energy loss it becomes degenerate with `c_shift` rather than with nothing, so it
+partially self-resolves there.
+
+**Open.** Beyond-two-centre / superexchange. The hub ablation leaves 30% of the d-response in
+the indirect channel, which is where this would live. It is the last item on the
+close-or-explain page.
+
+**Statement of record (assert, never implement around):**
+"A decision tree's branch is a hypothesis about the remedy, not an instruction. F7's branch
+presumed the envelope was the lever for the d-slope; b7 is the measurement the branch asked
+for and it falsified the presumption. Executing the change anyway would have been following the
+letter of the tree against the evidence the tree called for."
+
+### The bug the end-to-end run found that no unit test could
+
+`--defect_base_init` and `--defect_madelung_on_site` could not be combined at all — the joint
+run's own configuration. `CORRECTION_PREFIXES` omitted `madelung`, so `_base_state` classified
+the learned species charges as base weights and `load_stage_a_base` demanded a Stage-A
+checkpoint contain `madelung.z`, which no Stage-A base will ever have. Every unit test passed
+throughout, because each exercised one flag. `defect_protocol.trainable_mask` already worked
+around the same omission with an explicit `startswith("madelung.")`, so the codebase knew the
+answer in one place and tripped over it in another.
+
+Separately: `tests/unit/test_spectral_v3.py` imported a sibling by bare name while
+`tests/unit/__init__.py` makes the directory a package, so it raised at collection and its
+twelve tests had been silently skipped whenever the suite was collected by directory.

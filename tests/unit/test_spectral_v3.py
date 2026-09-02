@@ -21,7 +21,12 @@ from mace.modules.defect_models import MACEDefect
 from mace.modules.defect_spectral_v3 import LocalSpectralHead
 from mace.tools.scripts_utils import extract_config_mace_model
 
-from test_defect_spectral_model import make_batch          # noqa: E402
+# Sibling import by PACKAGE path, not by bare name. `tests/unit/__init__.py` exists, so
+# pytest treats this directory as a package and puts the REPO ROOT on sys.path rather than
+# the directory itself -- the bare `from test_defect_spectral_model import ...` raised
+# ModuleNotFoundError at collection time, so every test in this file had been silently
+# skipped whenever the suite was collected by directory.
+from tests.unit.test_defect_spectral_model import make_batch          # noqa: E402
 
 
 R_MAX = 4.0

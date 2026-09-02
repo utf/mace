@@ -28,12 +28,15 @@ BASE=$R/e0_base_s1/e0_base_s1.model
 cd "$W" || exit 1
 [ -f "$BASE" ] || { echo "ABORT: missing $BASE"; exit 1; }
 [ -f "$DATA/train.xyz" ] || { echo "ABORT: missing $DATA/train.xyz"; exit 1; }
+# The trunk must match e0_base_s1 exactly or --defect_base_init refuses to load it:
+# 128 channels, max_L 1, 8 radial basis, r_max 5.0. A first attempt at 32 channels
+# was caught by that check, which is the check working.
 
 run () {   # gpu name
     rm -rf "$R/$2" "$R/$2.log"
     NAME="$2" WORK_DIR="$R/$2" DATA_DIR="$DATA" MACE_REPO="$W" \
     CUDA_VISIBLE_DEVICES="$1" \
-    MAX_NUM_EPOCHS=2 NUM_CHANNELS=32 MAX_L=1 NUM_RADIAL_BASIS=8 R_MAX=5.0 \
+    MAX_NUM_EPOCHS=2 NUM_CHANNELS=128 MAX_L=1 NUM_RADIAL_BASIS=8 R_MAX=5.0 \
     BATCH_SIZE=4 VALID_BATCH_SIZE=4 DEVICE=cuda DEFAULT_DTYPE=float64 \
     USE_EMA=False PATIENCE=250 SEED=1 ENABLE_CUEQ=False \
     DEFECT_SPECTRAL_HEAD=True DEFECT_COUNTING_HEAD=True \

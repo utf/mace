@@ -59,8 +59,18 @@ __all__ = ["CORRECTION_PREFIXES", "is_correction_param", "load_stage_a_base",
 # as base, which made every Stage-A load demand a Hamiltonian from a checkpoint that predates
 # it -- and, worse, would have FROZEN the Hamiltonian in any staged run, silently turning the
 # decisive arm into an untrained head. Same failure shape as novelty_ above.
+#
+# `madelung` is on this list for the same reason `spectral` is. The learned species charges Z
+# are correction state introduced by Edit 1, not base weights: `stage_run` trains them,
+# `defect_protocol.trainable_mask` returns True for them, and the post-step projection exists
+# to keep them on the composition hyperplane. Omitting the prefix made `_base_state` classify
+# them as base, so `load_stage_a_base` demanded a Stage-A checkpoint contain `madelung.z` --
+# and no Stage-A base ever will, because Stage A has no Madelung term. The effect was that
+# --defect_base_init and --defect_madelung_on_site could not be combined AT ALL from config,
+# which is the joint run's own configuration. Found by running the production trainer end to
+# end; every unit test passed throughout, because each of them exercised one flag.
 CORRECTION_PREFIXES = ("carrier_", "counter_", "latent_charges", "logit",
-                       "defect_", "delta_", "novelty_", "spectral")
+                       "defect_", "delta_", "novelty_", "spectral", "madelung")
 
 
 # Training bookkeeping: neither base weights nor correction state. `current_epoch` drives the

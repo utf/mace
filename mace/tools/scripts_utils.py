@@ -1273,6 +1273,15 @@ def get_params_options(
         # like, so both spectral arms would have completed and reported that component H does
         # not localise. The orphan guard below caught it on the first real run.
         "spectral",
+        # The learned Madelung species charges. Same omission, same guard, one edit later:
+        # with --defect_madelung_on_site the trainer refused to start because `madelung.z`
+        # was in no group. It had never been noticed because every Stage-1..3 result came
+        # from defect-perovskite/stage_run.py, which builds its own AdamW over whatever has
+        # requires_grad and so never consulted this function. No weight decay -- Z is a
+        # physical charge held on the composition hyperplane by the post-step projection,
+        # and decaying it towards zero would fight that projection for the same degree of
+        # freedom.
+        "madelung",
     ):
         module = getattr(model, module_name, None)
         if module is not None:
