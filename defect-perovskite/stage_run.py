@@ -239,6 +239,10 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
 
     rng = np.random.default_rng(seed)
     hist = []
+    # Wall clock per epoch, reported with the loss. The wired density response costs an extra
+    # backward through the H builder; this is the number a later "training got slower" is read
+    # against, and it is free to record.
+    t_epoch, last_ep = time.perf_counter(), 0
     for ep in range(epochs):
         f_sum, n_step = 0.0, 0
         for batch, frames in batches:
@@ -271,8 +275,11 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
         if ep % 5 == 0 or ep == epochs - 1:
             z = (model.madelung.z.tolist() if getattr(model, "madelung", None) is not None
                  else None)
+            now = time.perf_counter()
             log(f"      epoch {ep:3d}  force {hist[-1]:.5f}"
-                + (f"  Z {['%.3f' % v for v in z]}" if z else ""))
+                + (f"  Z {['%.3f' % v for v in z]}" if z else "")
+                + f"  [{(now - t_epoch) / max(ep - last_ep, 1):.1f} s/epoch]")
+            t_epoch, last_ep = now, ep
 
     model.eval()
     metrics = evaluate(model, batches, frame_masks, device, ctx=ctx)
