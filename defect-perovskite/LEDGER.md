@@ -67,10 +67,42 @@ head, stop and investigate before R3.
 **D-2 has now run, and the resonance explanation is refuted (2 Sep 2026).** Measured on the
 frames each model's own spectrum marks bound (`depth/δ_L > 2`), `corr(λ, d_hub)` is negative
 in **17 of 18** models, mean −0.422; and **13 of the 18 models have no resonant frame at
-all** while still showing it. The anomaly is not a near-degeneracy artefact. It stays open
-with its cheapest explanation now eliminated, and §7's stop condition stays live.
+all** while still showing it. The anomaly is not a near-degeneracy artefact.
 
-Until it is resolved, `Δ_bind` is not to be relied on as a depth.
+**Stage 1 then changed its sign (2 Sep 2026, same day).** Three cohorts, same measurement:
+
+| cohort | mean `corr(λ, d_hub)` |
+|---|---|
+| archived (T-B edge+gap loss, no Madelung) | −0.422, negative in 17/18 |
+| Stage-1 **OFF** (force-only loss, no Madelung) | +0.020 |
+| Stage-1 **ON** (force-only loss, Madelung) | +0.422, positive in 5/6 |
+
+Two statements, deliberately kept apart. The **loss change alone** removed the negative, so
+the anomaly was never purely architectural — it was at least partly a property of training
+against the band-edge constraint. The **Madelung term** then drives the correlation positive,
+which is the physical direction: the level is deepest when the pair dimerises. That
+comparison is one edit apart and is clean.
+
+Not closed, because "removed" and "explained" are different, and neither cohort tells us why
+the archived one was negative. But it is no longer the same open item: the cheapest
+explanation (resonance) is eliminated, and the anomaly does not survive either change.
+
+Until it is understood, `Δ_bind` is still not to be relied on as a depth.
+
+---
+
+## New open item: `Z`'s scale is not identified (2 Sep 2026)
+
+Stage 1's ON arm is bimodal and splits by `|Z|`. Two of six seeds inflated the species
+charges to ~2.5× nominal — (−2.6, +2.3, +5.4) against (−1, +1, +2) — and are the two worst
+fits by a wide margin (axial_red +0.17, +0.18 against the other four's +0.63 to +0.72).
+Neutrality holds to 1 part in 10⁷ on every seed, so the projection is exact; what is missing
+is any constraint on the **scale**.
+
+Cause: the smooth part of `phi_LR` is dominated by a per-species constant that the learned
+on-site term can also produce, so only the small defect-induced deviation constrains `|Z|`.
+The plan's claim that the real-space part's absorption "is what makes Z identifiable" is
+right in principle and too weak in practice.
 
 **Ledger note on ε∞, from the §0 verification.** Nothing ties the screening amplitude `a` to
 the static dielectric constant — there is no static-dielectric literal anywhere in the
