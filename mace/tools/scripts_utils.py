@@ -442,6 +442,8 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         # Edit 1. Carried through the round trip for the same reason the spectral flags are:
         # a rebuilt model that quietly loses the Madelung term is a different model, and the
         # cuEq conversion performs exactly that round trip at the end of every run.
+        config["counting_head"] = bool(getattr(model, "counting_head", False))
+        config["counting_t_el"] = float(getattr(model, "counting_t_el", 0.025))
         config["madelung_on_site"] = bool(getattr(model, "madelung_on_site", False))
         config["madelung_eps_inf"] = float(getattr(model, "madelung_eps_inf", 4.0))
         if getattr(model, "madelung", None) is not None:

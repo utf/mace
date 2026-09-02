@@ -100,6 +100,8 @@ class MACEDefect(ScaleShiftMACE):
         spectral_first_shell: bool = False,
         spectral_sigma: bool = False,
         spectral_gauge_penalty: bool = False,
+        counting_head: bool = False,
+        counting_t_el: float = 0.025,
         madelung_on_site: bool = False,
         madelung_eps_inf: float = 4.0,
         madelung_composition: Optional[Sequence[float]] = None,
@@ -216,6 +218,8 @@ class MACEDefect(ScaleShiftMACE):
                 num_elements=int(kwargs["num_elements"]),
                 composition=madelung_composition,
                 z_init=madelung_z_init)
+        self.counting_head = bool(counting_head)
+        self.counting_t_el = float(counting_t_el)
         self.spectral = None
         # 0.0 means "the trunk's receptive field", r_max * num_interactions. That is the
         # natural scale: eps_i and t_ij are functions of node features that already aggregate
@@ -253,6 +257,17 @@ class MACEDefect(ScaleShiftMACE):
                 t_min=float(spectral_t_min),
                 single_manifold=self.spectral_single_manifold,
             )
+        elif self.spectral_head and self.counting_head:
+            # Edit 4 replaces the spectral head rather than sitting beside it: two heads
+            # would both write `delta_sr` and the model would double count.
+            from mace.modules.defect_counting import CountingHead
+
+            self.spectral = CountingHead(
+                num_elements=int(kwargs["num_elements"]),
+                feature_dim=self.spectral_feature_dim,
+                atomic_numbers=[int(z) for z in kwargs["atomic_numbers"]],
+                d_ref=2.8, r_cut=float(self.spectral_r_cut),
+                t_el=float(counting_t_el))
         elif self.spectral_head:
             from mace.modules.defect_spectral import SpectralCarrierHead
 

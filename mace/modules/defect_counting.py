@@ -143,8 +143,20 @@ def fermi_fill(eps: torch.Tensor, n_electrons: float, t_el: float = T_EL,
 
 
 def free_energy(eps: torch.Tensor, n_electrons: float, t_el: float = T_EL) -> torch.Tensor:
-    """`F(N) = sum_k f_k eps_k - T_el S(f)`, differentiable in `eps`."""
-    f = fermi_fill(eps, n_electrons, t_el)
+    """`F(N) = sum_k f_k eps_k - T_el S(f)`, differentiable in `eps`.
+
+    THE OCCUPATIONS ARE DETACHED, and that is not an approximation -- it is what makes the
+    derivative correct. At fixed N the constrained free energy obeys `dF/deps_k = f_k`. Let
+    the autograd flow through `f` as well, with `mu` frozen by the bisection, and the chain
+    rule adds a spurious `-mu f_k (1 - f_k) / T_el`: the entropy term cancels the `eps df`
+    term but leaves the `mu` piece behind, because `f` was varied at fixed `mu` rather than
+    at fixed N.
+
+    This was found by the HF-versus-dense validation, not by inspection. It is invisible on a
+    spectrum symmetric about `mu = 0` -- which the first version of the gradient test used,
+    so that test passed while the identity was wrong for every real spectrum.
+    """
+    f = fermi_fill(eps, n_electrons, t_el).detach()
     fc = f.clamp(1e-12, 1.0 - 1e-12)
     entropy = -(fc * fc.log() + (1.0 - fc) * (1.0 - fc).log()).sum()
     return (f * eps).sum() - t_el * entropy
@@ -289,3 +301,211 @@ def site_charges(p_now: torch.Tensor, p_ref: torch.Tensor, n_nodes: int,
     """
     diff = torch.diagonal(p_now - p_ref)
     return -amplitude * diff.reshape(n_nodes, ORBITALS_PER_ATOM).sum(dim=-1)
+
+
+class CountingHead(nn.Module):
+    """The Edit 4 head, wearing the `SpectralOutput` interface.
+
+    Presenting the same NamedTuple as the spectral heads is what lets `_carrier_head`, the
+    training diagnostics, `evaluate` and `capture` keep working unchanged. The alternative --
+    a second head interface -- is how `train` and `evaluate` came to disagree about the
+    forward pass four times already.
+
+    What the fields mean here, which is NOT what they meant before:
+
+    * `delta_sr`   `E_head`, the free-energy difference from the neutral fill. Identically
+                   zero at `counts = 0`.
+    * `alpha`      the carrier density from the DENSITY-MATRIX difference, normalised per
+                   graph so `N_eff = 1/sum alpha^2` still means participation. Broadcast
+                   across the four channel slots: the counting head has no channels, and
+                   pretending otherwise is what `channel_sign` was.
+    * `gap`        `eps_{N+1} - eps_N`, the frontier gap. This is what `loss_gap` consumes.
+    * `site_energy` the on-site levels (s shell), for the gauge diagnostics.
+
+    Both spins share one Hamiltonian and differ only in their fill, so `eigh` runs once per
+    graph rather than twice.
+    """
+
+    def __init__(self, num_elements: int, feature_dim: int, atomic_numbers,
+                 elem_dim: int = 8, hidden: int = 64, d_ref: float = 2.8,
+                 decay_length: float = 1.0, r_cut: float = 10.0,
+                 t_el: float = T_EL, num_channels: int = 4) -> None:
+        super().__init__()
+        self.h = SlaterKosterH(num_elements=num_elements, feature_dim=feature_dim,
+                               elem_dim=elem_dim, hidden=hidden, d_ref=d_ref,
+                               decay_length=decay_length, r_cut=r_cut)
+        self.t_el = float(t_el)
+        self.num_channels = int(num_channels)
+        # Valence per SPECIES INDEX, resolved once from the model's own atomic-number table.
+        # Looking it up by Z at every forward would put a python dict in the hot path and,
+        # worse, would silently accept a species the table does not cover.
+        zs = [int(z) for z in atomic_numbers]
+        missing = [z for z in zs if z not in VALENCE]
+        if missing:
+            raise ValueError(
+                f"no valence recorded for Z = {missing}; the counting head cannot fill a "
+                "band it does not know the electron count of")
+        self.register_buffer("valence",
+                             torch.tensor([VALENCE[z] for z in zs], dtype=torch.long))
+        # Diagnostics read this to size their spectra; the counting head returns the whole
+        # spectrum, so it is 4 orbitals per atom rather than a truncation.
+        self.num_states = -1
+
+    def forward(self, node_feats, counter_emb, counts, batch, num_graphs, edge_index,
+                edge_length, site_bias=None, node_species=None, clamp_mask=None,
+                edge_vector=None, madelung=None, internals=None):
+        from mace.modules.defect_spectral import SpectralOutput
+
+        if node_species is None or edge_vector is None:
+            raise ValueError("the counting head needs node_species and edge_vector")
+        # Same detach boundary as V3 and Stages 1-2: no head term carries gradient into the
+        # trunk under any run configuration. Done once at entry so a term added later cannot
+        # reconnect it -- there is no attached descriptor in scope below.
+        node_feats = node_feats.detach()
+        device, dtype = node_feats.device, node_feats.dtype
+        n_nodes = int(node_feats.shape[0])
+
+        levels = self.h.on_site(node_feats, node_species, madelung)      # [n, 2]
+        if clamp_mask is not None:
+            # DIAGNOSTIC ONLY, same contract as the spectral heads: sites outside the mask are
+            # pushed far above the frontier so no occupied state can live on them.
+            levels = torch.where(clamp_mask.reshape(-1, 1), levels,
+                                 levels + 1.0e3)
+
+        alpha = torch.zeros(n_nodes, self.num_channels, device=device, dtype=dtype)
+        delta = torch.zeros(num_graphs, device=device, dtype=dtype)
+        gaps = torch.zeros(num_graphs, device=device, dtype=dtype)
+        spectra, per_graph_nodes = [], []
+
+        src, dst = edge_index[0], edge_index[1]
+        for g in range(num_graphs):
+            node_sel = (batch == g).nonzero(as_tuple=True)[0]
+            n_g = int(node_sel.numel())
+            if n_g == 0:
+                spectra.append(torch.zeros(1, device=device, dtype=dtype))
+                per_graph_nodes.append(node_sel)
+                continue
+            remap = torch.full((n_nodes,), -1, dtype=torch.long, device=device)
+            remap[node_sel] = torch.arange(n_g, device=device)
+            edge_sel = (batch[src] == g).nonzero(as_tuple=True)[0]
+
+            H = self.h(node_feats[node_sel], node_species[node_sel],
+                       torch.stack([remap[src[edge_sel]], remap[dst[edge_sel]]]),
+                       edge_vector[edge_sel],
+                       madelung=None, n_nodes=n_g)
+            # The on-site term is applied here rather than inside `self.h` so the clamp above
+            # -- which is diagnostic and must never reach the Hamiltonian builder -- has a
+            # single place to act.
+            diag = torch.cat([levels[node_sel][:, :1],
+                              levels[node_sel][:, 1:].expand(-1, 3)], dim=-1).reshape(-1)
+            H = H - torch.diag(torch.diagonal(H)) + torch.diag(diag)
+
+            n_total = int(self.valence[node_species[node_sel]].sum())
+            c = counts[g].tolist() if counts.dim() > 1 else counts.tolist()
+            e_head, lam, psi, p_now, p_ref = head_energy_hf(H, n_total, c, self.t_el)
+            delta[g] = e_head
+            # EIGENVALUES CARRY THE GRADIENT, EIGENVECTORS DO NOT. `eigh`'s backward builds
+            # the eigenvector term with 1/(lam_i - lam_j) factors, which is NaN at exact
+            # degeneracy -- and a 316-state spectrum in a ~17 eV span has degeneracies for
+            # certain. It produced NaN on the first real batch.
+            #
+            # The energy needs only eigenvalues (Hellmann-Feynman), and the density matrix is
+            # a DIAGNOSTIC readout here, so detaching psi removes the divergent path entirely
+            # rather than regularising it. This is the concrete form of "never backprop
+            # through individual eigenvectors".
+            #
+            # NOTE for the joint run: with E_LR enabled, `alpha` feeds q_carrier, and a
+            # detached alpha cuts that gradient. Decide there whether q_carrier needs a
+            # differentiable density -- if so it needs a matrix-function route, not eigh.
+            spectra.append(lam.detach())
+            per_graph_nodes.append(node_sel)
+            n_maj_ref = float((n_total + 1) // 2)
+            q = site_charges(p_now, p_ref, n_g)   # sums to -Delta n exactly
+            mass = q.abs()
+            total = mass.sum()
+            alpha[node_sel] = (mass / total).unsqueeze(-1).expand(-1, self.num_channels) \
+                if float(total) > 0 else 0.0
+
+            k = min(max(int(round(n_maj_ref)) - 1, 0), lam.numel() - 2)
+            gaps[g] = lam[k + 1] - lam[k]
+
+        m = max(int(s.numel()) for s in spectra)
+        lam_pad = torch.full((num_graphs, self.num_channels, m), 1.0e3,
+                             device=device, dtype=dtype)
+        for g, s in enumerate(spectra):
+            lam_pad[g, :, : s.numel()] = s.unsqueeze(0)
+
+        site = levels[:, :1].expand(-1, self.num_channels)
+        counts_per_graph = torch.bincount(batch, minlength=num_graphs).clamp_min(1)
+        eps_mean = (torch.zeros(num_graphs, self.num_channels, device=device, dtype=dtype)
+                    .index_add_(0, batch, site) / counts_per_graph.unsqueeze(-1))
+
+        if internals is not None:
+            internals["lam"] = lam_pad
+            internals["eps"] = site
+            internals["eps_raw"] = site
+            internals["batch"] = batch
+            # NOT under the key "H": the spectral heads' H is [G, C, n_sites, n_sites] and
+            # this one is [4N, 4N] per graph. A consumer that indexes by site would read
+            # orbitals instead and get a plausible wrong answer, so it fails loudly instead.
+            internals["H_orbital"] = spectra
+
+        return SpectralOutput(
+            delta_sr=delta, alpha=alpha, site_energy=site,
+            gap=gaps.unsqueeze(-1).expand(-1, self.num_channels),
+            eps_mean=eps_mean, eigenvalues=lam_pad,
+            weights=torch.zeros_like(lam_pad))
+
+
+def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
+                   t_el: float = T_EL):
+    """`E_head` by the Hellmann-Feynman route. Same value as `head_energy`, usable gradient.
+
+    WHY THIS EXISTS. Fitting FORCES means backpropagating through a quantity that is itself
+    `dE/dR`, so the loss needs the SECOND derivative of the eigenvalues. `torch.linalg.eigh`'s
+    double backward builds that from eigenvector response with `1/(lam_i - lam_j)` factors,
+    and a 316-state spectrum spanning ~17 eV is degenerate to numerical precision in several
+    places. It returns NaN on the first real batch -- not occasionally, immediately.
+
+    The fix is the standard band-structure force expression rather than a regulariser:
+
+        F = Tr(P H) - T_el S,     P = sum_k f_k psi_k psi_k^T
+
+    with `P` and `S` evaluated at the current spectrum and held FIXED. Then
+
+        dF/dx = Tr(P dH/dx)
+
+    which is Hellmann-Feynman, exact, and involves no eigenvector response at all -- so the
+    second derivative needs only `d^2H/dR dtheta`, which is well conditioned everywhere.
+
+    WHAT IS APPROXIMATED, stated rather than buried: the VALUE and the FORCE are exact. What
+    is dropped is `dP/dR` in the loss's *parameter* gradient — the optimiser searches as if
+    the occupations were frozen at their current values. That is the same frozen-density
+    convention DFTB force training uses, and it is why `head_energy` (the plain autograd
+    version) is kept: the two must agree on energies, forces and site charges, which is what
+    `test_counting_head.py` asserts.
+
+    Returns `(E_head, lam, psi, P_now, P_ref)` so the caller can reuse the decomposition.
+    """
+    lam, psi = torch.linalg.eigh(H)
+    lam_d, psi_d = lam.detach(), psi.detach()
+
+    n_maj_ref = float((n_total + 1) // 2)
+    n_min_ref = float(n_total // 2)
+    n_maj, n_min = spin_targets(n_total, counts)
+
+    def piece(n_electrons):
+        f = fermi_fill(lam_d, n_electrons, t_el)
+        p = density_matrix(psi_d, f)
+        fc = f.clamp(1e-12, 1.0 - 1e-12)
+        entropy = -(fc * fc.log() + (1.0 - fc) * (1.0 - fc).log()).sum()
+        return (p * H).sum() - t_el * entropy, p
+
+    e_maj, p_maj = piece(n_maj)
+    e_min, p_min = piece(n_min)
+    e_maj_ref, p_maj_ref = piece(n_maj_ref)
+    e_min_ref, p_min_ref = piece(n_min_ref)
+    energy = (e_maj - e_maj_ref) + (e_min - e_min_ref)
+    # SUM the spin channels, do not average: the monopole identity `sum_i q_i = -Delta n`
+    # is over all electrons, and averaging halves it. Caught by the validation test.
+    return energy, lam, psi_d, p_maj + p_min, p_maj_ref + p_min_ref

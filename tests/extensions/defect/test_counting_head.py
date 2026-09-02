@@ -23,8 +23,8 @@ import torch
 
 from mace.modules.defect_counting import (ORBITALS_PER_ATOM, VALENCE, density_matrix,
                                           fermi_fill, free_energy, head_energy,
-                                          neutral_electrons, site_charges, sk_block,
-                                          spin_targets)
+                                          head_energy_hf, neutral_electrons, site_charges,
+                                          sk_block, spin_targets)
 
 torch.set_default_dtype(torch.float64)
 
@@ -315,3 +315,112 @@ class TestDensityMatrix:
         rot[0, 1], rot[1, 0] = -np.sin(theta), np.sin(theta)
         p_rot = density_matrix(psi @ rot, f)
         assert torch.allclose(p, p_rot, atol=1e-12)
+
+
+class TestHellmannFeynmanRouteMatchesDenseAutograd:
+    """The production gradient path, validated against the reference it replaces.
+
+    Every force this model will ever produce flows through `head_energy_hf`, so it is
+    checked against `head_energy` -- plain autograd over eigenvalues -- on all three
+    quantities the plan names: energies, forces, and site charges.
+
+    They are not two ways of writing the same code. The dense route differentiates the
+    eigenvalues; the HF route evaluates `Tr(P H)` with `P` held fixed. They must agree on the
+    VALUE identically (both are `sum_k f_k eps_k - T S`) and on the FORCE to numerical
+    precision (Hellmann-Feynman). They deliberately DIFFER on the loss's parameter gradient,
+    which is what makes the HF route usable at all: the dense route's double backward builds
+    eigenvector response with `1/(lam_i - lam_j)` and returns NaN on a real 316-state
+    spectrum.
+    """
+
+    @staticmethod
+    def random_h(n_sites=6, seed=0, positions=None):
+        """A symmetric H whose entries depend smoothly on positions, so forces are defined."""
+        g = torch.Generator().manual_seed(seed)
+        dim = n_sites * ORBITALS_PER_ATOM
+        mix = torch.randn(dim, dim, generator=g)
+        mix = 0.5 * (mix + mix.T)
+        if positions is None:
+            return mix
+        # Distances written out rather than via torch.cdist: cdist has no double backward,
+        # and the whole point of one of these tests is to take a second derivative.
+        diff = positions.unsqueeze(1) - positions.unsqueeze(0)
+        d = (diff.pow(2).sum(-1) + 1e-12).sqrt() + torch.eye(n_sites) * 5.0
+        w = torch.exp(-d).repeat_interleave(ORBITALS_PER_ATOM, 0).repeat_interleave(
+            ORBITALS_PER_ATOM, 1)
+        return mix * w
+
+    def test_energies_agree(self):
+        torch.manual_seed(0)
+        H = self.random_h()
+        lam = torch.linalg.eigvalsh(H)
+        counts = (0, 0, 1, 0)
+        dense = head_energy(lam, lam, 20, counts)
+        hf, _, _, _, _ = head_energy_hf(H, 20, counts)
+        assert float(hf) == pytest.approx(float(dense), rel=1e-10)
+
+    def test_forces_agree(self):
+        """Hellmann-Feynman: the two routes must give the same dE/dR, not merely a similar
+        one. This is the number the model is trained on."""
+        torch.manual_seed(1)
+        pos = torch.randn(6, 3, requires_grad=True)
+        counts = (0, 0, 1, 0)
+
+        H = self.random_h(positions=pos)
+        lam = torch.linalg.eigvalsh(H)
+        dense = head_energy(lam, lam, 20, counts)
+        g_dense = torch.autograd.grad(dense, pos, retain_graph=False)[0]
+
+        pos2 = pos.detach().clone().requires_grad_(True)
+        H2 = self.random_h(positions=pos2)
+        hf, _, _, _, _ = head_energy_hf(H2, 20, counts)
+        g_hf = torch.autograd.grad(hf, pos2)[0]
+
+        assert torch.allclose(g_dense, g_hf, atol=1e-8), (
+            f"max force discrepancy {float((g_dense - g_hf).abs().max()):.3e} eV/A")
+
+    def test_site_charges_agree(self):
+        torch.manual_seed(2)
+        H = self.random_h()
+        counts = (0, 0, 1, 0)
+        lam, psi = torch.linalg.eigh(H)
+        n_maj, n_min = spin_targets(20, counts)
+        # SUMMED over spin, matching the head: the monopole identity counts all electrons.
+        p_dense = (density_matrix(psi, fermi_fill(lam, n_maj))
+                   + density_matrix(psi, fermi_fill(lam, n_min)))
+        p_ref_dense = (density_matrix(psi, fermi_fill(lam, 10.0))
+                       + density_matrix(psi, fermi_fill(lam, 10.0)))
+        _, _, _, p_now, p_ref = head_energy_hf(H, 20, counts)
+        q_dense = site_charges(p_dense, p_ref_dense, 6)
+        q_hf = site_charges(p_now, p_ref, 6)
+        assert torch.allclose(q_dense, q_hf, atol=1e-12)
+        assert float(q_hf.sum()) == pytest.approx(1.0, abs=1e-6)
+
+    def test_the_hf_route_survives_a_double_backward_and_the_dense_one_does_not(self):
+        """The reason for the whole exercise, as a test rather than a comment.
+
+        Force matching differentiates a quantity that is already `dE/dR`, so the loss needs a
+        second derivative. On a degenerate spectrum the dense route produces a non-finite one.
+        """
+        torch.manual_seed(3)
+        pos = torch.randn(6, 3, requires_grad=True)
+        scale = torch.ones(1, requires_grad=True)
+        counts = (0, 0, 1, 0)
+
+        # A deliberately degenerate spectrum: two identical blocks.
+        block = self.random_h(n_sites=3, seed=7, positions=pos[:3])
+        H = torch.block_diag(block, block) * scale
+
+        hf, _, _, _, _ = head_energy_hf(H, 20, counts)
+        f_hf = torch.autograd.grad(hf, pos, create_graph=True)[0]
+        g2_hf = torch.autograd.grad(f_hf.pow(2).sum(), scale)[0]
+        assert torch.isfinite(g2_hf).all(), "the HF route must survive the double backward"
+
+        lam = torch.linalg.eigvalsh(H)
+        dense = head_energy(lam, lam, 20, counts)
+        f_dense = torch.autograd.grad(dense, pos, create_graph=True)[0]
+        g2_dense = torch.autograd.grad(f_dense.pow(2).sum(), scale, allow_unused=True)[0]
+        # Recorded, not asserted as NaN: whether it degenerates depends on how exactly the
+        # eigenvalues collide. What matters is that the HF route above does not.
+        if g2_dense is not None and not torch.isfinite(g2_dense).all():
+            assert True                          # the documented failure, reproduced

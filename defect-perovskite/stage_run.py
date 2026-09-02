@@ -88,16 +88,16 @@ def build(arch_path, base_path, seed, device, stage, madelung, eps_inf, t_ref, l
     # here and the A1 table describes the state the run actually starts in.
     model, _ = fresh_model(arch_path, base_path, seed, device,
                            madelung=COMPOSITION if madelung else None, eps_inf=eps_inf,
-                           z_init=Z_INIT if madelung else None)
-    install_local_head(model, t_ref_r=t_ref)
-    if stage >= 2:
-        from mace.modules.defect_bounded import install_bounded_elements
+                           z_init=Z_INIT if madelung else None,
+                           counting=(stage >= 3))
+    if stage < 3:
+        install_local_head(model, t_ref_r=t_ref)
+        if stage >= 2:
+            from mace.modules.defect_bounded import install_bounded_elements
 
-        install_bounded_elements(model)
-    if stage >= 3:
-        raise NotImplementedError(
-            "stage 3 needs the counting head; build it before asking for it rather than "
-            "letting this harness silently run stage 2 under a stage-3 label")
+            install_bounded_elements(model)
+    # Stage 3 needs no surgery: MACEDefect builds the counting head directly, and it REPLACES
+    # the spectral head rather than sitting beside it -- two heads would both write delta_sr.
     model = model.to(device)
     log(f"      stage {stage}, madelung {'ON' if madelung else 'OFF'}, "
         f"eps_inf {eps_inf}, seed {seed}")
@@ -124,7 +124,7 @@ def pristine_spectrum_check(model, pristine_batches, log):
     """
     from ta_band_edge import capture as _capture
 
-    fracs, gaps = [], []
+    fracs, gaps, _spectra = [], [], []
     for batch, frames in pristine_batches:
         internals, _ = _capture(model, batch)
         lam = internals["lam"]
@@ -139,21 +139,26 @@ def pristine_spectrum_check(model, pristine_batches, log):
                     continue
                 fracs.append(float(v[1] - v[0]) / span)
                 gaps.append(float(v[1] - v[0]))
+                _spectra.append(v)
     if not fracs:
         return dict(split_fraction=float("nan"), pristine_gap=float("nan"))
-    even = 1.0 / max(int(model.spectral.num_states) - 1, 1)
+    # From the REALISED spectrum length, not a configured num_states: the counting
+    # head returns the whole 4N spectrum and advertises num_states = -1, which
+    # would make the reference 1.0 and the gate vacuous.
+    n_states = max(int(np.median([int(s.numel()) for s in _spectra])), 2)
+    even = 1.0 / (n_states - 1)
     out = dict(split_fraction=float(np.mean(fracs)), pristine_gap=float(np.mean(gaps)),
                split_fraction_even=float(even))
     log(f"      pristine spectrum: split fraction {out['split_fraction']:.4f}, "
         f"lam2-lam1 {out['pristine_gap']:.4f} eV "
         f"({'BANDS' if out['split_fraction'] < even else 'SUPERATOM RISK'}, "
-        f"even spacing would give {even:.2f})")
+        f"even spacing would give {even:.4f})")
     return out
 
 
 def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, lr,
              stage, madelung, eps_inf, t_ref, log, pristine_batches=None,
-             freeze_z=False):
+             freeze_z=False, e_gap=2.4, w_gap=1.0):
     model = build(arch_path, base_path, seed, device, stage, madelung, eps_inf, t_ref, log)
     ctx = ForwardContext.production(model, device=device, eps_inf=eps_inf,
                                     stage=stage, madelung=bool(madelung), seed=seed)
@@ -177,6 +182,7 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
     params = [p for n, p in model.named_parameters() if p.requires_grad]
     opt = torch.optim.AdamW(params, lr=lr)
 
+    rng = np.random.default_rng(seed)
     hist = []
     for ep in range(epochs):
         f_sum, n_step = 0.0, 0
@@ -184,6 +190,16 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
             d = ctx.forward_dict(batch, frames, requires_grad=True)
             out = model(d, training=True, compute_force=True)
             loss = ((out["forces"] - batch.forces) ** 2).mean()
+            if stage >= 3 and pristine_batches:
+                # loss_gap, Stage 3 only. A constraint on the PRISTINE spectrum -- the
+                # frontier gap of a defect-free cell must be the host band gap -- so it is
+                # not an energy label and does not carry M1b's base-extrapolation slope.
+                # One pristine draw per step, ensemble mean over its graphs.
+                pb, pfr = pristine_batches[int(rng.integers(len(pristine_batches)))]
+                pout = model(ctx.forward_dict(pb, pfr, requires_grad=False),
+                             training=True, compute_force=False)
+                gap_res = pout["logit_gap"][:, 0].mean() - e_gap
+                loss = loss + w_gap * gap_res ** 2
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(params, 10.0)
@@ -217,6 +233,15 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
         log(f"      capture failed: {exc}")
     if pristine_batches:
         metrics.update(pristine_spectrum_check(model, pristine_batches, log))
+        # The coadvisor's Stage-3 watch item. Edit 3 narrows the superatom route but does not
+        # close it -- four of twelve Stage-2 seeds found it anyway, and those were exactly
+        # the seeds that "fitted". A Stage-3 seed above this line is to be reseeded, not
+        # interpreted, so it is marked here rather than left to a reader's judgement.
+        sf = metrics.get("split_fraction", float("nan"))
+        if sf == sf and sf > 0.3:
+            metrics["superatom_reseed"] = True
+            log(f"      *** SUPERATOM WATCH: split fraction {sf:.3f} > 0.30 -- this seed is "
+                "to be reseeded, not interpreted ***")
     metrics.update(seed=seed, stage=stage, madelung=bool(madelung), freeze_z=bool(freeze_z),
                    neff=neff,
                    null_ratio=ratio, force_final=hist[-1], force_first=hist[0],
@@ -245,6 +270,9 @@ def main() -> None:
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--seed-start", type=int, default=1)
     ap.add_argument("--eps-inf", type=float, default=EPS_INF_DEFAULT)
+    ap.add_argument("--e-gap", type=float, default=2.4,
+                    help="host band gap for loss_gap (stage 3); sensitivity 2.2")
+    ap.add_argument("--w-gap", type=float, default=1.0)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--save-dir", type=Path, default=None)
     ap.add_argument("--out", type=Path, required=True)
@@ -292,7 +320,8 @@ def main() -> None:
                                   args.device, args.epochs, args.lr, args.stage,
                                   args.madelung == "on", args.eps_inf, t_ref, log,
                                   pristine_batches=pristine_batches,
-                                  freeze_z=args.freeze_z)
+                                  freeze_z=args.freeze_z, e_gap=args.e_gap,
+                                  w_gap=args.w_gap)
         except Exception as exc:
             log(f"      FAILED: {exc}")
             rows.append(dict(seed=seed, error=str(exc)))

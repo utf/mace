@@ -314,7 +314,7 @@ def evaluate(model, batches, frame_masks, device, clamp=None, ctx=None):
 
 
 def fresh_model(arch_path, base_path, seed, device, response=None, madelung=None,
-                eps_inf=4.0, z_init=None):
+                eps_inf=4.0, z_init=None, counting=False):
     """Architecture from a current-code model, base weights from Stage-A, head freshly drawn.
 
     Three sources rather than one, deliberately:
@@ -338,6 +338,10 @@ def fresh_model(arch_path, base_path, seed, device, response=None, madelung=None
     arch = torch.load(arch_path, map_location="cpu", weights_only=False)
     torch.manual_seed(seed)
     cfg = extract_config_mace_model(arch)
+    if counting:
+        # Edit 4 REPLACES the spectral head; install_local_head/install_bounded_elements must
+        # not also run, or the model would carry two heads both writing delta_sr.
+        cfg["counting_head"] = True
     if madelung is not None:
         # Edit 1 replaces the response channel. `madelung` is the pristine stoichiometry in
         # the model's own species order; the Ewald kernel is built for the on-site term even
