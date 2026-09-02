@@ -365,3 +365,58 @@ Two identical invocations of the production trainer at the final config gave los
 float64 with cuEq off this trainer is deterministic, so any later difference between runs is a
 change rather than noise. That is worth more than the tolerance the section-3 plan asked for,
 and it was established before eight seeds were spent.
+
+---
+
+## Entry 10 — Stage B was normalising its trunk wrongly, and the c-shift found it
+
+**Closure, and it is a real bug rather than a convention.** `avg_num_neighbors` divides every
+message in the MACE trunk and is a plain float on each interaction block -- not a parameter,
+not a buffer, absent from `state_dict`. So `load_stage_a_base`'s name-and-shape check could not
+see it and its copy loop could not carry it. Stage A trained at r_max = 5.0 without a carrier
+head and got 14.08; any run with the head builds its graph at the CARRIER cutoff of 10 A and
+computed 112.5 on the same data. Eight times the divisor on every message, in the branch whose
+whole purpose is to be the reference the correction is defined against, and the loader reported
+success.
+
+**How it was found, because nothing else was going to.** The deterministic c-shift was
+introduced so the head's energy zero would not depend on the shuffle. It did something more
+useful: it disagreed with the harness by a factor of four on identical data. `c_shift` is the
+median of `(E_label - E_base - E_head)/Delta_n`, so it is a direct read on E_base. Every other
+candidate was measured and eliminated -- frame selection (raw ratio +3.756 first-48 against
++3.587 across the file), the forward path (ForwardContext against batch.to_dict(), agreeing to
+0.000000 eV), the referencing (-1.200 eV exactly), the head initialisation (0.012 eV), the
+atomic energies (identical, and cancelling to -0.002 eV on this composition). The trunk
+normalisation was what was left.
+
+**Two repairs, and they cross-validate.** A Stage-B run inherits the checkpoint's value, warns,
+and refuses outright if the block counts differ. A from-scratch run -- the joint run's own arm
+B -- has nothing to inherit, so the count is rescaled by the measured edge-count ratio at r_max,
+averaged over batches, rather than by a (10/5)^3 volume argument the periodic per-frame graph
+does not obey. The rescaling returns 14.095 against Stage A's 14.083, 0.09% apart, by a route
+that shares no code with it; 1/ratio = 8.01 against the 8x the two cutoffs predict.
+
+**And the quantity that exposed it certifies the repair.** The trainer's c-shift fell from
++36.5421 to +8.9600 over the same 944 frames, against b12's independent +8.94 on a stride sample
+and the harness's +8.70 on its first forty-eight. Predicted before it was measured.
+
+**Scope, checked rather than assumed.** The arch the harness builds from carries 14.14,
+essentially Stage A's 14.08, so the Stage-1..3 lineage and every number in the battery stand.
+The fault is confined to the production trainer, which had never been run end to end with a
+carrier head and a Stage-A base before this cycle -- which is exactly what section 3 was for.
+
+**Statement of record (assert, never implement around):**
+"A value that changes what a module computes and does not appear in `state_dict` is invisible to
+every check built on `state_dict`. `avg_num_neighbors` was one. Any future constant of that kind
+-- a divisor, a cutoff, a normalisation held as a plain attribute -- must be carried explicitly
+across a stage boundary or recomputed from the same definition on both sides, and a test must
+assert the premise that it is invisible, so that if it later becomes a buffer the special case
+is known to be redundant rather than quietly wrong."
+
+### The operational lesson, three times over in one night
+
+A liveness check is not the condition you want. Three faults of one shape: two `pgrep -f`
+patterns that matched the shell carrying them, and a post-run chain that waited on a PROCESS and
+so read a deliberate relaunch as the end of the run -- aborting the unattended scoring that was
+its entire purpose. All three now test the condition itself: bracket-quoted patterns, and a
+completion marker in the log rather than a process in the table.

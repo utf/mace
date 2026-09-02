@@ -439,6 +439,21 @@ end with a carrier head and a Stage-A base before this cycle — which is what �
 repaired, the trainer's c-shift should fall from +36.54 to near the harness's +8.9, because the
 entire 27 eV gap was `E_base` being wrong.
 
+**Confirmed.** On the relaunched joint run the trainer calibrates to **+8.9600 eV** over all 944
+charged frames.
+
+| | c-shift | frames |
+|---|---|---|
+| trainer, before the fix | +36.5421 | 944 |
+| **trainer, after the fix** | **+8.9600** | **944** |
+| b12, independent, stride sample | +8.94 | 118 |
+| harness, first 48 | +8.70 | 48 |
+
+The two drivers now agree on the head's energy zero to 3%, and the residual is the frame set —
+b11 measured the raw ratio moving by 0.17 eV between the first forty-eight and the whole file,
+with the head term accounting for the rest. The 27.6 eV was `E_base`, exactly as diagnosed, and
+the quantity that exposed the bug is the one that now certifies the repair.
+
 **What is not claimed: step-level weight identity between the two drivers.** They batch
 differently — a fixed graph list versus a shuffled DataLoader — so their weights after one
 epoch differ for reasons that have nothing to do with the protocol, and chasing that number
