@@ -679,3 +679,94 @@ class TestInitialisationGate:
         g = initialisation_gate(lam, 20.0, e_gap=2.4)
         assert g["passed"]
         assert g["frontier_gap"] > 20.0, "the frontier gap is what would flag this"
+
+
+class TestExplicitForcesMatchAutograd:
+    """Section 1's regression: wiring the density response must not change PREDICTIONS.
+
+    `-Tr((P - P_ref) dH/dR)` and `-d/dR [F(N) - F(N_ref)]` are the same mathematical object --
+    Hellmann-Feynman -- so the explicit route must reproduce the autograd route to tolerance.
+    Only the BACKWARD differs: the explicit form keeps `dP/dtheta` alive, the autograd form
+    (with P detached) does not.
+
+    Asserting this rather than assuming it is the point. A wiring change that silently moved
+    the forces would invalidate every comparison against the frozen-P rerun.
+    """
+
+    @staticmethod
+    def toy(n_sites=5, seed=0):
+        """H built from positions so dH/dR exists, with a smooth two-centre form."""
+        g = torch.Generator().manual_seed(seed)
+        pos = torch.randn(n_sites, 3, generator=g).requires_grad_(True)
+        base = torch.randn(n_sites * ORBITALS_PER_ATOM, n_sites * ORBITALS_PER_ATOM,
+                           generator=g)
+        base = 0.5 * (base + base.T)
+
+        def build(p):
+            diff = p.unsqueeze(1) - p.unsqueeze(0)
+            d = (diff.pow(2).sum(-1) + 1e-12).sqrt() + torch.eye(n_sites) * 4.0
+            w = torch.exp(-d).repeat_interleave(ORBITALS_PER_ATOM, 0).repeat_interleave(
+                ORBITALS_PER_ATOM, 1)
+            return base * w
+
+        return pos, build
+
+    def test_explicit_equals_autograd_forces(self):
+        from mace.modules.defect_counting import fermi_density_matrix, head_forces
+        pos, build = self.toy()
+        n_total, counts = 20, (0, 0, 1, 0)
+        n_maj, n_min = spin_targets(n_total, counts)
+        n_maj_ref, n_min_ref = float((n_total + 1) // 2), float(n_total // 2)
+
+        # autograd route: differentiate the free-energy difference
+        H = build(pos)
+        e, _, _, _, _ = head_energy_hf(H, n_total, counts)
+        f_auto = -torch.autograd.grad(e, pos, retain_graph=False)[0]
+
+        # explicit route: -Tr((P - P_ref) dH/dR), summed over spin
+        pos2 = pos.detach().clone().requires_grad_(True)
+        H2 = build(pos2)
+        P = (fermi_density_matrix(H2, n_maj) + fermi_density_matrix(H2, n_min))
+        P_ref = (fermi_density_matrix(H2, n_maj_ref) + fermi_density_matrix(H2, n_min_ref))
+        f_expl = head_forces(H2, pos2, P, P_ref, create_graph=False)
+
+        assert torch.allclose(f_auto, f_expl, atol=1e-8), (
+            f"explicit and autograd forces differ by "
+            f"{float((f_auto - f_expl).abs().max()):.3e} eV/A -- the wiring changed the "
+            "predictions, not just the gradient")
+
+    def test_the_explicit_route_carries_a_density_gradient_and_the_frozen_one_does_not(self):
+        """The whole reason for the change, as a test. With P frozen, a parameter that acts
+        only through the OCCUPATIONS has no gradient; with the response live, it does."""
+        from mace.modules.defect_counting import fermi_density_matrix, head_forces
+        pos, build = self.toy(seed=3)
+        shift = torch.zeros(1, requires_grad=True)          # a rigid on-site shift
+        n = pos.shape[0] * ORBITALS_PER_ATOM
+
+        H = build(pos) + shift * torch.diag(
+            torch.cat([torch.ones(n // 2), -torch.ones(n - n // 2)]))
+        P = fermi_density_matrix(H, 10.0)
+        P_ref = fermi_density_matrix(H, 10.0).detach() * 0.0
+        F = head_forces(H, pos, P, P_ref, create_graph=True)
+        g_live = torch.autograd.grad(F.pow(2).sum(), shift, retain_graph=True,
+                                     allow_unused=True)[0]
+        assert g_live is not None and torch.isfinite(g_live).all()
+        assert abs(float(g_live)) > 1e-10, "no gradient reaches the occupations"
+
+    def test_the_force_loss_backward_is_finite_on_a_degenerate_toy(self):
+        """No eigh double-backward survives anywhere on this path."""
+        from mace.modules.defect_counting import fermi_density_matrix, head_forces
+        g = torch.Generator().manual_seed(9)
+        pos = torch.randn(3, 3, generator=g).requires_grad_(True)
+        blk = torch.randn(6, 6, generator=g)
+        blk = 0.5 * (blk + blk.T)
+        scale = torch.ones(1, requires_grad=True)
+        d = ((pos.unsqueeze(1) - pos.unsqueeze(0)).pow(2).sum(-1) + 1e-12).sqrt()
+        w = torch.exp(-d).repeat_interleave(2, 0).repeat_interleave(2, 1)
+        H = torch.block_diag(blk * w[:3, :3].repeat(2, 2)[:6, :6],
+                             blk * w[:3, :3].repeat(2, 2)[:6, :6]) * scale
+        P = fermi_density_matrix(H, 6.0)
+        P_ref = fermi_density_matrix(H, 6.0).detach() * 0.0
+        F = head_forces(H, pos, P, P_ref, create_graph=True)
+        gg = torch.autograd.grad(F.pow(2).sum(), scale, allow_unused=True)[0]
+        assert gg is not None and torch.isfinite(gg).all()

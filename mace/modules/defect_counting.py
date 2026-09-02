@@ -733,3 +733,28 @@ def initialisation_gate(lam: torch.Tensor, n_electrons: float, e_gap: float,
     ok = (below <= 0.5 * e_gap) and (above <= 0.5 * e_gap) and (bandwidth >= 2.0 * e_gap)
     return dict(edge_spacing_below=below, edge_spacing_above=above, bandwidth=bandwidth,
                 frontier_gap=float(lam[n] - lam[n - 1]), passed=bool(ok))
+
+
+def head_forces(H: torch.Tensor, positions: torch.Tensor, P: torch.Tensor,
+                P_ref: torch.Tensor, create_graph: bool = True) -> torch.Tensor:
+    """`F = -Tr((P - P_ref) dH/dR)`, with the density response live in the theta gradient.
+
+    `grad_outputs` is the whole trick. `autograd.grad(H, R, grad_outputs=D)` contracts to
+    `sum_ab D_ab dH_ab/dR` -- exactly the force -- and under `create_graph` the result keeps a
+    graph through BOTH factors, so
+
+        dF/dtheta = Tr(dD/dtheta . dH/dR) + Tr(D . d2H/dR dtheta)
+
+    with the first term, the density response, present. Building `dH/dR` explicitly would be a
+    [4N, 4N, N, 3] tensor -- 1.9e8 entries at 159 atoms -- and is not the way.
+
+    `D = P - P_ref` rather than `P`: the head's energy is a DIFFERENCE from the neutral fill,
+    so its force is the difference of the two Hellmann-Feynman terms. Using `P` alone would
+    return the force of the whole valence manifold, which the base potential already carries.
+    """
+    D = (P - P_ref).to(H.dtype)
+    grad = torch.autograd.grad(H, positions, grad_outputs=D, create_graph=create_graph,
+                               retain_graph=True, allow_unused=True)[0]
+    if grad is None:
+        return torch.zeros_like(positions)
+    return -grad

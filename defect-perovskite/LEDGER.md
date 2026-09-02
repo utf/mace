@@ -161,3 +161,27 @@ ladder. F2: with P-backward + Harrison init, 6/6 seeds train at lr 0.01, init ga
 fires. F3: N_eff <= control at matched force fit in >= 5/6 seeds, read at matched pristine
 bandwidth. F4: counting-head dE_head slope on the 159-atom subset right sign and within 3x of
 -0.134 eV/A. F5: corr(lambda, d_hub) stays positive.
+
+---
+
+## Record, 2 Sep 2026 (verbatim)
+
+**+0.987 correlation, final form:** state it from what the control demonstrates directly --
+the bounded s-only head fits *only* by delocalising (its two best seeds are its two most
+delocalised, N_eff 64-69) -- not from any inferred correlation. The double retraction is
+logged; the claim no longer rests on a regime-dependent number.
+
+**New standing rule (regime tagging):** any claim measured in a single optimiser regime is
+tagged with that regime in the report and does not transfer without a cross-regime check.
+
+**Superseded numbers:** the Stage-1 spectral-head lambda-d turnover (+0.42/+0.27, lr-0.01
+regime) is superseded by F5 on the counting-head rerun models once measured; ledger item stays
+closed either way. The Stage-2 "s-only slope -0.0035, right sign 2/2" is marked **unreliable**
+(superatom-contaminated regime); nothing downstream uses it.
+
+**Retired diagnostic:** pristine split fraction (reference 1/(n_states-1) is not comparable
+across heads). d/delta_L is the quantity of record.
+
+**Float32 lesson:** the head runs float64 permanently; construction-time assert on dtype
+(occupation arguments ~700 and mu-bisection to 1e-10 are outside float32 by construction, not
+by accident).
