@@ -380,10 +380,12 @@ def run_model(path, pristine, defect, big_charged, big_pristine, device, batch_s
             e = o.get("delta_sr_energy")
             if e is None:
                 continue
+            # `delta_resp_energy` used to be added here. Edit 2 deleted the response
+            # channel, and the key is gone from the output dict rather than present and
+            # zero -- so this loop reads the whole carrier energy again, as it did before
+            # the channel existed. Left as a note because a silently-dropped `.get` that
+            # returns None forever looks identical to a term that happens to be zero.
             v = e.detach().cpu().numpy()
-            r = o.get("delta_resp_energy")
-            if r is not None:
-                v = v + r.detach().cpu().numpy()
             tot += float(v.sum()); n += v.size
         return tot / n if n else float("nan")
 

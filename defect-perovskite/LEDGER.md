@@ -38,8 +38,15 @@ architecture.
 
 Both motivate the variational move of Edit 1: the same physics, but inside `H` where it can
 select a site, rather than in a bolt-on energy readout where it demonstrably could not.
-Retirement lands **in the same commit as Edit 1** — never both active, which would double
-count the carrier's electrostatics.
+Retirement lands **in the same commit as Edit 1** (`85d195b`) — never both active, which
+would double count the carrier's electrostatics.
+
+*Consequence, verified rather than assumed:* every archived checkpoint in `~/runs/ab_models/`
+and `~/runs/tbv3_models/` pickles a `CarrierResponse` instance, so on post-`85d195b` code
+`torch.load` raises `ModuleNotFoundError: mace.modules.defect_response`. D-1 and D-2 ran
+before the deletion and are unaffected; the arch and base checkpoints never had the channel
+and still load. A future reader needing one of these should write a throwaway stub, not
+restore the module.
 
 **Cancelled with the programme, not to be run:** M2 attribution, C1 post-μ-fix, the F2
 closure-ratio update.
