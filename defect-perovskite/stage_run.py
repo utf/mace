@@ -57,6 +57,11 @@ Z_INIT = [-1.0, 1.0, 2.0]          # nominal, projected to neutrality at constru
 
 
 def log_to(path):
+    # Truncate, do not append. An appended log mixes a discarded run's lines with a live
+    # one's, and reading a void run's numbers as current has already happened twice today.
+    # The JSON is authoritative either way; this stops the log lying.
+    open(path, "w").close()
+
     def log(msg):
         line = f"[{time.strftime('%H:%M:%S')}] {msg}"
         print(line, flush=True)
@@ -147,10 +152,15 @@ def pristine_spectrum_check(model, pristine_batches, log):
     # would make the reference 1.0 and the gate vacuous.
     n_states = max(int(np.median([int(s.numel()) for s in _spectra])), 2)
     even = 1.0 / (n_states - 1)
-    out = dict(split_fraction=float(np.mean(fracs)), pristine_gap=float(np.mean(gaps)),
+    out = dict(split_fraction=float(np.mean(fracs)),
+               # NOT the band gap. This is lam_2 - lam_1 at the BOTTOM of the spectrum, which
+               # is what the superatom check needs. A reader who sees "pristine_gap" and
+               # thinks "band gap" would compare it to E_gap and draw nonsense, so the name
+               # says which one it is.
+               pristine_split_lam2_lam1=float(np.mean(gaps)),
                split_fraction_even=float(even))
     log(f"      pristine spectrum: split fraction {out['split_fraction']:.4f}, "
-        f"lam2-lam1 {out['pristine_gap']:.4f} eV "
+        f"lam2-lam1 {out['pristine_split_lam2_lam1']:.4f} eV "
         f"({'BANDS' if out['split_fraction'] < even else 'SUPERATOM RISK'}, "
         f"even spacing would give {even:.4f})")
     return out
@@ -233,6 +243,16 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
         log(f"      capture failed: {exc}")
     if pristine_batches:
         metrics.update(pristine_spectrum_check(model, pristine_batches, log))
+        # Stage 3's gate of record: the pristine FRONTIER gap, eps_{N+1} - eps_N, which is
+        # what loss_gap drives toward E_gap. A different quantity from the split check above,
+        # persisted separately so the two can never be read as one another.
+        with torch.no_grad():
+            fg = [float(model(ctx.forward_dict(pb, pf), training=False,
+                              compute_force=False)["logit_gap"][:, 0].mean())
+                  for pb, pf in pristine_batches]
+        metrics["pristine_frontier_gap"] = float(np.mean(fg))
+        log(f"      pristine frontier gap {metrics['pristine_frontier_gap']:.3f} eV "
+            f"(target {e_gap:.2f}, gate |delta| <= 0.10)")
         # The coadvisor's Stage-3 watch item. Edit 3 narrows the superatom route but does not
         # close it -- four of twelve Stage-2 seeds found it anyway, and those were exactly
         # the seeds that "fitted". A Stage-3 seed above this line is to be reseeded, not

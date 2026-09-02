@@ -100,6 +100,22 @@ with `P`, `S` held fixed gives exact values and exact forces; what is dropped is
 the loss's *parameter* gradient — the frozen-density convention DFTB force training uses.
 The two routes are asserted equal on energies, forces and site charges.
 
+**The windowed shift-invert solver is NOT built.** The order was to validate it against dense
+`eigh`; what was validated instead is the HF route against dense `eigh`, on those three named
+quantities. The substitution is deliberate: the windowed solver is only needed at ladder
+sizes, does not exist yet, and is not the path any current gradient takes — whereas the HF
+route *is* what every production force flows through, and it is the thing that was silently
+broken. Deferred to pre-R3, and flagged here rather than left to be discovered.
+
+**14. ⚑ Open decision before the joint run: `alpha` is not differentiable.** The counting head
+detaches the eigenvectors, so the site charges it reports carry no gradient. That is correct
+and necessary while E_LR is off — it is what stops `eigh`'s eigenvector backward producing
+NaN. But §6 re-enables E_LR, and `alpha` feeds `q_carrier`: from the moment the long-range
+branch fires, the head receives **zero gradient** through it, so E_LR can no longer teach the
+head where to put the carrier. Either accept that (E_LR then constrains only the host charges)
+or give `q_carrier` a differentiable density via a matrix-function route rather than `eigh`.
+This changes what the joint run can learn, so it is a decision and not a footnote.
+
 ## One consequence worth knowing
 
 Every checkpoint in `~/runs/ab_models/` and `~/runs/tbv3_models/` pickles a `CarrierResponse`
