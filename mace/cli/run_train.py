@@ -11,7 +11,7 @@ import logging
 import os
 from copy import deepcopy
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch.distributed
 from e3nn.util import jit
@@ -852,6 +852,56 @@ def run(args) -> None:
                 f"{getattr(args, 'base_lr_factor', 1.0)}, not 0.0, so the loaded base will "
                 "drift during training. That is a warm start, not Stage B.")
 
+    # ------------------------------------------------------------------ Stage-3 protocol
+    #
+    # The five things every Stage-3 result in this programme was produced with, and which
+    # the production trainer did not have: Harrison initialisation, c-shift calibration,
+    # linear warmup, the initialisation gate, and the head-only trainable mask. They live in
+    # mace.modules.defect_protocol and defect-perovskite/stage_run.py calls the SAME
+    # functions, so the two drivers cannot drift -- which is the only sense in which "the
+    # joint run comes from config" can be true.
+    #
+    # This half (initialisation and the mask) runs before the optimiser is built, because
+    # requires_grad decides which parameter groups exist. The other half (c-shift, the gate,
+    # warmup and the post-step projection) needs the data loaders and runs further down.
+    protocol_on = bool(getattr(args, "defect_protocol", False))
+    if protocol_on:
+        from mace.modules import defect_protocol
+
+        if model.__class__.__name__ != "MACEDefect":
+            raise RuntimeError("--defect_protocol only applies to MACEDefect")
+        if getattr(model, "spectral", None) is None:
+            raise RuntimeError(
+                "--defect_protocol needs a carrier head; pass --defect_spectral_head and "
+                "--defect_counting_head")
+        bond_length = float(getattr(args, "defect_protocol_bond_length", 0.0) or 0.0)
+        if bond_length <= 0.0:
+            raise RuntimeError(
+                "--defect_protocol needs --defect_protocol_bond_length. eps0 = 0 leaves "
+                "every site degenerate -- the atomic limit, where the bond order vanishes "
+                "and nothing can move the hoppings -- so the Harrison initialisation is not "
+                "optional, and its scale is a measured property of the host rather than a "
+                "constant this code is entitled to guess.")
+        defect_protocol.apply_harrison(model, model.atomic_numbers, bond_length)
+        logging.info(
+            f"Stage-3 protocol: Harrison initialisation at bond length {bond_length} A")
+
+        freeze_z = bool(getattr(args, "defect_protocol_freeze_z", False))
+        if bool(getattr(args, "defect_protocol_head_only", False)):
+            frozen = 0
+            for name, param in model.named_parameters():
+                keep = defect_protocol.trainable_mask(name, freeze_z=freeze_z)
+                param.requires_grad_(keep)
+                frozen += int(not keep)
+            logging.info(
+                f"Stage-3 protocol: head-only, {frozen} parameter tensors frozen"
+                + (", Z pinned" if freeze_z else ""))
+        elif freeze_z:
+            for name, param in model.named_parameters():
+                if name.startswith("madelung."):
+                    param.requires_grad_(False)
+            logging.info("Stage-3 protocol: Z pinned at its initialisation")
+
     if model.__class__.__name__ == "MACEDefect":
         # Ship the band edges that referenced the labels with the model, so inference
         # can undo the referencing with exactly the constants training used rather than
@@ -1177,6 +1227,34 @@ def run(args) -> None:
     if model.__class__.__name__ == "MACEDefect":
 
         def defect_seed_hook(epoch: int, current_model) -> None:
+            # Stage-3 linear warmup, applied to the learning rate BEFORE the epoch's
+            # gradient steps. The counting head's correction is eV-scale at step 0, so the
+            # first steps see gradients three orders larger than the converged ones and a
+            # seed can be thrown somewhere it cannot return from -- observed, not supposed.
+            #
+            # WHY AN OVERLAY AND NOT A SECOND SCHEDULER. The run's own scheduler is
+            # ReduceLROnPlateau or ExponentialLR and both write param_group['lr'] directly,
+            # so a second scheduler would have two objects owning one field. Worse, this
+            # hook fires BEFORE lr_scheduler.step(): writing an absolute rate here would let
+            # ExponentialLR compound its decay on top of the warmup and then have the next
+            # epoch's write discard it, quietly costing the run gamma^warm of its schedule.
+            #
+            # So the warmup is a pure multiplicative overlay that is REMOVED before it is
+            # re-applied. The scheduler owns the trajectory throughout; the overlay only
+            # scales whatever it currently says. At epoch == warm the factor is 1.0, so the
+            # overlay comes off and is never put back.
+            warm = int(getattr(args, "defect_protocol_warmup", 0) or 0)
+            if protocol_on and warm > 0 and epoch <= warm:
+                from mace.modules.defect_protocol import warmup_factor
+
+                previous = getattr(defect_seed_hook, "_warmup_factor", 1.0)
+                factor = warmup_factor(epoch, warm)
+                for group in optimizer.param_groups:
+                    group["lr"] = float(group["lr"]) / previous * factor
+                defect_seed_hook._warmup_factor = factor
+                if epoch < warm:
+                    logging.info(f"Stage-3 warmup: epoch {epoch}, lr x{factor:.3f}")
+
             # The **absolute** epoch, taken from the trainer. A counter local to the loss
             # would restart at zero on every resume and silently re-serve the size-hinge
             # warmup -- the same shape of bug as the gamma anneal restarting from scratch.
@@ -1325,6 +1403,92 @@ def run(args) -> None:
             f"Two-size upweight: factor {factor:.2f}, realised charged-force-loss share "
             f"{share:.1%} (target {float(args.defect_two_size_upweight):.0%})")
 
+    # ------------------------------------------- Stage-3 protocol, the data-dependent half
+    #
+    # c-shift, the initialisation gate, warmup and the post-step projection. Everything here
+    # runs on the loss's OWN loader, for the same reason the reach assertion below does: a
+    # calibration performed on a differently-built batch is a calibration for a run that is
+    # not happening.
+    protocol_post_step = None
+    if protocol_on:
+        from mace.modules import defect_protocol
+        from mace.modules.defect_counting import VALENCE
+
+        init_batch = next(iter(train_loader)).to(device)
+        with torch.no_grad():
+            out0 = model(init_batch.to_dict(), training=False, compute_force=False)
+        c = defect_protocol.calibrate_c_shift(
+            out0, getattr(init_batch, "energy", None), init_batch.carrier_counts)
+        if c is None:
+            # NOT silently zero. Delta_n = 0 on every frame makes the ratio undefined, and a
+            # 0.0 written here would be indistinguishable from a calibration that happened.
+            logging.warning(
+                "Stage-3 protocol: c-shift NOT calibrated -- no frame in the first batch "
+                "carries a net carrier. The head starts at c = 0, which is a choice this "
+                "run did not make deliberately.")
+        else:
+            with torch.no_grad():
+                model.spectral.c_shift.fill_(float(c))
+            logging.info(f"Stage-3 protocol: c-shift calibrated to {c:+.4f} eV")
+
+        # The initialisation gate, on a PRISTINE spectrum: bands, not atoms. Reported rather
+        # than enforced -- a trip is a statement about the initialisation that the run's
+        # record should carry, and stopping here would discard a run for a diagnostic.
+        e_gap = float(getattr(args, "defect_e_gap", 0.0) or 0.0)
+        composition = getattr(args, "defect_gap_composition", None)
+        if e_gap > 0 and composition is not None:
+            mask = loss_fn.stoichiometric_mask(init_batch) \
+                if hasattr(loss_fn, "stoichiometric_mask") else None
+            gate = None
+            if mask is not None and bool(mask.any()):
+                which = int(torch.nonzero(mask.reshape(-1))[0])
+                nodes = init_batch.batch == which
+                internals: Dict[str, Any] = {}
+                head = model.spectral
+                original = head.forward
+
+                def _capture(*a, **k):
+                    k["internals"] = internals
+                    return original(*a, **k)
+
+                head.forward = _capture
+                try:
+                    with torch.no_grad():
+                        model(init_batch.to_dict(), training=False, compute_force=False)
+                finally:
+                    head.forward = original
+                lam = internals.get("lam")
+                if lam is not None:
+                    v = lam[which, 0]
+                    v = v[v < 500.0]
+                    # Doubly-occupied count for THAT graph's own composition, recovered
+                    # from the one-hot species through the model's own atomic-number table
+                    # rather than from a constant.
+                    zs = model.atomic_numbers[
+                        init_batch.node_attrs[nodes].argmax(dim=-1)].tolist()
+                    n_el = sum(VALENCE[int(z)] for z in zs) / 2.0
+                    gate = defect_protocol.initialisation_report(v, n_el, e_gap)
+            if gate is None:
+                logging.warning(
+                    "Stage-3 protocol: initialisation gate UNSCORED -- the first batch "
+                    "carries no stoichiometric cell. Do not read that as a pass.")
+            else:
+                logging.info(
+                    f"Stage-3 protocol: init gate edges "
+                    f"{gate['edge_spacing_below']:.3f}/{gate['edge_spacing_above']:.3f} eV "
+                    f"(need <= {0.5 * e_gap:.2f}), bandwidth {gate['bandwidth']:.2f} eV "
+                    f"(need >= {2 * e_gap:.2f}) -> "
+                    f"{'PASS' if gate['passed'] else 'TRIP'}")
+
+        protocol_post_step = defect_protocol.post_step
+        logging.info("Stage-3 protocol: %s", json.dumps(defect_protocol.protocol_summary(
+            stage=3, e_gap=e_gap,
+            w_gap=float(getattr(args, "defect_gap_weight", 0.0) or 0.0),
+            warmup=int(getattr(args, "defect_protocol_warmup", 5)),
+            clip=float(args.clip_grad or 0.0),
+            freeze_z=bool(getattr(args, "defect_protocol_freeze_z", False)),
+            model=model), sort_keys=True))
+
     # Reach assertion on the LOSS'S OWN loader, not a reimplementation of it. graph_cutoff
     # was previously verified only where it was not used, and the resulting 5 A graph -- in
     # which the two vacancy-sharing Pb have no edge -- voided a 20-seed screen. A check that
@@ -1364,6 +1528,7 @@ def run(args) -> None:
         data_aug_magmom=args.data_aug_magmom,
         epoch_hook=defect_seed_hook,
         post_eval_hook=_release_hook,
+        post_step_hook=protocol_post_step,
     )
 
     logging.info("")

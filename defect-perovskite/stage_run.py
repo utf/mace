@@ -42,7 +42,6 @@ import torch
 import mace  # noqa: F401  (before e3nn)
 from mace import tools
 from mace.modules.defect_context import EPS_INF_DEFAULT, ForwardContext
-from mace.modules.defect_stage import is_correction_param
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from e0_residual_maps import _assert_repo  # noqa: E402
@@ -108,10 +107,9 @@ def build(arch_path, base_path, seed, device, stage, madelung, eps_inf, t_ref, l
         # site degenerate -- the atomic limit, where the bond order vanishes and (on the
         # frozen-P gradient) nothing could move the hoppings at all. The measured bond length
         # is passed in so the head stays host-agnostic.
-        from mace.modules.defect_counting import harrison_initialise
+        from mace.modules import defect_protocol
 
-        harrison_initialise(model.spectral, [int(z) for z in model.atomic_numbers],
-                            bond_length=t_ref)
+        defect_protocol.apply_harrison(model, model.atomic_numbers, t_ref)
     model = model.to(device)
     head = getattr(model, "spectral", None)
     knobs = ""
@@ -201,22 +199,22 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
 
     metrics_init = {}
     if stage >= 3:
-        from mace.modules.defect_counting import VALENCE, initialisation_gate
+        # THE PROTOCOL, from mace.modules.defect_protocol. These five calls replaced inlined
+        # copies of the same arithmetic: mace.cli.run_train now runs the same protocol, and
+        # "both drivers call one implementation" has to be a property of the code rather
+        # than a claim about it. Two copies that agree today are two copies that can drift.
+        from mace.modules import defect_protocol
+        from mace.modules.defect_counting import VALENCE
 
         b0, f0 = batches[0]
         with torch.no_grad():
             out0 = model(ctx.forward_dict(b0, f0), training=False, compute_force=False)
-            target = getattr(b0, "energy", None)
-            dn = b0.carrier_counts.reshape(int(b0.num_graphs), -1)
-            dn = (dn[:, 0] + dn[:, 1] - dn[:, 2] - dn[:, 3]).to(
-                out0["delta_sr_energy"].dtype)
-            sel = dn.abs() > 0
-            if target is not None and bool(sel.any()):
-                # E_head moves by c * Delta_n and by nothing else, so one scalar solves the
-                # median mismatch exactly. This is mu's old initialisation role, without
-                # mu's per-channel bookkeeping.
-                resid = target - out0["base_energy"] - out0["delta_sr_energy"]
-                c = float(torch.median(resid[sel] / dn[sel]))
+            c = defect_protocol.calibrate_c_shift(out0, getattr(b0, "energy", None),
+                                                  b0.carrier_counts)
+            if c is None:
+                log("      c-shift NOT calibrated: no frame in the init batch carries a "
+                    "net carrier, so Delta_n = 0 and the ratio is undefined")
+            else:
                 model.spectral.c_shift.fill_(c)
                 log(f"      c-shift calibrated to {c:+.4f} eV on the init batch")
         pb0, pf0 = (pristine_batches or [(b0, f0)])[0]
@@ -224,7 +222,7 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
         lam0 = internals["lam"][0, 0]
         lam0 = lam0[lam0 < 500.0]
         n_el = sum(VALENCE[int(z)] for z in pf0[0].get_atomic_numbers()) / 2.0
-        gate = initialisation_gate(lam0, n_el, e_gap)
+        gate = defect_protocol.initialisation_report(lam0, n_el, e_gap)
         log(f"      init gate: edges {gate['edge_spacing_below']:.3f}/"
             f"{gate['edge_spacing_above']:.3f} eV (need <= {0.5 * e_gap:.2f}), bandwidth "
             f"{gate['bandwidth']:.2f} eV (need >= {2 * e_gap:.2f}) -> "
@@ -232,23 +230,19 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
         metrics_init = {f"init_{k}": v for k, v in gate.items()}
 
     model.train()
+    # The head-only mask and the warmup, from the protocol module. `freeze_z` is the
+    # diagnostic arm that pins Z at the nominal charges, answering whether the LEARNED scale
+    # of Z buys anything or whether the two seeds that inflated it to (-2.6, +2.3, +5.4)
+    # simply went down a bad path and dragged the fit with them.
+    from mace.modules import defect_protocol
+
     for n, p in model.named_parameters():
-        train_it = (is_correction_param(n) or ".spectral." in n
-                    or n.startswith("madelung."))
-        if freeze_z and n.startswith("madelung."):
-            # Diagnostic arm: Z pinned at the nominal charges. Answers whether the LEARNED
-            # scale of Z buys anything, or whether the two seeds that inflated it to
-            # (-2.6, +2.3, +5.4) simply went down a bad path and dragged the fit with them.
-            train_it = False
-        p.requires_grad_(train_it)
+        p.requires_grad_(defect_protocol.trainable_mask(n, freeze_z=freeze_z))
     params = [p for n, p in model.named_parameters() if p.requires_grad]
     opt = torch.optim.AdamW(params, lr=lr)
-    # 5-epoch linear warmup. The counting head's correction is eV-scale at step 0, so the
-    # first few steps see gradients three orders larger than the converged ones; going in at
-    # full rate is how a seed gets thrown somewhere it cannot return from.
     warmup = 5
     sched = torch.optim.lr_scheduler.LambdaLR(
-        opt, lambda e: min(1.0, (e + 1) / warmup) if stage >= 3 else 1.0)
+        opt, lambda e: defect_protocol.warmup_factor(e, warmup) if stage >= 3 else 1.0)
 
     rng = np.random.default_rng(seed)
     hist = []
@@ -278,9 +272,8 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
             opt.step()
             # Z lives on the pristine composition hyperplane. Without the projection the
             # species charges drift as a group, which is a gauge on phi and a slow
-            # divergence -- a post-step hook, so it cannot be skipped by a branch.
-            if getattr(model, "madelung", None) is not None:
-                model.madelung.project_()
+            # divergence. The trainer passes the SAME function as its post_step_hook.
+            defect_protocol.post_step(model)
             f_sum += float(loss)
             n_step += 1
         sched.step()

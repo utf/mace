@@ -259,6 +259,7 @@ def train(
     data_aug_magmom: Optional[bool] = False,
     epoch_hook: Optional[Any] = None,
     post_eval_hook: Optional[Any] = None,
+    post_step_hook: Optional[Any] = None,
 ):
     lowest_loss = np.inf
     valid_loss = np.inf
@@ -344,6 +345,7 @@ def train(
             distributed=distributed,
             distributed_model=distributed_model,
             rank=rank,
+            post_step_hook=post_step_hook,
         )
         if distributed:
             torch.distributed.barrier()
@@ -468,6 +470,7 @@ def train_one_epoch(
     distributed: bool,
     distributed_model: Optional[DistributedDataParallel] = None,
     rank: Optional[int] = 0,
+    post_step_hook: Optional[Any] = None,
 ) -> None:
     model_to_train = model if distributed_model is None else distributed_model
 
@@ -499,6 +502,7 @@ def train_one_epoch(
                 output_args=output_args,
                 max_grad_norm=max_grad_norm,
                 device=device,
+                post_step_hook=post_step_hook,
             )
             opt_metrics["mode"] = "opt"
             opt_metrics["epoch"] = epoch
@@ -515,6 +519,7 @@ def take_step(
     output_args: Dict[str, bool],
     max_grad_norm: Optional[float],
     device: torch.device,
+    post_step_hook: Optional[Any] = None,
 ) -> Tuple[float, Dict[str, Any]]:
     start_time = time.time()
     batch = batch.to(device)
@@ -540,6 +545,12 @@ def take_step(
 
     loss = closure()
     optimizer.step()
+    # AFTER the optimiser and BEFORE the EMA. The projection the counting head needs (Z back
+    # onto the pristine composition hyperplane) constrains the parameters, so it has to run on
+    # the values the optimiser just wrote; running it after the EMA update would average a
+    # shadow copy of the unprojected weights into the model that gets evaluated.
+    if post_step_hook is not None:
+        post_step_hook(model)
 
     if ema is not None:
         ema.update()

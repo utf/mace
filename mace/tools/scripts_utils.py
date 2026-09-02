@@ -1027,6 +1027,9 @@ def get_loss_fn(
             size_ema_decay=args.defect_size_ema,
             gauge_weight=args.defect_gauge_weight,
             eps_gauge_weight=args.defect_eps_gauge_weight,
+            gap_weight=float(getattr(args, "defect_gap_weight", 0.0)),
+            e_gap=float(getattr(args, "defect_e_gap", 0.0)),
+            gap_composition=getattr(args, "defect_gap_composition", None),
         )
     elif args.loss == "l1l2energyforces":
         loss_fn = modules.WeightedEnergyForcesL1L2Loss(

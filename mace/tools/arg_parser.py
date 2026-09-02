@@ -1231,6 +1231,73 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default="gaussian",
     )
     parser.add_argument(
+        "--defect_protocol",
+        help="run the Stage-3 protocol from mace.modules.defect_protocol: Harrison "
+        "initialisation, c-shift calibration on the first batch, linear warmup, the "
+        "initialisation gate, the head-only trainable mask and the post-step Z projection. "
+        "Every Stage-3 result to date came from defect-perovskite/stage_run.py, which "
+        "carries these and the trainer did not; 'the joint run comes from config' is empty "
+        "until this is on",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--defect_protocol_bond_length",
+        help="measured nearest-neighbour distance for the Harrison initialisation, in "
+        "Angstrom. Passed in rather than baked in so the head stays host-agnostic; 2.861 "
+        "for CsPbCl3. Ignored unless --defect_protocol",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--defect_protocol_warmup",
+        help="linear LR warmup in epochs. The counting head's correction is eV-scale at "
+        "step 0, so the first steps see gradients three orders larger than the converged "
+        "ones",
+        type=int,
+        default=5,
+    )
+    parser.add_argument(
+        "--defect_protocol_head_only",
+        help="train only the correction parameters, the carrier head and the Madelung "
+        "charges -- the mask the Stage-1..3 screens ran under. OFF by default because the "
+        "joint run trains the base too, at a reduced rate via --base_lr_factor",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--defect_protocol_freeze_z",
+        help="diagnostic arm: pin the Madelung species charges at their initialisation, so "
+        "the run answers whether the LEARNED scale of Z buys anything",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--defect_gap_weight",
+        help="weight on the pristine frontier-gap constraint, (gap - E_gap)^2. A SPECTRUM "
+        "constraint applied to the stoichiometric cells in each batch, selected by "
+        "composition and never by a defect label, so it carries none of the 79-atom "
+        "base-extrapolation slope that keeps energy targets out of the head-only stages",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--defect_e_gap",
+        help="host band gap in eV that --defect_gap_weight drives the pristine frontier gap "
+        "towards. 2.40 for CsPbCl3 at this level of theory",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--defect_gap_composition",
+        help="pristine stoichiometry in the model's own species order, comma-separated, "
+        "e.g. '3,1,1' for CsPbCl3 with the table sorted (Cl, Cs, Pb). Only the ratio is "
+        "used. Required by --defect_gap_weight: without it nothing can tell a defect-free "
+        "cell from a defective one without consulting a label",
+        type=lambda s: [float(v) for v in s.split(",")] if s else None,
+        default=None,
+    )
+    parser.add_argument(
         "--defect_counting_envelope",
         help="radial envelope on the hopping integrals. 'exp' is exp(-(r - d_ref)/L), what "
         "Stage 3 ran; 'power' is Harrison's own (d_ref/r)^2, which is also the rule V0 is "

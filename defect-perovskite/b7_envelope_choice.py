@@ -133,6 +133,16 @@ def main() -> None:
                        for zz in pbatches[0][1][0].get_atomic_numbers()) / 2.0
             gate = initialisation_gate(lam0, n_el, args.e_gap)
             spec = pristine_spectrum_check(model, pbatches, quiet)
+            # THE GATE OF RECORD, computed here rather than read from
+            # `pristine_spectrum_check`: that function returns `pristine_split_lam2_lam1`,
+            # which is lam_2 - lam_1 at the BOTTOM of the spectrum for the superatom check,
+            # and a `.get("pristine_frontier_gap")` against it silently returns NaN. The
+            # frontier gap is eps_{N+1} - eps_N, the quantity loss_gap drives to E_gap and
+            # the one a longer-ranged envelope would close first.
+            lam_sorted = torch.sort(lam0).values
+            k = int(round(n_el))
+            frontier_gap = (float(lam_sorted[k] - lam_sorted[k - 1])
+                            if 0 < k < lam_sorted.numel() else float("nan"))
 
             # ------------------------------------------------------- the hub channel
             hub_t, sr, lam = [], [], []
@@ -153,7 +163,8 @@ def main() -> None:
                 bandwidth=float(gate["bandwidth"]),
                 edge_below=float(gate["edge_spacing_below"]),
                 edge_above=float(gate["edge_spacing_above"]),
-                pristine_gap=float(spec.get("pristine_frontier_gap", np.nan)),
+                pristine_gap=frontier_gap,
+                split_lam2_lam1=float(spec.get("pristine_split_lam2_lam1", np.nan)),
                 split_fraction=float(spec.get("split_fraction", np.nan)),
                 t_over_harrison=float(np.nanmean(ratio)),
                 d_delta_sr_dd=float(np.nanmean(sr)),
@@ -169,7 +180,8 @@ def main() -> None:
         row = dict(tag=tag, overrides=overrides, seeds=per_seed,
                    gate_pass=sum(p["init_gate"] for p in per_seed),
                    n_seeds=len(per_seed),
-                   **{k: agg(k) for k in ("bandwidth", "pristine_gap", "split_fraction",
+                   **{k: agg(k) for k in ("bandwidth", "pristine_gap",
+                                          "split_fraction", "split_lam2_lam1",
                                           "t_over_harrison", "d_delta_sr_dd",
                                           "d_lambda_dd")})
         rows.append(row)
@@ -182,7 +194,11 @@ def main() -> None:
         args.out.write_text(json.dumps(rows, indent=2, default=float))
 
     args.out.write_text(json.dumps(rows, indent=2, default=float))
-    ok = [r for r in rows if r["gate_pass"] == r["n_seeds"]]
+    # A candidate must ALSO keep a frontier gap worth the name. The initialisation gate
+    # checks band-edge spacings and bandwidth; it does not check that a gap survives, and a
+    # longer-ranged envelope closes the gap before it breaks either of those.
+    ok = [r for r in rows if r["gate_pass"] == r["n_seeds"]
+          and np.isfinite(r["pristine_gap"][0]) and r["pristine_gap"][0] > 0.5 * args.e_gap]
     print("\n=== the choice ===")
     if not ok:
         print("  NO candidate passes the initialisation gate on every seed. The envelope is "

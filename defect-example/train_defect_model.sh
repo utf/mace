@@ -260,6 +260,19 @@ DEFECT_COUNTING_SMEARING="${DEFECT_COUNTING_SMEARING:-gaussian}"
 DEFECT_COUNTING_T_EL="${DEFECT_COUNTING_T_EL:-0.05}"
 # The radial envelope on the hoppings. "exp" is what Stage 3 ran; "power" is
 # Harrison's d^-2, the rule V0 is initialised from. DECAY_LENGTH is ignored by "power".
+# The Stage-3 protocol: Harrison init, c-shift, warmup, init gate, head-only mask, Z
+# projection. Off by default -- every run before this one trained without it, and turning it
+# on silently would make old and new runs incomparable while looking identical in the log.
+DEFECT_PROTOCOL="${DEFECT_PROTOCOL:-False}"
+DEFECT_PROTOCOL_BOND_LENGTH="${DEFECT_PROTOCOL_BOND_LENGTH:-0.0}"
+DEFECT_PROTOCOL_WARMUP="${DEFECT_PROTOCOL_WARMUP:-5}"
+DEFECT_PROTOCOL_HEAD_ONLY="${DEFECT_PROTOCOL_HEAD_ONLY:-False}"
+DEFECT_PROTOCOL_FREEZE_Z="${DEFECT_PROTOCOL_FREEZE_Z:-False}"
+# The pristine frontier-gap constraint. Composition is required: without it nothing can tell
+# a defect-free cell from a defective one without consulting a label.
+DEFECT_GAP_WEIGHT="${DEFECT_GAP_WEIGHT:-0.0}"
+DEFECT_E_GAP="${DEFECT_E_GAP:-0.0}"
+DEFECT_GAP_COMPOSITION="${DEFECT_GAP_COMPOSITION:-}"
 DEFECT_COUNTING_ENVELOPE="${DEFECT_COUNTING_ENVELOPE:-exp}"
 DEFECT_COUNTING_DECAY_LENGTH="${DEFECT_COUNTING_DECAY_LENGTH:-1.0}"
 DEFECT_MADELUNG_ON_SITE="${DEFECT_MADELUNG_ON_SITE:-false}"
@@ -410,6 +423,14 @@ python -m mace.cli.run_train \
     --defect_counting_hop_range="${DEFECT_COUNTING_HOP_RANGE}" \
     --defect_counting_smearing="${DEFECT_COUNTING_SMEARING}" \
     --defect_counting_t_el="${DEFECT_COUNTING_T_EL}" \
+    --defect_protocol="${DEFECT_PROTOCOL}" \
+    --defect_protocol_bond_length="${DEFECT_PROTOCOL_BOND_LENGTH}" \
+    --defect_protocol_warmup="${DEFECT_PROTOCOL_WARMUP}" \
+    --defect_protocol_head_only="${DEFECT_PROTOCOL_HEAD_ONLY}" \
+    --defect_protocol_freeze_z="${DEFECT_PROTOCOL_FREEZE_Z}" \
+    --defect_gap_weight="${DEFECT_GAP_WEIGHT}" \
+    --defect_e_gap="${DEFECT_E_GAP}" \
+    --defect_gap_composition="${DEFECT_GAP_COMPOSITION}" \
     --defect_counting_envelope="${DEFECT_COUNTING_ENVELOPE}" \
     --defect_counting_decay_length="${DEFECT_COUNTING_DECAY_LENGTH}" \
     --defect_madelung_on_site="${DEFECT_MADELUNG_ON_SITE}" \

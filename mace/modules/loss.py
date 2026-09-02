@@ -5,7 +5,7 @@
 ###########################################################################################
 
 import math
-from typing import Optional
+from typing import Optional, Sequence
 
 import torch
 
@@ -773,6 +773,9 @@ class DefectLoss(torch.nn.Module):
         size_delocalised_leak: float = 0.05,
         gauge_weight: float = 0.0,
         eps_gauge_weight: float = 0.0,
+        gap_weight: float = 0.0,
+        e_gap: float = 0.0,
+        gap_composition: Optional[Sequence[float]] = None,
     ) -> None:
         super().__init__()
         for name, value in (
@@ -812,6 +815,19 @@ class DefectLoss(torch.nn.Module):
         self.size_delocalised_leak = size_delocalised_leak
         self.gauge_weight = gauge_weight
         self.eps_gauge_weight = eps_gauge_weight
+        self.gap_weight = float(gap_weight)
+        self.e_gap = float(e_gap)
+        # Stoichiometry in the model's own species order, e.g. (3, 1, 1) for CsPbCl3 with
+        # the AtomicNumberTable sorted (Cl, Cs, Pb). Only the RATIO is used, so the same
+        # numbers describe every supercell of the host.
+        self.gap_composition = (
+            None if gap_composition is None
+            else tuple(float(v) for v in gap_composition))
+        # Diagnostic: how many steps actually carried the term. A gap penalty that never
+        # fires because no batch happened to contain a stoichiometric cell would otherwise
+        # be indistinguishable from one that is working.
+        self.gap_steps_with_term = 0
+        self.gap_steps_total = 0
         # Running |c| per channel, used only to place the (detached) threshold. A buffer so
         # it survives checkpointing: restarting with a cold EMA would put every channel in
         # the exempt branch for the first few batches and briefly switch the term off.
@@ -912,6 +928,7 @@ class DefectLoss(torch.nn.Module):
             loss = loss + self.pressure_weight * reduce_loss(raw_pressure, ddp)
 
         loss = loss + self.size_penalty(ref, pred, ddp)
+        loss = loss + self.gap_penalty(ref, pred, ddp)
         loss = loss + self.gauge_penalty(ref, pred, ddp)
         loss = loss + self.eps_gauge(pred, ref, ddp)
         loss = loss + self.regularisation(pred)
@@ -1080,6 +1097,73 @@ class DefectLoss(torch.nn.Module):
         # no meaning at all.
         self.last_size_value = float(value.detach())
         return value
+
+    def stoichiometric_mask(self, ref: Batch) -> Optional[torch.Tensor]:
+        """Which graphs in this batch are defect-free, decided by COMPOSITION alone.
+
+        LABEL-FREE BY CONSTRUCTION, and that is the whole reason the gap term is allowed in
+        the loss at all. The test is `n_species(g) proportional to gap_composition`, a
+        property of the formula unit; it never consults the vacancy assignment, the carrier
+        counters or any defect annotation. A 79-atom V_Cl cell fails it because one Cl is
+        missing, which is arithmetic and not a label.
+
+        Not by atom count: the largest cells in this training set are 159-atom DEFECT
+        supercells, so "the big frames are the pristine ones" picks defect cells and builds
+        the bulk reference out of the structures it is meant to distinguish.
+        """
+        if self.gap_composition is None:
+            return None
+        counts = scatter_sum(ref.node_attrs, ref.batch, dim=0,
+                             dim_size=int(ref.num_graphs))
+        target = torch.as_tensor(self.gap_composition, dtype=counts.dtype,
+                                 device=counts.device)
+        if target.numel() != counts.shape[1]:
+            raise ValueError(
+                f"gap_composition has {target.numel()} entries but the model has "
+                f"{counts.shape[1]} species; the two must be in the same order")
+        # Units of formula per cell from the TOTAL atom count, not from one species'.
+        # Pivoting on a single species is wrong in exactly the case that matters: a 79-atom
+        # V_Cl cell divided by the Cl coefficient gives 15.667 units, whose expected counts
+        # are (47, 15.667, 15.667) -- within a third of an atom of the real (47, 16, 16),
+        # so a half-atom tolerance calls the vacancy cell pristine. The defect hides in the
+        # species you pivot on.
+        #
+        # The tolerance is tight rather than generous for the same reason. These counts are
+        # exact integers, so a stoichiometric cell matches to floating-point round-off and
+        # anything looser only admits near-misses -- which is what a vacancy is.
+        units = counts.sum(dim=-1) / target.sum()
+        expected = units.unsqueeze(-1) * target.unsqueeze(0)
+        return (counts - expected).abs().max(dim=-1).values < 1e-3
+
+    def gap_penalty(
+        self, ref: Batch, pred: TensorDict, ddp: Optional[bool] = None
+    ) -> torch.Tensor:
+        """`w * (gap_pristine - E_gap)^2`. A SPECTRUM constraint, not an energy label.
+
+        The frontier gap of a defect-free cell must be the host band gap. That is a property
+        of the material, so this term carries none of M1b's base-extrapolation slope -- which
+        is exactly why it is the one supervision the head-only stages are allowed besides
+        forces.
+
+        THE DIFFERENCE FROM `stage_run.py`, stated because it is real. The harness draws a
+        dedicated pristine batch per step; here the term is applied to whichever
+        stoichiometric graphs the batch already contains, which costs no extra forward and
+        keeps the loss a pure function of `(pred, ref)`. Steps whose batch contains none
+        contribute zero, so `gap_steps_with_term / gap_steps_total` is recorded and belongs
+        in the run's report -- the realised coverage is a property of the shuffle, not a
+        constant.
+        """
+        zero = torch.zeros((), dtype=ref.weight.dtype, device=ref.weight.device)
+        gap = pred.get("logit_gap")
+        if self.gap_weight <= 0.0 or gap is None:
+            return zero
+        mask = self.stoichiometric_mask(ref)
+        self.gap_steps_total += 1
+        if mask is None or not bool(mask.any()):
+            return zero
+        self.gap_steps_with_term += 1
+        residual = gap[mask, 0].mean() - self.e_gap
+        return self.gap_weight * residual ** 2
 
     def gauge_penalty(
         self, ref: Batch, pred: TensorDict, ddp: Optional[bool] = None

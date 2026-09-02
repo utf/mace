@@ -151,6 +151,9 @@ def main() -> None:
     ap.add_argument("--runs", type=Path, default=Path.home() / "runs")
     ap.add_argument("--folds", type=int, default=4)
     ap.add_argument("--production-base", default="e0_base_s1")
+    ap.add_argument("--null-dir", type=Path,
+                    default=Path(__file__).resolve().parent / "dataset_cf",
+                    help="cross-fit folds holding each base's held-out NEUTRAL frames")
     ap.add_argument("--cutoff", type=float, default=5.0)
     ap.add_argument("--batch-size", type=int, default=4)
     ap.add_argument("--device", default="cuda")
@@ -182,6 +185,46 @@ def main() -> None:
         del model
         if args.device.startswith("cuda"):
             torch.cuda.empty_cache()
+
+    # ------------------------------------------------------------- the neutral null
+    #
+    # THE CONTROL THE -0.134 REFERENCE HAS NEVER HAD. Both label arms are E_label - E_base,
+    # so both inherit whatever the base gets wrong at those geometries, and the 79-atom arm
+    # demonstrably does: its slope collapses from +0.36 to consistent-with-zero once the fit
+    # is restricted to the window where the base's own training set is dense. Only 4 of the
+    # 17 large frames sit inside that window, so the same question has to be asked of them --
+    # and it cannot be asked by restricting the range, because there is nothing left to fit.
+    #
+    # It can be asked with a null. The neutral defective cells carry the same vacancy, the
+    # same d(Pb-Pb) and no carrier, so ANY d-trend in their residual is base error by
+    # construction. If the large-cell null is flat while the charged arm is -0.134, the
+    # reference is carrier physics. If the null carries the same slope, F4 has been scored
+    # against an artefact.
+    #
+    # The frames come from the fold's own held-out pool, so each is scored by a base that
+    # never saw it -- an in-sample null would report the base's memory, not its error.
+    null_rows = []
+    if args.null_dir is not None and args.null_dir.exists():
+        for k in range(args.folds):
+            pool = args.null_dir / f"fold{k}" / "null_oof.xyz"
+            path = args.runs / f"cf_base_f{k}" / f"cf_base_f{k}.model"
+            if not pool.exists() or not path.exists():
+                continue
+            model = torch.load(path, map_location=args.device,
+                               weights_only=False).to(args.device).eval()
+            frames_k = read(str(pool), index=":")
+            for n in SIZES:
+                mine = [a for a in frames_k if len(a) == n]
+                if not mine:
+                    continue
+                null_rows += rows_for(model, mine, z_table, args.cutoff, args.device,
+                                      args.batch_size)
+            del model
+            if args.device.startswith("cuda"):
+                torch.cuda.empty_cache()
+        print(f"  neutral out-of-fold null: " + ", ".join(
+            f"{n} atoms x{sum(1 for r in null_rows if r['natoms'] == n)}" for n in SIZES),
+            flush=True)
 
     # ------------------------------------------------------- production-base 159 arm
     prod_rows = []
@@ -241,6 +284,12 @@ def main() -> None:
         if prod_rows:
             fits["159_prod"] = fit_arm(prod_rows, key, "159 atoms, production base")
             show(fits["159_prod"])
+        for n in SIZES:
+            mine = [r for r in null_rows if r["natoms"] == n]
+            if len(mine) >= 5:
+                fits[f"{n}_neutral_null"] = fit_arm(
+                    mine, key, f"{n} atoms, NEUTRAL null (no carrier)")
+                show(fits[f"{n}_neutral_null"])
         payload[key] = fits
 
         a, b = fits.get("79_matched"), fits.get("159_matched")
@@ -262,6 +311,18 @@ def main() -> None:
                   f"{'DISJOINT' if dis else 'OVERLAP'}; "
                   f"79 {a['slope']:+.4f} vs 159 {b['slope']:+.4f}  ->  {verdict}")
     payload["verdicts"] = verdicts
+    # The null's verdict on the reference, stated rather than left to the reader.
+    null159 = payload.get("de", {}).get("159_neutral_null")
+    chg159 = payload.get("de", {}).get("159_prod")
+    if null159 and chg159 and np.isfinite(null159["slope"]):
+        clean = not (null159["ci"][0] <= chg159["slope"] <= null159["ci"][1])
+        payload["reference_survives_null"] = bool(clean)
+        print("\n  THE NULL ON THE REFERENCE: neutral 159 slope "
+              f"{null159['slope']:+.4f} [{null159['ci'][0]:+.4f}, "
+              f"{null159['ci'][1]:+.4f}] against the charged {chg159['slope']:+.4f}")
+        print("  -> the -0.134 reference is " + (
+            "CARRIER PHYSICS (the null does not contain it)" if clean
+            else "INSIDE THE NULL -- it may be base error"))
     args.out.write_text(json.dumps(payload, indent=2, default=float))
     print(f"\nwrote {args.out}")
     print("\n  F6's scoring rule was fixed before the run: disjoint 95% intervals with the\n"
