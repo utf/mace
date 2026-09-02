@@ -382,6 +382,63 @@ half-atom tolerance. **The defect hides in the species you pivot on.** Units now
 total atom count and the tolerance is 1e-3, because these are exact integers and anything
 looser only admits near-misses, which is what a vacancy is.
 
+### The bug the c-shift caught, and it was the serious one
+
+The deterministic calibration was introduced so the head's energy zero would not depend on the
+shuffle. It did something more useful: it disagreed with the harness by a factor of four on
+identical data — **+8.70 eV** against **+36.54 eV** — and that disagreement turned out to be a
+direct read on a broken base branch.
+
+`c_shift` is the median of `(E_label − E_base − E_head)/Δn`, so it measures `E_base`. Each
+candidate was eliminated by measurement:
+
+| candidate | measurement | verdict |
+|---|---|---|
+| frame selection | raw ratio +3.756 over the first 48 vs +3.587 across the file, 5–95% span 0.6 eV | harmless |
+| forward path | `ForwardContext` vs `batch.to_dict()`: `base_energy`, `delta_sr` and the c-shift agree to **0.000000 eV** | not it |
+| per-(charge,size) referencing | exactly −1.200 eV, zero spread across frames | not it |
+| head initialisation | zero-init moves the c-shift by 0.012 eV | not it |
+| atomic energies | identical between source models; their difference from the trainer's regressed values cancels to −0.002 eV on this composition | not it |
+| **trunk normalisation** | Stage A **14.08**, the joint run **112.5** | **this** |
+
+The forward-path row is the important negative: train and evaluate do *not* disagree about the
+forward pass, which is a failure this project has already paid for four times.
+
+**`avg_num_neighbors` divides every message in the trunk, and it is neither a parameter nor a
+buffer** — a plain float on each interaction block. So it is absent from `state_dict`, the
+loader's name-and-shape check cannot see it, and its copy loop cannot carry it. Stage A trained
+at `r_max = 5.0` without a carrier head and got 14.08; any run with the head builds its graph at
+the **carrier** cutoff of 10 Å and computes 112.5 on the same data. Eight times the divisor on
+every message, in the branch whose whole purpose is to be the reference the correction is
+defined against — and `load_stage_a_base` reported success.
+
+**Two repairs, because they cover different runs.** A Stage-B run now inherits the checkpoint's
+value, with a loud warning and an outright refusal if the block counts differ. A *from-scratch*
+run has no checkpoint to inherit from — and the joint run's arm B is exactly that — so the count
+itself is rescaled by the measured edge-count ratio at `r_max`, averaged over batches, rather
+than by a `(10/5)³` volume argument that the periodic per-frame graph does not obey.
+
+**The two repairs cross-validate, which is what makes this a diagnosis rather than a patch:**
+
+```
+computed on the 10.0 A carrier graph            111.57
+rescaled by the measured edge-count ratio 0.1248  13.93
+Stage A, computed at r_max = 5.0 on its own data  14.08
+```
+
+1.1% apart, from completely different routes — a ratio taken on the carrier graph of one
+training set against a full pass at `r_max` on another — and `1/ratio = 8.01` against the 8×
+the two cutoffs predict.
+
+**Scope, checked rather than assumed.** The arch model the harness builds from carries 14.14,
+essentially Stage A's 14.08, so the Stage-1..3 lineage and every number in this report are
+unaffected. The fault is confined to the production trainer, which had never been run end to
+end with a carrier head and a Stage-A base before this cycle — which is what §3 existed to find.
+
+**The prediction this makes, recorded before the number arrived:** with the normalisation
+repaired, the trainer's c-shift should fall from +36.54 to near the harness's +8.9, because the
+entire 27 eV gap was `E_base` being wrong.
+
 **What is not claimed: step-level weight identity between the two drivers.** They batch
 differently — a fixed graph list versus a shuffled DataLoader — so their weights after one
 epoch differ for reasons that have nothing to do with the protocol, and chasing that number
