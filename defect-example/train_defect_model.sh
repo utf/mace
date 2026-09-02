@@ -337,6 +337,11 @@ DEFECT_QHOST_L2="${DEFECT_QHOST_L2:-1e-4}"
 
 # ---- optimisation ---------------------------------------------------------------------
 MAX_NUM_EPOCHS="${MAX_NUM_EPOCHS:-300}"
+# Validation every epoch is the default and is the right one for a short run.
+# On the full 2560-frame set at float64 it is ~1 min per epoch of pure overhead,
+# which a multi-seed run pays eight times over; the metric is unchanged, only
+# less frequent.
+EVAL_INTERVAL="${EVAL_INTERVAL:-1}"
 BATCH_SIZE="${BATCH_SIZE:-4}"
 VALID_BATCH_SIZE="${VALID_BATCH_SIZE:-4}"
 LR="${LR:-0.005}"
@@ -502,7 +507,7 @@ python -m mace.cli.run_train \
     --lr="${LR}" \
     ${EMA_ARGS[@]+"${EMA_ARGS[@]}"} \
     --patience="${PATIENCE}" \
-    --eval_interval=1 \
+    --eval_interval="${EVAL_INTERVAL}" \
     --default_dtype="${DEFAULT_DTYPE}" \
     --device="${DEVICE}" \
     --seed="${SEED}" \
