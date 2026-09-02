@@ -47,6 +47,7 @@ each shell carries its own bounded correction.
 
 from __future__ import annotations
 
+import math
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import torch
@@ -117,6 +118,113 @@ def spin_targets(n_total: int, counts: Sequence[int]) -> Tuple[float, float]:
     return float(maj + e_maj - h_maj), float(minor + e_min - h_min)
 
 
+# The label pipeline's own convention. The defect calculations were set up through doped,
+# whose default electronic smearing is Gaussian with SIGMA = 0.05 eV (ISMEAR = 0). The head
+# now matches the labels in FUNCTIONAL FORM and in width; the previous T_el = 25 meV was a
+# k_B * 300 K coincidence with no connection to the labels at all.
+#
+# Both families stay implemented, selected by config: Fermi-Dirac is retained for sensitivity
+# work, because "the answer does not depend on the smearing" is a claim that needs a second
+# family to test and not an assertion.
+SMEARING_FAMILY = "gaussian"
+SMEARING_WIDTH = 0.05            # eV
+# The LIVE setting, read by every fill, every entropy and the density-response backward.
+_FAMILY = SMEARING_FAMILY
+_WIDTH = SMEARING_WIDTH
+_SQRT_PI = math.sqrt(math.pi)
+
+
+def occupation_of(x: torch.Tensor, family: str = SMEARING_FAMILY) -> torch.Tensor:
+    """`f(x)` for `x = (eps - mu) / width`.
+
+    Gaussian (Methfessel-Paxton order 0): `f = erfc(x) / 2`.
+    Fermi-Dirac:                          `f = sigmoid(-x)`.
+    """
+    if family == "gaussian":
+        return 0.5 * torch.erfc(x)
+    if family == "fermi":
+        return torch.sigmoid(-x)
+    raise ValueError(f"unknown smearing family {family!r}; expected gaussian or fermi")
+
+
+def occupation_slope(x: torch.Tensor, width: float,
+                     family: str = SMEARING_FAMILY) -> torch.Tensor:
+    """`df/deps`, negative. Bounded by `1/(width sqrt(pi))` Gaussian, `1/(4 width)` FD.
+
+    This is the factor the Daleckii-Krein divided difference reduces to at coincidence, so
+    its bound is what keeps the density-response backward finite at exact degeneracy.
+    """
+    if family == "gaussian":
+        return -torch.exp(-x * x) / (width * _SQRT_PI)
+    if family == "fermi":
+        f = torch.sigmoid(-x)
+        return -f * (1.0 - f) / width
+    raise ValueError(f"unknown smearing family {family!r}")
+
+
+def entropy_of(x: torch.Tensor, family: str = SMEARING_FAMILY) -> torch.Tensor:
+    """The generalised entropy per state, so that `F = sum_k f_k eps_k - width * sum_k S_k`.
+
+    Gaussian: `S_k = exp(-x^2) / (2 sqrt(pi))`, which is NOT the Shannon entropy of `f` --
+    it is the Methfessel-Paxton term that makes `F` variational in the occupations, which is
+    what the Hellmann-Feynman force argument needs.
+    Fermi-Dirac: the usual `-(f ln f + (1-f) ln(1-f))`.
+    """
+    if family == "gaussian":
+        return torch.exp(-x * x) / (2.0 * _SQRT_PI)
+    if family == "fermi":
+        f = occupation_of(x, "fermi").clamp(1e-12, 1.0 - 1e-12)
+        return -(f * f.log() + (1.0 - f) * (1.0 - f).log())
+    raise ValueError(f"unknown smearing family {family!r}")
+
+
+def find_mu(eps: torch.Tensor, n_electrons: float, width: float,
+            family: str = SMEARING_FAMILY, tol: float = 1e-10,
+            max_iter: int = 200) -> float:
+    """The `mu` that puts exactly `n_electrons` in the spectrum, by bisection under no_grad.
+
+    Detaching is exact rather than approximate: at fixed N the free energy is stationary in
+    the fill, so `mu` does not appear in `dF/deps`.
+    """
+    with torch.no_grad():
+        e = eps.detach()
+        lo = float(e.min()) - 50.0 * width - 1.0
+        hi = float(e.max()) + 50.0 * width + 1.0
+        for _ in range(max_iter):
+            mid = 0.5 * (lo + hi)
+            total = occupation_of((e - mid) / width, family).sum()
+            if float(total) > n_electrons:
+                hi = mid
+            else:
+                lo = mid
+            if hi - lo < tol:
+                break
+        return 0.5 * (lo + hi)
+
+
+
+def use_smearing(family: str = SMEARING_FAMILY, width: float = SMEARING_WIDTH):
+    """Select the smearing family process-wide and return the previous setting.
+
+    A module-level switch rather than an argument threaded through eight call sites: the
+    family must be the SAME everywhere in one forward -- the fill, the entropy and the
+    density-response backward are three views of one convention, and a call site that missed
+    the argument would silently mix Gaussian occupations with a Fermi-Dirac backward.
+    Restoring the previous value is the caller's job; `smearing()` reads it.
+    """
+    global _FAMILY, _WIDTH
+    previous = (_FAMILY, _WIDTH)
+    if family not in ("gaussian", "fermi"):
+        raise ValueError(f"unknown smearing family {family!r}")
+    _FAMILY, _WIDTH = family, float(width)
+    return previous
+
+
+def smearing():
+    """The live `(family, width)`."""
+    return _FAMILY, _WIDTH
+
+
 def resolve_fills(n_total: int, counts: Sequence[int], occupation=None):
     """`((N_maj, N_min), (N_maj_ref, N_min_ref))` -- the fill, and the neutral origin.
 
@@ -155,21 +263,9 @@ def fermi_fill(eps: torch.Tensor, n_electrons: float, t_el: float = T_EL,
     derivative does not contain it (Hellmann-Feynman at fixed N), so detaching is exact rather
     than approximate -- see the module docstring.
     """
-    with torch.no_grad():
-        e = eps.detach()
-        lo = float(e.min()) - 50.0 * t_el - 1.0
-        hi = float(e.max()) + 50.0 * t_el + 1.0
-        for _ in range(max_iter):
-            mid = 0.5 * (lo + hi)
-            total = torch.sigmoid(-(e - mid) / t_el).sum()
-            if float(total) > n_electrons:
-                hi = mid
-            else:
-                lo = mid
-            if hi - lo < tol:
-                break
-        mu = 0.5 * (lo + hi)
-    return torch.sigmoid(-(eps - mu) / t_el)
+    family = _FAMILY
+    mu = find_mu(eps, n_electrons, t_el, family, tol=tol, max_iter=max_iter)
+    return occupation_of((eps - mu) / t_el, family)
 
 
 def free_energy(eps: torch.Tensor, n_electrons: float, t_el: float = T_EL) -> torch.Tensor:
@@ -187,8 +283,11 @@ def free_energy(eps: torch.Tensor, n_electrons: float, t_el: float = T_EL) -> to
     so that test passed while the identity was wrong for every real spectrum.
     """
     f = fermi_fill(eps, n_electrons, t_el).detach()
-    fc = f.clamp(1e-12, 1.0 - 1e-12)
-    entropy = -(fc * fc.log() + (1.0 - fc) * (1.0 - fc).log()).sum()
+    mu = find_mu(eps, n_electrons, t_el, _FAMILY)
+    # The LIVE family's entropy: Methfessel-Paxton exp(-x^2)/(2 sqrt(pi)) under Gaussian
+    # smearing, Shannon under Fermi-Dirac. Both make F variational in the occupations, which
+    # is what the Hellmann-Feynman force argument needs.
+    entropy = entropy_of((eps.detach() - mu) / t_el, _FAMILY).sum()
     return (f * eps).sum() - t_el * entropy
 
 
@@ -633,8 +732,8 @@ def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
     def piece(n_electrons):
         f = fermi_fill(lam_d, n_electrons, t_el)
         p = density_matrix(psi_d, f)
-        fc = f.clamp(1e-12, 1.0 - 1e-12)
-        entropy = -(fc * fc.log() + (1.0 - fc) * (1.0 - fc).log()).sum()
+        mu = find_mu(lam_d, n_electrons, t_el, _FAMILY)
+        entropy = entropy_of((lam_d - mu) / t_el, _FAMILY).sum()
         return (p * H).sum() - t_el * entropy, p, f
 
     e_maj, p_maj, f_maj = piece(n_maj)
@@ -721,6 +820,7 @@ class _FermiDensityMatrix(torch.autograd.Function):
         lam, U = torch.linalg.eigh(H.double())
         f = fermi_fill(lam, float(n_electrons), float(t_el))
         P = (U * f.unsqueeze(0)) @ U.transpose(-1, -2)
+        ctx.mu = find_mu(lam, float(n_electrons), float(t_el), _FAMILY)
         ctx.save_for_backward(lam, U, f)
         ctx.t_el = float(t_el)
         ctx.tol = float(degeneracy_tol)
@@ -730,29 +830,39 @@ class _FermiDensityMatrix(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_P):
         lam, U, f = ctx.saved_tensors
-        dH = _dk_backward(lam, U, f, ctx.t_el, ctx.tol, grad_P.double())
+        dH = _dk_backward(lam, U, f, ctx.t_el, ctx.tol, grad_P.double(), ctx.mu)
         return dH.to(ctx.in_dtype), None, None, None
 
 
 def _dk_eigenbasis(lam: torch.Tensor, f: torch.Tensor, t_el: float, tol: float,
-                   Ghat: torch.Tensor) -> torch.Tensor:
+                   Ghat: torch.Tensor, mu=None) -> torch.Tensor:
     """One fill's Daleckii-Krein map, already in the eigenbasis: `Ghat` in, `M` out.
 
     Split from the basis round trip because the multi-fill Function applies FOUR of these to
     ONE `Ghat` and returns one `U M U^T`. Rotating in and out per fill instead costs three
     extra 636x636 float64 GEMMs each, which measured as a quarter of the wiring's overhead.
     """
-    fp = -f * (1.0 - f) / t_el                      # f'(lam), bounded by 1/(4 T)
+    # `mu` COMES FROM THE FORWARD, it is not re-derived here. Recovering it by inverting the
+    # occupations needs states with a fractional filling, and under Gaussian smearing there
+    # may be none: erfc/2 drops below 1e-6 within 3.5 widths, so a spectrum whose frontier
+    # sits in a gap has every f at exactly 0 or 1 and the inversion has nothing to work with.
+    # The fallback that used to cover that case returned the spectrum's MEDIAN, which is not
+    # mu at all -- it put f' at the wrong energy and the degenerate-limit finite-difference
+    # check failed by a factor of 16.
+    if mu is None:
+        mu = _mu_from(lam, f, t_el)
+    fp = occupation_slope((lam - mu) / t_el, t_el, _FAMILY)   # f'(lam); bounded
     dl = lam.unsqueeze(-1) - lam.unsqueeze(-2)
     df = f.unsqueeze(-1) - f.unsqueeze(-2)
     near = dl.abs() <= tol
     # The divided difference away from coincidence, its limit at it. `torch.where` alone
     # would still evaluate the singular branch and poison the gradient with NaN, so the
-    # denominator is made safe BEFORE the division.
+    # denominator is made safe BEFORE the division. The limit is the family's own slope --
+    # bounded by 1/(sigma sqrt(pi)) Gaussian, 1/(4 T) Fermi-Dirac -- so degeneracy is finite
+    # under both.
     safe = torch.where(near, torch.ones_like(dl), dl)
     mid = 0.5 * (lam.unsqueeze(-1) + lam.unsqueeze(-2))
-    fmid = torch.sigmoid(-(mid - _mu_from(lam, f, t_el)) / t_el)
-    L = torch.where(near, -fmid * (1.0 - fmid) / t_el, df / safe)
+    L = torch.where(near, occupation_slope((mid - mu) / t_el, t_el, _FAMILY), df / safe)
 
     M = L * Ghat
     denom = fp.sum(-1)
@@ -763,12 +873,12 @@ def _dk_eigenbasis(lam: torch.Tensor, f: torch.Tensor, t_el: float, tol: float,
 
 
 def _dk_backward(lam: torch.Tensor, U: torch.Tensor, f: torch.Tensor, t_el: float,
-                 tol: float, G: torch.Tensor) -> torch.Tensor:
+                 tol: float, G: torch.Tensor, mu=None) -> torch.Tensor:
     """One fill's Daleckii-Krein pullback: a cotangent on `P` becomes one on `H`."""
     # H is symmetric, so only the symmetric part of the cotangent can act on it.
     G = 0.5 * (G + G.transpose(-1, -2))
     Ghat = U.transpose(-1, -2) @ G @ U
-    return U @ _dk_eigenbasis(lam, f, t_el, tol, Ghat) @ U.transpose(-1, -2)
+    return U @ _dk_eigenbasis(lam, f, t_el, tol, Ghat, mu) @ U.transpose(-1, -2)
 
 
 class _FermiDensitySum(torch.autograd.Function):
@@ -791,11 +901,12 @@ class _FermiDensitySum(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, H, lam, U, occ, signs, t_el, degeneracy_tol):
+    def forward(ctx, H, lam, U, occ, signs, t_el, degeneracy_tol, mus=None):
         sgn = torch.tensor(signs, dtype=occ.dtype, device=occ.device)
         weighted = (occ * sgn.unsqueeze(-1)).sum(0)
         acc = (U * weighted.unsqueeze(-2)) @ U.transpose(-1, -2)
         ctx.save_for_backward(lam, U, occ)
+        ctx.mus = tuple(mus) if mus is not None else (None,) * len(signs)
         ctx.signs = tuple(float(s) for s in signs)
         ctx.t_el = float(t_el)
         ctx.tol = float(degeneracy_tol)
@@ -809,11 +920,11 @@ class _FermiDensitySum(torch.autograd.Function):
         G = 0.5 * (G + G.transpose(-1, -2))
         Ghat = U.transpose(-1, -2) @ G @ U
         M = None
-        for sign, f in zip(ctx.signs, occ):
-            term = sign * _dk_eigenbasis(lam, f, ctx.t_el, ctx.tol, Ghat)
+        for sign, f, mu in zip(ctx.signs, occ, ctx.mus):
+            term = sign * _dk_eigenbasis(lam, f, ctx.t_el, ctx.tol, Ghat, mu)
             M = term if M is None else M + term
         dH = U @ M @ U.transpose(-1, -2)
-        return dH.to(ctx.in_dtype), None, None, None, None, None, None
+        return dH.to(ctx.in_dtype), None, None, None, None, None, None, None
 
 
 def _mu_from(lam: torch.Tensor, f: torch.Tensor, t_el: float) -> torch.Tensor:
@@ -826,8 +937,12 @@ def _mu_from(lam: torch.Tensor, f: torch.Tensor, t_el: float) -> torch.Tensor:
     interior = (f > 1e-6) & (f < 1.0 - 1e-6)
     if not bool(interior.any()):
         return lam.median()
-    x = lam[interior] + t_el * torch.log(f[interior] / (1.0 - f[interior]))
-    return x.median()
+    if _FAMILY == "gaussian":
+        # `f = erfc(x)/2` inverts as `x = erfinv(1 - 2f)`, so `mu = lam - width * x`.
+        x = torch.erfinv((1.0 - 2.0 * f[interior]).clamp(-1 + 1e-12, 1 - 1e-12))
+        return (lam[interior] - t_el * x).median()
+    return (lam[interior] + t_el * torch.log(
+        f[interior] / (1.0 - f[interior]))).median()
 
 
 def fermi_density_matrix(H: torch.Tensor, n_electrons: float, t_el: float = T_EL,
@@ -848,8 +963,13 @@ def fermi_density_difference(H: torch.Tensor, fills: Sequence[float],
     lam, u = torch.linalg.eigh(H.double()) if spectrum is None else spectrum
     if occupations is None:
         occupations = torch.stack([fermi_fill(lam, float(n), float(t_el)) for n in fills])
+    # One `mu` per fill, from the same bisection that made the occupations. Passed forward so
+    # the backward never has to invert `f` -- which is impossible when every state is fully
+    # occupied or fully empty, the ordinary case for a gapped spectrum under Gaussian
+    # smearing.
+    mus = tuple(find_mu(lam, float(n), float(t_el), _FAMILY) for n in fills)
     return _FermiDensitySum.apply(H, lam, u, occupations, tuple(signs), t_el,
-                                  degeneracy_tol)
+                                  degeneracy_tol, mus)
 
 
 # Harrison solid-state-table atomic term values, eV, by atomic number: (eps_s, eps_p).

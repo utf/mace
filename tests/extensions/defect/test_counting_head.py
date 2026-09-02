@@ -952,3 +952,102 @@ class TestChangedLevelIndex:
     def test_a_stated_occupation_is_honoured(self):
         from mace.modules.defect_counting import changed_level_index
         assert changed_level_index(20, (0, 0, 0, 0), occupation=(12.0, 8.0)) == 11
+
+
+class TestSmearingFamilies:
+    """Gaussian sigma = 0.05 eV is now the default, matching the labels' own convention.
+
+    The defect calculations were set up through doped, whose default electronic smearing is
+    Gaussian with SIGMA = 0.05 eV (ISMEAR = 0). The previous T_el = 25 meV was a k_B * 300 K
+    coincidence with no connection to the labels. Fermi-Dirac stays implemented because
+    "the answer does not depend on the smearing" needs a second family to test.
+    """
+
+    @staticmethod
+    def spectrum(n=40, seed=4):
+        g = torch.Generator().manual_seed(seed)
+        return torch.sort(torch.randn(n, generator=g).double() * 3.0).values
+
+    def test_the_default_is_the_labels_convention(self):
+        from mace.modules.defect_counting import smearing
+        assert smearing() == ("gaussian", 0.05)
+
+    def test_the_occupation_is_erfc_over_two(self):
+        from mace.modules.defect_counting import occupation_of
+        x = torch.linspace(-4, 4, 9).double()
+        assert torch.allclose(occupation_of(x, "gaussian"), 0.5 * torch.erfc(x))
+        # Monotone, and the two limits, which no formula error survives.
+        assert float(occupation_of(torch.tensor([-6.0]).double(), "gaussian")) > 1 - 1e-8
+        assert float(occupation_of(torch.tensor([6.0]).double(), "gaussian")) < 1e-8
+
+    def test_the_slope_is_the_derivative_of_the_occupation(self):
+        """Finite differences against the analytic slope, both families. The slope IS the
+        Daleckii-Krein limit at coincidence, so an error here is an error in every density
+        response at a degeneracy."""
+        from mace.modules.defect_counting import occupation_of, occupation_slope
+        for family in ("gaussian", "fermi"):
+            w, h = 0.05, 1e-6
+            eps = torch.linspace(-0.3, 0.3, 13).double()
+            fd = (occupation_of((eps + h) / w, family)
+                  - occupation_of((eps - h) / w, family)) / (2 * h)
+            assert torch.allclose(fd, occupation_slope(eps / w, w, family), atol=1e-6)
+
+    def test_the_gaussian_slope_is_bounded_by_one_over_sigma_root_pi(self):
+        """The bound that keeps the response backward finite at exact degeneracy."""
+        import math
+        from mace.modules.defect_counting import occupation_slope
+        w = 0.05
+        x = torch.linspace(-10, 10, 2001).double()
+        assert float(occupation_slope(x, w, "gaussian").abs().max()) <= \
+            1.0 / (w * math.sqrt(math.pi)) + 1e-12
+
+    def test_the_fill_hits_the_electron_count_under_both_families(self):
+        from mace.modules.defect_counting import fermi_fill, use_smearing
+        lam = self.spectrum()
+        for family in ("gaussian", "fermi"):
+            previous = use_smearing(family, 0.05)
+            try:
+                assert float(fermi_fill(lam, 17.0, 0.05).sum()) == pytest.approx(17.0,
+                                                                                abs=1e-8)
+            finally:
+                use_smearing(*previous)
+
+    def test_the_two_families_agree_near_an_edge(self):
+        """F2's premise: Gaussian sigma = 0.05 and Fermi-Dirac 25 meV are tail-equivalent, so
+        the head has been accidentally close to the labels' convention all along. Compared on
+        the OCCUPATION of a gapped spectrum, which is what the energy actually sees."""
+        from mace.modules.defect_counting import fermi_fill, use_smearing
+        lam = torch.cat([torch.linspace(-3.0, -0.6, 20),
+                         torch.linspace(1.8, 4.0, 20)]).double()
+        fills = {}
+        for family, width in (("gaussian", 0.05), ("fermi", 0.025)):
+            previous = use_smearing(family, width)
+            try:
+                fills[family] = fermi_fill(lam, 20.0, width)
+            finally:
+                use_smearing(*previous)
+        assert torch.allclose(fills["gaussian"], fills["fermi"], atol=1e-6)
+
+    def test_the_free_energy_is_stationary_in_the_fill(self):
+        """`dF/deps_k = f_k` under BOTH families -- the identity the Hellmann-Feynman force
+        argument rests on. It is the entropy term that makes it true, so a wrong entropy for
+        a family shows up here and nowhere else."""
+        from mace.modules.defect_counting import fermi_fill, free_energy, use_smearing
+        for family, width in (("gaussian", 0.05), ("fermi", 0.025)):
+            previous = use_smearing(family, width)
+            try:
+                lam = self.spectrum(seed=7).requires_grad_(True)
+                f = fermi_fill(lam.detach(), 17.0, width)
+                free_energy(lam, 17.0, width).backward()
+                assert torch.allclose(lam.grad, f, atol=1e-8), (
+                    f"{family}: dF/deps departs from f by "
+                    f"{float((lam.grad - f).abs().max()):.2e}")
+            finally:
+                use_smearing(*previous)
+
+    def test_an_unknown_family_is_refused(self):
+        from mace.modules.defect_counting import occupation_of, use_smearing
+        with pytest.raises(ValueError, match="unknown smearing family"):
+            occupation_of(torch.zeros(3), "cold")
+        with pytest.raises(ValueError, match="unknown smearing family"):
+            use_smearing("cold", 0.05)
