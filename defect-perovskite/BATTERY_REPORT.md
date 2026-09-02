@@ -33,6 +33,25 @@ which exists to prove the trainer's call sites fire.
 before." That reading is wrong. The move is +2.103 eV of rigid spectrum offset; the depth
 below the conduction manifold changed by −0.025 eV. Nothing physical happened. See F9.
 
+### The record carried into this cycle, verbatim
+
+- b7's null is scoped: it varied the global envelope at initialisation, where the environment
+  modulation ≡ 1; the defect-local lever was never exercised. The modulation ceiling (within
+  2% of bound on 33% of hub bonds, b3) is the one mechanism that raises hub coupling without
+  inflating bandwidth. §1 resolves it before the joint run because §2's leakage risk is
+  maximal for a head at its stop.
+- Adoption-rule rationale, verbatim: "M1b removed" alone is passable by leakage — a base that
+  removes the +0.36 artefact by absorbing the carrier passes it. The detector is the
+  null-cleared −0.134 staying put.
+- Zero-init of the on-site correction output at joint-run start (removes b4's +0.27 eV gauge;
+  final layer of h_θ to zero; one test). Centred correction stays at R3.
+- Standing-rule addition: any ratio-of-spread criterion registers an absolute floor (F10's
+  lesson).
+
+All four were executed. The first is what b9 measures; the second is criterion 1; the third
+fired on every joint seed (`|W_site| 0.00000`, `b_site +0.00000` at epoch 0); the fourth is why
+F10 carries a 50 meV floor beside its 2σ test.
+
 **Third correction, to §0's own γ-independence note.** It is sound about a fixed pre-tanh
 value and does not apply here: the widened cohort are fresh builds trained from scratch, not
 the γ = 1 models re-evaluated. Their Cl pre-tanh is +0.001, not −3.6. F8 was near-certain only
