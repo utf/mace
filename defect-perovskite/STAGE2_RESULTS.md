@@ -45,6 +45,20 @@ training rather than running away. The Stage-1 runaway was an interaction with t
 on-site term, not a property of `Z` itself — so the amendment proposed after Stage 1 matters
 much less than it appeared to, and we would not now press for it.
 
+## Two readouts that survive Stage 2, and one that does not
+
+**The λ–d turnover strengthens.** Under bounded elements `corr(λ, d_hub)` is **+0.439,
+positive in 10 of 10** measurable cells (learned `Z`) and +0.313, 8/10 (nominal). Stage 1 was
++0.422 in 5/6. So the physical direction is not an artefact of the escape route — it holds,
+and holds more uniformly, precisely where the escape route is closed.
+
+**The D-1 standing diagnostic stays null**, as it was on the archived cohort: ratio 1.06,
+rank ratio 0.89. Bounded elements did not concentrate `∂H/∂R` near the defect either.
+
+**The φ-binned gap grows**, 1.2 → 3.5 meV/Å (nominal `Z`). That tracks the overall fit
+getting worse rather than saying anything separate about electrostatics, and it is reported
+because the gate is defined on it.
+
 ## What Stage 1 was actually doing
 
 The learned per-species decay lengths in the Stage-1 heads, against the plan's own

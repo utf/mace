@@ -137,6 +137,11 @@ comparison are all between arms trained under identical conditions, with the esc
 equally available to each. It retracts reading Stage 1's absolute axial_red as evidence that
 the head had found physical structure.
 
+**The λ–d turnover survives, and strengthens.** Under bounded elements `corr(λ, d_hub)` is
+**+0.439, positive in 10 of 10** measurable cells, against Stage 1's +0.422 in 5/6. So the
+physical direction is not a by-product of the escape route — it holds most uniformly exactly
+where the route is closed. D-1 stays null here too (ratio 1.06).
+
 **It also withdraws our own `Z` amendment.** Under bounded elements, learned and nominal `Z`
 are indistinguishable (+0.142 vs +0.170) and `Z` shrinks rather than running away. The
 Stage-1 runaway was an interaction with the unbounded on-site term. We would not now press
