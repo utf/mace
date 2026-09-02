@@ -217,6 +217,12 @@ def make_atoms(counts, seed=0, rattle=0.1, cell_size=6.0):
         atoms.positions += rng.normal(scale=rattle, size=atoms.positions.shape)
     atoms.info["REF_energy"] = 0.0
     atoms.info["carrier_counts"] = np.asarray(counts, dtype=int)
+    # Multiplicity is REQUIRED for every spin-polarised frame -- the guard that catches the
+    # 4H-SiC labelling class, where a triplet ground state written as n = 0 had nothing to
+    # contradict it. These fixtures predate that guard and were failing on it, which left
+    # the whole long-range branch untested. M_s = 2 S_z, so multiplicity = |M_s| + 1.
+    m_s = int((counts[0] - counts[2]) - (counts[1] - counts[3]))
+    atoms.info["multiplicity"] = abs(m_s) + 1
     atoms.info["e_cbm_cell"] = -3.2
     atoms.info["e_vbm_cell"] = -6.85
     atoms.arrays["REF_forces"] = np.zeros((len(atoms), 3))
@@ -228,6 +234,7 @@ def make_batch(atoms_list):
         info_keys={
             "energy": "REF_energy",
             "carrier_counts": "carrier_counts",
+            "multiplicity": "multiplicity",
             "e_cbm_cell": "e_cbm_cell",
             "e_vbm_cell": "e_vbm_cell",
         },
@@ -288,6 +295,11 @@ class TestStructuredCharges:
             charged = atoms.copy()
             charged.info = dict(atoms.info)
             charged.info["carrier_counts"] = np.asarray(counts, dtype=int)
+            # Multiplicity travels WITH the counts. Copying it from the neutral frame and
+            # overriding only the counts is the labelling error the guard exists to catch,
+            # reproduced in a test fixture.
+            m_s = int((counts[0] - counts[2]) - (counts[1] - counts[3]))
+            charged.info["multiplicity"] = abs(m_s) + 1
             charged.arrays["REF_forces"] = np.zeros((len(charged), 3))
             out = run(model, [charged])
             assert out["screening_amplitude"].shape == (1,)

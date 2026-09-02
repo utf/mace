@@ -104,8 +104,45 @@ def build(arch_path, base_path, seed, device, stage, madelung, eps_inf, t_ref, l
     return model
 
 
+def pristine_spectrum_check(model, pristine_batches, log):
+    """Stage 2's gate: on a DEFECT-FREE cell the spectrum must be bands, not a superatom.
+
+    A perfect crystal has no bound state, so its lowest level must sit among the others --
+    `(lam_2 - lam_1)` of order the level spacing, small against the bandwidth. The superatom
+    failure is the opposite: one in-phase mode over the whole cell, split far below
+    everything else. E2 measured exactly that at a 10 A reach, so it is a real available
+    minimum and not a hypothetical.
+
+    Reported as `split_fraction = (lam_2 - lam_1) / (lam_max - lam_1)`. Near zero is bands.
+    """
+    from ta_band_edge import capture as _capture
+
+    fracs, gaps = [], []
+    for batch, frames in pristine_batches:
+        internals, _ = _capture(model, batch)
+        lam = internals["lam"]
+        for g in range(lam.shape[0]):
+            for c in range(lam.shape[1]):
+                v = lam[g, c]
+                v = torch.sort(v[v < 500.0]).values
+                if v.numel() < 3:
+                    continue
+                span = float(v[-1] - v[0])
+                if span <= 1e-9:
+                    continue
+                fracs.append(float(v[1] - v[0]) / span)
+                gaps.append(float(v[1] - v[0]))
+    if not fracs:
+        return dict(split_fraction=float("nan"), pristine_gap=float("nan"))
+    out = dict(split_fraction=float(np.mean(fracs)), pristine_gap=float(np.mean(gaps)))
+    log(f"      pristine spectrum: split fraction {out['split_fraction']:.4f}, "
+        f"lam2-lam1 {out['pristine_gap']:.4f} eV "
+        f"({'BANDS' if out['split_fraction'] < 0.2 else 'SUPERATOM RISK'})")
+    return out
+
+
 def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, lr,
-             stage, madelung, eps_inf, t_ref, log):
+             stage, madelung, eps_inf, t_ref, log, pristine_batches=None):
     model = build(arch_path, base_path, seed, device, stage, madelung, eps_inf, t_ref, log)
     ctx = ForwardContext.production(model, device=device, eps_inf=eps_inf,
                                     stage=stage, madelung=bool(madelung), seed=seed)
