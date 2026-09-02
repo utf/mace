@@ -832,6 +832,36 @@ def run(args) -> None:
     loss_fn = get_loss_fn(args, dipole_only, args.compute_dipole)
     args.avg_num_neighbors = get_avg_num_neighbors(head_configs, args, train_loader, device)
 
+    # COUNT NEIGHBOURS AT r_max, NOT AT THE GRAPH CUTOFF. `avg_num_neighbors` divides every
+    # message in the trunk, and the trunk's messages only run over edges inside `r_max`. With
+    # the carrier head the loader builds its graph at the CARRIER cutoff instead -- 10 A here
+    # against r_max 5.0 -- so the count comes back about eight times too large and every
+    # message is divided by eight times too much.
+    #
+    # Measured, not estimated: the Stage-A base was trained without the head and has 14.08; a
+    # run with the head on the same data computes 112.5. For a Stage-B run
+    # `load_stage_a_base` now repairs this by inheriting the checkpoint's value, but a
+    # from-scratch arm has no checkpoint to inherit from -- so without this the staging
+    # control would differ from the staged arm in trunk normalisation, which has nothing to do
+    # with staging. Rescaling by the edge-count ratio keeps one number and one code path.
+    if (getattr(args, "defect_spectral_head", False)
+            and float(graph_cutoff(args)) > float(args.r_max)
+            and all(h.compute_avg_num_neighbors for h in head_configs)):
+        from mace.modules.defect_reach import count_edges_within
+
+        wide, narrow = count_edges_within(next(iter(train_loader)), float(args.r_max))
+        if wide > 0:
+            ratio = float(narrow) / float(wide)
+            rescaled = float(args.avg_num_neighbors) * ratio
+            logging.warning(
+                "avg_num_neighbors was computed on the %.1f A carrier graph (%.2f); the "
+                "trunk only passes messages inside r_max = %.1f A, so it is rescaled by the "
+                "edge-count ratio %.4f to %.2f. Dividing every message by the carrier-graph "
+                "count would be about %.1fx too much.",
+                float(graph_cutoff(args)), float(args.avg_num_neighbors),
+                float(args.r_max), ratio, rescaled, 1.0 / max(ratio, 1e-9))
+            args.avg_num_neighbors = rescaled
+
     # Model
     model, output_args = configure_model(args, train_loader, atomic_energies, model_foundation, heads, z_table, head_configs)
     model.to(device)

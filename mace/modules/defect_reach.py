@@ -26,7 +26,7 @@ from typing import Dict, Optional
 
 import torch
 
-__all__ = ["reach_report", "assert_carrier_reach"]
+__all__ = ["reach_report", "assert_carrier_reach", "count_edges_within"]
 
 
 def _edge_lengths(batch) -> Optional[torch.Tensor]:
@@ -42,6 +42,23 @@ def _edge_lengths(batch) -> Optional[torch.Tensor]:
     if shifts is not None and shifts.numel() == vec.numel():
         vec = vec + shifts
     return torch.linalg.norm(vec, dim=-1).detach()
+
+
+def count_edges_within(batch, r_max: float):
+    """`(total_edges, edges_inside r_max)` for one batch. Both counts, so the caller divides.
+
+    WHY IT IS NEEDED. `avg_num_neighbors` divides every message in the trunk, and the trunk's
+    messages only run over edges inside `r_max`. With a carrier head the loader builds its
+    graph at the CARRIER cutoff instead, so a neighbour count taken off that graph counts
+    edges the trunk never uses -- 10 A against r_max 5.0 gives roughly eight times too many
+    here. The ratio of the two counts is the correction, and it is measured on the same batch
+    the loader produced rather than assumed from a volume argument, because the graph is
+    built per frame with periodic images and a `(10/5)^3` estimate is not the same number.
+    """
+    lengths = _edge_lengths(batch)
+    if lengths is None or lengths.numel() == 0:
+        return 0, 0
+    return int(lengths.numel()), int((lengths <= float(r_max)).sum())
 
 
 def reach_report(batch, r_max: float, cutoff: float,

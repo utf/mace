@@ -91,7 +91,11 @@ want = [round(float(b.avg_num_neighbors), 4) for b in stage_a.interactions]
 m2 = MACEDefect(**cfg)
 for blk, v in zip(m2.interactions, [112.5] * len(want)):
     blk.avg_num_neighbors = v          # the wrong value a real run would have computed
-load_stage_a_base(m2, base_path, device="cpu")
+# strict=False: this probe builds from the ARCH's config, whose `gauge_counters`
+# buffer has a different shape from the Stage-A base's. The real run builds from
+# args and does its own strict load; all this probe asks is whether the trunk
+# normalisation is carried across.
+load_stage_a_base(m2, base_path, device="cpu", strict=False)
 got = [round(float(b.avg_num_neighbors), 4) for b in m2.interactions]
 print(f"  avg_num_neighbors: Stage A {want}, after load {got}")
 ok = ok and (got == want)
