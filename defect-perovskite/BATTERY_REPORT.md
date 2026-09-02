@@ -604,6 +604,31 @@ production-base number is printed beside it, because a joint model is scored aga
 base and that is the like-for-like comparison. On a strict reading the pre-joint model already
 fails criterion 2, which is better known before the joint numbers arrive than after.
 
+### How the result will be read, decided before it exists
+
+F13 is withdrawn: it was conditional on F12, which failed. That leaves **F14** as the live
+forecast, and under the current bound its clause predicts **leakage** — the 159-atom charged
+residual slope shrinking below 0.10 in magnitude. So the two outcomes are both clean, and both
+are written down here rather than chosen afterwards:
+
+- **Criterion 1 fails** (slope shrinks toward −0.06): **F14 confirmed**, and the run is *not
+  adopted* — the base removed M1b's artefact by absorbing the carrier. That is a real result
+  about the joint objective, not a failed experiment, and it says the correction and the base
+  are competing for the same signal at these weights.
+- **Criterion 1 holds** (slope stays within −0.1446…−0.1230): **F14 fails**, adoption is live,
+  and the remaining criteria decide it.
+
+**Criterion 2 is scored against both references, and the composite flag is not the verdict.**
+The registered threshold is b1's out-of-fold `+0.0800`; the like-for-like number, measured
+against the production base a Stage-A model starts from, is `+0.0968`. The pre-joint model
+already fails the registered reading. So the per-criterion table is the result and the boolean
+`adopted` is a summary of it — a technicality on criterion 2 must not be allowed to masquerade
+as a verdict on criterion 1.
+
+**Both arms are reported side by side.** A from-scratch control that leaks while the Stage-A
+arm does not — or the reverse — is a result about *staging*, and will be labelled as one rather
+than folded into a single adoption number.
+
 ### JOINT_RUN_RESULTS_PLACEHOLDER
 
 ---
