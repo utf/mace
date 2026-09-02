@@ -261,6 +261,50 @@ def _parse_literal_or_none(value):
     return value
 
 
+def _defect_madelung_kwargs(args) -> dict:
+    """The Edit 1 / Edit 4 flags, parsed once for both MACEDefect construction sites.
+
+    One function because the two sites drifted apart before: the foundation branch silently
+    lacked a flag the scratch branch had, and a run's saved artefact then disagreed with the
+    config that produced it. `_assert_config_round_trip` is the guard, this is the cause it
+    removes.
+    """
+
+    def _floats(raw, name):
+        if raw is None:
+            return None
+        try:
+            return [float(x) for x in str(raw).replace(" ", "").split(",") if x != ""]
+        except ValueError as exc:
+            raise ValueError(f"--{name} must be comma-separated numbers, got {raw!r}") from exc
+
+    composition = _floats(getattr(args, "defect_madelung_composition", None),
+                          "defect_madelung_composition")
+    z_init = _floats(getattr(args, "defect_madelung_z_init", None),
+                     "defect_madelung_z_init")
+    on_site = bool(getattr(args, "defect_madelung_on_site", False))
+    if on_site and not composition:
+        raise ValueError(
+            "--defect_madelung_on_site needs --defect_madelung_composition: the neutrality "
+            "projection has no hyperplane without it, and Z would drift as a group")
+    if composition and z_init and len(composition) != len(z_init):
+        raise ValueError(
+            f"--defect_madelung_composition has {len(composition)} entries and "
+            f"--defect_madelung_z_init has {len(z_init)}; both are in species order")
+    counting = bool(getattr(args, "defect_counting_head", False))
+    if counting and not bool(getattr(args, "defect_spectral_head", False)):
+        raise ValueError(
+            "--defect_counting_head requires --defect_spectral_head: the counting head "
+            "replaces the spectral head and is built on that branch")
+    return dict(
+        counting_head=counting,
+        madelung_on_site=on_site,
+        madelung_eps_inf=float(getattr(args, "defect_madelung_eps_inf", 4.0)),
+        madelung_composition=composition,
+        madelung_z_init=z_init,
+    )
+
+
 def _build_model(args, model_config, model_config_foundation, heads):  # pylint: disable=too-many-return-statements
 
     if args.model == "MagneticScaleShiftMACE":
@@ -410,6 +454,7 @@ def _build_model(args, model_config, model_config_foundation, heads):  # pylint:
             host_carrier_coupling=args.host_carrier_coupling,
             carrier_self_isolated=args.carrier_self_isolated,
             lr_start_epoch=args.lr_start_epoch,
+            **_defect_madelung_kwargs(args),
         )
     if args.model == "ScaleShiftBOTNet":
         # say it is deprecated
@@ -514,6 +559,7 @@ def _build_model(args, model_config, model_config_foundation, heads):  # pylint:
             host_carrier_coupling=args.host_carrier_coupling,
             carrier_self_isolated=args.carrier_self_isolated,
             lr_start_epoch=args.lr_start_epoch,
+            **_defect_madelung_kwargs(args),
         )
     if args.model == "MACELES":
         from mace.modules.extensions import MACELES

@@ -1187,6 +1187,54 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=0.0,
     )
     parser.add_argument(
+        "--defect_counting_head",
+        help="Edit 4: the electron-counting head. Four orbitals per atom (s, px, py, pz) "
+        "with Slater-Koster angular factors; the carrier energy is the Mermin free-energy "
+        "difference between the requested fill and the neutral one, so it is identically "
+        "zero at zero counters. REPLACES the spectral head rather than sitting beside it -- "
+        "two heads would both write delta_sr and the model would double count. Requires "
+        "--defect_spectral_head",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--defect_madelung_on_site",
+        help="Edit 1: put the host Madelung potential of learnable per-species charges on "
+        "the on-site energies, eps_i = eps_local_i - phi_LR_i / eps_inf. Variational, unlike "
+        "the retired response channel: an anion vacancy raises phi at the neighbouring "
+        "cations, which lowers their electron on-site energy, which is a donor well the "
+        "eigenproblem can bind into. phi_LR is the FULL lattice sum -- only the true self "
+        "term is excluded, no self-image subtraction",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--defect_madelung_eps_inf",
+        help="High-frequency dielectric constant screening phi_LR in the on-site shift. The "
+        "carrier's own field, which the lattice has not had time to respond to. Distinct "
+        "from --eps_inf, which initialises the long-range branch",
+        type=float,
+        default=4.0,
+    )
+    parser.add_argument(
+        "--defect_madelung_composition",
+        help="Pristine stoichiometry in the model's own species order, comma-separated "
+        "(CsPbCl3 with Z-table [17, 55, 82] is '3,1,1'). A property of the training set's "
+        "formula unit, not of the defect: Z is projected onto this hyperplane after every "
+        "optimiser step, without which the species charges drift as a group",
+        type=str,
+        default=None,
+    )
+    parser.add_argument(
+        "--defect_madelung_z_init",
+        help="Initial per-species charges, comma-separated, in the same order. Nominal "
+        "charges ('-1,1,2' for CsPbCl3) rather than zeros: at Z = 0 the Madelung term is "
+        "identically absent at epoch 0 and the run has to discover the ionicity of a "
+        "rock-salt-like crystal from force residuals",
+        type=str,
+        default=None,
+    )
+    parser.add_argument(
         "--defect_base_release_epoch",
         help="Epoch at which the frozen Stage-A base is released to a slow learning rate "
         "(plan T4). 0 disables the two-timescale schedule entirely. Passing seeds settle by "

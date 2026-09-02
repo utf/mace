@@ -249,6 +249,15 @@ DEFECT_BASE_INIT="${DEFECT_BASE_INIT:-}"
 # size ladder verifies that property rather than a hinge enforcing it, and there are no
 # logits to seed.
 DEFECT_SPECTRAL_HEAD="${DEFECT_SPECTRAL_HEAD:-False}"
+# Edit 4 and Edit 1. Off by default: a run that does not ask for the counting head must
+# build exactly the model it built before these flags existed.
+DEFECT_COUNTING_HEAD="${DEFECT_COUNTING_HEAD:-false}"
+DEFECT_MADELUNG_ON_SITE="${DEFECT_MADELUNG_ON_SITE:-false}"
+DEFECT_MADELUNG_EPS_INF="${DEFECT_MADELUNG_EPS_INF:-4.0}"
+# Pristine stoichiometry and nominal charges in the model's own species order. Empty unless
+# the Madelung term is on, and the parser refuses the term without a composition.
+DEFECT_MADELUNG_COMPOSITION="${DEFECT_MADELUNG_COMPOSITION:-}"
+DEFECT_MADELUNG_Z_INIT="${DEFECT_MADELUNG_Z_INIT:-}"
 DEFECT_SPECTRAL_DECAY="${DEFECT_SPECTRAL_DECAY:-False}"
 DEFECT_SPECTRAL_FIRST_SHELL="${DEFECT_SPECTRAL_FIRST_SHELL:-False}"
 DEFECT_SPECTRAL_SIGMA="${DEFECT_SPECTRAL_SIGMA:-False}"
@@ -386,6 +395,11 @@ python -m mace.cli.run_train \
     --defect_zero_u_init="${DEFECT_ZERO_U_INIT}" \
     ${DEFECT_BASE_INIT:+--defect_base_init="${DEFECT_BASE_INIT}"} \
     --defect_spectral_head="${DEFECT_SPECTRAL_HEAD}" \
+    --defect_counting_head="${DEFECT_COUNTING_HEAD}" \
+    --defect_madelung_on_site="${DEFECT_MADELUNG_ON_SITE}" \
+    --defect_madelung_eps_inf="${DEFECT_MADELUNG_EPS_INF}" \
+    --defect_madelung_composition="${DEFECT_MADELUNG_COMPOSITION}" \
+    --defect_madelung_z_init="${DEFECT_MADELUNG_Z_INIT}" \
     --defect_spectral_r_cut="${DEFECT_SPECTRAL_R_CUT}" \
     --defect_size_ema="${DEFECT_SIZE_EMA}" \
     --defect_totals_detach_base="${DEFECT_TOTALS_DETACH_BASE}" \

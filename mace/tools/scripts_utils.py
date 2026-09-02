@@ -411,9 +411,16 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         # parameters entirely, so the load would drop the Hamiltonian and silently restore
         # the softmax the arm exists to replace.
         config["spectral_head"] = bool(getattr(model, "spectral_head", False))
+        # getattr on the HEAD, not plain access: the counting head wears the SpectralOutput
+        # interface but has no `smearing` and no `t_min` -- it is a Fermi fill at `t_el`, not
+        # a Gaussian broadening of six states. Plain access raised AttributeError and made a
+        # Stage-3 model impossible to round-trip through this extractor at all, which is to
+        # say impossible to save and reload through the production path. Found by the
+        # section-3 bit-identity gate on its first run.
         if getattr(model, "spectral", None) is not None:
-            config["spectral_num_states"] = int(model.spectral.num_states)
-            config["spectral_smearing"] = float(model.spectral.smearing)
+            config["spectral_num_states"] = int(getattr(model.spectral, "num_states", 6))
+            config["spectral_smearing"] = float(
+                getattr(model.spectral, "smearing", 0.020))
         # Explicit, not recomputed from the default: a converted model must keep the range it
         # was trained with even if the default changes, and the trunk filter keys off it.
         config["spectral_r_cut"] = float(getattr(model, "spectral_r_cut", 0.0))
@@ -449,8 +456,13 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         if getattr(model, "madelung", None) is not None:
             config["madelung_composition"] = [
                 float(x) for x in model.madelung.composition]
+            # The LEARNED charges, not the nominal initialisation. Rebuilding with z_init
+            # unset would restore Z = 0 and then the state-dict load would have to carry it;
+            # it does, but a config that describes a different starting model than the one
+            # saved is precisely the drift this extractor keeps being caught by.
+            config["madelung_z_init"] = [float(x) for x in model.madelung.z.detach()]
         if getattr(model, "spectral", None) is not None:
-            config["spectral_t_min"] = float(model.spectral.t_min)
+            config["spectral_t_min"] = float(getattr(model.spectral, "t_min", 0.02))
         # A buffer, so the weight transfer would carry the values -- but only if the
         # rebuilt model allocated the same shape, and it defaults to empty. Without this
         # the converted model would either fail the state-dict load or come back with the
