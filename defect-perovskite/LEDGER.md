@@ -132,3 +132,32 @@ constant through the forward context.
 Test 2 (R_DFT ≈ 0.95); the E0 footprint; the D1 decomposition; M1 and M1b (clean subset =
 159-atom, slope −0.134 eV/Å); the F1 and F2 measurements. Per-fold bases remain available as
 optional low-priority evaluation nulls.
+
+---
+
+## Superseded decisions and qualifications, 2 Sep 2026 (recorded verbatim)
+
+**Withdrawn (ours):** the T_el warm start as the failure-to-start fix. At an atomic-limit init
+the bond order P_ij = 0 at *any* smearing, so smearing does not create the missing gradient.
+Wrong mechanism; sixth entry in the forecast-phenomenology class.
+
+**Superseded (ours):** Q2 answer (a) accept-the-detach. With the P-backward available at
+O(n³), (b)-now is strictly better and is also what E_LR needs.
+
+**Confirmed cause of the lr anomaly:** biased gradient (frozen P) + pathological random init
+(atomic limit), not a property of the counting head. lr 0.01 is the target again.
+
+**Qualification 1:** "frozen-P training cannot relocate the carrier" is overstated — each
+forward recomputes P, so relocation happens by drift, which is why Stage 3's converged seeds
+learned at all. Accurate form: relocation-from-forces is absent from the *gradient*.
+Conclusion unchanged: build the exact backward before the joint run.
+
+**Qualification 2:** in the tiling test, learned matrix elements are bit-identical; Madelung
+phi matches only to numerical tolerance across G-grids. Test accordingly or the assertion
+fails for the wrong reason.
+
+**Forecasts on record, before results.** F1: the NaN trips assertion 3 or 4 of the triage
+ladder. F2: with P-backward + Harrison init, 6/6 seeds train at lr 0.01, init gate rarely
+fires. F3: N_eff <= control at matched force fit in >= 5/6 seeds, read at matched pristine
+bandwidth. F4: counting-head dE_head slope on the 159-atom subset right sign and within 3x of
+-0.134 eV/A. F5: corr(lambda, d_hub) stays positive.
