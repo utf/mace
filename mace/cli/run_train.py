@@ -882,9 +882,26 @@ def run(args) -> None:
                 "and nothing can move the hoppings -- so the Harrison initialisation is not "
                 "optional, and its scale is a measured property of the host rather than a "
                 "constant this code is entitled to guess.")
-        defect_protocol.apply_harrison(model, model.atomic_numbers, bond_length)
+        harrison_applied = defect_protocol.apply_harrison(
+            model, model.atomic_numbers, bond_length)
         logging.info(
-            f"Stage-3 protocol: Harrison initialisation at bond length {bond_length} A")
+            f"Stage-3 protocol: Harrison initialisation at bond length {bond_length} A "
+            f"-> {'applied' if harrison_applied else 'NOT APPLIED'}")
+
+        # The on-site correction channel starts at exactly zero output when asked. What it
+        # removes is a measured global gauge -- a near-uniform +0.27 eV on every atom, which
+        # contributes no force and so is invisible to a forces-only objective. Starting from
+        # zero means whatever the joint run's energy loss puts there was put there, not
+        # inherited from a random draw and then frozen in by a flat direction.
+        if bool(getattr(args, "defect_protocol_zero_on_site", False)):
+            if defect_protocol.zero_on_site_correction(model):
+                logging.info(
+                    "Stage-3 protocol: on-site correction zero-initialised (the +0.27 eV "
+                    "uniform gauge removed at step 0)")
+            else:
+                logging.warning(
+                    "Stage-3 protocol: --defect_protocol_zero_on_site was given but no "
+                    "on-site correction layer was found; NOTHING was zeroed.")
 
         freeze_z = bool(getattr(args, "defect_protocol_freeze_z", False))
         if bool(getattr(args, "defect_protocol_head_only", False)):
@@ -1254,6 +1271,39 @@ def run(args) -> None:
                 defect_seed_hook._warmup_factor = factor
                 if epoch < warm:
                     logging.info(f"Stage-3 warmup: epoch {epoch}, lr x{factor:.3f}")
+                if epoch == start_epoch and start_epoch > 0:
+                    # Audit only, not a fix. Resuming mid-warmup starts the overlay at 1.0
+                    # while the checkpointed rate still carries the old factor, so the
+                    # remaining warmup epochs are double-scaled. Logged so a resumed run's
+                    # schedule is readable from its own log rather than inferred.
+                    logging.warning(
+                        f"Stage-3 warmup: RESUMED at epoch {start_epoch} inside the "
+                        f"{warm}-epoch warmup. The overlay restarts from 1.0 while the "
+                        f"checkpointed lr still carries the previous factor, so the "
+                        f"remaining warmup epochs are scaled twice. Audit only.")
+
+            # Gauge visibility. `c_shift` and the mean on-site correction are the two
+            # directions a forces-only objective cannot see -- both move the whole spectrum
+            # and neither changes a force -- so they are logged every epoch rather than
+            # inspected once at the end, when a drift is already baked in.
+            if protocol_on:
+                head = getattr(target, "spectral", None)
+                if head is not None:
+                    parts = [f"c_shift {float(head.c_shift):+.4f}"]
+                    site = getattr(getattr(head, "h", None), "site", None)
+                    if site is not None:
+                        last = [m for m in site.modules()
+                                if isinstance(m, torch.nn.Linear)]
+                        if last:
+                            parts.append(f"|W_site| {float(last[-1].weight.abs().mean()):.5f}")
+                            if last[-1].bias is not None:
+                                parts.append(
+                                    f"b_site {float(last[-1].bias.mean()):+.5f}")
+                    z = getattr(target, "madelung", None)
+                    if z is not None and hasattr(z, "z"):
+                        parts.append("Z " + " ".join(f"{v:+.3f}"
+                                                     for v in z.z.detach().tolist()))
+                    logging.info("Gauge: epoch %d  %s", epoch, "  ".join(parts))
 
             # The **absolute** epoch, taken from the trainer. A counter local to the loss
             # would restart at zero on every resume and silently re-serve the size-hinge
@@ -1394,14 +1444,36 @@ def run(args) -> None:
     # Two-size upweight, applied to the dataset the loss iterates. Placed here, next to the
     # reach assertion, because both are properties of the data the optimiser actually sees --
     # the class of thing this project has repeatedly got wrong by configuring somewhere else.
+    realised_shares = {}
     if float(getattr(args, "defect_two_size_upweight", 0.0) or 0.0) > 0:
         from mace.data.two_size import apply_two_size_upweight
 
         factor, share = apply_two_size_upweight(
             train_set, target_share=float(args.defect_two_size_upweight))
+        realised_shares["charged_large"] = share
         logging.info(
             f"Two-size upweight: factor {factor:.2f}, realised charged-force-loss share "
             f"{share:.1%} (target {float(args.defect_two_size_upweight):.0%})")
+
+    # The NEUTRAL large cells get the same treatment, and separately. They are the base
+    # branch's only direct constraint at large d -- the rest of the neutral set stops around
+    # 6.0 A, and above that the base extrapolates, which is the measured +0.132 eV/A error in
+    # the carrier-free 79-atom residual. In the joint run the base is no longer frozen, so
+    # this is what lets it LEARN that region instead of leaving the correction to absorb the
+    # difference, which is exactly the leakage the adoption rule tests for.
+    if float(getattr(args, "defect_neutral_size_upweight", 0.0) or 0.0) > 0:
+        from mace.data.two_size import apply_neutral_size_upweight
+
+        factor, share = apply_neutral_size_upweight(
+            train_set, target_share=float(args.defect_neutral_size_upweight))
+        realised_shares["neutral_large"] = share
+        logging.info(
+            f"Neutral two-size upweight: factor {factor:.2f}, realised neutral-force-loss "
+            f"share {share:.1%} (target "
+            f"{float(args.defect_neutral_size_upweight):.0%})")
+    if realised_shares:
+        logging.info("Realised large-cell shares: %s", json.dumps(
+            {k: round(v, 4) for k, v in realised_shares.items()}, sort_keys=True))
 
     # ------------------------------------------- Stage-3 protocol, the data-dependent half
     #
@@ -1415,23 +1487,25 @@ def run(args) -> None:
         from mace.modules.defect_counting import VALENCE
 
         init_batch = next(iter(train_loader)).to(device)
-        with torch.no_grad():
-            out0 = model(init_batch.to_dict(), training=False, compute_force=False)
-        c = defect_protocol.calibrate_c_shift(
-            out0, getattr(init_batch, "energy", None), init_batch.carrier_counts)
+        # EVERY charged frame the loader holds, in one pass -- not the first batch. `c` is the
+        # head's energy zero, set once from data, so a value that depends on which frames the
+        # shuffle put first is a run-to-run difference with no physical content. The
+        # degenerate case is worse: a first batch that happens to be all neutral skips the
+        # calibration entirely, which is what the production smoke hit on a cross-fit fold.
+        c, c_n = defect_protocol.calibrate_c_shift_over_loader(model, train_loader, device)
         if c is None:
             # NOT silently zero. Delta_n = 0 on every frame makes the ratio undefined, and a
             # 0.0 written here would be indistinguishable from a calibration that happened.
             logging.warning(
-                "Stage-3 protocol: c-shift NOT calibrated -- no frame in the first batch "
-                "carries a net carrier, so Delta_n = 0 and the ratio is undefined. The head "
-                "starts at c = 0, which is a choice this run did not make deliberately. "
-                "Raise --batch_size or shuffle so the first batch reaches a charged frame; "
-                "the protocol summary records this as c_shift_calibrated: false.")
+                "Stage-3 protocol: c-shift NOT calibrated -- NO frame in the training set "
+                "carries a net carrier, so Delta_n = 0 everywhere and the ratio is undefined. "
+                "The head starts at c = 0, which is a choice this run did not make "
+                "deliberately; the protocol summary records c_shift_calibrated: false.")
         else:
             with torch.no_grad():
                 model.spectral.c_shift.fill_(float(c))
-            logging.info(f"Stage-3 protocol: c-shift calibrated to {c:+.4f} eV")
+            logging.info(f"Stage-3 protocol: c-shift calibrated to {c:+.4f} eV over "
+                         f"{c_n} charged frames (whole training set, shuffle-independent)")
 
         # The initialisation gate, on a PRISTINE spectrum: bands, not atoms. Reported rather
         # than enforced -- a trip is a statement about the initialisation that the run's
@@ -1489,7 +1563,8 @@ def run(args) -> None:
             warmup=int(getattr(args, "defect_protocol_warmup", 5)),
             clip=float(args.clip_grad or 0.0),
             freeze_z=bool(getattr(args, "defect_protocol_freeze_z", False)),
-            model=model, c_shift=c), sort_keys=True))
+            model=model, c_shift=c, c_shift_n_frames=c_n,
+            harrison_applied=harrison_applied), sort_keys=True))
 
     # Reach assertion on the LOSS'S OWN loader, not a reimplementation of it. graph_cutoff
     # was previously verified only where it was not used, and the resulting 5 A graph -- in

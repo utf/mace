@@ -136,6 +136,15 @@ SMEARING_WIDTH = 0.05            # eV
 # `SlaterKosterH.radial` for the measurement that separates them.
 ENVELOPES = ("exp", "power")
 ENVELOPE_DEFAULT = "exp"
+# The environment modulation on each hopping integral. "linear" is Stage 3's
+# `1 + hop_range * tanh(g)`, bounded in [1 - hop_range, 1 + hop_range] and therefore
+# ASYMMETRIC in log space: at hop_range = 0.5 it can halve a bond but only add 50%. "log" is
+# `exp(beta * tanh(g))`, bounded in [exp(-beta), exp(+beta)] and symmetric, so widening does
+# not privilege weakening over strengthening. Both are exactly 1 at g = 0, so bulk-like bonds
+# are untouched by the choice and the two forms differ only where the head is straining.
+HOP_FORMS = ("linear", "log")
+HOP_FORM_DEFAULT = "linear"
+HOP_LOG_BETA_DEFAULT = math.log(3.0)      # x[1/3, 3]
 # The LIVE setting, read by every fill, every entropy and the density-response backward.
 _FAMILY = SMEARING_FAMILY
 _WIDTH = SMEARING_WIDTH
@@ -313,7 +322,9 @@ class SlaterKosterH(nn.Module):
     def __init__(self, num_elements: int, feature_dim: int, elem_dim: int = 8,
                  hidden: int = 64, d_ref: float = 2.8, decay_length: float = 1.0,
                  r_cut: float = 10.0, on_site_range: float = 1.0,
-                 hop_range: float = 0.5, envelope: str = ENVELOPE_DEFAULT) -> None:
+                 hop_range: float = 0.5, envelope: str = ENVELOPE_DEFAULT,
+                 hop_form: str = HOP_FORM_DEFAULT,
+                 hop_log_beta: float = HOP_LOG_BETA_DEFAULT) -> None:
         super().__init__()
         from mace.modules.defect_bounded import ETA_SS_SIGMA, HBAR2_OVER_M
         from mace.modules.defect_spectral import _mlp
@@ -321,6 +332,11 @@ class SlaterKosterH(nn.Module):
         if envelope not in ENVELOPES:
             raise ValueError(f"unknown radial envelope {envelope!r}; expected one of "
                              f"{sorted(ENVELOPES)}")
+        if hop_form not in HOP_FORMS:
+            raise ValueError(f"unknown hopping modulation {hop_form!r}; expected one of "
+                             f"{sorted(HOP_FORMS)}")
+        self.hop_form = str(hop_form)
+        self.hop_log_beta = float(hop_log_beta)
         self.d_ref, self.decay_length, self.r_cut = float(d_ref), float(decay_length), \
             float(r_cut)
         self.envelope = str(envelope)
@@ -385,8 +401,32 @@ class SlaterKosterH(nn.Module):
                          e_i + e_j, (e_i - e_j).abs()], dim=-1)
         pre = self.hop(sym)
         self._audit_store("hop", pre)
-        correction = 1.0 + self.hop_range * torch.tanh(pre)
+        correction = self.modulation(pre)
         return self.v0(species_i, species_j) * self.radial(r).unsqueeze(-1) * correction
+
+    def modulation(self, pre: torch.Tensor) -> torch.Tensor:
+        """The environment factor multiplying `v0 * radial`. Exactly 1 at `pre = 0`.
+
+        WHY THE SECOND FORM EXISTS, measured rather than supposed. On the vacancy-flanking
+        Pb-Pb bond the trained cohort sits AT the linear form's stop: ss-sigma pinned at the
+        lower bound, pp-sigma and pp-pi at the upper one, in every d bin. A parameter at its
+        stop has gradient `sech^2 ~ 0` -- it looks like it is learning and it is not -- and a
+        scaling what-if on that bond moves F4 from -0.061 to -0.090 while the 79-atom force
+        loss falls, so the stop is binding on something the data wants.
+
+        The linear form cannot simply be widened without breaking the bulk: `1 + b*tanh(g)`
+        with `b > 1` can drive an integral through zero and out the other side, changing the
+        SIGN of a hopping the Harrison initialisation fixed. The log form has no such branch
+        -- `exp` is positive everywhere -- and it is symmetric, so `beta = ln 3` gives
+        x[1/3, 3] rather than the linear form's lopsided [1/2, 3/2].
+
+        `getattr` on both attributes: models pickled before either existed must keep
+        evaluating, and they were all linear.
+        """
+        if getattr(self, "hop_form", HOP_FORM_DEFAULT) == "log":
+            beta = float(getattr(self, "hop_log_beta", HOP_LOG_BETA_DEFAULT))
+            return torch.exp(beta * torch.tanh(pre))
+        return 1.0 + self.hop_range * torch.tanh(pre)
 
     _audit = False
     _audit_bin: Dict[str, list] = {}
@@ -530,7 +570,9 @@ class CountingHead(nn.Module):
                  on_site_range: float = ON_SITE_RANGE_DEFAULT,
                  hop_range: float = 0.5,
                  smearing_family: str = SMEARING_FAMILY,
-                 envelope: str = ENVELOPE_DEFAULT) -> None:
+                 envelope: str = ENVELOPE_DEFAULT,
+                 hop_form: str = HOP_FORM_DEFAULT,
+                 hop_log_beta: float = HOP_LOG_BETA_DEFAULT) -> None:
         """`on_site_range` is gamma, the half-width of the bounded on-site correction.
 
         THE DEFAULT IS 3 eV, NOT 1. At gamma = 1 the audit found every chlorine in every seed
@@ -545,7 +587,8 @@ class CountingHead(nn.Module):
                                elem_dim=elem_dim, hidden=hidden, d_ref=d_ref,
                                decay_length=decay_length, r_cut=r_cut,
                                on_site_range=on_site_range, hop_range=hop_range,
-                               envelope=envelope)
+                               envelope=envelope, hop_form=hop_form,
+                               hop_log_beta=hop_log_beta)
         self.smearing_family = str(smearing_family)
         self.t_el = float(t_el)
         self.num_channels = int(num_channels)

@@ -23,19 +23,12 @@ from typing import Callable, Dict, Optional, Sequence
 import torch
 
 
-def calibrate_c_shift(out, energy_target, counts) -> Optional[float]:
-    """The uniform on-site offset `c` that removes the median energy mismatch, or None.
+def c_shift_terms(out, energy_target, counts):
+    """The per-frame ratios `(E_target - E_base - E_head) / Delta_n`, charged frames only.
 
-    `E_head` moves by `c * Delta_n` and by nothing else, so ONE scalar solves the median
-    mismatch exactly -- this is `mu_c`'s old initialisation role without `mu_c`'s per-channel
-    bookkeeping. Solved on the initialisation batch and then trained.
-
-    The MEDIAN, not the mean: a single frame whose base energy is badly extrapolated would
-    otherwise set the offset for the whole run.
-
-    Returns None when no frame in the batch carries a net carrier, because `Delta_n = 0`
-    makes the ratio undefined -- and silently returning 0.0 there would look like a
-    calibration that had happened.
+    Split out from `calibrate_c_shift` so that a calibration over MANY batches takes one
+    median over all the terms rather than a median of per-batch medians, which is a different
+    and shuffle-dependent statistic.
     """
     if energy_target is None:
         return None
@@ -46,7 +39,65 @@ def calibrate_c_shift(out, energy_target, counts) -> Optional[float]:
     if not bool(sel.any()):
         return None
     resid = energy_target - out["base_energy"] - out["delta_sr_energy"]
-    return float(torch.median(resid[sel] / delta_n[sel]))
+    return (resid[sel] / delta_n[sel]).detach().reshape(-1)
+
+
+def calibrate_c_shift(out, energy_target, counts) -> Optional[float]:
+    """The uniform on-site offset `c` that removes the median energy mismatch, or None.
+
+    `E_head` moves by `c * Delta_n` and by nothing else, so ONE scalar solves the median
+    mismatch exactly -- this is `mu_c`'s old initialisation role without `mu_c`'s per-channel
+    bookkeeping.
+
+    The MEDIAN, not the mean: a single frame whose base energy is badly extrapolated would
+    otherwise set the offset for the whole run.
+
+    Returns None when no frame carries a net carrier, because `Delta_n = 0` makes the ratio
+    undefined -- and silently returning 0.0 there would look like a calibration that had
+    happened. Prefer `calibrate_c_shift_over_loader` in a real run: a single batch makes the
+    initialisation depend on the shuffle.
+    """
+    terms = c_shift_terms(out, energy_target, counts)
+    if terms is None or terms.numel() == 0:
+        return None
+    return float(torch.median(terms))
+
+
+def calibrate_c_shift_over_loader(model, loader, device, forward=None,
+                                  max_batches: Optional[int] = None):
+    """`c` from EVERY charged frame the loader holds, in one pass. Shuffle-independent.
+
+    WHY NOT THE FIRST BATCH. `c` is the head's energy zero and it is set once, at
+    initialisation, from data -- so a value that depends on which frames the shuffle happened
+    to put first is a run-to-run difference with no physical content. Worse in the degenerate
+    case: a first batch that happens to be all neutral skips the calibration entirely, which
+    is what the production smoke hit. One pass over the loader costs one forward per batch at
+    epoch zero and removes both problems.
+
+    Returns `(c, n_frames)`; `c` is None when no charged frame was found anywhere, which is a
+    statement about the dataset and is logged by the caller rather than papered over with 0.0.
+    """
+    terms = []
+    n = 0
+    was_training = model.training
+    model.eval()
+    try:
+        for k, batch in enumerate(loader):
+            if max_batches is not None and k >= max_batches:
+                break
+            batch = batch.to(device)
+            with torch.no_grad():
+                out = (forward(batch) if forward is not None
+                       else model(batch.to_dict(), training=False, compute_force=False))
+            t = c_shift_terms(out, getattr(batch, "energy", None), batch.carrier_counts)
+            if t is not None and t.numel():
+                terms.append(t.float().cpu())
+                n += int(t.numel())
+    finally:
+        model.train(was_training)
+    if not terms:
+        return None, 0
+    return float(torch.median(torch.cat(terms))), n
 
 
 def warmup_factor(epoch: int, warmup: int = 5) -> float:
@@ -114,26 +165,44 @@ def post_step(model) -> None:
         madelung.project_()
 
 
-def apply_harrison(model, atomic_numbers: Sequence[int], bond_length: float) -> None:
+def apply_harrison(model, atomic_numbers: Sequence[int], bond_length: float) -> bool:
     """Harrison term values and universal hoppings, at the MEASURED bond length.
 
     eps0 = 0 makes every site degenerate -- the atomic limit, where the bond order vanishes
     and, on the frozen-P gradient, nothing could move the hoppings at all. The bond length is
     passed in rather than baked in so the head stays host-agnostic.
+
+    Returns whether it ran, so `protocol_summary` can report an OUTCOME. A caller that infers
+    "initialised" from the stage number is recording its own intent, which is the fault the
+    c-shift field was fixed for.
     """
     from mace.modules.defect_counting import harrison_initialise
 
-    harrison_initialise(model.spectral, [int(z) for z in atomic_numbers],
+    head = getattr(model, "spectral", None)
+    if head is None:
+        return False
+    harrison_initialise(head, [int(z) for z in atomic_numbers],
                         bond_length=float(bond_length))
+    return True
 
 
 def protocol_summary(stage: int, e_gap: float, w_gap: float, warmup: int,
                      clip: float, freeze_z: bool, model=None,
-                     c_shift: Optional[float] = None) -> Dict[str, object]:
-    """What a run will actually do, as a dict to be logged and saved beside the results.
+                     c_shift: Optional[float] = None,
+                     harrison_applied: Optional[bool] = None,
+                     c_shift_n_frames: Optional[int] = None) -> Dict[str, object]:
+    """What a run ACTUALLY DID, as a dict to be logged and saved beside the results.
 
     A run whose artefact does not record its own protocol is a run whose numbers cannot be
     compared to anything later, which this programme has paid for four times.
+
+    INTENT VERSUS OUTCOME. Every field here is one of two kinds, and mixing them is the fault
+    this function exists to prevent. Settings the caller chose (`e_gap`, `w_gap`, `warmup`,
+    `grad_clip`) are intent and are reported as given. Everything that describes what happened
+    -- the smearing family and width, whether Harrison initialisation ran, whether the c-shift
+    calibrated and to what, whether Z is actually frozen, whether the base is actually frozen
+    -- is MEASURED off the model or passed in as an outcome. `c_shift_calibrated` used to be
+    `stage >= 3` and `harrison_init` still was; both are outcomes now.
     """
     from mace.modules.defect_counting import smearing
 
@@ -149,9 +218,61 @@ def protocol_summary(stage: int, e_gap: float, w_gap: float, warmup: int,
     # skipped, warning logged, head starting at c = 0 -- still recorded "calibrated: true" in
     # its own artefact. Caught by the first end-to-end trainer run. Exactly the class of
     # mismatch this summary exists to prevent, one level up from the smearing width.
+    # Measured, not assumed: whether the charges and the base are actually receiving gradient
+    # right now. A run configured with --defect_protocol_freeze_z but whose mask never ran
+    # would otherwise record the intent and train the opposite.
+    z_frozen = bool(freeze_z)
+    base_frozen = None
+    if model is not None:
+        named = dict(model.named_parameters())
+        z = [p for n, p in named.items() if n.startswith("madelung.")]
+        if z:
+            z_frozen = not any(p.requires_grad for p in z)
+        base = [p for n, p in named.items()
+                if n.startswith(("interactions.", "products.", "readouts.",
+                                 "node_embedding."))]
+        if base:
+            base_frozen = not any(p.requires_grad for p in base)
     return dict(stage=int(stage), e_gap=float(e_gap), w_gap=float(w_gap),
-                warmup=int(warmup), grad_clip=float(clip), freeze_z=bool(freeze_z),
+                warmup=int(warmup), grad_clip=float(clip),
+                freeze_z=z_frozen, base_frozen=base_frozen,
                 smearing_family=family, smearing_width=float(width),
-                harrison_init=stage >= 3,
+                harrison_init=(stage >= 3 if harrison_applied is None
+                               else bool(harrison_applied)),
                 c_shift_calibrated=c_shift is not None,
-                c_shift=None if c_shift is None else float(c_shift))
+                c_shift=None if c_shift is None else float(c_shift),
+                c_shift_n_frames=(None if c_shift_n_frames is None
+                                  else int(c_shift_n_frames)))
+
+
+def zero_on_site_correction(model) -> bool:
+    """Start the on-site correction channel at exactly zero output. Returns whether it ran.
+
+    WHAT THIS REMOVES. The measured channel applies a near-uniform +0.27 eV to every atom in
+    the cell -- a global gauge, degenerate with `eps0` by species and with the whole-spectrum
+    offset F9 measured. It is free to be one because a uniform on-site shift moves every level
+    together and contributes exactly zero force, so a forces-only objective never touches it.
+
+    Zeroing the final layer makes the channel start at no shift at all, so whatever it ends up
+    carrying was put there by the joint run's energy loss rather than inherited from a random
+    initialisation and then frozen in by a flat direction. The centred correction -- which
+    would remove the species mean by construction, not merely at step zero -- stays at R3.
+
+    Weights AND bias: zeroing only the weight leaves a constant per-channel offset, which is
+    precisely the mode being removed.
+    """
+    head = getattr(model, "spectral", None)
+    site = getattr(getattr(head, "h", None), "site", None)
+    if site is None:
+        return False
+    last = None
+    for module in site.modules():
+        if isinstance(module, torch.nn.Linear):
+            last = module
+    if last is None:
+        return False
+    with torch.no_grad():
+        last.weight.zero_()
+        if last.bias is not None:
+            last.bias.zero_()
+    return True

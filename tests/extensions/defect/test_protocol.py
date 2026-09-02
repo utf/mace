@@ -73,12 +73,21 @@ class TestTrainableMask:
 class TestProtocolSummary:
     def test_it_records_the_live_smearing(self):
         """A run whose artefact does not record its own protocol cannot be compared to
-        anything later."""
+        anything later.
+
+        `c_shift_calibrated` and `harrison_init` are now OUTCOMES, so a summary written
+        without either being reported comes back false. That is the point: this call passes
+        neither, so neither happened as far as the artefact is concerned.
+        """
         s = protocol.protocol_summary(stage=3, e_gap=2.4, w_gap=1.0, warmup=5,
                                       clip=1.0, freeze_z=False)
         assert s["smearing_family"] == "gaussian"
         assert s["smearing_width"] == pytest.approx(0.05)
-        assert s["harrison_init"] and s["c_shift_calibrated"]
+        assert s["harrison_init"] and not s["c_shift_calibrated"]
+        done = protocol.protocol_summary(stage=3, e_gap=2.4, w_gap=1.0, warmup=5,
+                                         clip=1.0, freeze_z=False, c_shift=-0.5,
+                                         harrison_applied=True)
+        assert done["harrison_init"] and done["c_shift_calibrated"]
 
     def test_stage_two_reports_no_harrison(self):
         s = protocol.protocol_summary(stage=2, e_gap=2.4, w_gap=1.0, warmup=0,

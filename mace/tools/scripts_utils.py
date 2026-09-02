@@ -467,6 +467,9 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         config["counting_envelope"] = str(getattr(model, "counting_envelope", "exp"))
         config["counting_decay_length"] = float(
             getattr(model, "counting_decay_length", 1.0))
+        config["counting_hop_form"] = str(getattr(model, "counting_hop_form", "linear"))
+        config["counting_hop_log_beta"] = float(
+            getattr(model, "counting_hop_log_beta", 1.0986122886681098))
         config["madelung_on_site"] = bool(getattr(model, "madelung_on_site", False))
         config["madelung_eps_inf"] = float(getattr(model, "madelung_eps_inf", 4.0))
         if getattr(model, "madelung", None) is not None:

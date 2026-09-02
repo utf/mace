@@ -1298,6 +1298,44 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=None,
     )
     parser.add_argument(
+        "--defect_counting_hop_form",
+        help="environment modulation on each hopping integral. 'linear' is "
+        "1 + hop_range*tanh(g), what Stage 3 ran, bounded in [0.5, 1.5] and asymmetric in "
+        "log space. 'log' is exp(beta*tanh(g)), symmetric and positive by construction, so "
+        "widening cannot drive an integral through zero and flip the sign the Harrison "
+        "initialisation fixed. Both are exactly 1 at g = 0, so bulk-like bonds are untouched "
+        "by the choice. Measured motivation: on the vacancy-flanking Pb-Pb bond the trained "
+        "cohort sits AT the linear stop in every d bin",
+        type=str,
+        choices=("linear", "log"),
+        default="linear",
+    )
+    parser.add_argument(
+        "--defect_counting_hop_beta",
+        help="beta in the 'log' modulation, so the factor spans [exp(-beta), exp(beta)]. "
+        "ln 3 = 1.0986 gives x[1/3, 3]. Ignored by --defect_counting_hop_form linear",
+        type=float,
+        default=1.0986122886681098,
+    )
+    parser.add_argument(
+        "--defect_protocol_zero_on_site",
+        help="start the on-site correction channel at exactly zero output. The measured "
+        "channel applies a near-uniform +0.27 eV to every atom -- a global gauge that "
+        "contributes no force and is therefore invisible to a forces-only objective. "
+        "Zero-init means whatever it carries afterwards was put there by the energy loss",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--defect_neutral_size_upweight",
+        help="target share of the NEUTRAL force loss carried by large neutral cells. They "
+        "are the base branch's only direct constraint at large d: the rest of the neutral "
+        "set stops around 6.0 A and the base extrapolates above it, which is the measured "
+        "+0.132 eV/A error in the carrier-free 79-atom residual. 0 disables",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
         "--defect_counting_envelope",
         help="radial envelope on the hopping integrals. 'exp' is exp(-(r - d_ref)/L), what "
         "Stage 3 ran; 'power' is Harrison's own (d_ref/r)^2, which is also the rule V0 is "

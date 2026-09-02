@@ -106,6 +106,8 @@ class MACEDefect(ScaleShiftMACE):
         counting_smearing_family: str = "gaussian",
         counting_envelope: str = "exp",
         counting_decay_length: float = 1.0,
+        counting_hop_form: str = "linear",
+        counting_hop_log_beta: float = 1.0986122886681098,
         # The LABELS' width, 0.05 eV, not 25 meV. The old default was a k_B * 300 K
         # coincidence, and leaving it here while switching the family to Gaussian
         # would have trained six seeds at Gaussian 0.025 and reported them as the
@@ -233,6 +235,8 @@ class MACEDefect(ScaleShiftMACE):
         self.counting_smearing_family = str(counting_smearing_family)
         self.counting_envelope = str(counting_envelope)
         self.counting_decay_length = float(counting_decay_length)
+        self.counting_hop_form = str(counting_hop_form)
+        self.counting_hop_log_beta = float(counting_hop_log_beta)
         self.counting_t_el = float(counting_t_el)
         self.spectral = None
         # 0.0 means "the trunk's receptive field", r_max * num_interactions. That is the
@@ -286,6 +290,8 @@ class MACEDefect(ScaleShiftMACE):
                 smearing_family=str(counting_smearing_family),
                 envelope=str(counting_envelope),
                 decay_length=float(counting_decay_length),
+                hop_form=str(counting_hop_form),
+                hop_log_beta=float(counting_hop_log_beta),
                 t_el=float(counting_t_el))
         elif self.spectral_head:
             from mace.modules.defect_spectral import SpectralCarrierHead

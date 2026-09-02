@@ -22,7 +22,7 @@ from typing import Sequence, Tuple
 
 import numpy as np
 
-__all__ = ["apply_two_size_upweight"]
+__all__ = ["apply_two_size_upweight", "apply_neutral_size_upweight"]
 
 
 def _n_atoms(d) -> int:
@@ -74,4 +74,57 @@ def apply_two_size_upweight(dataset: Sequence, target_share: float = 0.25,
         f"Two-size upweight: {len(large)} charged frames at >= {size_threshold} atoms "
         f"scaled by {factor:.1f}x -> {realised:.1%} of the charged force loss "
         f"(target {target:.0%}). Cell size is not a defect label.")
+    return float(factor), float(realised)
+
+
+def apply_neutral_size_upweight(dataset: Sequence, target_share: float = 0.25,
+                                size_threshold: int = 100) -> Tuple[float, float]:
+    """The same treatment for the NEUTRAL frames at the large size.
+
+    WHY THEY MATTER SEPARATELY. The seventeen neutral 159-atom cells are the base branch's
+    only direct constraint at large d: the neutral training set is otherwise 79- and 80-atom,
+    its d distribution stops around 6.0 A, and above that the base extrapolates. That
+    extrapolation is not hypothetical -- it is the measured +0.132 eV/A slope in the 79-atom
+    carrier-free residual, and it is why the small-cell charged labels carry a +0.36 artefact
+    that points opposite to the physics.
+
+    In the joint run the base is no longer frozen, so this is the one lever that lets it
+    LEARN the long-d region instead of extrapolating into it. Leaving these seventeen at
+    natural weight while upweighting the charged seventeen would ask the correction to absorb
+    a base error the base was never given the chance to fix -- which is exactly the leakage
+    the adoption rule tests for.
+
+    Charged and neutral shares are computed within their own populations, so the two
+    upweights do not compete for one budget.
+    """
+    small_mass = large_mass = 0.0
+    large = []
+    for d in dataset:
+        if _is_charged(d):
+            continue
+        w = float(getattr(d, "forces_weight", 1.0))
+        m = w * _n_atoms(d)
+        if _n_atoms(d) >= size_threshold:
+            large.append(d)
+            large_mass += m
+        else:
+            small_mass += m
+
+    if not large or large_mass <= 0:
+        logging.warning(
+            "Neutral two-size upweight: NO large neutral frames in the training set. The "
+            "base has no direct constraint at large d and will extrapolate there; the "
+            "leakage detector in the adoption rule is the thing to watch.")
+        return 1.0, 0.0
+
+    target = float(np.clip(target_share, 1e-6, 0.95))
+    factor = target * small_mass / max((1.0 - target) * large_mass, 1e-30)
+    for d in large:
+        d.forces_weight = d.forces_weight * factor
+
+    realised = (factor * large_mass) / (factor * large_mass + small_mass)
+    logging.info(
+        f"Neutral two-size upweight: {len(large)} neutral frames at >= {size_threshold} "
+        f"atoms scaled by {factor:.1f}x -> {realised:.1%} of the neutral force loss "
+        f"(target {target:.0%}).")
     return float(factor), float(realised)

@@ -68,9 +68,17 @@ def test_the_harness_calls_the_protocol_rather_than_its_own_copy(piece):
         "that can drift from it tomorrow.")
 
 
-@pytest.mark.parametrize("piece", ("calibrate_c_shift", "trainable_mask", "warmup_factor",
-                                   "post_step", "apply_harrison"))
+@pytest.mark.parametrize("piece", ("calibrate_c_shift_over_loader", "trainable_mask",
+                                   "warmup_factor", "post_step", "apply_harrison",
+                                   "zero_on_site_correction"))
 def test_the_trainer_calls_the_protocol(piece):
+    """The trainer calibrates over the WHOLE loader, not `calibrate_c_shift` on one batch.
+
+    A single-batch calibration makes the head's energy zero depend on the shuffle, and in the
+    degenerate case -- a first batch that happens to be all neutral -- skips it entirely,
+    which is what the production smoke hit. The single-batch entry point stays for callers
+    that genuinely have one batch (the harness) and is covered separately.
+    """
     assert piece in _calls(RUN_TRAIN), f"run_train.py does not call {piece}"
 
 
@@ -129,6 +137,10 @@ def test_protocol_summary_reads_the_head_and_not_the_module_default():
 
     class _Model:
         spectral = _Head()
+
+        @staticmethod
+        def named_parameters():
+            return iter(())
 
     summary = defect_protocol.protocol_summary(3, 2.4, 1.0, 5, 1.0, False, model=_Model())
     assert summary["smearing_family"] == "fermi"
@@ -270,3 +282,169 @@ def test_train_passes_the_post_step_hook_to_take_step():
     assert step < hook < ema, (
         "the hook must run after the optimiser and before the EMA update; averaging a "
         "shadow copy of unprojected weights would put them back into the evaluated model")
+
+
+# ------------------------------------------------- the deterministic c-shift and the forms
+
+
+def test_c_shift_over_a_loader_is_the_median_of_ALL_terms_not_of_per_batch_medians():
+    """Two batches with 1 and 3 charged frames. A median of medians weights the lone frame
+    equally with the three; the median over all four terms does not."""
+    import torch as _t
+
+    class _Batch:
+        def __init__(self, resid, counts):
+            self.energy = _t.tensor(resid, dtype=_t.float64)
+            self.carrier_counts = _t.tensor(counts, dtype=_t.float64)
+            self._n = len(resid)
+
+        def to(self, _device):
+            return self
+
+        def to_dict(self):
+            return {}
+
+    def _out(batch):
+        n = batch._n
+        return {"delta_sr_energy": _t.zeros(n, dtype=_t.float64),
+                "base_energy": _t.zeros(n, dtype=_t.float64)}
+
+    one = _Batch([100.0], [[1, 0, 0, 0]])
+    three = _Batch([1.0, 2.0, 3.0], [[1, 0, 0, 0]] * 3)
+
+    class _M:
+        training = False
+
+        def train(self, _mode=True):
+            pass
+
+        def eval(self):
+            pass
+
+    c, n = defect_protocol.calibrate_c_shift_over_loader(
+        _M(), [one, three], "cpu", forward=_out)
+    assert n == 4
+    # torch.median takes the LOWER of the two middle values on an even-length tensor, so
+    # [1, 2, 3, 100] gives 2.0 rather than numpy's 2.5. Kept as torch's, because the
+    # single-batch entry point has always used torch.median and the two must agree.
+    # The point stands either way: a median of per-batch medians would be 51.
+    assert c == pytest.approx(2.0)
+
+
+def test_c_shift_over_a_loader_reports_none_when_nothing_is_charged():
+    import torch as _t
+
+    class _Batch:
+        energy = _t.zeros(2, dtype=_t.float64)
+        carrier_counts = _t.zeros(2, 4, dtype=_t.float64)
+
+        def to(self, _device):
+            return self
+
+    class _M:
+        training = False
+
+        def train(self, _mode=True):
+            pass
+
+        def eval(self):
+            pass
+
+    c, n = defect_protocol.calibrate_c_shift_over_loader(
+        _M(), [_Batch()], "cpu",
+        forward=lambda b: {"delta_sr_energy": _t.zeros(2, dtype=_t.float64),
+                           "base_energy": _t.zeros(2, dtype=_t.float64)})
+    assert c is None and n == 0
+
+
+def test_harrison_reports_whether_it_ran():
+    """`protocol_summary` used to infer `harrison_init` from the stage number."""
+    class _NoHead:
+        spectral = None
+
+    assert defect_protocol.apply_harrison(_NoHead(), [17], 2.8) is False
+    summary = defect_protocol.protocol_summary(3, 2.4, 1.0, 5, 1.0, False,
+                                               harrison_applied=False)
+    assert summary["harrison_init"] is False
+
+
+def test_both_modulation_forms_are_exactly_one_on_a_bulk_like_bond():
+    """`pre = 0` must give factor 1 in both, or switching forms would rescale every hopping
+    in the model rather than only the ones the head is straining on."""
+    for form in ("linear", "log"):
+        h = SlaterKosterH(num_elements=3, feature_dim=8, hop_form=form)
+        assert float(h.modulation(torch.zeros(1))) == pytest.approx(1.0)
+
+
+def test_the_log_form_is_symmetric_in_log_space_and_the_linear_form_is_not():
+    lin = SlaterKosterH(num_elements=3, feature_dim=8, hop_form="linear", hop_range=0.5)
+    log = SlaterKosterH(num_elements=3, feature_dim=8, hop_form="log")
+    big = torch.tensor([12.0])            # tanh saturates
+    up_lin = float(lin.modulation(big))
+    dn_lin = float(lin.modulation(-big))
+    up_log = float(log.modulation(big))
+    dn_log = float(log.modulation(-big))
+    assert up_lin == pytest.approx(1.5, abs=1e-6) and dn_lin == pytest.approx(0.5, abs=1e-6)
+    assert up_log * dn_log == pytest.approx(1.0, rel=1e-6)   # symmetric in log space
+    assert up_log == pytest.approx(3.0, rel=1e-6)
+    # And the log form is positive everywhere, so widening cannot flip a hopping's sign.
+    assert float(log.modulation(torch.tensor([-50.0]))) > 0.0
+
+
+def test_an_unknown_modulation_form_is_refused():
+    with pytest.raises(ValueError, match="unknown hopping modulation"):
+        SlaterKosterH(num_elements=3, feature_dim=8, hop_form="tanh")
+
+
+def test_models_pickled_before_the_modulation_form_existed_still_evaluate():
+    h = SlaterKosterH(num_elements=3, feature_dim=8)
+    del h.hop_form
+    assert float(h.modulation(torch.zeros(1))) == pytest.approx(1.0)
+
+
+def test_zero_init_removes_the_on_site_channel_output_entirely():
+    """Weights AND bias: zeroing only the weight leaves a constant per-channel offset, which
+    is precisely the uniform gauge mode being removed."""
+    class _M:
+        pass
+
+    m = _M()
+    m.spectral = type("H", (), {})()
+    m.spectral.h = SlaterKosterH(num_elements=3, feature_dim=8)
+    last = [x for x in m.spectral.h.site.modules() if isinstance(x, torch.nn.Linear)][-1]
+    with torch.no_grad():
+        last.weight.fill_(0.3)
+        if last.bias is not None:
+            last.bias.fill_(0.7)
+    assert defect_protocol.zero_on_site_correction(m) is True
+    assert float(last.weight.abs().max()) == 0.0
+    assert last.bias is None or float(last.bias.abs().max()) == 0.0
+
+
+def test_zero_init_says_so_when_there_is_nothing_to_zero():
+    class _M:
+        spectral = None
+
+    assert defect_protocol.zero_on_site_correction(_M()) is False
+
+
+def test_the_neutral_upweight_touches_neutral_frames_only():
+    from mace.data.two_size import apply_neutral_size_upweight
+
+    class _D:
+        def __init__(self, n, charged):
+            self.positions = torch.zeros(n, 3)
+            self.carrier_counts = (torch.tensor([1.0, 0, 0, 0]) if charged
+                                   else torch.zeros(4))
+            self.forces_weight = 1.0
+
+    small = [_D(79, False) for _ in range(40)]
+    large = [_D(159, False) for _ in range(2)]
+    charged_large = [_D(159, True) for _ in range(2)]
+    factor, share = apply_neutral_size_upweight(small + large + charged_large,
+                                                target_share=0.25)
+    assert factor > 1.0 and share == pytest.approx(0.25, abs=1e-6)
+    assert all(d.forces_weight == 1.0 for d in charged_large), (
+        "the neutral upweight must not touch charged frames -- the two shares are computed "
+        "within their own populations so they do not compete for one budget")
+    assert all(d.forces_weight == 1.0 for d in small)
