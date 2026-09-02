@@ -1282,6 +1282,17 @@ def run(args) -> None:
                         f"checkpointed lr still carries the previous factor, so the "
                         f"remaining warmup epochs are scaled twice. Audit only.")
 
+
+            # The **absolute** epoch, taken from the trainer. A counter local to the loss
+            # would restart at zero on every resume and silently re-serve the size-hinge
+            # warmup -- the same shape of bug as the gamma anneal restarting from scratch.
+            loss_fn.current_epoch = int(epoch)
+            # The model needs it too: the long-range branch is gated on the same absolute
+            # epoch, and it must reach the module that is actually being trained.
+            target = getattr(current_model, "module", current_model)
+            if hasattr(target, "current_epoch"):
+                with torch.no_grad():
+                    target.current_epoch.fill_(int(epoch))
             # Gauge visibility. `c_shift` and the mean on-site correction are the two
             # directions a forces-only objective cannot see -- both move the whole spectrum
             # and neither changes a force -- so they are logged every epoch rather than
@@ -1304,17 +1315,6 @@ def run(args) -> None:
                         parts.append("Z " + " ".join(f"{v:+.3f}"
                                                      for v in z.z.detach().tolist()))
                     logging.info("Gauge: epoch %d  %s", epoch, "  ".join(parts))
-
-            # The **absolute** epoch, taken from the trainer. A counter local to the loss
-            # would restart at zero on every resume and silently re-serve the size-hinge
-            # warmup -- the same shape of bug as the gamma anneal restarting from scratch.
-            loss_fn.current_epoch = int(epoch)
-            # The model needs it too: the long-range branch is gated on the same absolute
-            # epoch, and it must reach the module that is actually being trained.
-            target = getattr(current_model, "module", current_model)
-            if hasattr(target, "current_epoch"):
-                with torch.no_grad():
-                    target.current_epoch.fill_(int(epoch))
 
             # Bandwidth anneal. This runs in epoch_hook rather than post_eval_hook because
             # it must be in place BEFORE the epoch's gradient steps, not chosen after them.

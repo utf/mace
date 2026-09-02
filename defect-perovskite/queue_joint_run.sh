@@ -79,6 +79,57 @@ print("  CONFIG OK" if ok else "  CONFIG WRONG -- refusing to spend seeds")
 sys.exit(0 if ok else 1)
 PYCHK
 
+# ONE EPOCH ON A SMALL SET BEFORE ANY SEED IS SPENT. The config read-back above proves the
+# MODEL is right; it says nothing about the training loop, and the first attempt at this run
+# lost four seeds at epoch 0 to an UnboundLocalError in the epoch hook -- a per-epoch logging
+# block inserted above the line that defines the variable it reads. Every unit test passed;
+# the two-epoch smoke had been run before that patch existed. A model that builds is not a
+# run that trains, which is the same lesson as "a model is not a run" one level down.
+preflight () {
+    local out="$R/${TAG}_preflight"
+    rm -rf "$out" "$out.log"
+    NAME="${TAG}_preflight" WORK_DIR="$out" \
+    DATA_DIR="$W/defect-perovskite/dataset_cf/fold0" MACE_REPO="$W" \
+    CUDA_VISIBLE_DEVICES=4 \
+    MAX_NUM_EPOCHS=1 NUM_CHANNELS=128 MAX_L=1 NUM_RADIAL_BASIS=8 R_MAX=5.0 \
+    BATCH_SIZE=8 VALID_BATCH_SIZE=8 DEVICE=cuda DEFAULT_DTYPE=float64 \
+    EVAL_INTERVAL=1 USE_EMA=False PATIENCE=250 SEED=99 ENABLE_CUEQ=False \
+    LR=0.005 BASE_LR_FACTOR=0.1 DEFECT_BASE_INIT="$BASE" \
+    DEFECT_SPECTRAL_HEAD=True DEFECT_COUNTING_HEAD=True DEFECT_SPECTRAL_R_CUT=10.0 \
+    DEFECT_MADELUNG_ON_SITE=True DEFECT_MADELUNG_COMPOSITION="3,1,1" \
+    DEFECT_MADELUNG_Z_INIT="-1,1,2" DEFECT_MADELUNG_EPS_INF=4.0 \
+    DEFECT_COUNTING_ON_SITE_RANGE=3.0 DEFECT_COUNTING_HOP_RANGE=0.5 \
+    DEFECT_COUNTING_SMEARING=gaussian DEFECT_COUNTING_T_EL=0.05 \
+    DEFECT_COUNTING_ENVELOPE=exp DEFECT_COUNTING_DECAY_LENGTH=1.0 \
+    DEFECT_COUNTING_HOP_FORM="$HOP_FORM" DEFECT_COUNTING_HOP_BETA="$HOP_BETA" \
+    DEFECT_PROTOCOL=True DEFECT_PROTOCOL_BOND_LENGTH=2.861 \
+    DEFECT_PROTOCOL_WARMUP=5 DEFECT_PROTOCOL_HEAD_ONLY=False \
+    DEFECT_PROTOCOL_ZERO_ON_SITE=True \
+    DEFECT_GAP_WEIGHT=1.0 DEFECT_E_GAP=2.4 DEFECT_GAP_COMPOSITION="3,1,1" \
+    DEFECT_TWO_SIZE_UPWEIGHT=0.25 DEFECT_NEUTRAL_SIZE_UPWEIGHT=0.25 \
+    USE_LONG_RANGE=True LR_START_EPOCH=0 \
+    "$W/defect-example/train_defect_model.sh" > "$out.log" 2>&1
+    local code=$?
+    if [ "$code" -ne 0 ]; then
+        echo "  PREFLIGHT FAILED (exit $code) -- refusing to spend eight seeds"
+        grep -avE "Warning|warn|openequivariance|falling back" "$out.log" | tail -12
+        return 1
+    fi
+    # The epoch hook must actually have RUN, not merely not crashed: an exception swallowed
+    # somewhere upstream would leave the log clean and the gauge silent.
+    if ! grep -aq "Gauge: epoch 0" "$out.log"; then
+        echo "  PREFLIGHT: no gauge line at epoch 0 -- the epoch hook did not run"
+        return 1
+    fi
+    echo "  preflight OK: one epoch, gauge logged, exit 0"
+    grep -aE "Gauge: epoch 0|Stage-3 protocol: c-shift" "$out.log" \
+        | sed 's/^.*INFO: /    /' | head -3
+    return 0
+}
+
+echo "=== preflight: one epoch on the small set ==="
+preflight || exit 1
+
 run () {   # gpu name seed arm
     local gpu="$1" name="$2" seed="$3" arm="$4"
     rm -rf "$R/$name" "$R/$name.log"

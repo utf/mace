@@ -307,3 +307,61 @@ answer in one place and tripped over it in another.
 Separately: `tests/unit/test_spectral_v3.py` imported a sibling by bare name while
 `tests/unit/__init__.py` makes the directory a package, so it raised at collection and its
 twelve tests had been silently skipped whenever the suite was collected by directory.
+
+---
+
+## Entry 9 — the modulation ceiling, and the joint run's leakage detector
+
+**Closure (F11).** The hub-bond modulation's stop binds in **two of six seeds**, not in a third
+of the bonds: in those two it is 100% of hub bonds in every distance bin, and in the other four
+nothing is within 0.79 of a stop. That reconciles b3's pooled 33% with the per-seed picture and
+falsifies "concentrated in short-d bins" -- it is a per-seed phenomenon, not a per-distance one.
+
+**And both stops are in use on the same bond.** ss-sigma sits at the LOWER bound while pp-sigma
+and pp-pi sit at the UPPER one: the head wants less s-s overlap and more p-p overlap than the
+bound allows, simultaneously. Any uniform scale factor on that bond therefore helps one channel
+and hurts another, which is a structural reason the what-if is a blunt instrument and the
+per-channel bound is the finer one.
+
+**Closure (F12), on the registered sign-and-direction rule.** Scaling the hub integrals by
+x1.25 lowers the 79-atom force loss (-0.8%, in 4/6 seeds) but moves F4 only to -0.0675 against
+the -0.08 the rule required. First clause met, second not: **F12 FAILS**, the stop is not the
+lever, and the joint run proceeds on the current bound. No head-only rerun was spent.
+
+Two facts survive the failed forecast. F4 moves monotonically toward the reference under
+scaling in EVERY seed, so the coupling is the channel -- it is simply not reachable by widening
+a bound that only two seeds are pressed against. And the 79-atom force loss has a shallow
+minimum near x1.25 and rises 5.5% by x1.5, so the small cells actively prefer a hub coupling
+close to what the head already has.
+
+**Open, and now first on the R3 page:** beyond-two-centre / superexchange. The hub ablation
+leaves 30% of the d-response in the indirect channel and both coupling levers -- global
+envelope (b7) and local modulation ceiling (b9) -- are now closed as remedies.
+
+**Statement of record (assert, never implement around):**
+"With the base unfrozen, M1b's +0.36 eV/A small-cell artefact can be removed two ways: the base
+learns the long-d region it used to extrapolate into, which is the point, or it absorbs the
+carrier, which improves every aggregate number and destroys the decomposition. Both look like
+success in the loss. They differ only in whether the null-cleared -0.134 stays put when measured
+against the trained model's own base branch. That slope is the detector, and shrinkage toward
+-0.06 is not adopted regardless of total fit."
+
+### What the joint run was given, and what it was not
+
+Launched with both size upweights at 25% of their own populations' force loss -- charged large
+cells because they carry the only bound-versus-band measurement, neutral large cells because
+they are the base's only direct constraint at large d. Raising the charged seventeen alone would
+have asked the correction to absorb a base error the base was never given the chance to fix,
+which is the leakage the detector tests for.
+
+Recorded so the numbers are readable later: the TRAINING set holds 16 charged and 15 neutral
+159-atom frames; the remaining one of each is in the validation file. The seventeen-frame
+references (b1, and the -0.134 itself) are measured on train + valid.
+
+### The bit-identity result, stronger than asked
+
+Two identical invocations of the production trainer at the final config gave losses agreeing to
+**0.000e+00** across both epochs -- not "within the scatter-atomics floor" but exactly equal. In
+float64 with cuEq off this trainer is deterministic, so any later difference between runs is a
+change rather than noise. That is worth more than the tolerance the section-3 plan asked for,
+and it was established before eight seeds were spent.
