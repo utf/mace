@@ -555,6 +555,59 @@ envelope candidate raises it at initialisation.
 | Beyond-two-centre / superexchange | **open, and now first.** The hub ablation leaves 30% of the d-response in the indirect channel, and F12 removed the direct channel's bound as the lever. |
 | Centred correction | **deferred to R3** per the decision tree, with b4 as its evidence: the channel is inert and its constant mode is an unidentified gauge under a forces-only loss. |
 
+## 6. The joint run
+
+Eight seeds: six with the Stage-A base loaded and trained at 0.1x the head's rate, two jointly
+from scratch at equal rates as the staging control. Twenty epochs, batch 8, float64, E_LR
+staged in at epoch 12, protocol on, on-site correction zero-initialised, four GPUs at a time.
+
+**Both size upweights, not one.** The charged 159-atom frames carry the only measurement that
+separates a bound carrier from a band-like one and are 1.6% of the charged force loss at
+natural weight. The *neutral* 159-atom frames are the base's only direct constraint at large d.
+Raising the charged seventeen alone would ask the correction to absorb a base error the base
+was never given the chance to fix, which is precisely the leakage the adoption rule tests for.
+Both realised **25.0%** of their own population's force loss. Recorded for later readers: the
+training file holds 16 charged and 15 neutral 159-atom cells; the remaining one of each is in
+the validation file, and the seventeen-frame references are measured on train + valid.
+
+### The adoption rule, and why criterion 1 cannot be traded
+
+With the base unfrozen, M1b's +0.36 eV/A small-cell artefact can be removed two ways. The base
+can learn the long-d region it used to extrapolate into — that is the point of the joint run.
+Or it can absorb the carrier, which improves every aggregate number and destroys the
+decomposition the whole programme rests on. **Both look like success in the loss.** They differ
+in one place: whether the null-cleared `-0.134` stays put when measured against the trained
+model's own base branch. Shrinkage toward `-0.06` is not adopted regardless of total fit.
+
+### The scorer's own null control
+
+`b10_adoption.py` was written and committed before any joint model existed, and run first
+against the frozen pre-joint cohort — a model whose answer is known in advance, because it has
+not been jointly trained and must not be adopted.
+
+| criterion | pre-joint model | reference | reading |
+|---|---|---|---|
+| 1 charged 159 energy slope | **-0.1308** | b1: -0.1338 | reproduces |
+| 1 charged 159 force slope | **-0.1868** | b1: -0.1901 | reproduces |
+| 4 F4 `delta_sr` slope | -0.0624 | within 1.5x of -0.134 | **out of band**, correctly |
+| 5 pristine gap | 2.385 eV | 2.40 +- 0.1 | ok |
+| 6 depth from CBM | +0.132 eV | 0.10-0.13 | shallow donor |
+| | | | **NOT ADOPTED** |
+
+So the machinery and the thresholds both behave on a case with a known answer.
+
+**One scoring subtlety recorded rather than quietly resolved.** Criterion 2's registered
+reference is b1's out-of-fold cross-fit null, `+0.0800`; the same neutral slope measured
+against the *production* base — the one a Stage-A joint model starts from — is `+0.0968`. Those
+are different bases and they disagree. The registered threshold stays as written and the
+production-base number is printed beside it, because a joint model is scored against its own
+base and that is the like-for-like comparison. On a strict reading the pre-joint model already
+fails criterion 2, which is better known before the joint numbers arrive than after.
+
+### JOINT_RUN_RESULTS_PLACEHOLDER
+
+---
+
 ### The threat that was checked and did not materialise
 
 The −0.134 reference is measured on 17 frames of which only 4 sit inside the window where the
