@@ -42,8 +42,10 @@ under an assumption the experiment did not satisfy.
 
 ## 1. The battery
 
-Eight measurements. Scripts are `defect-perovskite/b{1..8}_*.py`; raw output in
-`~/runs/b*_*.json` on b3 (b1 local).
+Eight measurements. Seven have their own script, `defect-perovskite/b1..b4, b6..b8_*.py`;
+the eighth (b5, saturation by species) is `s6_saturation_by_species.py` re-run on the
+widened cohort, unchanged, so the two gamma regimes are scored by identical code. Raw
+output in `~/runs/b*_*.json` on b3; b1 ran locally, where the cross-fit bases live.
 
 ### b1 — the labels' own d-slope, per size, with two controls (F6)
 
@@ -225,8 +227,9 @@ Per atom, by shell, six seeds, eight large frames.
 | bulk Pb | +0.0933 ± 0.0203 | 0.0012 | +0.2789 |
 | Cs | +0.0865 ± 0.0200 | 0.0009 | +0.2587 |
 
-**The channel is inert, not merely unsaturated.** Every species within 0.01 of every other,
-within-shell spread of order 1 meV, ligand Cl and bulk Cl 2.7 meV apart. It applies a
+**The channel is inert, not merely unsaturated.** Every species within 0.01 pre-tanh of
+every other; the within-shell spread of 0.0007-0.0033 pre-tanh is 2-10 meV once multiplied
+by gamma, and ligand Cl and bulk Cl are 2.7 meV apart. It applies a
 near-uniform +0.27 eV to every atom in the cell: a global gauge, degenerate with `eps0` by
 species and with F9's offset overall.
 
@@ -403,9 +406,13 @@ SMOKE_RESULTS_PLACEHOLDER
 The battery replaces "F4's amplitude is unexplained" with a decomposition in which every factor
 is measured:
 
-1. **Label availability.** 98.4% of the charged frames carry no resolved d-trend in this
-   observable; the remaining 1.6% carry −0.134. The head is fitting a mixture in which the
-   signal is 1.6% of the data and the noise around it is a base artefact of opposite sign.
+1. **Label availability.** 98.4% of the charged frames are 79-atom, and they supply nothing
+   usable in this observable: no resolved trend in the region where a null is measurable
+   (+0.081 [−0.111, +0.272]), a resolved +0.132 of base error there, and an unresolvable
+   mixture of the two in the long-d tail where the full-range +0.364 comes from. The
+   remaining 1.6% carry −0.134 against a matched null of +0.080. The head is fitting a
+   mixture in which the usable signal is 1.6% of the data and what surrounds it points the
+   other way.
 2. **Loss coverage.** `delta_sr`'s d-slope was never in the Stage-3 objective. In the fitted
    channel — forces — the head reproduces the labels at both sizes, sign flip included (b8).
    **F4 becomes a fitted quantity for the first time in the joint run**, whose `DefectLoss`
