@@ -51,7 +51,15 @@ def frontier_level(model, batch, frames, ctx) -> float:
     n_total = sum(VALENCE[int(z)] for z in frames[0].get_atomic_numbers())
     counts = batch.carrier_counts.reshape(-1).tolist()
     n_maj, _ = spin_targets(n_total, counts)
-    k = int(round(n_maj)) - 1
+    n_maj_ref = float((n_total + 1) // 2)
+    # THE LEVEL WHOSE OCCUPATION CHANGED, which is not the same as the highest occupied one.
+    # For an added electron (n_maj = ref + 1) that is index n_maj - 1, the level the carrier
+    # went into. For a REMOVED electron (n_maj = ref - 1) the highest occupied level is one
+    # below the defect state, and indexing it would measure the d-dependence of a valence
+    # level instead -- a plausible flat correlation from the wrong quantity. `max` picks the
+    # changed level under both conventions, and the counters are printed so which one the
+    # data uses is on record rather than assumed.
+    k = int(round(max(n_maj, n_maj_ref))) - 1
     if k < 0 or k >= lam.numel():
         return float("nan")
     return float(lam[k])
@@ -78,6 +86,10 @@ def main() -> None:
           f"d range {d[ok].min():.2f}-{d[ok].max():.2f} A", flush=True)
 
     z = tools.AtomicNumberTable(sorted({17, 55, 82}))
+    # Provenance for the frontier index: which counter convention these frames actually use.
+    seen_counters = sorted({tuple(int(c) for c in b.carrier_counts.reshape(-1).tolist())
+                            for b, _ in make_batches(frames, z, 5.0, 1, "cpu")})
+    print(f"  counters present: {seen_counters}", flush=True)
     rows = []
     for mp in args.models:
         if not Path(mp).exists():
