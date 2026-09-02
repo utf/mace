@@ -51,6 +51,31 @@ def hub_separation(atoms) -> float:
     return float(dd[0, 0])
 
 
+def fit_with_ci(x, y, level=0.95):
+    """OLS slope with its own 95% interval from the per-frame residuals.
+
+    n = 17. A slope quoted without an interval at that size says nothing about whether the
+    trend is resolved, and the seed-to-seed spread cannot supply one -- it measures a
+    different thing (initialisation) from the one that matters here (how well seventeen
+    frames pin a line).
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    n = x.size
+    slope, intercept = np.polyfit(x, y, 1)
+    resid = y - (slope * x + intercept)
+    sxx = float(((x - x.mean()) ** 2).sum())
+    if n <= 2 or sxx <= 0:
+        return float(slope), float("nan"), float("nan"), float("nan")
+    se = float(np.sqrt((resid ** 2).sum() / (n - 2) / sxx))
+    # Student t at the requested level; scipy is not a dependency of this harness, so the
+    # two sizes this gate actually runs at are tabulated and anything else falls back to the
+    # normal quantile with a note in the json.
+    t = {15: 2.131, 16: 2.120, 14: 2.145}.get(n - 2, 1.96)
+    corr = float(np.corrcoef(x, y)[0, 1])
+    return float(slope), float(slope - t * se), float(slope + t * se), corr
+
+
 def main() -> None:
     here = Path(__file__).resolve().parent
     ap = argparse.ArgumentParser(description=__doc__)
@@ -91,20 +116,30 @@ def main() -> None:
         good = ok & np.isfinite(de)
         if good.sum() < 5:
             continue
-        slope = float(np.polyfit(d[good], de[good], 1)[0])
-        corr = float(np.corrcoef(d[good], de[good])[0, 1])
+        slope, lo, hi, corr = fit_with_ci(d[good], de[good])
+        passed = bool(slope < 0 and abs(slope) >= abs(REFERENCE_SLOPE) / 3.0
+                      and abs(slope) <= abs(REFERENCE_SLOPE) * 3.0)
         rows.append(dict(model=Path(mp).name, n=int(good.sum()), slope=slope, corr=corr,
+                         slope_ci=[lo, hi], passed=passed,
                          de_range=[float(de[good].min()), float(de[good].max())]))
-        print(f"  {rows[-1]['model']:26s} slope {slope:+.4f} eV/A  corr {corr:+.3f}  "
-              f"(reference {REFERENCE_SLOPE:+.3f})", flush=True)
+        print(f"  {rows[-1]['model']:26s} slope {slope:+.4f} "
+              f"[{lo:+.4f}, {hi:+.4f}] eV/A  corr {corr:+.3f}  "
+              f"(reference {REFERENCE_SLOPE:+.3f})  {'PASS' if passed else 'FAIL'}",
+              flush=True)
         args.out.write_text(json.dumps(rows, indent=2, default=float))
 
     args.out.write_text(json.dumps(rows, indent=2, default=float))
     if rows:
         sl = np.array([r["slope"] for r in rows])
+        n_pass = int(sum(r["passed"] for r in rows))
         print(f"\n  mean slope {sl.mean():+.4f} +- {sl.std():.4f} eV/A against "
               f"{REFERENCE_SLOPE:+.3f}; correct sign in "
               f"{int((sl < 0).sum())}/{len(sl)} cells")
+        print(f"  F4 gate (right sign, within 3x of the reference): "
+              f"{n_pass}/{len(rows)} seeds")
+        print("  The CI is the SLOPE's own standard error from the per-frame spread, not "
+              "the seed spread: with n = 17 a seed can look on-target and still be "
+              "consistent with zero, and the seed-to-seed number cannot see that.")
     print(f"wrote {args.out}")
 
 
