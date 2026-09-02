@@ -3,18 +3,24 @@
 
 WHAT IT ASKS. The carrier level in a chlorine vacancy is built from the two Pb dangling
 orbitals that flank it. Pull those two apart and their coupling falls, so the bonding
-combination -- the level the added electron occupies -- must RISE. A head that has learned a
-real defect state reproduces that; a head that has learned an energy offset attached to the
-vacancy cannot, because nothing in an offset knows about `d`.
+combination must RISE. A head that has learned a real defect state reproduces that; a head
+that has learned an energy offset attached to the vacancy cannot, because nothing in an
+offset knows about `d`.
+
+THE COUNTERS ARE A HOLE, MEASURED NOT ASSUMED: all 16 frames carry (0, 0, 1, 0), which
+`spin_targets` reads as h_maj = 1, so `n_maj = ref - 1`. The level in question is the one the
+carrier VACATED, not one it entered -- the same defect state either way, which is why the
+argument above is unchanged, but the index is not: the naive `n_maj - 1` would have landed a
+level below it and measured a valence state's d-dependence instead.
 
 THIS SUPERSEDES THE STAGE-1 FIGURE. That one was measured on the V3 spectral head, whose
 `lambda` was a six-state truncation of a different eigenproblem, and it was read in a single
 optimiser regime. This is the counting head's own frontier level, over the whole spectrum,
 on the clean-label subset -- and the number here is the one that stands.
 
-`lambda_frontier` is the HIGHEST OCCUPIED MAJORITY level: `n_maj = spin_targets(...)` counts
-the electrons in that channel, so index `n_maj - 1` is the one the carrier sits in. Taking
-the gap instead would confound the level with the one above it.
+`lambda_frontier` is the level whose occupation the counters CHANGED, index
+`max(n_maj, n_maj_ref) - 1`, which is correct for an added and a removed electron alike.
+Taking the gap instead would confound the level with the one above it.
 
 The same 159-atom subset as F4, and for the same reason: the 79-atom energy targets carry
 M1b's base-extrapolation slope, and pooling sizes re-imports it.
