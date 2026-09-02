@@ -18,22 +18,28 @@ and gap losses, so reading against them would conflate the edit with the loss ch
 | force parity not degraded | **pass** — ON is better, within seed spread |
 | no double counting (E_resp gone in the same commit) | **pass**, `85d195b` |
 
-## The arms
+## The three arms
 
-| arm | n | axial_red | rmse_all | rmse_nbhd | N_eff | null ratio |
-|---|---|---|---|---|---|---|
-| **ON** | 6 | **+0.514** ± 0.240 | **32.5** ± 7.2 | 62.8 ± 19.3 | 43.0 | 0.803 |
-| OFF | 6 | +0.452 ± 0.189 | 35.5 ± 7.0 | 65.6 ± 19.4 | **19.3** | **0.265** |
+The third arm — `Z` pinned at the nominal charges — was added mid-stage after the ON arm's
+`Z` ran away. It is a diagnostic control, not an architecture change: same code, same seeds,
+`Z` simply not in the optimiser.
 
-**The φ-binned gate passes.** Error binned by `|phi_LR|` at defect-near atoms, low vs high:
+| arm | n | axial_red | rmse_all | rmse_nbhd | N_eff | null ratio | corr(λ,d) | φ gap |
+|---|---|---|---|---|---|---|---|---|
+| OFF (no Madelung) | 6 | +0.452 ± 0.189 | 35.5 ± 7.0 | 65.6 ± 19.4 | **19.3** | **0.265** | +0.020 | +3.8 |
+| ON, learned `Z` | 6 | +0.514 ± 0.240 | 32.5 ± 7.2 | 62.8 ± 19.3 | 43.0 | 0.803 | **+0.422** | +2.0 |
+| **ON, nominal `Z`** | 6 | **+0.627 ± 0.184** | **30.4 ± 6.6** | 48.6–50.5 | 49.8 | 0.790 | +0.270 | **+1.2** |
 
-| arm | low \|φ\| | high \|φ\| | gap |
-|---|---|---|---|
-| ON | 30.6 | 32.6 | **+2.0** |
-| OFF | 33.2 | 37.0 | +3.8 |
+**The φ-binned gate passes, and passes best with `Z` fixed.** Error binned by `|phi_LR|` at
+defect-near atoms: the gap the Madelung term is supposed to close goes **3.8 → 2.0 → 1.2**
+meV/Å across OFF → learned `Z` → nominal `Z`, and the nominal-`Z` arm is lowest in both bins
+(29.0 / 30.3). This is the gate as stated, read against the OFF control rather than against
+the archived numbers.
 
-The gap the Madelung term is supposed to close does close — 3.8 → 2.0 meV/Å — and ON is
-lower in *both* bins. This is the gate as stated, read ON vs OFF.
+**Learning `Z` buys nothing and costs two seeds.** Nominal `Z` beats learned `Z` on
+axial_red (+0.627 vs +0.514), on force error (30.4 vs 32.5) and on the φ gate (1.2 vs 2.0),
+with a *smaller* seed spread (±0.184 vs ±0.240). Every headline number is better with the
+parameter removed.
 
 ## The result we did not expect: the λ–d anomaly changes sign
 
@@ -41,7 +47,13 @@ lower in *both* bins. This is the gate as stated, read ON vs OFF.
 |---|---|---|
 | archived (T-B loss, no Madelung) | **−0.422** | negative in 17/18 |
 | Stage-1 **OFF** | +0.020 | ~flat |
-| Stage-1 **ON** | **+0.422** | positive in 5/6 |
+| Stage-1 ON, learned `Z` | **+0.422** | positive in 5/6 |
+| Stage-1 **ON, nominal `Z`** | **+0.270** | positive in 5/6 |
+
+**The physical trend comes from the Madelung contrast at nominal charges, not from fitted
+`Z`.** That is the stronger version of the claim: it does not depend on an optimiser finding
+the right species charges, only on the term being present with the formal ones. Learned `Z`
+adds a little more (+0.42 against +0.27) and pays for it with the two diverged seeds.
 
 Positive is the physical direction: the level rises as the pair separates, so the state is
 deepest when the pair dimerises. That is what R-A predicted and never found.
@@ -83,8 +95,16 @@ can also produce, so only the small defect-induced deviation constrains `|Z|`. T
 claim that "the real-space part is absorbed by the learned local term, which is what makes Z
 identifiable" is right in principle and too weak in practice.
 
-A diagnostic arm with `Z` pinned at nominal is running; it says whether the learned scale
-buys anything at all.
+**The diagnostic settles it: the learned scale buys nothing.** With `Z` pinned at nominal,
+every headline number improves and the seed spread narrows (table above). The two-seed
+divergence disappears because there is nothing left to diverge.
+
+**Proposed amendment, for confirmation rather than silent adoption** (`BUILD_CHOICES.md` item
+11): either fix `Z` at the formal charges, or make it bounded in Edit 3's own idiom —
+`Z[s] = Z_nominal[s] + δ·tanh(·)` with a small δ. The second is more consistent with the
+spec's philosophy of bounded corrections over physical scales; the first is what the data
+currently supports. Stage 2 runs **both** the learnable and the nominal arms so the answer
+is complete either way, and the plan's learnable `Z` remains the default until overruled.
 
 ## One reading for Stage 2
 

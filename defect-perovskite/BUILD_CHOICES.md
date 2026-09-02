@@ -63,6 +63,20 @@ arch and base carry `eps_inf_init = 6.5` while both launchers pass 4.0. Inert th
 harnesses still pass it; raising means they fail loudly instead of silently training a
 term-less model.
 
+**11. Proposed amendment: `Z` should probably not be learnable — but it still is.** Stage 1
+measured this rather than guessed it. With `Z` pinned at the formal charges every headline
+number improves — axial_red +0.514 → +0.627, force error 32.5 → 30.4 meV/Å, the φ-binned gate
+2.0 → 1.2 — and the seed spread *narrows*. The physical λ–d trend survives at nominal charges
+(+0.270, positive in 5/6), so it comes from the Madelung contrast rather than from fitted
+charges.
+
+Two forms to choose between: fix `Z` at formal, or make it bounded in Edit 3's own idiom,
+`Z[s] = Z_nominal[s] + δ·tanh(·)`. The second is more consistent with the spec's philosophy
+of bounded corrections over physical scales; the first is what the data supports today.
+
+**Not applied.** The plan says learnable, so learnable is what runs, and Stage 2 carries both
+arms so the answer is complete whichever way you decide.
+
 ## One consequence worth knowing
 
 Every checkpoint in `~/runs/ab_models/` and `~/runs/tbv3_models/` pickles a `CarrierResponse`
