@@ -5,6 +5,13 @@ on a **force-only** loss against a **frozen** base; §6 needs none of those thre
 
 ---
 
+## A hard blocker, found 2 Sep
+
+**The counting head returns NaN at 159 atoms** while being finite at 79. Forward pass only,
+no gradients. §7's dilution gate lives on the 17 two-size frames and size-invariance is the
+programme's central claim, so the joint run cannot start until this is fixed. Undiagnosed;
+316 vs 636 orbitals is the difference.
+
 ## The decision that blocks launch
 
 **`alpha` carries no gradient, and E_LR is about to depend on it.**

@@ -100,14 +100,39 @@ cohort, where the head was worse than its own base on resonant frames. Too few m
 as a result; recorded because the bin populations are now large enough to make the comparison
 possible at all, which they were not before (18 resonant frames across 18 models).
 
+## A blocker found while running the last gate: the counting head is NaN at 159 atoms
+
+`s3_dehead_trend.py` returned no rows for any Stage-3 model. The cause is not the script:
+`delta_sr_energy` is **NaN on every 159-atom frame**, on a model that is finite on all 79-atom
+frames. Confirmed directly on three frames, forward pass only, no gradients involved.
+
+This matters more than the gate it blocked:
+
+* the **159-atom subset is the cut that speaks for the labels** (M1b), so the
+  `corr(dE_head, d)` gate cannot be measured for the counting head at all until it is fixed;
+* **§7's dilution gate is defined on the 17 two-size frames**, and size-invariance is the
+  central claim of the whole programme. A head that fails at the larger size cannot be taken
+  to the joint run.
+
+Not diagnosed. 79 atoms is 316 orbitals and 159 is 636, so the candidates are `eigh` failing
+to converge at that size, an ill-conditioned `H`, or something in the build that only appears
+with the larger edge count. **This is the first thing to fix, before the reseed work.**
+
+The gate did produce numbers for the two Stage-2 (s-only) models it could run, and they are
+worth recording: slope **−0.0035 ± 0.0022 eV/Å** against the reference **−0.134**, correct
+sign in 2/2 but roughly **forty times too small**. The bounded s-only head reproduces the
+direction of the label trend and almost none of its magnitude — consistent with everything
+else Stage 2 says about it.
+
 ## What Stage 3 needs before it can be read
 
-1. **Fix the failure-to-start.** Two of six seeds is too many. Candidates, cheapest first: a
+1. **Fix the 159-atom NaN.** Blocks two gates and the joint run outright.
+2. **Fix the failure-to-start.** Two of six seeds is too many. Candidates, cheapest first: a
    short warmup on the on-site terms before the hoppings move; gradient clipping tuned to the
    eV-scale initial loss rather than the 0.003-scale converged one; or an initialisation that
    puts `E_head` nearer zero at epoch 0.
-2. **Re-run with the failures fixed**, six seeds, same control.
-3. **The two gates still unmeasured**: the pristine frontier gap against E_gap ± 0.1 eV (now
+3. **Re-run with both fixed**, six seeds, same control.
+4. **The two gates still unmeasured**: the pristine frontier gap against E_gap ± 0.1 eV (now
    persisted per seed by the harness, but these runs predate that), and
    `corr(dE_head, d)` on the 159-atom subset against −0.134 eV/Å (`s3_dehead_trend.py`,
    written, not yet run).
