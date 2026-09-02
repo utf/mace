@@ -13,8 +13,26 @@ export PYTHONPATH=$W PATH="$HOME/micromamba/envs/py13/bin:$PATH"
 TAG="${TAG:-joint}"
 cd "$W" || exit 1
 
-echo "=== waiting for the joint run ==="
-while pgrep -f "queue_joint_run.sh" > /dev/null; do sleep 120; done
+# WAIT ON THE COMPLETION MARKER, NOT ON THE PROCESS. A process check treats any gap as the
+# end: when the joint run was stopped and relaunched to pick up the trunk-normalisation fix,
+# this chain saw the queue disappear, found no models, and aborted -- so the scoring that was
+# supposed to happen unattended would not have happened at all. The marker only appears when
+# the queue actually finishes, and it survives a restart.
+echo "=== waiting for the joint run to write its completion marker ==="
+QLOG="$R/joint_queue.log"
+while ! grep -aq "joint run complete" "$QLOG" 2>/dev/null; do
+    sleep 120
+    # A queue that is neither running nor finished has died; say so rather than waiting out
+    # the night on a log that will never change.
+    if ! pgrep -f "[q]ueue_joint_run.sh" > /dev/null \
+       && ! grep -aq "joint run complete" "$QLOG" 2>/dev/null; then
+        echo "  queue not running and no completion marker; waiting 10 more minutes in case"
+        echo "  this is a relaunch gap, then scoring whatever models exist"
+        sleep 600
+        pgrep -f "[q]ueue_joint_run.sh" > /dev/null && continue
+        grep -aq "joint run complete" "$QLOG" 2>/dev/null || break
+    fi
+done
 echo "=== joint run finished $(date +%F' '%H:%M:%S); scoring ==="
 
 ARMA=()
