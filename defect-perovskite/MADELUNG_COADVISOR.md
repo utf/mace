@@ -104,6 +104,45 @@ of bounded corrections over physical scales; the first is what the data supports
 
 ---
 
+---
+
+## Stage 2 has since run, and it is the result of the day
+
+Edit 3 on top of Edit 1, same seeds, same data. **Its superatom gate passes decisively and
+its force-parity gate fails badly — and those are the same fact.**
+
+| group (12 seeds, both `Z` arms pooled) | n | pristine split fraction | axial_red | rmse_all |
+|---|---|---|---|---|
+| bands | 8 | 0.10–0.14 | **+0.030** | 50.8 |
+| superatom | 4 | 0.74–0.78 | **+0.408** | 42.0 |
+
+`corr(axial_red, split_fraction) = **+0.987**`, strictly bimodal, no seed in between. Where
+the pristine spectrum comes out as bands, the head fits forces no better than the frozen base
+it corrects (299.6 against 305.2 meV/Å on the axial component). Where it is still a superatom,
+it fits.
+
+The Stage-1 heads say why. Their learned decay lengths reach **3.3 Å**, giving
+`t(5.6 Å)/t(2.8 Å)` of 60 % (ON) and 50 % (nominal `Z`) against the plan's own 5–20 % target,
+with two cells **above 100 %** — hopping that increases with distance. Stage 1's +0.63 was
+bought with the near-complete graph E2 identified, and the split fraction of 0.76 was
+reporting it the whole time.
+
+This does not retract Stage 1's contrasts — the φ gate, the λ–d sign change and the `Z`
+comparison are all between arms trained under identical conditions, with the escape route
+equally available to each. It retracts reading Stage 1's absolute axial_red as evidence that
+the head had found physical structure.
+
+**It also withdraws our own `Z` amendment.** Under bounded elements, learned and nominal `Z`
+are indistinguishable (+0.142 vs +0.170) and `Z` shrinks rather than running away. The
+Stage-1 runaway was an interaction with the unbounded on-site term. We would not now press
+the change.
+
+**What we have not concluded** is that the s-only basis is the reason. Edit 4 exists because
+one orbital per atom cannot represent the p-derived valence band this hole lives in, and its
+toy tables already pass. Stage 2 is a reason to run Stage 3, not to stop. What would be wrong
+is loosening Edit 3's bounds until the fit returns — that buys back the superatom, and we
+would be measuring it again in a month under another name.
+
 ## Built and gated, not yet run
 
 * **Edit 3** (bounded elements): `t = V0[s_i,s_j] f(r) (1 + ½tanh g)`, `eps = eps0[s] − φ/ε∞
@@ -124,9 +163,11 @@ of bounded corrections over physical scales; the first is what the data supports
 
 ## What we are asking
 
-1. Confirm or overrule the `Z` amendment, and if `Z` stays learnable, whether the bounded
-   `Z_nominal + δ·tanh` form is the one you want.
-2. Whether the λ–d turnover is enough to close the ledger item or whether you want the
+1. **Whether Stage 2's result changes the plan.** Our reading is that it does not — Stage 3
+   is exactly the response to "a physical s-only Hamiltonian cannot fit these forces", and
+   the counting head is built and its toy tables pass. But this is the first time a gate
+   failure has pointed at the basis rather than at an implementation detail, and it is your
+   call whether that warrants a step back.
+2. Whether the λ–d turnover is enough to close the ledger item, or whether you want the
    archived cohort's negative explained before we rely on `Δ_bind` as a depth.
-3. Anything you want measured before Stage 3, given that D-1 came back null and the D-2
-   resonance prediction was refuted — the two diagnostics that were meant to inform it.
+3. The `Z` amendment is **withdrawn** by Stage 2 — no decision needed unless you disagree.

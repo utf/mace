@@ -19,19 +19,31 @@ meV/Å).
 
 ## They are not two results. They are one.
 
-The gates are perfectly anticorrelated *within* Stage 2, seed by seed, at identical
-configuration:
+Both arms, 12 seeds, everything held fixed but the seed:
 
-| arm | seed | axial_red | split fraction |
-|---|---|---|---|
-| learned `Z` | 1 | +0.014 | **0.099** (bands) |
-| learned `Z` | 2 | **+0.389** | 0.738 (superatom) |
-| nominal `Z` | 1 | +0.019 | **0.136** (bands) |
-| nominal `Z` | 2 | **+0.465** | 0.767 (superatom) |
+| arm | n | axial_red | rmse_all | N_eff | null ratio | split fraction |
+|---|---|---|---|---|---|---|
+| learned `Z` | 6 | +0.142 ± 0.159 | 47.2 ± 4.0 | 34.5 | 0.880 | 0.336 |
+| nominal `Z` | 6 | +0.170 ± 0.199 | 48.5 ± 4.7 | 36.1 | 0.890 | 0.343 |
 
-The bounded form does not close the escape route completely — one seed in each arm found it
-anyway — and **the seeds that found it are exactly the seeds that fit**. Where the spectrum
-came out as bands, the fit collapsed to base level.
+**`corr(axial_red, split_fraction) = +0.987`** over the 12 seeds, and the distribution is
+strictly bimodal — no seed lands between:
+
+| group | n | split fraction | axial_red | rmse_all |
+|---|---|---|---|---|
+| bands | 8 | 0.10–0.14 | **+0.030** | 50.8 |
+| superatom | 4 | 0.74–0.78 | **+0.408** | 42.0 |
+
+The bounded form does not close the escape route completely — four seeds found it anyway —
+and **the seeds that found it are exactly the seeds that fit**. Where the spectrum came out
+as bands, the fit collapsed to base level. There is no seed with a physical spectrum and a
+good fit.
+
+**Edit 3 also dissolves the `Z` pathology.** Learned and nominal `Z` are now
+indistinguishable (+0.142 against +0.170, well inside the spread), and `Z` shrinks during
+training rather than running away. The Stage-1 runaway was an interaction with the unbounded
+on-site term, not a property of `Z` itself — so the amendment proposed after Stage 1 matters
+much less than it appeared to, and we would not now press for it.
 
 ## What Stage 1 was actually doing
 
