@@ -57,6 +57,12 @@ bin (`d/δ_L < 1`), it is recorded as explained-by-resonance pending Edit 4. §7
 condition — if `corr(level, d)` is still anti-physical **on bound frames** under the counting
 head, stop and investigate before R3.
 
+**D-2 has now run, and the resonance explanation is refuted (2 Sep 2026).** Measured on the
+frames each model's own spectrum marks bound (`depth/δ_L > 2`), `corr(λ, d_hub)` is negative
+in **17 of 18** models, mean −0.422; and **13 of the 18 models have no resonant frame at
+all** while still showing it. The anomaly is not a near-degeneracy artefact. It stays open
+with its cheapest explanation now eliminated, and §7's stop condition stays live.
+
 Until it is resolved, `Δ_bind` is not to be relied on as a depth.
 
 **Ledger note on ε∞, from the §0 verification.** Nothing ties the screening amplitude `a` to

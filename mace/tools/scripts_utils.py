@@ -439,7 +439,14 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         config["spectral_sigma"] = bool(getattr(model, "spectral_sigma", False))
         config["spectral_gauge_penalty"] = bool(
             getattr(model, "spectral_gauge_penalty", False))
-        config["response_channel"] = bool(getattr(model, "response_channel", False))
+        # Edit 1. Carried through the round trip for the same reason the spectral flags are:
+        # a rebuilt model that quietly loses the Madelung term is a different model, and the
+        # cuEq conversion performs exactly that round trip at the end of every run.
+        config["madelung_on_site"] = bool(getattr(model, "madelung_on_site", False))
+        config["madelung_eps_inf"] = float(getattr(model, "madelung_eps_inf", 4.0))
+        if getattr(model, "madelung", None) is not None:
+            config["madelung_composition"] = [
+                float(x) for x in model.madelung.composition]
         if getattr(model, "spectral", None) is not None:
             config["spectral_t_min"] = float(model.spectral.t_min)
         # A buffer, so the weight transfer would carry the values -- but only if the

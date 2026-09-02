@@ -15,7 +15,7 @@ The long-range branch of section 3.4 is added on top of this skeleton; the short
 correction here is complete on its own.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import torch
 from e3nn import o3
@@ -100,7 +100,10 @@ class MACEDefect(ScaleShiftMACE):
         spectral_first_shell: bool = False,
         spectral_sigma: bool = False,
         spectral_gauge_penalty: bool = False,
-        response_channel: bool = False,
+        madelung_on_site: bool = False,
+        madelung_eps_inf: float = 4.0,
+        madelung_composition: Optional[Sequence[float]] = None,
+        madelung_z_init: Optional[Sequence[float]] = None,
         logit_seed_gamma: float = 0.0,
         correction_trunk: str = "shared",
         use_long_range: bool = True,
@@ -190,17 +193,29 @@ class MACEDefect(ScaleShiftMACE):
         self.spectral_first_shell = bool(spectral_first_shell)
         self.spectral_feature_dim = (carrier_feature_dim if spectral_first_shell
                                      else feature_dim)
-        # Step 2: the host's energetic response to the carrier's own potential. Built on the
-        # SAME features the spectral head consumes -- defect_feats, whose width is
-        # spectral_feature_dim, not carrier_feature_dim. Off by default, so every existing
-        # configuration is unchanged.
-        self.response_channel = response_channel
-        if response_channel:
-            from mace.modules.defect_response import CarrierResponse
+        # Edit 1, and Edit 2 in the same breath. The response channel is gone: it measured
+        # that electrostatics has the reach (clause 1) but does not select a site (clause 2),
+        # which is exactly what an energy-readout term cannot do -- V could change the energy
+        # but never the Hamiltonian, so it could never change where the carrier goes. The
+        # Madelung potential of learnable per-species charges goes on the ON-SITE ENERGIES
+        # instead, where it is variational.
+        #
+        # The two must never both exist: they are the same physics counted twice.
+        self.madelung_on_site = bool(madelung_on_site)
+        self.madelung_eps_inf = float(madelung_eps_inf)
+        self.madelung = None
+        if madelung_on_site:
+            from mace.modules.defect_madelung import MadelungOnSite
 
-            self.carrier_response = CarrierResponse(
-                feature_dim=self.spectral_feature_dim,
-                num_elements=int(kwargs["num_elements"]))
+            if madelung_composition is None:
+                raise ValueError(
+                    "madelung_on_site needs madelung_composition: the pristine stoichiometry "
+                    "in the model's own species order, which is what the neutrality "
+                    "projection is defined against")
+            self.madelung = MadelungOnSite(
+                num_elements=int(kwargs["num_elements"]),
+                composition=madelung_composition,
+                z_init=madelung_z_init)
         self.spectral = None
         # 0.0 means "the trunk's receptive field", r_max * num_interactions. That is the
         # natural scale: eps_i and t_ij are functions of node features that already aggregate
@@ -310,6 +325,13 @@ class MACEDefect(ScaleShiftMACE):
                 pol_gate_lambda=pol_gate_lambda,
                 pol_gate_hops=pol_gate_hops,
             )
+        elif self.madelung_on_site:
+            # Edit 1 needs an Ewald evaluator whether or not the long-range ENERGY branch is
+            # enabled -- Stages 1 to 3 retrain the head with E_LR still staged off. Same
+            # module and the same `les_arguments`, so phi_LR and E_LR cannot end up on
+            # different smearings or different G = 0 conventions, which is the whole point of
+            # "same code, same convention" in the spec.
+            self.latent_ewald = LatentEwald(les_arguments)
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
         """Fill in attributes added after a checkpoint was written.
@@ -417,6 +439,8 @@ class MACEDefect(ScaleShiftMACE):
         node_species: Optional[torch.Tensor] = None,
         clamp_mask: Optional[torch.Tensor] = None,
         edge_vector: Optional[torch.Tensor] = None,
+        positions: Optional[torch.Tensor] = None,
+        cell: Optional[torch.Tensor] = None,
     ):
         """Either carrier head, behind one signature.
 
@@ -458,6 +482,25 @@ class MACEDefect(ScaleShiftMACE):
         head_feats = node_feats
         if getattr(self, "spectral_first_shell", False):
             head_feats = node_feats[:, : self.spectral_feature_dim]
+
+        # Edit 1: the host Madelung potential on the on-site energies. Computed here, where
+        # positions and the cell are in scope, and handed to the head as a finished shift --
+        # the head owns the eigenproblem, not the electrostatics, and the sign lives in
+        # MadelungOnSite.on_site_shift so there is exactly one place to get it wrong.
+        madelung: Optional[torch.Tensor] = None
+        if getattr(self, "madelung", None) is not None:
+            if positions is None or cell is None or node_species is None:
+                raise ValueError(
+                    "madelung_on_site needs positions, cell and node_species; a call site "
+                    "that omits them would silently drop the term and train a different "
+                    "model than the one configured")
+            from mace.modules.defect_madelung import self_potential_of
+
+            madelung = self.madelung.on_site_shift(
+                self.latent_ewald, node_species, positions, cell, batch,
+                eps_inf=self.madelung_eps_inf,
+                self_potential=self_potential_of(self.latent_ewald, cell))
+
         out = self.spectral(
             node_feats=head_feats,
             counter_emb=counter_emb,
@@ -470,6 +513,7 @@ class MACEDefect(ScaleShiftMACE):
             node_species=node_species,
             clamp_mask=clamp_mask,
             edge_vector=edge_vector,
+            madelung=madelung,
         )
         # delta_u is the spread of the occupied state's site energy over its own support: the
         # spectral analogue of "how much does u vary where alpha lives".
@@ -691,6 +735,8 @@ class MACEDefect(ScaleShiftMACE):
             clamp_mask=head_clamp,
             edge_vector=head_vectors,
             logit_bias=logit_bias,
+            positions=positions,
+            cell=data["cell"],
         )
         # Intrinsic gap: the same pooling with the seed switched off, so the logged gap
         # separates what MLP_l has learned from what the seed is supplying. The dead
@@ -757,6 +803,8 @@ class MACEDefect(ScaleShiftMACE):
             clamp_mask=head_clamp,
             edge_vector=head_vectors,
             logit_bias=logit_bias,
+            positions=positions,
+            cell=data["cell"],
         )
 
         # Long-range branch (plan section 3.4).
@@ -884,37 +932,17 @@ class MACEDefect(ScaleShiftMACE):
         # The correction at this frame's own counter is what the total energy carries;
         # the paired difference is what the delta labels supervise. They coincide only
         # when the reference is the closed-shell state.
-        # Carrier-field response. alpha comes from H on carrier-blind features, V follows
-        # from alpha, E_resp follows from V -- no self-consistent loop, forces by autograd.
-        # dL/dalpha still reaches eps and t through this term, which is how it can select a
-        # site without a built-in potential doing the selecting.
-        delta_resp = torch.zeros_like(delta_sr)
-        if getattr(self, "response_channel", False) and self.use_long_range:
-            from mace.modules.defect_response import self_potential_of
-
-            self_pot = self_potential_of(self.latent_ewald, data["cell"])
-            # Same slice the spectral head takes: with first-shell features on, the head
-            # consumes node_feats[:, :spectral_feature_dim] while defect_feats is the full
-            # concatenation. The response must read the same features, or it would be
-            # conditioned on the whole receptive field the head deliberately excludes.
-            resp_feats = defect_feats
-            if getattr(self, "spectral_first_shell", False):
-                resp_feats = defect_feats[:, : self.spectral_feature_dim]
-            # V3 detaches here too. Section 2 of the plan asks for a trunk-feature effective
-            # charge AND for the trunk to train on the base loss only; in T-B the trunk is
-            # frozen so the two readings coincide, which is precisely why the choice is made
-            # here rather than discovered at the from-scratch step. Under spectral_local NO
-            # head term carries gradient into the trunk, in any run configuration.
-            if getattr(self, "spectral_local", False):
-                resp_feats = resp_feats.detach()
-            delta_resp = self.carrier_response(
-                node_feats=resp_feats, node_species=data["node_attrs"].argmax(-1),
-                alpha=alpha, counts=counts, batch=data["batch"],
-                positions=data["positions"], cell=data["cell"],
-                ewald=self.latent_ewald, self_potential=self_pot,
-                num_graphs=num_graphs)
-
-        correction_energy = delta_sr + delta_lr + delta_resp
+        # Edit 2. The carrier-field response channel is GONE, deleted in the same commit that
+        # landed Edit 1 -- they are the same physics, and running both would count the
+        # carrier's electrostatics twice.
+        #
+        # What it measured is kept in the ledger: it confirmed that electrostatics has the
+        # ~6 A reach the force footprint needs (clause 1), and that it does not select a site
+        # (clause 2). Clause 2 is not a shortcoming of the implementation. E_resp was an
+        # energy readout, so V could change the energy but never H, and a term that cannot
+        # change the Hamiltonian cannot change where the carrier goes. Edit 1 puts the same
+        # potential on the on-site energies, where the eigenproblem sees it.
+        correction_energy = delta_sr + delta_lr
         correction_energy_ref = delta_sr_ref + delta_lr_ref
         delta_energy = correction_energy - correction_energy_ref
         total_energy = base_energy + correction_energy
@@ -972,7 +1000,6 @@ class MACEDefect(ScaleShiftMACE):
             "correction_energy": correction_energy,
             "counter_input_l2": self.carrier_pooling.counter_input_l2(),
             "delta_sr_energy": delta_sr,
-            "delta_resp_energy": delta_resp,
             "delta_lr_ref_energy": delta_lr_ref,
             "node_energy": node_energy,
             "forces": forces,

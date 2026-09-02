@@ -148,7 +148,7 @@ def test_head_loss_does_not_reach_the_trunk():
     Asserted on the whole trunk rather than on the head's own input, because the response
     channel reads trunk features by a different route and V3 detaches that too.
     """
-    model = build_v3(response_channel=False)
+    model = build_v3()
     batch = make_batch()
     for p in model.parameters():
         p.requires_grad_(True)

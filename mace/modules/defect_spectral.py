@@ -339,6 +339,7 @@ class SpectralCarrierHead(nn.Module):
         node_species: Optional[torch.Tensor] = None,  # [n_nodes] element indices
         clamp_mask: Optional[torch.Tensor] = None,  # [n_nodes] bool, DIAGNOSTIC ONLY
         edge_vector: Optional[torch.Tensor] = None,  # [n_edges, 3], needed by H3
+        madelung: Optional[torch.Tensor] = None,  # [n_nodes] Edit 1, see below
         internals: Optional[Dict[str, torch.Tensor]] = None,  # DIAGNOSTIC ONLY, see below
     ) -> SpectralOutput:
         """`internals`, when a dict is passed, is filled with H, psi, lam, w, eps and the
@@ -361,6 +362,18 @@ class SpectralCarrierHead(nn.Module):
                                       edge_index, edge_length, edge_vector, n_nodes)
         if site_bias is not None:
             eps_raw = eps_raw + site_bias
+        # Kept for the A2 diagnostic: the learned on-site term alone, before Edit 1's
+        # electrostatics and before the gauge.
+        eps_learned = eps_raw
+
+        # Edit 1. `madelung` is already `-phi_LR / eps_inf` -- the sign lives in
+        # MadelungOnSite.on_site_shift and nothing here may re-apply it. It is added BEFORE
+        # the gauge below, which in Stages 1 and 2 removes the per-frame mean: what acts
+        # there is the Madelung CONTRAST, which is what the A1 rock-salt and perovskite
+        # tables check. The absolute offset becomes load-bearing only when the gauge goes,
+        # at the counting head, where the energy labels pin it.
+        if madelung is not None:
+            eps_raw = eps_raw + madelung.reshape(-1, 1)
 
         # Gauge control. eps has an exact uniform mode: adding a constant to every site shifts
         # every eigenvalue and hence dE_SR, which a trainable base can partly absorb -- that is
@@ -493,6 +506,11 @@ class SpectralCarrierHead(nn.Module):
             internals["psi"] = psi
             internals["lam"] = lam
             internals["eps"] = eps
+            # Pre-gauge, and pre-Madelung. A2 clause 1 is a statement about the LEARNED
+            # on-site term, which `eps` is not: the difference gauge subtracts a per-cell
+            # mean, so eps differs between two cells by a constant even when every learned
+            # value is bit-identical.
+            internals["eps_raw"] = eps_learned
             internals["batch"] = batch
             internals["local"] = local
 

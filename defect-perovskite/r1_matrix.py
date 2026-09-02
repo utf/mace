@@ -313,7 +313,8 @@ def evaluate(model, batches, frame_masks, device, clamp=None, ctx=None):
     )
 
 
-def fresh_model(arch_path, base_path, seed, device, response=False):
+def fresh_model(arch_path, base_path, seed, device, response=None, madelung=None,
+                eps_inf=4.0, z_init=None):
     """Architecture from a current-code model, base weights from Stage-A, head freshly drawn.
 
     Three sources rather than one, deliberately:
@@ -327,12 +328,24 @@ def fresh_model(arch_path, base_path, seed, device, response=False):
     """
     from mace.tools.scripts_utils import extract_config_mace_model
 
+    if response is not None:
+        raise ValueError(
+            "the response channel was deleted by Edit 2 -- it is the same physics as the "
+            "Madelung on-site term and running both double counts. Pass "
+            "madelung=<pristine stoichiometry> instead. This raises rather than ignoring "
+            "the argument so an archived harness cannot silently train a term-less model.")
+
     arch = torch.load(arch_path, map_location="cpu", weights_only=False)
     torch.manual_seed(seed)
     cfg = extract_config_mace_model(arch)
-    if response:
-        cfg["response_channel"] = True
-        cfg["use_long_range"] = True    # the response needs the Ewald kernel
+    if madelung is not None:
+        # Edit 1 replaces the response channel. `madelung` is the pristine stoichiometry in
+        # the model's own species order; the Ewald kernel is built for the on-site term even
+        # with the long-range ENERGY branch still staged off.
+        cfg["madelung_on_site"] = True
+        cfg["madelung_composition"] = list(madelung)
+        cfg["madelung_eps_inf"] = float(eps_inf)
+        cfg["madelung_z_init"] = list(z_init) if z_init is not None else None
     model = arch.__class__(**cfg)
 
     base = torch.load(base_path, map_location="cpu", weights_only=False)
