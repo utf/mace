@@ -55,8 +55,8 @@ def capture_hamiltonians(model):
     grabbed = []
     original = dc.head_energy_hf
 
-    def wrapped(H, n_total, counts, t_el=dc.T_EL, occupation=None):
-        out = original(H, n_total, counts, t_el, occupation=occupation)
+    def wrapped(H, *a, **kw):
+        out = original(H, *a, **kw)
         grabbed.append((H, out[3], out[4]))
         return out
 

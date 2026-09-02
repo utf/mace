@@ -440,8 +440,9 @@ class CountingHead(nn.Module):
             n_total = int(self.valence[node_species[node_sel]].sum())
             c = counts[g].tolist() if counts.dim() > 1 else counts.tolist()
             occ = None if occupations is None else occupations[g]
-            e_head, lam, psi, p_now, p_ref = head_energy_hf(H, n_total, c, self.t_el,
-                                                           occupation=occ)
+            resp_bucket = {} if force_out is not None else None
+            e_head, lam, psi, p_now, p_ref = head_energy_hf(
+                H, n_total, c, self.t_el, occupation=occ, response_out=resp_bucket)
             delta[g] = e_head
 
             # SECTION 1, THE DENSITY RESPONSE IN THE FORCE GRADIENT.
@@ -466,14 +467,10 @@ class CountingHead(nn.Module):
             #
             # Deleting this as a no-op is the obvious future mistake. The test that it is not
             # one is `test_wiring_changes_gradient_not_forces`.
-            if force_out is not None:
-                now, ref = resolve_fills(n_total, c, occ)
-                if now != ref:
-                    dens = fermi_density_difference(
-                        H, (now[0], now[1], ref[0], ref[1]), (1.0, 1.0, -1.0, -1.0),
-                        self.t_el)
-                    resp_h.append(H)
-                    resp_d.append(dens - dens.detach())
+            if resp_bucket:
+                dens = resp_bucket["density_difference"]
+                resp_h.append(H)
+                resp_d.append(dens - dens.detach())
 
             # EIGENVALUES CARRY THE GRADIENT, EIGENVECTORS DO NOT. `eigh`'s backward builds
             # the eigenvector term with 1/(lam_i - lam_j) factors, which is NaN at exact
@@ -545,7 +542,7 @@ class CountingHead(nn.Module):
 
 
 def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
-                   t_el: float = T_EL, occupation=None):
+                   t_el: float = T_EL, occupation=None, response_out=None):
     """`E_head` by the Hellmann-Feynman route. Same value as `head_energy`, usable gradient.
 
     WHY THIS EXISTS. Fitting FORCES means backpropagating through a quantity that is itself
@@ -581,6 +578,7 @@ def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
     same reason; this is that precedent applied here.
     """
     in_dtype = H.dtype
+    h_in = H
     H = H.double()
     lam, psi = torch.linalg.eigh(H)
     lam_d, psi_d = lam.detach(), psi.detach()
@@ -595,13 +593,24 @@ def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
         p = density_matrix(psi_d, f)
         fc = f.clamp(1e-12, 1.0 - 1e-12)
         entropy = -(fc * fc.log() + (1.0 - fc) * (1.0 - fc).log()).sum()
-        return (p * H).sum() - t_el * entropy, p
+        return (p * H).sum() - t_el * entropy, p, f
 
-    e_maj, p_maj = piece(n_maj)
-    e_min, p_min = piece(n_min)
-    e_maj_ref, p_maj_ref = piece(n_maj_ref)
-    e_min_ref, p_min_ref = piece(n_min_ref)
+    e_maj, p_maj, f_maj = piece(n_maj)
+    e_min, p_min, f_min = piece(n_min)
+    e_maj_ref, p_maj_ref, f_maj_ref = piece(n_maj_ref)
+    e_min_ref, p_min_ref, f_min_ref = piece(n_min_ref)
     energy = ((e_maj - e_maj_ref) + (e_min - e_min_ref)).to(in_dtype)
+
+    # SECTION 1. The same `P - P_ref`, built as a DIFFERENTIABLE function of `H` for the
+    # force response. Here rather than in the head because the spectrum and the four fills
+    # are already in hand: the alternative diagonalises the same matrix a second time.
+    # Absent when the fill equals the reference -- a neutral frame has no response, and the
+    # difference would be an identity zero in the gradient as well as the value.
+    if response_out is not None and (n_maj, n_min) != (n_maj_ref, n_min_ref):
+        response_out["density_difference"] = fermi_density_difference(
+            h_in, (n_maj, n_min, n_maj_ref, n_min_ref), (1.0, 1.0, -1.0, -1.0), t_el,
+            spectrum=(lam_d, psi_d),
+            occupations=torch.stack([f_maj, f_min, f_maj_ref, f_min_ref]))
     # SUM the spin channels, do not average: the monopole identity `sum_i q_i = -Delta n`
     # is over all electrons, and averaging halves it. Caught by the validation test.
     return (energy, lam.to(in_dtype), psi_d.to(in_dtype),
@@ -683,18 +692,14 @@ class _FermiDensityMatrix(torch.autograd.Function):
         return dH.to(ctx.in_dtype), None, None, None
 
 
-def _dk_backward(lam: torch.Tensor, U: torch.Tensor, f: torch.Tensor, t_el: float,
-                 tol: float, G: torch.Tensor) -> torch.Tensor:
-    """One fill's Daleckii-Krein pullback: a cotangent on `P` becomes one on `H`.
+def _dk_eigenbasis(lam: torch.Tensor, f: torch.Tensor, t_el: float, tol: float,
+                   Ghat: torch.Tensor) -> torch.Tensor:
+    """One fill's Daleckii-Krein map, already in the eigenbasis: `Ghat` in, `M` out.
 
-    Factored out of `_FermiDensityMatrix.backward` so the multi-fill Function below shares the
-    identical arithmetic rather than a second copy of it. The maths is unchanged and the
-    docstring on that class is still where it is explained.
+    Split from the basis round trip because the multi-fill Function applies FOUR of these to
+    ONE `Ghat` and returns one `U M U^T`. Rotating in and out per fill instead costs three
+    extra 636x636 float64 GEMMs each, which measured as a quarter of the wiring's overhead.
     """
-    # H is symmetric, so only the symmetric part of the cotangent can act on it.
-    G = 0.5 * (G + G.transpose(-1, -2))
-    Ghat = U.transpose(-1, -2) @ G @ U
-
     fp = -f * (1.0 - f) / t_el                      # f'(lam), bounded by 1/(4 T)
     dl = lam.unsqueeze(-1) - lam.unsqueeze(-2)
     df = f.unsqueeze(-1) - f.unsqueeze(-2)
@@ -712,32 +717,43 @@ def _dk_backward(lam: torch.Tensor, U: torch.Tensor, f: torch.Tensor, t_el: floa
     if bool((denom.abs() > 1e-12).all()):
         num = (fp * torch.diagonal(Ghat, dim1=-2, dim2=-1)).sum(-1)
         M = M - torch.diag_embed(fp * (num / denom).unsqueeze(-1))
-    return U @ M @ U.transpose(-1, -2)
+    return M
+
+
+def _dk_backward(lam: torch.Tensor, U: torch.Tensor, f: torch.Tensor, t_el: float,
+                 tol: float, G: torch.Tensor) -> torch.Tensor:
+    """One fill's Daleckii-Krein pullback: a cotangent on `P` becomes one on `H`."""
+    # H is symmetric, so only the symmetric part of the cotangent can act on it.
+    G = 0.5 * (G + G.transpose(-1, -2))
+    Ghat = U.transpose(-1, -2) @ G @ U
+    return U @ _dk_eigenbasis(lam, f, t_el, tol, Ghat) @ U.transpose(-1, -2)
 
 
 class _FermiDensitySum(torch.autograd.Function):
-    """`D = sum_a s_a f_{N_a}(H)` -- several fills of ONE Hamiltonian, one eigensolve.
+    """`D = sum_a s_a f_{N_a}(H)` -- several fills of ONE Hamiltonian, differentiable in H.
 
     The force response needs `P - P_ref` summed over both spins: four fills of the same `H`.
-    Four separate `fermi_density_matrix` calls would be four `eigh` of a 636x636 float64
-    matrix per graph per step, and the spectrum is the same every time. This does the solve
-    once and reuses `(lam, U)` for every fill, in the forward and in the backward alike.
+    The eigendecomposition and the occupations are taken as ARGUMENTS rather than recomputed,
+    because the caller in the hot path -- `head_energy_hf` -- has just built both from this
+    exact `H` for the energy. Recomputing them costs a float64 `eigh` of a 636x636 matrix and
+    four bisections per graph per step, which measured as a third of the wiring's overhead.
 
-    The backward is a straight sum: `D` is linear in the individual `P_a`, so each fill's
-    cotangent is `s_a G` and each pullback is the same Daleckii-Krein map at that fill's
-    occupations. `test_counting_head.py` pins this against the four-call route rather than
-    trusting the argument.
+    `lam`, `U` and `occ` are DETACHED, non-differentiable inputs and must belong to `H`. The
+    contract is kept by construction, not by trust: the only hot-path caller builds all four
+    inside one function from one matrix. `fermi_density_difference` computes its own when the
+    caller has none, which is what the equivalence tests exercise.
+
+    Forward collapses to a single GEMM: `sum_a s_a U diag(f_a) U^T = U diag(sum_a s_a f_a) U^T`.
+    The backward does not collapse -- each fill has its own divided-difference matrix -- but it
+    shares the basis round trip, applying all four maps to one `Ghat` and rotating out once.
     """
 
     @staticmethod
-    def forward(ctx, H, fills, signs, t_el, degeneracy_tol):
-        lam, U = torch.linalg.eigh(H.double())
-        occs = tuple(fermi_fill(lam, float(n), float(t_el)) for n in fills)
-        acc = None
-        for sign, f in zip(signs, occs):
-            term = float(sign) * ((U * f.unsqueeze(-2)) @ U.transpose(-1, -2))
-            acc = term if acc is None else acc + term
-        ctx.save_for_backward(lam, U, *occs)
+    def forward(ctx, H, lam, U, occ, signs, t_el, degeneracy_tol):
+        sgn = torch.tensor(signs, dtype=occ.dtype, device=occ.device)
+        weighted = (occ * sgn.unsqueeze(-1)).sum(0)
+        acc = (U * weighted.unsqueeze(-2)) @ U.transpose(-1, -2)
+        ctx.save_for_backward(lam, U, occ)
         ctx.signs = tuple(float(s) for s in signs)
         ctx.t_el = float(t_el)
         ctx.tol = float(degeneracy_tol)
@@ -746,14 +762,16 @@ class _FermiDensitySum(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_D):
-        lam, U = ctx.saved_tensors[0], ctx.saved_tensors[1]
-        occs = ctx.saved_tensors[2:]
+        lam, U, occ = ctx.saved_tensors
         G = grad_D.double()
-        dH = None
-        for sign, f in zip(ctx.signs, occs):
-            term = _dk_backward(lam, U, f, ctx.t_el, ctx.tol, sign * G)
-            dH = term if dH is None else dH + term
-        return dH.to(ctx.in_dtype), None, None, None, None
+        G = 0.5 * (G + G.transpose(-1, -2))
+        Ghat = U.transpose(-1, -2) @ G @ U
+        M = None
+        for sign, f in zip(ctx.signs, occ):
+            term = sign * _dk_eigenbasis(lam, f, ctx.t_el, ctx.tol, Ghat)
+            M = term if M is None else M + term
+        dH = U @ M @ U.transpose(-1, -2)
+        return dH.to(ctx.in_dtype), None, None, None, None, None, None
 
 
 def _mu_from(lam: torch.Tensor, f: torch.Tensor, t_el: float) -> torch.Tensor:
@@ -778,9 +796,18 @@ def fermi_density_matrix(H: torch.Tensor, n_electrons: float, t_el: float = T_EL
 
 def fermi_density_difference(H: torch.Tensor, fills: Sequence[float],
                              signs: Sequence[float], t_el: float = T_EL,
-                             degeneracy_tol: float = 1e-7) -> torch.Tensor:
-    """`sum_a s_a P(N_a)` for several fills of one `H`, differentiable, one eigensolve."""
-    return _FermiDensitySum.apply(H, tuple(fills), tuple(signs), t_el, degeneracy_tol)
+                             degeneracy_tol: float = 1e-7, spectrum=None,
+                             occupations=None) -> torch.Tensor:
+    """`sum_a s_a P(N_a)` for several fills of one `H`, differentiable in `H`.
+
+    `spectrum` is `(lam, U)` in float64 and `occupations` is `[n_fills, n]`, both of THIS `H`.
+    Supplied by the head, which has them already; computed here when they are not.
+    """
+    lam, u = torch.linalg.eigh(H.double()) if spectrum is None else spectrum
+    if occupations is None:
+        occupations = torch.stack([fermi_fill(lam, float(n), float(t_el)) for n in fills])
+    return _FermiDensitySum.apply(H, lam, u, occupations, tuple(signs), t_el,
+                                  degeneracy_tol)
 
 
 # Harrison solid-state-table atomic term values, eV, by atomic number: (eps_s, eps_p).
