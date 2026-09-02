@@ -64,7 +64,15 @@ REF_ENERGY_SLOPE = -0.1338
 REF_ENERGY_CI = (-0.1446, -0.1230)
 REF_FORCE_SLOPE = -0.1901
 REF_FORCE_CI = (-0.2103, -0.1700)
-REF_NEUTRAL_159 = 0.0800
+REF_NEUTRAL_159 = 0.0800        # b1's out-of-fold cross-fit null
+# The same slope measured against the PRODUCTION base, i.e. the one a Stage-A-initialised
+# joint model starts from. Criterion 2's registered reference is the cross-fit number above,
+# and it stays that; this is reported beside it because it is the like-for-like comparison --
+# a joint model is scored against its own base, and the two bases do not agree here. Measured
+# on the frozen pre-joint cohort by this same script, which is also its null control: on a
+# model that has not been jointly trained it returns the pre-joint references (charged energy
+# -0.1308 against b1's -0.1338, force -0.1868 against -0.1901) and correctly refuses to adopt.
+REF_NEUTRAL_159_PRODUCTION_BASE = 0.0968
 LEAK_FLOOR = -0.10          # magnitude below this = the base ate the carrier (F14)
 F4_TOLERANCE = 1.5          # criterion 4: within 1.5x of the reference
 DEPTH_BAND = (0.10, 0.13)   # eV below the conduction manifold, pre-joint
@@ -234,7 +242,9 @@ def main() -> None:
         verdict = dict(
             c1_leakage=bool(inside(ce["slope"], REF_ENERGY_CI)
                             and inside(cf_["slope"], REF_FORCE_CI)),
-            c1_energy_shrunk=bool(ce["slope"] > LEAK_FLOOR),
+            # F14's clause, and the sign needs care: the slope is negative, so "shrunk"
+            # means LESS negative than the floor. `<= -0.10` is the healthy case.
+            c1_not_shrunk=bool(ce["slope"] <= LEAK_FLOOR),
             c2_neutral_toward_zero=bool(abs(nn["slope"]) <= abs(REF_NEUTRAL_159)),
             c3_not_degraded=bool(e <= baseline[0] * 1.1 and f <= baseline[1] * 1.1),
             c4_f4_in_band=bool(s4 < 0 and abs(s4) >= abs(REF_ENERGY_SLOPE) / F4_TOLERANCE
@@ -252,10 +262,11 @@ def main() -> None:
         print(f"\n  {row['model']}   c_shift {row['regime']['c_shift']:+.4f}")
         print(f"    1  charged 159 energy {ce['slope']:+.4f} "
               f"[{ce['ci'][0]:+.4f}, {ce['ci'][1]:+.4f}] vs {REF_ENERGY_SLOPE:+.4f} "
-              f"{'OK' if verdict['c1_leakage'] else 'LEAK'}"
-              f"{'' if verdict['c1_energy_shrunk'] else '  (below the -0.10 floor)'}")
+              f"{'OK' if verdict['c1_leakage'] else 'OUTSIDE THE REFERENCE CI'}"
+              f"{'' if verdict['c1_not_shrunk'] else '  <- SHRUNK past -0.10: F14 leakage'}")
         print(f"       charged 159 force  {cf_['slope']:+.4f} vs {REF_FORCE_SLOPE:+.4f}")
-        print(f"    2  neutral 159 energy {nn['slope']:+.4f} vs {REF_NEUTRAL_159:+.4f}  "
+        print(f"    2  neutral 159 energy {nn['slope']:+.4f} vs {REF_NEUTRAL_159:+.4f} "
+              f"(cross-fit) / {REF_NEUTRAL_159_PRODUCTION_BASE:+.4f} (production base)  "
               f"{'toward zero' if verdict['c2_neutral_toward_zero'] else 'GREW'}")
         print(f"    3  neutral-79 window  E {e * 1000:.1f} meV/atom "
               f"(base {baseline[0] * 1000:.1f}), F {f * 1000:.1f} meV/A "

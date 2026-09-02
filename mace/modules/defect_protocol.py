@@ -160,7 +160,12 @@ def post_step(model) -> None:
     which is a gauge on `phi` and a slow divergence. A loop that forgot it would train a
     slightly different model with no error anywhere.
     """
-    madelung = getattr(model, "madelung", None)
+    # Unwrap first. The trainer hands `take_step` whatever it is training, which under
+    # DistributedDataParallel is a wrapper whose own attributes do not include `madelung` --
+    # so a `getattr` on the wrapper would find nothing, skip the projection silently, and let
+    # Z drift off the composition hyperplane for the whole run with no error anywhere.
+    target = getattr(model, "module", model)
+    madelung = getattr(target, "madelung", None)
     if madelung is not None:
         madelung.project_()
 
