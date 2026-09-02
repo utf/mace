@@ -152,7 +152,8 @@ def pristine_spectrum_check(model, pristine_batches, log):
 
 
 def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, lr,
-             stage, madelung, eps_inf, t_ref, log, pristine_batches=None):
+             stage, madelung, eps_inf, t_ref, log, pristine_batches=None,
+             freeze_z=False):
     model = build(arch_path, base_path, seed, device, stage, madelung, eps_inf, t_ref, log)
     ctx = ForwardContext.production(model, device=device, eps_inf=eps_inf,
                                     stage=stage, madelung=bool(madelung), seed=seed)
@@ -165,8 +166,14 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
 
     model.train()
     for n, p in model.named_parameters():
-        p.requires_grad_(is_correction_param(n) or ".spectral." in n
-                         or n.startswith("madelung."))
+        train_it = (is_correction_param(n) or ".spectral." in n
+                    or n.startswith("madelung."))
+        if freeze_z and n.startswith("madelung."):
+            # Diagnostic arm: Z pinned at the nominal charges. Answers whether the LEARNED
+            # scale of Z buys anything, or whether the two seeds that inflated it to
+            # (-2.6, +2.3, +5.4) simply went down a bad path and dragged the fit with them.
+            train_it = False
+        p.requires_grad_(train_it)
     params = [p for n, p in model.named_parameters() if p.requires_grad]
     opt = torch.optim.AdamW(params, lr=lr)
 
@@ -210,7 +217,8 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
         log(f"      capture failed: {exc}")
     if pristine_batches:
         metrics.update(pristine_spectrum_check(model, pristine_batches, log))
-    metrics.update(seed=seed, stage=stage, madelung=bool(madelung), neff=neff,
+    metrics.update(seed=seed, stage=stage, madelung=bool(madelung), freeze_z=bool(freeze_z),
+                   neff=neff,
                    null_ratio=ratio, force_final=hist[-1], force_first=hist[0],
                    context=ctx.as_dict())
     if getattr(model, "madelung", None) is not None:
@@ -228,6 +236,8 @@ def main() -> None:
     ap.add_argument("--n-pristine", type=int, default=8)
     ap.add_argument("--stage", type=int, default=1, choices=(1, 2, 3))
     ap.add_argument("--madelung", choices=("on", "off"), default="on")
+    ap.add_argument("--freeze-z", action="store_true",
+                    help="pin Z at the nominal charges; diagnostic arm for the Z runaway")
     ap.add_argument("--frames", type=int, default=48)
     ap.add_argument("--batch-size", type=int, default=4)
     ap.add_argument("--epochs", type=int, default=40)
@@ -281,7 +291,8 @@ def main() -> None:
             model, met = run_cell(args.arch, args.base, seed, batches, frame_masks,
                                   args.device, args.epochs, args.lr, args.stage,
                                   args.madelung == "on", args.eps_inf, t_ref, log,
-                                  pristine_batches=pristine_batches)
+                                  pristine_batches=pristine_batches,
+                                  freeze_z=args.freeze_z)
         except Exception as exc:
             log(f"      FAILED: {exc}")
             rows.append(dict(seed=seed, error=str(exc)))
@@ -292,7 +303,12 @@ def main() -> None:
             f"rmse_nbhd {met['rmse_nbhd']:.1f}  N_eff {met['neff']:.2f}")
         if args.save_dir:
             args.save_dir.mkdir(parents=True, exist_ok=True)
-            tag = f"s{args.stage}_{args.madelung}_s{seed}"
+            # The tag carries EVERY arm-distinguishing flag, not just stage and madelung.
+            # It did not, and the Z-frozen diagnostic arm silently overwrote the Stage-1 ON
+            # checkpoints -- same stage, same madelung setting, different model. Anything
+            # that changes what is trained belongs in the filename.
+            tag = (f"s{args.stage}_{args.madelung}"
+                   + ("_frz" if args.freeze_z else "") + f"_s{seed}")
             torch.save(model, args.save_dir / f"{tag}.model")
         args.out.write_text(json.dumps(rows, indent=2, default=float))
 
