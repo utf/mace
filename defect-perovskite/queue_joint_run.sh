@@ -75,6 +75,26 @@ ok = (getattr(rb, "hop_form", "linear") == live["hop_form"]
       and getattr(rb, "envelope", "exp") == live["envelope"]
       and abs(float(rb.on_site_range) - 3.0) < 1e-9
       and live["family"] == "gaussian" and abs(float(live["width"]) - 0.05) < 1e-9)
+
+# THE TRUNK NORMALISATION, checked against the Stage-A base itself. `avg_num_neighbors` is a
+# plain float on each interaction block dividing every message -- not a parameter, not a
+# buffer, so absent from state_dict and invisible to the loader's name-and-shape check. Stage
+# A trained at r_max = 5.0 without a carrier head and got 14.08; a run with the spectral head
+# builds its graph at the 10 A carrier cutoff and computes 112.5 on the same data. Loading
+# Stage A's weights into that trunk divides every message by eight times too much, and the
+# loader reports success. It cost the first joint launch.
+from mace.modules.defect_stage import load_stage_a_base  # noqa: E402
+
+base_path = os.path.expanduser("~/runs/e0_base_s1/e0_base_s1.model")
+stage_a = torch.load(base_path, map_location="cpu", weights_only=False)
+want = [round(float(b.avg_num_neighbors), 4) for b in stage_a.interactions]
+m2 = MACEDefect(**cfg)
+for blk, v in zip(m2.interactions, [112.5] * len(want)):
+    blk.avg_num_neighbors = v          # the wrong value a real run would have computed
+load_stage_a_base(m2, base_path, device="cpu")
+got = [round(float(b.avg_num_neighbors), 4) for b in m2.interactions]
+print(f"  avg_num_neighbors: Stage A {want}, after load {got}")
+ok = ok and (got == want)
 print("  CONFIG OK" if ok else "  CONFIG WRONG -- refusing to spend seeds")
 sys.exit(0 if ok else 1)
 PYCHK

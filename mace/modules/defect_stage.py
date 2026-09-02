@@ -124,6 +124,40 @@ def load_stage_a_base(model, path, device="cpu", strict=True):
             "The trunk architecture must be identical between Stage A and Stage B "
             "(channels, max_L, interactions, cutoff, element set).")
 
+    # `avg_num_neighbors` is NOT a parameter and NOT a buffer -- it is a plain float on each
+    # interaction block, dividing every message. So it is absent from `state_dict`, which
+    # means the name/shape check above cannot see it and the copy below cannot carry it, and
+    # a Stage-B model built with a different value loads Stage A's weights into a trunk that
+    # normalises them differently. The loader reports success and the base branch silently
+    # stops reproducing Stage A.
+    #
+    # It is not a hypothetical mismatch. Stage A was trained at r_max = 5.0 with no carrier
+    # head and got 14.08; a Stage-B run with the spectral head builds its graph at the
+    # CARRIER cutoff of 10 A and computes 112.5 on the same data. Eight times the divisor on
+    # every message. It was found because the c-shift calibration -- the median energy
+    # mismatch, which is a direct read on E_base -- disagreed between the two drivers by a
+    # factor of four, and every other candidate had been eliminated.
+    src_ann = [float(b.avg_num_neighbors) for b in getattr(source, "interactions", [])]
+    dst_ann = [float(b.avg_num_neighbors) for b in getattr(model, "interactions", [])]
+    if src_ann and len(src_ann) == len(dst_ann):
+        moved = [(a, b) for a, b in zip(dst_ann, src_ann) if abs(a - b) > 1e-6]
+        if moved:
+            with torch.no_grad():
+                for block, value in zip(model.interactions, src_ann):
+                    block.avg_num_neighbors = value
+            logging.warning(
+                "Stage B: avg_num_neighbors differed between this model and the Stage-A "
+                "checkpoint (%s vs %s) and has been RESET to Stage A's. It is a plain float "
+                "on each interaction block, not a buffer, so it is invisible to state_dict "
+                "and the base branch would otherwise have normalised every message "
+                "differently from the base whose weights it just loaded.",
+                [round(a, 3) for a, _ in moved], [round(b, 3) for _, b in moved])
+    elif src_ann:
+        raise RuntimeError(
+            f"Stage-A checkpoint has {len(src_ann)} interaction blocks and this model has "
+            f"{len(dst_ann)}; avg_num_neighbors cannot be carried across and the base branch "
+            "would not reproduce Stage A.")
+
     copied = 0
     with torch.no_grad():
         for name, tensor in dst.items():
