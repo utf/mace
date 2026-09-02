@@ -100,7 +100,19 @@ def model_axial(model, frames, z_table, cutoff, device, ctx, batch=4):
 
 
 def level_spacing(model, pristine, z_table, cutoff, device, ctx) -> float:
-    """`delta_L`: median spacing just above the pristine frontier, this model's own."""
+    """`delta_L`: median spacing just above the pristine frontier, this model's own.
+
+    THE COMMON-delta_L CONVENTION. `delta_L` must come from ONE cell size for every frame the
+    bound flag is applied to, and that size is the LARGE one. The labels are k-sampled on the
+    doubled axis, so their continuum discretisation is size-invariant, while the model's
+    Gamma-only continuum is 2x sparser at 79 atoms than at 159. Taking `delta_L` from a small
+    pristine cell and `depth` from a large charged one -- which this did -- compares a depth
+    against a level spacing from a different Brillouin-zone sampling, and inflates the bound
+    fraction at the small size for a reason that has nothing to do with binding.
+
+    The caller passes pristine frames already filtered to the large size; `pristine_size` is
+    reported so the convention travels with the number.
+    """
     from mace.modules.defect_counting import VALENCE
 
     spac = []
@@ -162,7 +174,15 @@ def main() -> None:
           f" {len(small)} of {SMALL_NATOMS} inside the +-{args.tol} A windows "
           f"(of {len(small_all)})", flush=True)
 
-    pristine = select_pristine(ase_read(str(args.data), ":"), args.n_pristine)
+    # The largest pristine cells available, for the common-delta_L convention above.
+    all_pristine = select_pristine(ase_read(str(args.data), ":"), 64)
+    if not all_pristine:
+        raise SystemExit("no pristine frames found")
+    biggest = max(len(a) for a in all_pristine)
+    pristine = [a for a in all_pristine if len(a) == biggest][: args.n_pristine]
+    print(f"delta_L from {len(pristine)} pristine cells of {biggest} atoms "
+          f"(common-delta_L convention: one size for every frame the bound flag touches)",
+          flush=True)
     z = tools.AtomicNumberTable(sorted({17, 55, 82}))
     rows = []
     for mp in args.models:
@@ -185,7 +205,7 @@ def main() -> None:
         bnd = matched_ratios([r for r, k in zip(big_rows, bound) if k], small_rows,
                              args.tol, rng) if bound.any() else None
 
-        row = dict(model=Path(mp).name, delta_L=delta_l,
+        row = dict(model=Path(mp).name, delta_L=delta_l, pristine_size=int(biggest),
                    depth_med=float(np.nanmedian(dep)),
                    bound_fraction=float(bound.mean()), all=allr, bound=bnd,
                    passed=bool(bnd is not None and bnd["median"] <= GATE_MAX_RATIO))
