@@ -202,11 +202,76 @@ statement to rely on** — 0.82 ± 0.05 with 6/6 passing on the pre-correction m
 
 ---
 
-## §6 — gate table
+## §6 — gate table, on the §5 models
 
-Launched 18:03 on the §5 models: F4, F5, dilution and the head-vs-base discrimination, one
-per GPU. F4/F5/discrimination are minutes; dilution ~27 (it forwards 892 matched small-cell
-frames per model). **Results pending at the time of writing.**
+**All three standing gates pass, 6/6 each.**
+
+### F4 — right sign, within 3× of the reference
+
+| seed | slope (eV/Å) | 95% CI | corr | |
+|---|---|---|---|---|
+| 1 | −0.0639 | [−0.0773, −0.0506] | −0.939 | PASS |
+| 2 | −0.0533 | [−0.0650, −0.0415] | −0.933 | PASS |
+| 3 | −0.0774 | [−0.0917, −0.0631] | −0.952 | PASS |
+| 4 | −0.0645 | [−0.0775, −0.0516] | −0.944 | PASS |
+| 5 | −0.0493 | [−0.0617, −0.0369] | −0.915 | PASS |
+| 6 | −0.0591 | [−0.0756, −0.0426] | −0.899 | PASS |
+
+Mean **−0.0613 ± 0.0090**, sign 6/6, **6/6 in band** (was 5/6 before the correction — seed 5
+moved from −0.0431 to −0.0493 and cleared the threshold it had missed by 0.0016).
+
+### F5 — positive, 6/6
+
+corr **+0.911 ± 0.028** (0.871 to 0.944), slope +0.056 to +0.091 eV/Å, every CI excluding
+zero. λ_frontier spans +0.92 to +2.05 eV across seeds — a wider absolute spread than before,
+which is the corrected on-site potential no longer being pinned by a supercell-dependent
+offset.
+
+### Dilution — bound, 6/6
+
+| seed | δ_L (eV) | depth (eV) | bound | R_bound |
+|---|---|---|---|---|
+| 1 | 0.015 | 0.042 | 75% | 0.77 [0.69, 0.99] |
+| 2 | 0.011 | 0.032 | 75% | 0.78 [0.70, 1.13] |
+| 3 | 0.013 | 0.060 | 81% | 0.72 [0.63, 0.81] |
+| 4 | 0.011 | 0.043 | 81% | 0.69 [0.64, 0.80] |
+| 5 | 0.014 | 0.034 | 56% | 0.86 [0.73, 0.89] |
+| 6 | 0.013 | 0.039 | 75% | 0.84 [0.74, 1.24] |
+
+**R = 0.78 ± 0.06**, gate ≤ 1.3 met **6/6**, bound fraction **74% ± 8%**. Four of six
+intervals exclude 1.3 outright; none approaches the band-state value of 2.
+
+### F4 head-vs-base — unchanged verdict
+
+head **−0.0613 ± 0.0090** against this base's residual slope **−0.1310 [−0.1422, −0.1198]**,
+which brackets the −0.134 reference in **6/6**. Verdict **head, 6/6**. The head reproduces
+47% of what its own base leaves for it, with non-overlapping intervals. **The joint run will
+not fix F4** — training the base jointly removes M1b's base-extrapolation slope from the
+79-atom energy targets, a different problem; here the frozen base already leaves the right
+trend.
+
+---
+
+## Forecast scorecard — all five met
+
+| forecast | outcome |
+|---|---|
+| eps0 / Z / c re-settle | **met** — RMSE 25.0 vs 25.3, axial_red within a seed spread |
+| pristine gap re-passes within 0.1 eV | **met** — 2.399, \|Δ\| = 0.001 on a 0.10 gate |
+| F4 slope unchanged within CI | **met** — −0.0613 ± 0.0090 against −0.0607 ± 0.0091 |
+| dilution and F5 within spread | **met** — R 0.78 ± 0.06 vs 0.85 ± 0.04; corr +0.911 ± 0.028 vs +0.898 ± 0.036 |
+| cross-size consistency improves | **met by construction** — the cross-size on-site error is now identically zero; the dilution number is the empirical read |
+
+No forecast missed. Per the decision tree, §6 gates passing means the pipeline is clear to
+proceed to the joint run.
+
+### What the correction did and did not change
+
+It did **not** move the d-channel: F4's slope is the same to within a tenth of its own
+standard error, exactly as forecast — the fix is size-level. It did **not** cost fit quality
+or localisation: RMSE improved slightly, dilution tightened from 0.85 to 0.78, F5 held. What
+it changed is the thing it was supposed to change — the ~0.11/0.05/0.28 eV per-species
+inconsistency between the 79- and 159-atom cells is gone, and F4 gained the sixth seed.
 
 ---
 
@@ -221,3 +286,24 @@ frames per model). **Results pending at the time of writing.**
    so the joint run will not fix it. Per the plan this is close-or-explain at R3, not a
    joint-run gate. Candidates in order: E_LR re-enable, then SCC.
 4. **Z endpoints** for the §5 run not yet compared against the pre-correction run.
+
+---
+
+## Bottom line for the coadvisor
+
+The Madelung host term was subtracting ion i's own periodic images, which made `phi_LR` a
+function of the supercell rather than of the crystal — a ~0.11 / 0.05 / 0.28 eV per-species
+error between the two cell sizes the dataset contains. It is fixed, pinned by eight standing
+tests including a counterfactual, and the six seeds retrained under the corrected kernel pass
+all three gates 6/6 with every registered forecast met.
+
+The state is bound: dilution R = 0.78 ± 0.06 against a ≤ 1.3 gate, bound fraction 74%, on the
+observable that separates a bound carrier from a band state by construction. N_eff (5.26) is
+reported alongside but should **not** be leaned on — the T_el scan shows it nearly triples
+from 5 to 100 meV, so it is partly thermal smearing and is comparable only within a fixed
+T_el.
+
+Two things are open and neither is hidden: the saturation audit did not bind to the head's
+modules and its config decision is unmade; and F4's amplitude shortfall is the head's, not the
+base's, so the joint run will not close it — that is close-or-explain at R3, with E_LR then
+SCC as the candidates in order.
