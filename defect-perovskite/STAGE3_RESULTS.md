@@ -188,19 +188,27 @@ genuinely changes, so the learned elements are *not* expected to be bit-identica
 qualification did not name. A clean version needs a cell already larger than `2 × r_couple`
 before tiling, or a shorter reach.
 
-## The unblocked gate, on one seed
+## The unblocked gate — F4 not met
 
-With the dtype fix, the 159-atom `dE_head`–d gate runs. Seed 1:
+With the dtype fix, the 159-atom `dE_head`–d gate runs on all four converged seeds.
 
-| | slope (eV/Å) | corr |
+| seed | slope (eV/Å) | corr |
 |---|---|---|
-| counting head, seed 1 | **−0.0189** | **−0.924** |
+| 1 | **−0.0189** | **−0.924** |
+| 2 | −0.0127 | −0.598 |
+| 5 | **+0.0155** | +0.154 |
+| 6 | −0.0083 | −0.185 |
+| **mean** | **−0.0061 ± 0.0130** | correct sign in 3/4 |
 | bounded s-only (Stage 2) | −0.0035 | −0.31 to −0.66 |
 | **label reference** | **−0.134** | −0.989 |
 
-Right sign, a very strong linear trend, and **7× short** of the label slope against the
-s-only head's 40×. A real improvement, but **F4 (within 3×) is not met** on this seed.
+**F4 is not met.** The prediction was right sign and within 3× of −0.134. The sign is right in
+3 of 4 (seed 5 is inverted), and the magnitude is 7× short on the best seed and 22× short on
+the mean. Against the s-only head's 40× that is an improvement, and seed 1's `corr = −0.924`
+is a genuinely strong linear trend — but the head is not reproducing the label slope.
 
-Three of the four converged Stage-3 seeds still fail to produce the gate — they remain
-non-finite on 159-atom frames after the dtype fix, so there is a **second cause** not yet
-diagnosed. That has to be found before the rerun; it is not the same bug.
+*A correction to my own first pass:* I initially reported that three of the four seeds still
+failed this gate after the dtype fix, and inferred a second undiagnosed cause. That was wrong.
+Those three model files had never been copied from the compute machine to the analysis
+machine — the same sync failure that has now caused four incidents in one day. There is no
+second cause.
