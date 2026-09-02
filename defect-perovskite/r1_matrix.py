@@ -236,7 +236,13 @@ def axial_stats(err_head, err_base, fm, sel):
     return head_ax, base_ax, target, corr
 
 
-def evaluate(model, batches, frame_masks, device, clamp=None):
+def evaluate(model, batches, frame_masks, device, clamp=None, ctx=None):
+    """Head/base axial statistics over `batches`.
+
+    `ctx` is a ForwardContext; when given it decides the clamp and every other forward-pass
+    property, so this path cannot disagree with training. `clamp` is the pre-context
+    argument, kept for the archived scripts.
+    """
     model.eval()
     head_ax, base_ax, tgt, cor, pb_frac = [], [], [], [], []
     d_list = []
@@ -247,11 +253,14 @@ def evaluate(model, batches, frame_masks, device, clamp=None):
     if True:
         for batch, frames in batches:
             fm = [frame_masks[id(a)] for a in frames]
-            d = batch.to_dict()
-            d["positions"] = batch.positions.detach().clone().requires_grad_(True)
             # C1 measures a CLAMPED head; evaluating it unclamped would report the metrics of
             # a different model than the one trained -- N_eff came back 35 on a two-atom clamp.
-            d["_clamp_mask"] = None if clamp is None else stacked(fm, clamp, device)
+            if ctx is not None:
+                d = ctx.forward_dict(batch, frames, requires_grad=True)
+            else:
+                d = batch.to_dict()
+                d["positions"] = batch.positions.detach().clone().requires_grad_(True)
+                d["_clamp_mask"] = None if clamp is None else stacked(fm, clamp, device)
             with torch.enable_grad():
                 out = model(d, training=False, compute_force=True)
             err_h = (out["forces"] - batch.forces).detach().cpu().numpy()

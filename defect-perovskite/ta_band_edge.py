@@ -161,11 +161,16 @@ def make_batches(frames, z_table, cutoff, batch_size, device):
 # --------------------------------------------------------------------------- capture
 
 
-def capture(model, batch, clamp_mask=None):
+def capture(model, batch, clamp_mask=None, ctx=None, frames=None):
     """One forward pass returning both the head internals and the model output.
 
     The head's own `internals` hook is used rather than a re-assembled H: for H3 the
     Hamiltonian carries a sigma term that a formula written out here would silently drop.
+
+    Pass `ctx` (a ForwardContext) and this path builds its input exactly as train and
+    evaluate do. `clamp_mask` is the pre-context signature, kept so the archived scripts
+    still run; new callers should pass `ctx` -- an explicit mask here is a second place the
+    forward pass gets decided, which is the fault the context exists to remove.
     """
     grabbed: dict = {}
     head = model.spectral
@@ -178,9 +183,12 @@ def capture(model, batch, clamp_mask=None):
     head.forward = wrapped
     try:
         with torch.no_grad():
-            d = batch.to_dict()
-            if clamp_mask is not None:
-                d["_clamp_mask"] = clamp_mask
+            if ctx is not None:
+                d = ctx.forward_dict(batch, frames, requires_grad=False)
+            else:
+                d = batch.to_dict()
+                if clamp_mask is not None:
+                    d["_clamp_mask"] = clamp_mask
             out = model(d, training=False, compute_force=False)
     finally:
         head.forward = original
