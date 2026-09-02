@@ -849,17 +849,30 @@ def run(args) -> None:
             and all(h.compute_avg_num_neighbors for h in head_configs)):
         from mace.modules.defect_reach import count_edges_within
 
-        wide, narrow = count_edges_within(next(iter(train_loader)), float(args.r_max))
+        # Over several batches, not one. The from-scratch arm has no checkpoint to inherit a
+        # normalisation from, so this ratio IS its trunk normalisation, and one batch of eight
+        # frames is a sample of a dataset property. On the first measurement a single batch
+        # gave 13.93 against Stage A's 14.08 -- 1.1% out, which is the sampling error and not
+        # a disagreement, but it is an avoidable asymmetry between the two arms when the only
+        # thing they are meant to differ in is staging.
+        wide = narrow = 0
+        for k, probe in enumerate(train_loader):
+            if k >= 20:
+                break
+            w, n = count_edges_within(probe, float(args.r_max))
+            wide += w
+            narrow += n
         if wide > 0:
             ratio = float(narrow) / float(wide)
             rescaled = float(args.avg_num_neighbors) * ratio
             logging.warning(
                 "avg_num_neighbors was computed on the %.1f A carrier graph (%.2f); the "
                 "trunk only passes messages inside r_max = %.1f A, so it is rescaled by the "
-                "edge-count ratio %.4f to %.2f. Dividing every message by the carrier-graph "
-                "count would be about %.1fx too much.",
+                "edge-count ratio %.4f (%d of %d edges over %d batches) to %.2f. Dividing "
+                "every message by the carrier-graph count would be about %.1fx too much.",
                 float(graph_cutoff(args)), float(args.avg_num_neighbors),
-                float(args.r_max), ratio, rescaled, 1.0 / max(ratio, 1e-9))
+                float(args.r_max), ratio, narrow, wide, min(k + 1, 20), rescaled,
+                1.0 / max(ratio, 1e-9))
             args.avg_num_neighbors = rescaled
 
     # Model
