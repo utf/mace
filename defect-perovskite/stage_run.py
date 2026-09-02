@@ -101,8 +101,15 @@ def build(arch_path, base_path, seed, device, stage, madelung, eps_inf, t_ref, l
             from mace.modules.defect_bounded import install_bounded_elements
 
             install_bounded_elements(model)
-    # Stage 3 needs no surgery: MACEDefect builds the counting head directly, and it REPLACES
-    # the spectral head rather than sitting beside it -- two heads would both write delta_sr.
+    if stage >= 3:
+        # Section 3: Harrison term values, not a zero initialisation. eps0 = 0 makes every
+        # site degenerate -- the atomic limit, where the bond order vanishes and (on the
+        # frozen-P gradient) nothing could move the hoppings at all. The measured bond length
+        # is passed in so the head stays host-agnostic.
+        from mace.modules.defect_counting import harrison_initialise
+
+        harrison_initialise(model.spectral, [int(z) for z in model.atomic_numbers],
+                            bond_length=t_ref)
     model = model.to(device)
     log(f"      stage {stage}, madelung {'ON' if madelung else 'OFF'}, "
         f"eps_inf {eps_inf}, seed {seed}")
@@ -179,6 +186,38 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
     log(f"      reach: max edge {rep.get('max_edge', float('nan')):.2f} A "
         f"against cutoff {ctx.cutoff:.1f} A")
 
+    metrics_init = {}
+    if stage >= 3:
+        from mace.modules.defect_counting import VALENCE, initialisation_gate
+
+        b0, f0 = batches[0]
+        with torch.no_grad():
+            out0 = model(ctx.forward_dict(b0, f0), training=False, compute_force=False)
+            target = getattr(b0, "energy", None)
+            dn = b0.carrier_counts.reshape(int(b0.num_graphs), -1)
+            dn = (dn[:, 0] + dn[:, 1] - dn[:, 2] - dn[:, 3]).to(
+                out0["delta_sr_energy"].dtype)
+            sel = dn.abs() > 0
+            if target is not None and bool(sel.any()):
+                # E_head moves by c * Delta_n and by nothing else, so one scalar solves the
+                # median mismatch exactly. This is mu's old initialisation role, without
+                # mu's per-channel bookkeeping.
+                resid = target - out0["base_energy"] - out0["delta_sr_energy"]
+                c = float(torch.median(resid[sel] / dn[sel]))
+                model.spectral.c_shift.fill_(c)
+                log(f"      c-shift calibrated to {c:+.4f} eV on the init batch")
+        pb0, pf0 = (pristine_batches or [(b0, f0)])[0]
+        internals, _ = capture(model, pb0, ctx=ctx, frames=pf0)
+        lam0 = internals["lam"][0, 0]
+        lam0 = lam0[lam0 < 500.0]
+        n_el = sum(VALENCE[int(z)] for z in pf0[0].get_atomic_numbers()) / 2.0
+        gate = initialisation_gate(lam0, n_el, e_gap)
+        log(f"      init gate: edges {gate['edge_spacing_below']:.3f}/"
+            f"{gate['edge_spacing_above']:.3f} eV (need <= {0.5 * e_gap:.2f}), bandwidth "
+            f"{gate['bandwidth']:.2f} eV (need >= {2 * e_gap:.2f}) -> "
+            f"{'PASS' if gate['passed'] else 'TRIP'}")
+        metrics_init = {f"init_{k}": v for k, v in gate.items()}
+
     model.train()
     for n, p in model.named_parameters():
         train_it = (is_correction_param(n) or ".spectral." in n
@@ -191,6 +230,12 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
         p.requires_grad_(train_it)
     params = [p for n, p in model.named_parameters() if p.requires_grad]
     opt = torch.optim.AdamW(params, lr=lr)
+    # 5-epoch linear warmup. The counting head's correction is eV-scale at step 0, so the
+    # first few steps see gradients three orders larger than the converged ones; going in at
+    # full rate is how a seed gets thrown somewhere it cannot return from.
+    warmup = 5
+    sched = torch.optim.lr_scheduler.LambdaLR(
+        opt, lambda e: min(1.0, (e + 1) / warmup) if stage >= 3 else 1.0)
 
     rng = np.random.default_rng(seed)
     hist = []
@@ -212,7 +257,7 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
                 loss = loss + w_gap * gap_res ** 2
             opt.zero_grad(set_to_none=True)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(params, 10.0)
+            torch.nn.utils.clip_grad_norm_(params, 1.0 if stage >= 3 else 10.0)
             opt.step()
             # Z lives on the pristine composition hyperplane. Without the projection the
             # species charges drift as a group, which is a gauge on phi and a slow
@@ -221,6 +266,7 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
                 model.madelung.project_()
             f_sum += float(loss)
             n_step += 1
+        sched.step()
         hist.append(f_sum / max(n_step, 1))
         if ep % 5 == 0 or ep == epochs - 1:
             z = (model.madelung.z.tolist() if getattr(model, "madelung", None) is not None
@@ -262,6 +308,7 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
             metrics["superatom_reseed"] = True
             log(f"      *** SUPERATOM WATCH: split fraction {sf:.3f} > 0.30 -- this seed is "
                 "to be reseeded, not interpreted ***")
+    metrics.update(**metrics_init)
     metrics.update(seed=seed, stage=stage, madelung=bool(madelung), freeze_z=bool(freeze_z),
                    neff=neff,
                    null_ratio=ratio, force_final=hist[-1], force_first=hist[0],

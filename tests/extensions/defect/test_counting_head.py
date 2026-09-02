@@ -602,3 +602,80 @@ class TestDensityResponseBackward:
         (P[0, 1] ** 2 + P[0, 1]).backward()
         assert off.grad is not None and abs(float(off.grad)) > 1e-6, (
             "no gradient reaches the hopping at the atomic limit")
+
+
+class TestHarrisonInitialisation:
+    """Section 3: the init that replaces the atomic limit."""
+
+    @staticmethod
+    def head(bond=2.8):
+        from mace.modules.defect_counting import CountingHead, harrison_initialise
+        h = CountingHead(num_elements=3, feature_dim=8, atomic_numbers=[17, 55, 82])
+        harrison_initialise(h, [17, 55, 82], bond_length=bond)
+        return h
+
+    def test_anion_p_sits_below_both_cation_p_levels(self):
+        """The property the whole init is for, and it costs no charge parameter: the valence
+        band comes out anion-derived without touching Z."""
+        h = self.head()
+        cl_p, cs_p, pb_p = (float(h.h.eps0[i, 1]) for i in range(3))
+        assert cl_p < pb_p < cs_p, f"Cl {cl_p}, Pb {pb_p}, Cs {cs_p}"
+
+    def test_s_lies_below_p_for_every_species(self):
+        h = self.head()
+        for i in range(3):
+            assert float(h.h.eps0[i, 0]) < float(h.h.eps0[i, 1])
+
+    def test_hoppings_follow_the_universal_d_squared_scaling(self):
+        """Halving the bond length must quadruple every integral -- that is the content of
+        the scaling, and a wrong power would be invisible at one distance."""
+        a, b = self.head(bond=2.8), self.head(bond=1.4)
+        ratio = (b.h.v0_raw / a.h.v0_raw)
+        assert torch.allclose(ratio, torch.full_like(ratio, 4.0), atol=1e-10)
+
+    def test_the_bond_length_is_an_argument_not_a_constant(self):
+        """Passing the measured distance in keeps the head host-agnostic; a baked-in value
+        would make it a CsPbCl3 module."""
+        import inspect
+        from mace.modules.defect_counting import harrison_initialise
+        assert "bond_length" in inspect.signature(harrison_initialise).parameters
+
+    def test_an_unknown_species_is_refused(self):
+        from mace.modules.defect_counting import CountingHead, harrison_initialise
+        h = CountingHead(num_elements=3, feature_dim=8, atomic_numbers=[17, 55, 82])
+        with pytest.raises(ValueError, match="no Harrison term values"):
+            harrison_initialise(h, [17, 55, 6])
+
+
+class TestInitialisationGate:
+    def test_the_atomic_limit_fails_the_gate(self):
+        """Degenerate site energies and no bandwidth: exactly the state the gate exists to
+        catch, and the one a zero initialisation produces."""
+        from mace.modules.defect_counting import initialisation_gate
+        lam = torch.zeros(40) + torch.linspace(0, 1e-6, 40)
+        g = initialisation_gate(lam, 20.0, e_gap=2.4)
+        assert not g["passed"]
+        assert g["bandwidth"] < 2 * 2.4
+
+    def test_a_band_like_spectrum_passes(self):
+        from mace.modules.defect_counting import initialisation_gate
+        lam = torch.linspace(-10.0, 10.0, 200)
+        g = initialisation_gate(lam, 100.0, e_gap=2.4)
+        assert g["passed"], g
+
+    def test_two_clumps_pass_and_that_is_correct(self):
+        """Recorded because the obvious intuition is wrong. Two tight clumps 24 eV apart look
+        atomic, but both stated clauses pass: the edge spacings are measured WITHIN the
+        occupied and empty manifolds, and they are tiny, while the bandwidth is large.
+
+        That is not a hole in the gate. This spectrum is a band structure with an absurd gap,
+        not an atomic limit -- the atomic limit has near-degenerate levels and therefore no
+        bandwidth, which the second clause does catch. What rejects an absurd frontier gap is
+        `loss_gap`, which trains that quantity toward E_gap; the gate reports it so the two
+        are not confused."""
+        from mace.modules.defect_counting import initialisation_gate
+        lam = torch.cat([torch.full((20,), -12.0), torch.full((20,), 12.0)])
+        lam = lam + torch.linspace(0, 1e-4, 40)
+        g = initialisation_gate(lam, 20.0, e_gap=2.4)
+        assert g["passed"]
+        assert g["frontier_gap"] > 20.0, "the frontier gap is what would flag this"

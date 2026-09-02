@@ -350,6 +350,10 @@ class CountingHead(nn.Module):
         # Diagnostics read this to size their spectra; the counting head returns the whole
         # spectrum, so it is 4 orbitals per atom rather than a truncation.
         self.num_states = -1
+        # One scalar, uniform across sites. It moves E_head by c * Delta_n and nothing else
+        # -- the role mu_c used to play, without mu_c's per-channel bookkeeping. Calibrated
+        # once on an init batch against the median energy target, then trainable.
+        self.c_shift = nn.Parameter(torch.zeros(()))
 
     def forward(self, node_feats, counter_emb, counts, batch, num_graphs, edge_index,
                 edge_length, site_bias=None, node_species=None, clamp_mask=None,
@@ -373,7 +377,7 @@ class CountingHead(nn.Module):
         device, dtype = node_feats.device, node_feats.dtype
         n_nodes = int(node_feats.shape[0])
 
-        levels = self.h.on_site(node_feats, node_species, madelung)      # [n, 2]
+        levels = self.h.on_site(node_feats, node_species, madelung) + self.c_shift
         if clamp_mask is not None:
             # DIAGNOSTIC ONLY, same contract as the spectral heads: sites outside the mask are
             # pushed far above the frontier so no occupied state can live on them.
@@ -652,3 +656,80 @@ def fermi_density_matrix(H: torch.Tensor, n_electrons: float, t_el: float = T_EL
                          degeneracy_tol: float = 1e-7) -> torch.Tensor:
     """`P = sum_k f_k psi_k psi_k^T` at fixed `N`, differentiable in `H`."""
     return _FermiDensityMatrix.apply(H, n_electrons, t_el, degeneracy_tol)
+
+
+# Harrison solid-state-table atomic term values, eV, by atomic number: (eps_s, eps_p).
+# Tabulated free-atom values -- host- and defect-agnostic, and not fitted here.
+#
+# What they buy: the anion p level sits BELOW both cation p levels
+# (Cl -11.74 < Pb -8.04 < Cs -1.80) without touching Z, so the valence band comes out
+# anion-derived at initialisation. Starting instead from eps0 = 0 makes every site degenerate
+# -- the atomic limit, where the bond order vanishes and, on the frozen-P gradient, nothing
+# could move the hoppings at all.
+HARRISON_TERMS: Dict[int, Tuple[float, float]] = {
+    17: (-24.63, -11.74),      # Cl 3s, 3p
+    55: (-3.36, -1.80),        # Cs 6s, 6p
+    82: (-15.19, -8.04),       # Pb 6s, 6p
+}
+# Harrison universal coefficients, in BOND_TYPES order.
+HARRISON_ETA = (-1.40, 1.84, 3.24, -0.81)
+
+
+def harrison_initialise(head, atomic_numbers: Sequence[int],
+                        bond_length: float = 2.8) -> None:
+    """Set on-site levels and hopping scales from the Harrison tables, in place.
+
+    On-sites are the tabulated free-atom term values per species and shell. Hoppings are
+    `eta_b * hbar^2 / (m d^2)` at the measured bond length, per bond type.
+
+    `bond_length` is the MEASURED median nearest-neighbour distance of the data, not a
+    constant: the universal scaling is a function of the actual bond length, and passing a
+    material-specific number in here rather than baking one into the module keeps the head
+    host-agnostic.
+    """
+    zs = [int(z) for z in atomic_numbers]
+    missing = [z for z in zs if z not in HARRISON_TERMS]
+    if missing:
+        raise ValueError(
+            f"no Harrison term values recorded for Z = {missing}; the counting head would "
+            "fall back to a degenerate atomic-limit initialisation, which is the failure "
+            "this function exists to prevent")
+    with torch.no_grad():
+        for i, z in enumerate(zs):
+            eps_s, eps_p = HARRISON_TERMS[z]
+            head.h.eps0[i, 0] = eps_s
+            head.h.eps0[i, 1] = eps_p
+        scale = HBAR2_OVER_M_COUNTING / (float(bond_length) ** 2)
+        eta = torch.tensor(HARRISON_ETA, dtype=head.h.v0_raw.dtype,
+                           device=head.h.v0_raw.device)
+        head.h.v0_raw.copy_(
+            (eta * scale).reshape(1, 1, 4).expand_as(head.h.v0_raw).clone())
+
+
+HBAR2_OVER_M_COUNTING = 7.62      # eV A^2; same constant Edit 3 uses, named here to avoid
+                                  # a cross-module import in a hot path
+
+
+def initialisation_gate(lam: torch.Tensor, n_electrons: float, e_gap: float,
+                        t_el: float = T_EL) -> Dict[str, float]:
+    """The step-0 sanity gate on a PRISTINE spectrum: bands, not atoms.
+
+    Two conditions, both from the plan:
+
+    * edge spacing <= E_gap / 2 at BOTH edges -- the levels either side of the frontier must
+      be closer together than the gap they are supposed to bracket. In the atomic limit the
+      spacing is of order the term-value differences (tens of eV) and this fails immediately.
+    * bandwidth >= 2 E_gap -- there has to be a band at all.
+
+    A gate, not a filter: a trip means re-initialise AND report. A seed that drifts atomic
+    during training is a reportable failure mode, not something to discard quietly.
+    """
+    lam = torch.sort(lam.detach().reshape(-1)).values
+    n = int(round(float(n_electrons)))
+    n = max(1, min(n, int(lam.numel()) - 1))
+    below = float(lam[n - 1] - lam[n - 2]) if n >= 2 else float("inf")
+    above = float(lam[n + 1] - lam[n]) if n + 1 < lam.numel() else float("inf")
+    bandwidth = float(lam[-1] - lam[0])
+    ok = (below <= 0.5 * e_gap) and (above <= 0.5 * e_gap) and (bandwidth >= 2.0 * e_gap)
+    return dict(edge_spacing_below=below, edge_spacing_above=above, bandwidth=bandwidth,
+                frontier_gap=float(lam[n] - lam[n - 1]), passed=bool(ok))
