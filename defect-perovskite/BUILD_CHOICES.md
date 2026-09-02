@@ -1,5 +1,9 @@
 # Implementation choices to confirm — Madelung-in-H build
 
+> **Status, 2 Sep 2026.** The coadvisor asked to see only those items that touch the **A1
+> sign convention** or the **forward-context object**. Those are **items 4, 8 and 9** —
+> flagged below. Everything else stands as applied unless overruled. Item 11 is withdrawn.
+
 Choices, not results. Each is a place the plan admits more than one reading, or where I went
 past what it says. Ordered by how much a different answer would cost to undo.
 
@@ -23,7 +27,7 @@ ON vs OFF.
 
 ## Judgement calls inside the spec
 
-**4. `phi_LR` sign lives in exactly one function.** `MadelungOnSite.on_site_shift` returns
+**4. ⚑ FLAGGED (A1 sign convention). `phi_LR` sign lives in exactly one function.** `MadelungOnSite.on_site_shift` returns
 `−phi/ε∞`, already signed; the head adds it and may not re-apply anything. The A1 tables check
 that function, so there is one place to be wrong and it is covered.
 
@@ -50,12 +54,12 @@ first-neighbour value is above its 0.3–1.0 eV, because it is now Harrison's ss
 measured bond length rather than a calibrated target. Flagging it because it supersedes a
 window we previously treated as a constraint — and because `V0` is free to come down.
 
-**8. Stage 1–2 gauge unchanged, so the Madelung *contrast* is what acts.** The difference
+**8. ⚑ FLAGGED (A1 sign convention). Stage 1–2 gauge unchanged, so the Madelung *contrast* is what acts.** The difference
 gauge removes the per-frame mean, which removes the uniform part of the shift. A1 test 2 and
 A2 both check contrast. The absolute offset becomes load-bearing only at Stage 3's ungauged
 `eps0`, where the energy labels pin it — decided now rather than rediscovered there.
 
-**9. `eps_inf` is threaded through `ForwardContext`, never read from the model.** The retained
+**9. ⚑ FLAGGED (forward-context object). `eps_inf` is threaded through `ForwardContext`, never read from the model.** The retained
 arch and base carry `eps_inf_init = 6.5` while both launchers pass 4.0. Inert there
 (`use_long_range=False`), not inert once the Madelung term divides by it.
 

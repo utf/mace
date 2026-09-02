@@ -83,11 +83,19 @@ against the band-edge constraint. The **Madelung term** then drives the correlat
 which is the physical direction: the level is deepest when the pair dimerises. That
 comparison is one edit apart and is clean.
 
-Not closed, because "removed" and "explained" are different, and neither cohort tells us why
-the archived one was negative. But it is no longer the same open item: the cheapest
-explanation (resonance) is eliminated, and the anomaly does not survive either change.
+**CLOSED 2 Sep 2026, on the coadvisor's call.** Recorded verbatim as the closure:
 
-Until it is understood, `Δ_bind` is still not to be relied on as a depth.
+> Removed by Edit 1 + the loss change; archived-cohort mechanism unattributed; `Δ_bind`
+> usable as depth in the counting head, revisit only if the sign recurs there.
+
+The reasoning: the anomaly failed to survive either change, is positive in **10/10** under
+Stage 2 — exactly the conditions where the superatom escape is shut — and strengthens as the
+model gets more physical. That is the profile of an artefact of the retired training setup,
+not of the architecture going forward. Explaining a dead configuration's pathology is the
+side-quest class to avoid.
+
+§7's stop condition still stands for the counting head: if `corr(level, d)` comes back
+anti-physical on bound frames there, stop and investigate before R3.
 
 ---
 
