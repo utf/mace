@@ -95,9 +95,44 @@ error, and F4's gate rests on something real.
 
 The null also *confirms* the small-cell diagnosis rather than merely being consistent with it:
 at 79 atoms the carrier-free base error carries a resolved **+0.1317** d-trend with a tight
-interval — the same sign as the charged +0.3641 and none of the physics. And the force channel
-separates cleanly: the 79-atom null force slope is +0.0009, flat, which is why the head's force
-fit (b8) can track the labels at both sizes while the energy channel cannot.
+interval — the same sign as the charged +0.3641 and none of the physics.
+
+**What the null can and cannot cover, stated precisely, because the two sizes differ here.**
+The null is fitted over the *neutral* frames' own d range, and at 79 atoms the two populations
+barely overlap above their common median:
+
+| | n | d range (Å) | median | above 5.5 Å | above 6.0 Å |
+|---|---|---|---|---|---|
+| neutral null | 1174 | 3.68–6.02 | 4.74 | 56 | **1** |
+| charged | 1030 | 4.93–6.80 | 5.49 | 494 | **117** |
+
+The charged median is essentially the null's 95th percentile. So at 79 atoms the honest
+reading is narrower than "the trend is base error": **inside the region where
+a null exists, neither channel carries a resolved carrier trend** — energy +0.0806
+[−0.1108, +0.2720], force −0.0470 [−0.3079, +0.2139] — **and the base's own error there is
++0.1317 in energy and flat in force. Outside it, in the long-d tail where the full-range fits
+get their slope, no null is measurable and carrier trend cannot be separated from base
+extrapolation at all.** Either way the 79-atom labels supply nothing usable in this observable,
+which is the conclusion F6 needed; what they cannot supply is a clean attribution of the
++0.3641 to one cause.
+
+**At 159 atoms the control is genuinely matched, and that is the one the gate rests on.**
+Seventeen charged and seventeen neutral cells of the same size, scored by the same bases:
+
+| | n | d range (Å) | median | slope |
+|---|---|---|---|---|
+| neutral null | 17 | 4.18–6.54 | 5.75 | +0.0800 [−0.0503, +0.2102] |
+| charged | 17 | 4.84–7.12 | 6.11 | **−0.1338** [−0.1446, −0.1230] |
+
+The two overlap on 4.84–6.54, which contains twelve of the seventeen charged frames — nothing
+like the 1-against-117 mismatch at 79 atoms. A carrier-free set covering most of the same
+geometries gives a slope of the opposite sign whose interval contains zero, while the charged
+set gives −0.134 with corr −0.989. That is the control F4's gate needed and did not have.
+
+The channel asymmetry is worth carrying forward. The 79-atom null's **force** slope is
++0.0009 — the base makes no d-dependent force error where it has data — while its **energy**
+slope is +0.1317. Force errors are local; energy errors accumulate over the cell. That is why
+the head's force fit (b8) tracks the labels at both sizes while the energy channel cannot.
 
 ### b2 — the head's own energy and level slopes, per size
 
