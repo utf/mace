@@ -78,6 +78,28 @@ the counting head returns the whole 4N spectrum (320 states, reference 0.003) wh
 spectral head returned 6 (reference 0.20). Stage 3's 0.07 is *above* its own reference;
 Stage 2's 0.14 is *below* its own. No Stage-3 seed tripped the 0.30 reseed watch.
 
+## The D-2 readout, which landed after the table above
+
+**`corr(λ, d_hub)` is positive in 6 of 6 Stage-3 models** (+0.11 to +0.44). The turnover first
+seen at Stage 1 and strengthened at Stage 2 survives the change of basis, on every seed —
+including the two that failed to converge. Whatever else is unsettled, the level's response
+to the vacancy-flanking separation is now physical in every arm we have run since Edit 1
+landed, across three architectures.
+
+**`δ_L` independently exposes the failed seeds.** The pristine level spacing comes out at
+**2.03 and 3.75 eV** for seeds 3 and 4, against 0.087–0.57 eV for the four that converged. A
+pristine supercell whose levels are spaced by 2–4 eV is not a band structure. This is a
+useful property: the failure is visible in a *label-free* quantity computed from the pristine
+spectrum alone, so a screen can reject those seeds without reference to their fit.
+
+**Resonance now discriminates, and in the opposite direction.** The counting head's spectrum
+is dense (320 states), so many more frames fall in the resonant bin: seed 2 has 17 of 24,
+seed 5 has 20 of 24, seed 1 has 7 marginal and 17 bound. For seed 1 the marginal-bin error is
+*lower* than the bound-bin error (45.9 against 53.4 meV/Å) — the reverse of the archived
+cohort, where the head was worse than its own base on resonant frames. Too few models to read
+as a result; recorded because the bin populations are now large enough to make the comparison
+possible at all, which they were not before (18 resonant frames across 18 models).
+
 ## What Stage 3 needs before it can be read
 
 1. **Fix the failure-to-start.** Two of six seeds is too many. Candidates, cheapest first: a
