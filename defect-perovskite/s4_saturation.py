@@ -46,34 +46,29 @@ SATURATED = 2.0          # |x| beyond which sech^2 has lost >90% of its gradient
 
 
 def collect(model, batch, frames, ctx):
-    """The raw tanh arguments on a real graph, by spying on the head's own MLPs."""
+    """The raw tanh arguments on a real graph, from the head's OWN audit buffer.
+
+    Not a spy on guessed attribute names. The previous version looked for submodules called
+    `g`, `h`, `g_mlp` and so on, matched none, and reported a silent null -- which is the
+    worst possible failure for an audit, since "no saturation found" and "nothing was
+    measured" print the same. `SlaterKosterH.audit()` now stores every pre-tanh tensor from
+    the code that computes it.
+
+    The audited class is `SlaterKosterH`, NOT `BoundedLocalHead`: Stage 3 replaced the
+    spectral head wholesale, so these models contain no BoundedLocalHead at all and auditing
+    it would have audited a module that is not there.
+    """
     head = model.spectral
-    grabbed = {}
-
-    def spy(name, module):
-        original = module.forward
-
-        def wrapped(*a, **k):
-            out = original(*a, **k)
-            grabbed.setdefault(name, []).append(out.detach().reshape(-1).cpu())
-            return out
-
-        module.forward = wrapped
-        return original
-
-    restore = {}
-    for name in ("g", "h", "g_mlp", "h_mlp", "hop_mlp", "site_mlp"):
-        mod = getattr(head.h, name, None)
-        if mod is not None and hasattr(mod, "forward"):
-            restore[name] = (mod, spy(name, mod))
+    head.h._audit_bin = {}
+    bin_ = head.h.audit(True)
     try:
         with torch.no_grad():
             model(ctx.forward_dict(batch, frames, requires_grad=False),
                   training=False, compute_force=False)
+        grabbed = {k: torch.cat(v) for k, v in bin_.items() if v}
     finally:
-        for mod, original in restore.values():
-            mod.forward = original
-    return {k: torch.cat(v) for k, v in grabbed.items()}
+        head.h.audit(False)
+    return grabbed
 
 
 def envelope(model, r_grid):
@@ -126,9 +121,10 @@ def main() -> None:
         raw = collect(model, batch, frs, ctx)
         row = {"model": Path(mp).name, "channels": {}}
         if not raw:
-            row["note"] = ("no tanh-argument module found under head.h by the known names; "
-                           "the saturation fractions below are unavailable and the audit "
-                           "reports the parameter norms instead")
+            row["note"] = ("the audit buffer came back empty -- SlaterKosterH.audit() did "
+                           "not fire, so nothing was measured. This is a FAILURE of the "
+                           "audit, not a finding of no saturation.")
+            print(f"  {row['model']:20s} AUDIT DID NOT FIRE", flush=True)
         for name, v in raw.items():
             v = v.float()
             sat = float((v.abs() > SATURATED).float().mean())

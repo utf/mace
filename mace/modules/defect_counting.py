@@ -245,8 +245,35 @@ class SlaterKosterH(nn.Module):
         e_i, e_j = self.elem(species_i), self.elem(species_j)
         sym = torch.cat([feats_i + feats_j, (feats_i - feats_j).abs(),
                          e_i + e_j, (e_i - e_j).abs()], dim=-1)
-        correction = 1.0 + self.hop_range * torch.tanh(self.hop(sym))
+        pre = self.hop(sym)
+        self._audit_store("hop", pre)
+        correction = 1.0 + self.hop_range * torch.tanh(pre)
         return self.v0(species_i, species_j) * self.radial(r).unsqueeze(-1) * correction
+
+    _audit = False
+    _audit_bin: Dict[str, list] = {}
+
+    def audit(self, on: bool = True) -> Dict[str, torch.Tensor]:
+        """Turn on pre-tanh capture and return the dict the head writes into.
+
+        NAME-PROOF BY CONSTRUCTION. The previous audit spied on submodules by guessing their
+        attribute names, matched none, and reported nothing -- a silent null. The tensors are
+        now stored by the code that computes them, so the audit cannot miss a channel that
+        exists or invent one that does not.
+
+        WHICH CLASS THIS IS ON, and it is not the one the plan named. Stage 3 replaced the
+        spectral head wholesale, so a Stage-3 model contains NO `BoundedLocalHead`: the
+        bounded forms that are live are these two, on `SlaterKosterH`. Auditing
+        `BoundedLocalHead` would have audited a module the models do not contain.
+        """
+        self._audit = bool(on)
+        if not on:
+            self._audit_bin = {}
+        return self._audit_bin
+
+    def _audit_store(self, name: str, value: torch.Tensor) -> None:
+        if getattr(self, "_audit", False):
+            self._audit_bin.setdefault(name, []).append(value.detach().reshape(-1).cpu())
 
     def on_site(self, feats, species, madelung: Optional[torch.Tensor] = None):
         """`[n_nodes, 2]`: the s and p levels.
@@ -256,6 +283,8 @@ class SlaterKosterH(nn.Module):
         different shifts would be inventing a crystal-field term and calling it electrostatics.
         """
         e = self.elem(species)
+        pre_site = self.site(torch.cat([feats, self.elem(species)], dim=-1))
+        self._audit_store("site", pre_site)
         levels = self.eps0[species] + self.on_site_range * torch.tanh(
             self.site(torch.cat([feats, e], dim=-1)))
         if madelung is not None:
