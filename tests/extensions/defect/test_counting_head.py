@@ -770,3 +770,152 @@ class TestExplicitForcesMatchAutograd:
         F = head_forces(H, pos, P, P_ref, create_graph=True)
         gg = torch.autograd.grad(F.pow(2).sum(), scale, allow_unused=True)[0]
         assert gg is not None and torch.isfinite(gg).all()
+
+
+class TestMultiFillFunction:
+    """`fermi_density_difference` must equal four `fermi_density_matrix` calls, in the value
+    AND in the backward. The multi-fill Function exists only to save three eigensolves per
+    graph per step; the four-call route is the validated reference, and a refactor that drifts
+    from it would move every force gradient without moving a single force.
+    """
+
+    @staticmethod
+    def toy(n=12, seed=5):
+        g = torch.Generator().manual_seed(seed)
+        a = torch.randn(n, n, generator=g)
+        return (0.5 * (a + a.T)).requires_grad_(True)
+
+    def test_value_matches_the_four_call_route(self):
+        from mace.modules.defect_counting import (fermi_density_difference,
+                                                  fermi_density_matrix)
+        h = self.toy()
+        fills, signs = (7.0, 6.0, 6.0, 6.0), (1.0, 1.0, -1.0, -1.0)
+        combined = fermi_density_difference(h, fills, signs)
+        separate = sum(s * fermi_density_matrix(h, n) for s, n in zip(signs, fills))
+        assert torch.allclose(combined, separate, atol=1e-12)
+
+    def test_backward_matches_the_four_call_route(self):
+        from mace.modules.defect_counting import (fermi_density_difference,
+                                                  fermi_density_matrix)
+        fills, signs = (7.0, 6.0, 6.0, 6.0), (1.0, 1.0, -1.0, -1.0)
+        g = torch.Generator().manual_seed(11)
+        cot = torch.randn(12, 12, generator=g)
+
+        h1 = self.toy()
+        (fermi_density_difference(h1, fills, signs) * cot).sum().backward()
+        h2 = self.toy()
+        (sum(s * fermi_density_matrix(h2, n) for s, n in zip(signs, fills)) * cot
+         ).sum().backward()
+        assert torch.allclose(h1.grad, h2.grad, atol=1e-10), (
+            f"max |delta| = {float((h1.grad - h2.grad).abs().max()):.3e}")
+
+    def test_identical_fills_give_exactly_zero_and_no_gradient(self):
+        """The pristine case. Equal fills either side of the difference cancel in the value
+        AND in the response, so a counters-off frame contributes nothing by construction."""
+        from mace.modules.defect_counting import fermi_density_difference
+        h = self.toy(seed=7)
+        d = fermi_density_difference(h, (6.0, 6.0, 6.0, 6.0), (1.0, 1.0, -1.0, -1.0))
+        assert float(d.abs().max()) == 0.0
+        d.sum().backward()
+        assert float(h.grad.abs().max()) == 0.0
+
+
+class TestForceResponseWiring:
+    """Section 1 wired into `CountingHead.forward`, which is where the model consumes it.
+
+    The claim being pinned is a pair: the response is EXACTLY zero in value, so no force the
+    model reports can move; and it is non-zero in the parameter gradient, which is the whole
+    reason it exists. Testing only one half would let either a no-op or a prediction change
+    through.
+    """
+
+    @staticmethod
+    def system(n_sites=6, seed=2, counts=(0, 0, 1, 0)):
+        from mace.modules.defect_counting import CountingHead, harrison_initialise
+        torch.manual_seed(seed)
+        head = CountingHead(num_elements=3, feature_dim=8, atomic_numbers=[17, 55, 82],
+                            r_cut=6.0)
+        harrison_initialise(head, [17, 55, 82], bond_length=2.8)
+        g = torch.Generator().manual_seed(seed)
+        pos = (torch.randn(n_sites, 3, generator=g) * 2.5).requires_grad_(True)
+        species = torch.tensor([0, 2, 0, 0, 1, 0])[:n_sites]
+        src, dst = torch.meshgrid(torch.arange(n_sites), torch.arange(n_sites),
+                                  indexing="ij")
+        keep = src.reshape(-1) != dst.reshape(-1)
+        edge_index = torch.stack([src.reshape(-1)[keep], dst.reshape(-1)[keep]])
+        feats = torch.randn(n_sites, 8, generator=g)
+        batch = torch.zeros(n_sites, dtype=torch.long)
+        cnt = torch.tensor([list(counts)], dtype=torch.get_default_dtype())
+
+        def call(force_out):
+            vec = pos[edge_index[1]] - pos[edge_index[0]]
+            return head(node_feats=feats, counter_emb=None, counts=cnt, batch=batch,
+                        num_graphs=1, edge_index=edge_index,
+                        edge_length=vec.pow(2).sum(-1, keepdim=True).sqrt(),
+                        node_species=species, edge_vector=vec,
+                        positions=pos, force_out=force_out)
+
+        return head, pos, call
+
+    def test_the_response_is_exactly_zero_in_value(self):
+        _, pos, call = self.system()
+        out = {}
+        call(out)
+        assert "force_response" in out, "the head was asked and did not answer"
+        assert float(out["force_response"].abs().max()) == 0.0, (
+            "the response must be an identity zero, not a small number: every force the "
+            "model reports is compared against runs made before the wiring")
+
+    def test_wiring_changes_the_gradient_and_not_the_forces(self):
+        """The section-1 contract in one test. Same batch, wiring on and off: the head force
+        is bit-identical, and the gradient of that force with respect to a hopping scale is
+        not. Deleting the response as a no-op fails here."""
+        results = {}
+        for tag, want in (("off", False), ("on", True)):
+            head, pos, call = self.system()
+            out = {} if want else None
+            res = call(out)
+            force = -torch.autograd.grad(res.delta_sr.sum(), pos, create_graph=True)[0]
+            if out:
+                force = force + out["force_response"]
+            grad = torch.autograd.grad(force.pow(2).sum(), head.h.v0_raw,
+                                       allow_unused=True)[0]
+            results[tag] = (force.detach().clone(), None if grad is None else grad.clone())
+
+        assert torch.equal(results["on"][0], results["off"][0]), (
+            "the wiring moved the forces; it is supposed to be an identity in value")
+        g_on, g_off = results["on"][1], results["off"][1]
+        assert g_on is not None and g_off is not None
+        assert torch.isfinite(g_on).all()
+        delta = float((g_on - g_off).abs().max())
+        assert delta > 1e-8, (
+            f"the density response contributed nothing to the gradient (max delta {delta:.3e})"
+            " -- the wiring is a no-op and the term is still missing")
+
+    def test_a_neutral_frame_gets_no_response_at_all(self):
+        """The standing pristine regression, at the FORCE level where it has never been
+        asserted. At zero counters the fill equals the reference, so the head energy, its
+        force and its response are all identically zero -- and the cheapest possible catch
+        for a future `P` where `P - P_ref` belongs."""
+        _, pos, call = self.system(counts=(0, 0, 0, 0))
+        out = {}
+        res = call(out)
+        assert out == {}, "a neutral frame must not build a response graph at all"
+        assert float(res.delta_sr.abs().max()) == 0.0
+        force = -torch.autograd.grad(res.delta_sr.sum(), pos, allow_unused=True,
+                                     materialize_grads=True)[0]
+        assert float(force.abs().max()) < 1e-10, (
+            f"a neutral frame exerts a head force of {float(force.abs().max()):.3e} eV/A")
+
+    def test_it_refuses_to_answer_without_positions(self):
+        from mace.modules.defect_counting import CountingHead
+        head, pos, call = self.system()
+        with pytest.raises(ValueError, match="positions are absent or detached"):
+            vec = pos[[0, 1]] - pos[[1, 0]]
+            head(node_feats=torch.randn(6, 8), counter_emb=None,
+                 counts=torch.tensor([[0.0, 0.0, 1.0, 0.0]]),
+                 batch=torch.zeros(6, dtype=torch.long), num_graphs=1,
+                 edge_index=torch.tensor([[0, 1], [1, 0]]),
+                 edge_length=vec.pow(2).sum(-1, keepdim=True).sqrt(),
+                 node_species=torch.tensor([0, 2, 0, 0, 1, 0]), edge_vector=vec,
+                 positions=None, force_out={})

@@ -47,7 +47,7 @@ each shell carries its own bounded correction.
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import torch
 from torch import nn
@@ -115,6 +115,23 @@ def spin_targets(n_total: int, counts: Sequence[int]) -> Tuple[float, float]:
     minor = n_total // 2
     e_maj, e_min, h_maj, h_min = (int(c) for c in counts)
     return float(maj + e_maj - h_maj), float(minor + e_min - h_min)
+
+
+def resolve_fills(n_total: int, counts: Sequence[int], occupation=None):
+    """`((N_maj, N_min), (N_maj_ref, N_min_ref))` -- the fill, and the neutral origin.
+
+    One function because two places now need the same answer: `head_energy_hf` builds the
+    energy as a difference between these two fills, and `CountingHead` builds the force
+    response's density difference from the same pair. Duplicating the four lines is exactly
+    how the two would come to disagree about what "the reference" is -- and then the response
+    would be the gradient of a different quantity than the energy it is supposed to complete.
+    """
+    ref = (float((n_total + 1) // 2), float(n_total // 2))
+    if occupation is None:
+        now = spin_targets(n_total, counts)
+    else:
+        now = (float(occupation[0]), float(occupation[1]))
+    return now, ref
 
 
 def fermi_fill(eps: torch.Tensor, n_electrons: float, t_el: float = T_EL,
@@ -354,10 +371,15 @@ class CountingHead(nn.Module):
         # -- the role mu_c used to play, without mu_c's per-channel bookkeeping. Calibrated
         # once on an init batch against the median energy target, then trainable.
         self.c_shift = nn.Parameter(torch.zeros(()))
+        # Read by `_carrier_head` to decide whether to hand this head `positions` and a
+        # `force_out` dict. A capability flag rather than an isinstance check: the model must
+        # not import the head module to know what its own head can do.
+        self.wants_positions = True
 
     def forward(self, node_feats, counter_emb, counts, batch, num_graphs, edge_index,
                 edge_length, site_bias=None, node_species=None, clamp_mask=None,
-                edge_vector=None, madelung=None, occupations=None, internals=None):
+                edge_vector=None, madelung=None, occupations=None, internals=None,
+                positions=None, force_out=None):
         """`occupations`, when given, is [n_graphs, 2] holding (N_maj, N_min) directly.
 
         Stage 4's interface, and it is an INPUT change rather than an architecture one: the
@@ -388,6 +410,9 @@ class CountingHead(nn.Module):
         delta = torch.zeros(num_graphs, device=device, dtype=dtype)
         gaps = torch.zeros(num_graphs, device=device, dtype=dtype)
         spectra, per_graph_nodes = [], []
+        # Section 1: the force response. Collected per graph, contracted once after the loop.
+        resp_h: List[torch.Tensor] = []
+        resp_d: List[torch.Tensor] = []
 
         src, dst = edge_index[0], edge_index[1]
         for g in range(num_graphs):
@@ -418,6 +443,38 @@ class CountingHead(nn.Module):
             e_head, lam, psi, p_now, p_ref = head_energy_hf(H, n_total, c, self.t_el,
                                                            occupation=occ)
             delta[g] = e_head
+
+            # SECTION 1, THE DENSITY RESPONSE IN THE FORCE GRADIENT.
+            #
+            # The energy above is built on DETACHED occupations, which is exact: at fixed N
+            # the free energy is stationary in the fill, so `dE/dR = Tr((P - P_ref) dH/dR)`
+            # with P held fixed. What that route drops is `dP/dtheta` in the force loss's
+            # PARAMETER gradient -- the optimiser searches as if the density could not respond
+            # to a change in the elements. That is what zeroes the hopping gradient at an
+            # atomic-limit initialisation, and what would stop E_LR from ever teaching the
+            # head where to put the carrier.
+            #
+            # The force is LINEAR in its cotangent, so
+            #
+            #     F(D) - F(D.detach()) = F(D - D.detach())
+            #
+            # and `D - D.detach()` is EXACTLY zero in value while carrying dD/dtheta. Adding
+            # its contraction to the forces therefore cannot move a single force component --
+            # that is an identity, not a tolerance -- while contributing precisely the missing
+            # `-Tr(dD/dtheta . dH/dR)` to the gradient. The already-present autograd route
+            # supplies the other half, `-Tr(D d2H/dR dtheta)`.
+            #
+            # Deleting this as a no-op is the obvious future mistake. The test that it is not
+            # one is `test_wiring_changes_gradient_not_forces`.
+            if force_out is not None:
+                now, ref = resolve_fills(n_total, c, occ)
+                if now != ref:
+                    dens = fermi_density_difference(
+                        H, (now[0], now[1], ref[0], ref[1]), (1.0, 1.0, -1.0, -1.0),
+                        self.t_el)
+                    resp_h.append(H)
+                    resp_d.append(dens - dens.detach())
+
             # EIGENVALUES CARRY THE GRADIENT, EIGENVECTORS DO NOT. `eigh`'s backward builds
             # the eigenvector term with 1/(lam_i - lam_j) factors, which is NaN at exact
             # degeneracy -- and a 316-state spectrum in a ~17 eV span has degeneracies for
@@ -442,6 +499,22 @@ class CountingHead(nn.Module):
 
             k = min(max(int(round(n_maj_ref)) - 1, 0), lam.numel() - 2)
             gaps[g] = lam[k + 1] - lam[k]
+
+        if force_out is not None and resp_h:
+            if positions is None or not positions.requires_grad:
+                raise ValueError(
+                    "the counting head was asked for a force response but positions are "
+                    "absent or detached; returning nothing here would silently train the "
+                    "frozen-density gradient while the configuration says otherwise")
+            grad = torch.autograd.grad(
+                resp_h, [positions], grad_outputs=resp_d, create_graph=True,
+                retain_graph=True, allow_unused=True)[0]
+            if grad is None:
+                raise RuntimeError(
+                    "the head Hamiltonian does not depend on positions; the force response "
+                    "-- and every head force already in the model -- would be identically "
+                    "zero, so this fails rather than returning a plausible zero")
+            force_out["force_response"] = -grad
 
         m = max(int(s.numel()) for s in spectra)
         lam_pad = torch.full((num_graphs, self.num_channels, m), 1.0e3,
@@ -512,15 +585,10 @@ def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
     lam, psi = torch.linalg.eigh(H)
     lam_d, psi_d = lam.detach(), psi.detach()
 
-    n_maj_ref = float((n_total + 1) // 2)
-    n_min_ref = float(n_total // 2)
-    if occupation is None:
-        n_maj, n_min = spin_targets(n_total, counts)
-    else:
-        # Stage 4: the caller states the fill. The REFERENCE stays the neutral ground state,
-        # so E_head is still the difference from the same origin and still vanishes when the
-        # override happens to equal it.
-        n_maj, n_min = float(occupation[0]), float(occupation[1])
+    # Stage 4 lets the caller state the fill. The REFERENCE stays the neutral ground state,
+    # so E_head is still the difference from the same origin and still vanishes when the
+    # override happens to equal it.
+    (n_maj, n_min), (n_maj_ref, n_min_ref) = resolve_fills(n_total, counts, occupation)
 
     def piece(n_electrons):
         f = fermi_fill(lam_d, n_electrons, t_el)
@@ -611,31 +679,81 @@ class _FermiDensityMatrix(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_P):
         lam, U, f = ctx.saved_tensors
-        t_el, tol = ctx.t_el, ctx.tol
-        G = grad_P.double()
-        # H is symmetric, so only the symmetric part of the cotangent can act on it.
-        G = 0.5 * (G + G.transpose(-1, -2))
-        Ghat = U.transpose(-1, -2) @ G @ U
-
-        fp = -f * (1.0 - f) / t_el                      # f'(lam), bounded by 1/(4 T)
-        dl = lam.unsqueeze(-1) - lam.unsqueeze(-2)
-        df = f.unsqueeze(-1) - f.unsqueeze(-2)
-        near = dl.abs() <= tol
-        # The divided difference away from coincidence, its limit at it. `torch.where` alone
-        # would still evaluate the singular branch and poison the gradient with NaN, so the
-        # denominator is made safe BEFORE the division.
-        safe = torch.where(near, torch.ones_like(dl), dl)
-        mid = 0.5 * (lam.unsqueeze(-1) + lam.unsqueeze(-2))
-        fmid = torch.sigmoid(-(mid - _mu_from(lam, f, t_el)) / t_el)
-        L = torch.where(near, -fmid * (1.0 - fmid) / t_el, df / safe)
-
-        M = L * Ghat
-        denom = fp.sum(-1)
-        if bool((denom.abs() > 1e-12).all()):
-            num = (fp * torch.diagonal(Ghat, dim1=-2, dim2=-1)).sum(-1)
-            M = M - torch.diag_embed(fp * (num / denom).unsqueeze(-1))
-        dH = U @ M @ U.transpose(-1, -2)
+        dH = _dk_backward(lam, U, f, ctx.t_el, ctx.tol, grad_P.double())
         return dH.to(ctx.in_dtype), None, None, None
+
+
+def _dk_backward(lam: torch.Tensor, U: torch.Tensor, f: torch.Tensor, t_el: float,
+                 tol: float, G: torch.Tensor) -> torch.Tensor:
+    """One fill's Daleckii-Krein pullback: a cotangent on `P` becomes one on `H`.
+
+    Factored out of `_FermiDensityMatrix.backward` so the multi-fill Function below shares the
+    identical arithmetic rather than a second copy of it. The maths is unchanged and the
+    docstring on that class is still where it is explained.
+    """
+    # H is symmetric, so only the symmetric part of the cotangent can act on it.
+    G = 0.5 * (G + G.transpose(-1, -2))
+    Ghat = U.transpose(-1, -2) @ G @ U
+
+    fp = -f * (1.0 - f) / t_el                      # f'(lam), bounded by 1/(4 T)
+    dl = lam.unsqueeze(-1) - lam.unsqueeze(-2)
+    df = f.unsqueeze(-1) - f.unsqueeze(-2)
+    near = dl.abs() <= tol
+    # The divided difference away from coincidence, its limit at it. `torch.where` alone
+    # would still evaluate the singular branch and poison the gradient with NaN, so the
+    # denominator is made safe BEFORE the division.
+    safe = torch.where(near, torch.ones_like(dl), dl)
+    mid = 0.5 * (lam.unsqueeze(-1) + lam.unsqueeze(-2))
+    fmid = torch.sigmoid(-(mid - _mu_from(lam, f, t_el)) / t_el)
+    L = torch.where(near, -fmid * (1.0 - fmid) / t_el, df / safe)
+
+    M = L * Ghat
+    denom = fp.sum(-1)
+    if bool((denom.abs() > 1e-12).all()):
+        num = (fp * torch.diagonal(Ghat, dim1=-2, dim2=-1)).sum(-1)
+        M = M - torch.diag_embed(fp * (num / denom).unsqueeze(-1))
+    return U @ M @ U.transpose(-1, -2)
+
+
+class _FermiDensitySum(torch.autograd.Function):
+    """`D = sum_a s_a f_{N_a}(H)` -- several fills of ONE Hamiltonian, one eigensolve.
+
+    The force response needs `P - P_ref` summed over both spins: four fills of the same `H`.
+    Four separate `fermi_density_matrix` calls would be four `eigh` of a 636x636 float64
+    matrix per graph per step, and the spectrum is the same every time. This does the solve
+    once and reuses `(lam, U)` for every fill, in the forward and in the backward alike.
+
+    The backward is a straight sum: `D` is linear in the individual `P_a`, so each fill's
+    cotangent is `s_a G` and each pullback is the same Daleckii-Krein map at that fill's
+    occupations. `test_counting_head.py` pins this against the four-call route rather than
+    trusting the argument.
+    """
+
+    @staticmethod
+    def forward(ctx, H, fills, signs, t_el, degeneracy_tol):
+        lam, U = torch.linalg.eigh(H.double())
+        occs = tuple(fermi_fill(lam, float(n), float(t_el)) for n in fills)
+        acc = None
+        for sign, f in zip(signs, occs):
+            term = float(sign) * ((U * f.unsqueeze(-2)) @ U.transpose(-1, -2))
+            acc = term if acc is None else acc + term
+        ctx.save_for_backward(lam, U, *occs)
+        ctx.signs = tuple(float(s) for s in signs)
+        ctx.t_el = float(t_el)
+        ctx.tol = float(degeneracy_tol)
+        ctx.in_dtype = H.dtype
+        return acc.to(H.dtype)
+
+    @staticmethod
+    def backward(ctx, grad_D):
+        lam, U = ctx.saved_tensors[0], ctx.saved_tensors[1]
+        occs = ctx.saved_tensors[2:]
+        G = grad_D.double()
+        dH = None
+        for sign, f in zip(ctx.signs, occs):
+            term = _dk_backward(lam, U, f, ctx.t_el, ctx.tol, sign * G)
+            dH = term if dH is None else dH + term
+        return dH.to(ctx.in_dtype), None, None, None, None
 
 
 def _mu_from(lam: torch.Tensor, f: torch.Tensor, t_el: float) -> torch.Tensor:
@@ -656,6 +774,13 @@ def fermi_density_matrix(H: torch.Tensor, n_electrons: float, t_el: float = T_EL
                          degeneracy_tol: float = 1e-7) -> torch.Tensor:
     """`P = sum_k f_k psi_k psi_k^T` at fixed `N`, differentiable in `H`."""
     return _FermiDensityMatrix.apply(H, n_electrons, t_el, degeneracy_tol)
+
+
+def fermi_density_difference(H: torch.Tensor, fills: Sequence[float],
+                             signs: Sequence[float], t_el: float = T_EL,
+                             degeneracy_tol: float = 1e-7) -> torch.Tensor:
+    """`sum_a s_a P(N_a)` for several fills of one `H`, differentiable, one eigensolve."""
+    return _FermiDensitySum.apply(H, tuple(fills), tuple(signs), t_el, degeneracy_tol)
 
 
 # Harrison solid-state-table atomic term values, eV, by atomic number: (eps_s, eps_p).

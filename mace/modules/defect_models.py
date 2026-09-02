@@ -457,6 +457,7 @@ class MACEDefect(ScaleShiftMACE):
         positions: Optional[torch.Tensor] = None,
         cell: Optional[torch.Tensor] = None,
         occupations: Optional[torch.Tensor] = None,
+        force_out: Optional[Dict[str, torch.Tensor]] = None,
     ):
         """Either carrier head, behind one signature.
 
@@ -517,7 +518,7 @@ class MACEDefect(ScaleShiftMACE):
                 eps_inf=self.madelung_eps_inf,
                 self_potential=self_potential_of(self.latent_ewald, cell))
 
-        out = self.spectral(
+        head_kwargs = dict(
             node_feats=head_feats,
             counter_emb=counter_emb,
             counts=counts,
@@ -532,6 +533,19 @@ class MACEDefect(ScaleShiftMACE):
             madelung=madelung,
             occupations=occupations,
         )
+        # Section 1. `force_out` is both the request and the reply: a head that can supply the
+        # density response advertises `wants_positions`, and gets asked only when the caller
+        # is in a training force pass. Absent here, no second backward is built -- which is
+        # how "create_graph off in evaluation" is enforced structurally rather than by
+        # inspecting the grad mode, since eval-with-forces has grad enabled too.
+        #
+        # A dict the head writes into, NOT an attribute on the head: a graph-connected tensor
+        # in a module's __dict__ broke deepcopy, and with it the cuEq conversion at the end of
+        # every run. Same reason `eps_mean` travels back in `head_extras`.
+        if force_out is not None and getattr(self.spectral, "wants_positions", False):
+            head_kwargs["positions"] = positions
+            head_kwargs["force_out"] = force_out
+        out = self.spectral(**head_kwargs)
         # delta_u is the spread of the occupied state's site energy over its own support: the
         # spectral analogue of "how much does u vary where alpha lives".
         #
@@ -732,6 +746,13 @@ class MACEDefect(ScaleShiftMACE):
             logit_bias = novelty.unsqueeze(-1) * self.logit_seed_gamma.unsqueeze(0)
 
         counter_emb = self.counter_embedding(counts)
+        # Section 1. The head's force response is requested only on a TRAINING force pass:
+        # it is exactly zero in value, so an evaluation pass would pay a create_graph backward
+        # for nothing. `None` means "not requested"; an empty dict that comes back empty means
+        # "requested, and the fill equals the reference", which is a real zero.
+        want_response = bool(training and compute_force)
+        force_out: Optional[Dict[str, torch.Tensor]] = {} if want_response else None
+        force_out_ref: Optional[Dict[str, torch.Tensor]] = {} if want_response else None
         (
             delta_sr,
             alpha,
@@ -755,6 +776,7 @@ class MACEDefect(ScaleShiftMACE):
             positions=positions,
             cell=data["cell"],
             occupations=data.get("occupations"),
+            force_out=force_out,
         )
         # Intrinsic gap: the same pooling with the seed switched off, so the logged gap
         # separates what MLP_l has learned from what the seed is supplying. The dead
@@ -824,6 +846,7 @@ class MACEDefect(ScaleShiftMACE):
             positions=positions,
             cell=data["cell"],
             occupations=data.get("occupations"),
+            force_out=force_out_ref,
         )
 
         # Long-range branch (plan section 3.4).
@@ -970,11 +993,23 @@ class MACEDefect(ScaleShiftMACE):
         # below consumes, and get_outputs is free to release it.
         correction_forces: Optional[torch.Tensor] = None
         delta_forces: Optional[torch.Tensor] = None
+        # Section 1. Exactly zero in value, so every force below is bit-identical with and
+        # without it; what it carries is the density response in the parameter gradient. Added
+        # to BOTH branches -- the reference counter need not be the closed shell (a caller can
+        # supply `carrier_counts_ref`), and a response added only to the near side would put
+        # an asymmetric term into `delta_forces`.
+        response = None if force_out is None else force_out.get("force_response")
+        response_ref = (None if force_out_ref is None
+                        else force_out_ref.get("force_response"))
         if compute_force:
             correction_forces = _energy_gradient(correction_energy, positions, training)
             correction_forces_ref = _energy_gradient(
                 correction_energy_ref, positions, training
             )
+            if response is not None:
+                correction_forces = correction_forces + response
+            if response_ref is not None:
+                correction_forces_ref = correction_forces_ref + response_ref
             delta_forces = correction_forces - correction_forces_ref
 
         forces, virials, stress, hessian, edge_forces, _ = get_outputs(
@@ -996,8 +1031,12 @@ class MACEDefect(ScaleShiftMACE):
         # gradient is linear. Note this subtracts the correction at *this* frame's
         # counter, not the paired difference -- the two agree only when the reference is
         # the closed-shell state, which is exactly when base labels exist.
+        if forces is not None and response is not None:
+            forces = forces + response
         base_forces: Optional[torch.Tensor] = None
         if forces is not None and correction_forces is not None:
+            # Both terms gained the same response, so the base branch is untouched -- which is
+            # correct: the response belongs to the head, and L_base must not see it.
             base_forces = forces - correction_forces
 
         atomic_virials: Optional[torch.Tensor] = None
