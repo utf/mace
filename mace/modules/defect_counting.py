@@ -353,7 +353,15 @@ class CountingHead(nn.Module):
 
     def forward(self, node_feats, counter_emb, counts, batch, num_graphs, edge_index,
                 edge_length, site_bias=None, node_species=None, clamp_mask=None,
-                edge_vector=None, madelung=None, internals=None):
+                edge_vector=None, madelung=None, occupations=None, internals=None):
+        """`occupations`, when given, is [n_graphs, 2] holding (N_maj, N_min) directly.
+
+        Stage 4's interface, and it is an INPUT change rather than an architecture one: the
+        counters already map to a fill, and this simply lets a caller state the fill instead.
+        That is what makes excited configurations and non-Aufbau occupations expressible
+        without a second code path -- the thing the four-channel counter scheme could never
+        represent. Ground-state fill remains the default.
+        """
         from mace.modules.defect_spectral import SpectralOutput
 
         if node_species is None or edge_vector is None:
@@ -402,7 +410,9 @@ class CountingHead(nn.Module):
 
             n_total = int(self.valence[node_species[node_sel]].sum())
             c = counts[g].tolist() if counts.dim() > 1 else counts.tolist()
-            e_head, lam, psi, p_now, p_ref = head_energy_hf(H, n_total, c, self.t_el)
+            occ = None if occupations is None else occupations[g]
+            e_head, lam, psi, p_now, p_ref = head_energy_hf(H, n_total, c, self.t_el,
+                                                           occupation=occ)
             delta[g] = e_head
             # EIGENVALUES CARRY THE GRADIENT, EIGENVECTORS DO NOT. `eigh`'s backward builds
             # the eigenvector term with 1/(lam_i - lam_j) factors, which is NaN at exact
@@ -458,7 +468,7 @@ class CountingHead(nn.Module):
 
 
 def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
-                   t_el: float = T_EL):
+                   t_el: float = T_EL, occupation=None):
     """`E_head` by the Hellmann-Feynman route. Same value as `head_energy`, usable gradient.
 
     WHY THIS EXISTS. Fitting FORCES means backpropagating through a quantity that is itself
@@ -492,7 +502,13 @@ def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
 
     n_maj_ref = float((n_total + 1) // 2)
     n_min_ref = float(n_total // 2)
-    n_maj, n_min = spin_targets(n_total, counts)
+    if occupation is None:
+        n_maj, n_min = spin_targets(n_total, counts)
+    else:
+        # Stage 4: the caller states the fill. The REFERENCE stays the neutral ground state,
+        # so E_head is still the difference from the same origin and still vanishes when the
+        # override happens to equal it.
+        n_maj, n_min = float(occupation[0]), float(occupation[1])
 
     def piece(n_electrons):
         f = fermi_fill(lam_d, n_electrons, t_el)
@@ -509,3 +525,20 @@ def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
     # SUM the spin channels, do not average: the monopole identity `sum_i q_i = -Delta n`
     # is over all electrons, and averaging halves it. Caught by the validation test.
     return energy, lam, psi_d, p_maj + p_min, p_maj_ref + p_min_ref
+
+
+def scc_energy(gamma: torch.Tensor, delta_q: torch.Tensor) -> torch.Tensor:
+    """Edit 5's second-order term, `0.5 * sum_ij Gamma_ij dq_i dq_j`. INTERFACE ONLY.
+
+    Reserved and not implemented in the sense that matters: nothing calls it, no model builds
+    a `Gamma`, and it is not in any energy. What it fixes is the SHAPE of the eventual
+    contract -- `Gamma` is [n_sites, n_sites] and `delta_q` is the site charge this module
+    already produces via `site_charges`, so a later implementation cannot quietly redefine
+    either.
+
+    Self-consistency is the part that is genuinely absent: a real SCC loop would recompute
+    `delta_q` from an H that already contains this term, iterating to convergence. That
+    changes the forward pass from one eigensolve to several and needs its own gradient
+    treatment, which is why it is a separate edit rather than a few lines here.
+    """
+    return 0.5 * torch.einsum("ij,i,j->", gamma, delta_q, delta_q)

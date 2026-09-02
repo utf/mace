@@ -456,6 +456,7 @@ class MACEDefect(ScaleShiftMACE):
         edge_vector: Optional[torch.Tensor] = None,
         positions: Optional[torch.Tensor] = None,
         cell: Optional[torch.Tensor] = None,
+        occupations: Optional[torch.Tensor] = None,
     ):
         """Either carrier head, behind one signature.
 
@@ -529,6 +530,7 @@ class MACEDefect(ScaleShiftMACE):
             clamp_mask=clamp_mask,
             edge_vector=edge_vector,
             madelung=madelung,
+            occupations=occupations,
         )
         # delta_u is the spread of the occupied state's site energy over its own support: the
         # spectral analogue of "how much does u vary where alpha lives".
@@ -752,6 +754,7 @@ class MACEDefect(ScaleShiftMACE):
             logit_bias=logit_bias,
             positions=positions,
             cell=data["cell"],
+            occupations=data.get("occupations"),
         )
         # Intrinsic gap: the same pooling with the seed switched off, so the logged gap
         # separates what MLP_l has learned from what the seed is supplying. The dead
@@ -820,6 +823,7 @@ class MACEDefect(ScaleShiftMACE):
             logit_bias=logit_bias,
             positions=positions,
             cell=data["cell"],
+            occupations=data.get("occupations"),
         )
 
         # Long-range branch (plan section 3.4).

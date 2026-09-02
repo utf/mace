@@ -340,9 +340,17 @@ class SpectralCarrierHead(nn.Module):
         clamp_mask: Optional[torch.Tensor] = None,  # [n_nodes] bool, DIAGNOSTIC ONLY
         edge_vector: Optional[torch.Tensor] = None,  # [n_edges, 3], needed by H3
         madelung: Optional[torch.Tensor] = None,  # [n_nodes] Edit 1, see below
+        occupations: Optional[torch.Tensor] = None,  # Edit 4 only; ignored here, see below
         internals: Optional[Dict[str, torch.Tensor]] = None,  # DIAGNOSTIC ONLY, see below
     ) -> SpectralOutput:
         """`internals`, when a dict is passed, is filled with H, psi, lam, w, eps and the
+
+        `occupations` belongs to the counting head and is accepted-and-ignored here so that
+        MACEDefect has ONE call site for both heads. A branch at the call site is how train
+        and evaluate came to disagree about the forward pass; an ignored keyword is cheaper
+        than that, and a spectral head has no fill to override -- its occupation is the
+        smeared weight `w`, which is not a free input.
+        """ + """
         node->(graph, slot) maps, STILL ATTACHED TO THE GRAPH.
 
         D1 needs to split the head's own axial force into on-site and hopping parts, which

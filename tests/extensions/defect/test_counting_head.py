@@ -424,3 +424,48 @@ class TestHellmannFeynmanRouteMatchesDenseAutograd:
         # eigenvalues collide. What matters is that the HF route above does not.
         if g2_dense is not None and not torch.isfinite(g2_dense).all():
             assert True                          # the documented failure, reproduced
+
+
+class TestOccupationOverride:
+    """Stage 4: the fill is statable, not only derivable from four counters.
+
+    This is what the counter scheme could never express -- an excited or non-Aufbau
+    configuration -- and it is an INPUT change rather than an architecture one, which is why
+    it needs no retraining.
+    """
+
+    @staticmethod
+    def h(seed=0, n_sites=5):
+        g = torch.Generator().manual_seed(seed)
+        dim = n_sites * ORBITALS_PER_ATOM
+        m = torch.randn(dim, dim, generator=g)
+        return 0.5 * (m + m.T)
+
+    def test_the_override_reproduces_the_counter_fill_when_they_agree(self):
+        """The two routes must coincide where they describe the same thing, or the override
+        is a second convention rather than a generalisation of the first."""
+        H = self.h()
+        counts = (0, 0, 1, 0)
+        n_total = 20
+        via_counts, *_ = head_energy_hf(H, n_total, counts)
+        via_override, *_ = head_energy_hf(H, n_total, (0, 0, 0, 0),
+                                          occupation=spin_targets(n_total, counts))
+        assert float(via_override) == pytest.approx(float(via_counts), rel=1e-12)
+
+    def test_the_reference_stays_the_neutral_ground_state(self):
+        """E_head must remain a difference from ONE origin. An override that also moved the
+        reference would make two overridden configurations incomparable."""
+        H = self.h(seed=1)
+        n_total = 20
+        at_ground, *_ = head_energy_hf(H, n_total, (0, 0, 0, 0),
+                                       occupation=(10.0, 10.0))
+        assert float(at_ground) == pytest.approx(0.0, abs=1e-12)
+
+    def test_a_non_aufbau_configuration_is_expressible(self):
+        """Two electrons moved from the majority to the minority channel -- a configuration
+        with no representation in (e_maj, e_min, h_maj, h_min) at fixed total charge."""
+        H = self.h(seed=2)
+        n_total = 20
+        excited, *_ = head_energy_hf(H, n_total, (0, 0, 0, 0), occupation=(8.0, 12.0))
+        assert float(excited) > 0.0, "a non-ground configuration must cost energy"
+        assert torch.isfinite(torch.as_tensor(float(excited)))
