@@ -137,6 +137,17 @@ def test_protocol_summary_reads_the_head_and_not_the_module_default():
     assert defect_counting.smearing()[0] != "fermi"
 
 
+def test_protocol_summary_records_whether_the_c_shift_HAPPENED():
+    """Not whether it was intended. A run whose first batch carries no net carrier skips the
+    calibration and starts at c = 0; the summary used to say "calibrated: true" anyway,
+    because it reported `stage >= 3`. Caught by the first end-to-end trainer run."""
+    skipped = defect_protocol.protocol_summary(3, 2.4, 1.0, 5, 1.0, False, c_shift=None)
+    assert skipped["c_shift_calibrated"] is False and skipped["c_shift"] is None
+    done = defect_protocol.protocol_summary(3, 2.4, 1.0, 5, 1.0, False, c_shift=-1.25)
+    assert done["c_shift_calibrated"] is True
+    assert done["c_shift"] == pytest.approx(-1.25)
+
+
 # ------------------------------------------------------------------------ the envelope
 
 

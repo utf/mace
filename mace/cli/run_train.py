@@ -1424,8 +1424,10 @@ def run(args) -> None:
             # 0.0 written here would be indistinguishable from a calibration that happened.
             logging.warning(
                 "Stage-3 protocol: c-shift NOT calibrated -- no frame in the first batch "
-                "carries a net carrier. The head starts at c = 0, which is a choice this "
-                "run did not make deliberately.")
+                "carries a net carrier, so Delta_n = 0 and the ratio is undefined. The head "
+                "starts at c = 0, which is a choice this run did not make deliberately. "
+                "Raise --batch_size or shuffle so the first batch reaches a charged frame; "
+                "the protocol summary records this as c_shift_calibrated: false.")
         else:
             with torch.no_grad():
                 model.spectral.c_shift.fill_(float(c))
@@ -1487,7 +1489,7 @@ def run(args) -> None:
             warmup=int(getattr(args, "defect_protocol_warmup", 5)),
             clip=float(args.clip_grad or 0.0),
             freeze_z=bool(getattr(args, "defect_protocol_freeze_z", False)),
-            model=model), sort_keys=True))
+            model=model, c_shift=c), sort_keys=True))
 
     # Reach assertion on the LOSS'S OWN loader, not a reimplementation of it. graph_cutoff
     # was previously verified only where it was not used, and the resulting 5 A graph -- in

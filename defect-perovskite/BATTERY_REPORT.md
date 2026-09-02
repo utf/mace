@@ -330,6 +330,11 @@ differently — a fixed graph list versus a shuffled DataLoader — so their wei
 epoch differ for reasons that have nothing to do with the protocol, and chasing that number
 would be measuring the shuffle. The test file says so at the top.
 
+**839 tests pass**, 28 of them new, 1 skipped. The 16 collection errors in the same run are
+`test_eager_benchmark` / `test_compile_benchmark` asking for a `benchmark` fixture that
+`pytest-benchmark` would provide; it is not installed here, and that is unrelated and
+pre-existing.
+
 ### Two bugs the end-to-end run found that no unit test could
 
 **`--defect_base_init` and `--defect_madelung_on_site` could not be combined at all** — the

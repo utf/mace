@@ -128,7 +128,8 @@ def apply_harrison(model, atomic_numbers: Sequence[int], bond_length: float) -> 
 
 
 def protocol_summary(stage: int, e_gap: float, w_gap: float, warmup: int,
-                     clip: float, freeze_z: bool, model=None) -> Dict[str, object]:
+                     clip: float, freeze_z: bool, model=None,
+                     c_shift: Optional[float] = None) -> Dict[str, object]:
     """What a run will actually do, as a dict to be logged and saved beside the results.
 
     A run whose artefact does not record its own protocol is a run whose numbers cannot be
@@ -143,7 +144,14 @@ def protocol_summary(stage: int, e_gap: float, w_gap: float, warmup: int,
     if model is not None and getattr(model, "spectral", None) is not None:
         family = str(getattr(model.spectral, "smearing_family", family))
         width = float(getattr(model.spectral, "t_el", width))
+    # `c_shift_calibrated` reports the OUTCOME, not the intent. It used to be `stage >= 3`,
+    # so a run whose initialisation batch happened to carry no net carrier -- calibration
+    # skipped, warning logged, head starting at c = 0 -- still recorded "calibrated: true" in
+    # its own artefact. Caught by the first end-to-end trainer run. Exactly the class of
+    # mismatch this summary exists to prevent, one level up from the smearing width.
     return dict(stage=int(stage), e_gap=float(e_gap), w_gap=float(w_gap),
                 warmup=int(warmup), grad_clip=float(clip), freeze_z=bool(freeze_z),
                 smearing_family=family, smearing_width=float(width),
-                harrison_init=stage >= 3, c_shift_calibrated=stage >= 3)
+                harrison_init=stage >= 3,
+                c_shift_calibrated=c_shift is not None,
+                c_shift=None if c_shift is None else float(c_shift))
