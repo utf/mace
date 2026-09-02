@@ -495,8 +495,16 @@ def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
     version) is kept: the two must agree on energies, forces and site charges, which is what
     `test_counting_head.py` asserts.
 
-    Returns `(E_head, lam, psi, P_now, P_ref)` so the caller can reuse the decomposition.
+    THE EIGENSOLVE RUNS IN FLOAT64 UNCONDITIONALLY. In float32 this head returns NaN -- not
+    at some size threshold, but on ordinary frames of any size, intermittently. The spectrum
+    spans ~17 eV across hundreds of states with `T_el = 25 meV`, so the occupation is a
+    sigmoid of `(lam - mu)/T` with arguments of order 700: float32 has neither the range for
+    the exponentials nor the precision for a bisection that must place `mu` to 1e-10 of a
+    fixed electron count. The parent spectral head already carries a `solver_dtype` for the
+    same reason; this is that precedent applied here.
     """
+    in_dtype = H.dtype
+    H = H.double()
     lam, psi = torch.linalg.eigh(H)
     lam_d, psi_d = lam.detach(), psi.detach()
 
@@ -521,10 +529,11 @@ def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
     e_min, p_min = piece(n_min)
     e_maj_ref, p_maj_ref = piece(n_maj_ref)
     e_min_ref, p_min_ref = piece(n_min_ref)
-    energy = (e_maj - e_maj_ref) + (e_min - e_min_ref)
+    energy = ((e_maj - e_maj_ref) + (e_min - e_min_ref)).to(in_dtype)
     # SUM the spin channels, do not average: the monopole identity `sum_i q_i = -Delta n`
     # is over all electrons, and averaging halves it. Caught by the validation test.
-    return energy, lam, psi_d, p_maj + p_min, p_maj_ref + p_min_ref
+    return (energy, lam.to(in_dtype), psi_d.to(in_dtype),
+            (p_maj + p_min).to(in_dtype), (p_maj_ref + p_min_ref).to(in_dtype))
 
 
 def scc_energy(gamma: torch.Tensor, delta_q: torch.Tensor) -> torch.Tensor:

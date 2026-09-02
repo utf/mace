@@ -136,3 +136,71 @@ else Stage 2 says about it.
    persisted per seed by the harness, but these runs predate that), and
    `corr(dE_head, d)` on the 159-atom subset against −0.134 eV/Å (`s3_dehead_trend.py`,
    written, not yet run).
+
+---
+
+# NaN triage — F1 falsified, and my earlier diagnosis was wrong
+
+**The NaN is not size-dependent. It is a float32 failure.**
+
+The assertion ladder was run in float64 on one 159-atom charged frame, with a 79-atom
+reference, stopping at the first failure:
+
+| assertion | 79 atoms | 159 atoms |
+|---|---|---|
+| 1. `isfinite(H)` after assembly | pass, (316, 316) | pass, (636, 636) |
+| 3. `n_states == 4·n_atoms`, `N_target < n_states` | pass, 316 / N 205 | pass, 636 / N 413 |
+| 4. `Tr P == N` to 1e-8; entropy finite | pass, err 3.1e-12 | pass, err 1.2e-12 |
+
+**F1 (the NaN trips assertion 3 or 4) is falsified.** Counting and occupations are exact at
+both sizes, and the eigendecomposition is clean. Nothing in the ladder tripped.
+
+The direct dtype test then settled it:
+
+| dtype | 79 atoms | 159 atoms |
+|---|---|---|
+| float32 | **NaN** | **NaN** |
+| float64 | −2.16865199 | −2.25260971 |
+
+**This corrects my report to the coadvisor.** I described the failure as appearing at 159
+atoms and not at 79. It appears at both; I had only tested 79-atom frames that happened to
+survive. The size correlation was an artefact of which frames I sampled.
+
+**Cause.** The spectrum spans ~17 eV across hundreds of states with `T_el = 25 meV`, so the
+occupation is a sigmoid of `(λ−μ)/T` with arguments of order 700. float32 has neither the
+range for those exponentials nor the precision for a bisection that must place μ to 1e-10 of
+a fixed electron count. The parent spectral head already carries a `solver_dtype` for exactly
+this reason.
+
+**Fix:** the eigensolve and occupation solve run in float64 unconditionally, returning to the
+caller's dtype. float32 and float64 now agree to seven significant figures at both sizes.
+
+## The two assertions that did fail, and why they are inconclusive here
+
+**[2] tiled-pristine invariance** — on-site energies of the original atoms differ by 0.601 eV,
+far more than a φ tolerance. **[5] `F(2N) = 2F(N)`** — 5.7 % off.
+
+Both are confounded on this cell and neither is evidence of a bug. The coupling reach is 10 Å
+and the pristine cell is smaller than `2 × r_couple` in the tiled direction, so an atom in the
+untiled cell sees its own periodic images and in the tiled cell does not. The environment
+genuinely changes, so the learned elements are *not* expected to be bit-identical. This is the
+"fails for the wrong reason" hazard the qualification warned about, met in a form the
+qualification did not name. A clean version needs a cell already larger than `2 × r_couple`
+before tiling, or a shorter reach.
+
+## The unblocked gate, on one seed
+
+With the dtype fix, the 159-atom `dE_head`–d gate runs. Seed 1:
+
+| | slope (eV/Å) | corr |
+|---|---|---|
+| counting head, seed 1 | **−0.0189** | **−0.924** |
+| bounded s-only (Stage 2) | −0.0035 | −0.31 to −0.66 |
+| **label reference** | **−0.134** | −0.989 |
+
+Right sign, a very strong linear trend, and **7× short** of the label slope against the
+s-only head's 40×. A real improvement, but **F4 (within 3×) is not met** on this seed.
+
+Three of the four converged Stage-3 seeds still fail to produce the gate — they remain
+non-finite on 159-atom frames after the dtype fix, so there is a **second cause** not yet
+diagnosed. That has to be found before the rerun; it is not the same bug.
