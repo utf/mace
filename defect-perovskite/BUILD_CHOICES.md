@@ -81,6 +81,25 @@ of bounded corrections over physical scales; the first is what the data supports
 **Not applied.** The plan says learnable, so learnable is what runs, and Stage 2 carries both
 arms so the answer is complete whichever way you decide.
 
+**12. Stage 3 runs at lr 0.05, and Stage 2 is re-run at 0.05 to match.** Not a tuning
+preference — at the shared lr 0.01 the counting head does not train at all (force 5.34 → 4.81
+over 40 epochs), while at 0.05 it falls 3.71 → 0.0092 in five epochs and at 0.20 it diverges.
+The cause is structural: Stage 3 starts at force ~5 where Stages 1–2 started at ~0.004,
+because the counting head's correction is eV-scale at initialisation and must travel three
+orders of magnitude rather than refine.
+
+Because a different rate weakens "everything held fixed but the edit", the Stage-2 arm is
+re-run at 0.05 alongside, which removes the confound instead of arguing about it. The first
+Stage-3 launch at lr 0.01 is **void and not reported**.
+
+**13. Forces come from the Hellmann-Feynman route, not from dense `eigh` autograd.** Force
+matching differentiates a quantity that is already `dE/dR`, so the loss needs the second
+derivative of the eigenvalues; `eigh`'s double backward builds that from eigenvector response
+with `1/(λᵢ−λⱼ)` and returns NaN immediately on a real 316-state spectrum. `E = Tr(P H) − T S`
+with `P`, `S` held fixed gives exact values and exact forces; what is dropped is `dP/dR` in
+the loss's *parameter* gradient — the frozen-density convention DFTB force training uses.
+The two routes are asserted equal on energies, forces and site charges.
+
 ## One consequence worth knowing
 
 Every checkpoint in `~/runs/ab_models/` and `~/runs/tbv3_models/` pickles a `CarrierResponse`
