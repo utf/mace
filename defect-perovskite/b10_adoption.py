@@ -124,6 +124,9 @@ def main() -> None:
                     default=[here / "dataset_pbe" / "train.xyz",
                              here / "dataset_pbe" / "valid.xyz"])
     ap.add_argument("--cf-runs", type=Path, default=Path.home() / "runs")
+    ap.add_argument("--cf-dir", type=Path,
+                    default=Path(__file__).resolve().parent / "dataset_cf",
+                    help="the cross-fit folds, each holding the frames its base never saw")
     ap.add_argument("--n-neutral-79", type=int, default=200)
     ap.add_argument("--n-pristine", type=int, default=3)
     ap.add_argument("--eps-inf", type=float, default=EPS_INF_DEFAULT)
@@ -137,9 +140,25 @@ def main() -> None:
     big_charged = [a for a in charged if len(a) == CLEAN_NATOMS]
     big_neutral = neutral_frames(args.data, CLEAN_NATOMS)
     dense, _ = neutral_dense_window(args.data, 79)
-    small_neutral = [a for a in neutral_frames(args.data, 79)
-                     if dense and dense[0] <= hub_separation(a) <= dense[1]]
-    small_neutral = small_neutral[:args.n_neutral_79]
+    # Criterion 3's frames come from each fold's OWN held-out pool, keyed by fold, not from a
+    # `i % 4` partition of the whole neutral set. The partition was wrong in a way that made
+    # the baseline look better than it is: fold base k has seen three quarters of any such
+    # partition, so most of "its" frames were in its training set and the reference error was
+    # partly in-sample. `null_oof.xyz` is what each base actually never saw.
+    small_by_fold = {}
+    for k in range(4):
+        pool = args.cf_dir / f"fold{k}" / "null_oof.xyz"
+        if not pool.exists():
+            continue
+        mine = [a for a in ase_read(str(pool), index=":")
+                if len(a) == 79 and dense
+                and dense[0] <= hub_separation(a) <= dense[1]]
+        small_by_fold[k] = mine[:max(args.n_neutral_79 // 4, 1)]
+    small_neutral = [a for k in sorted(small_by_fold) for a in small_by_fold[k]]
+    if not small_neutral:
+        raise SystemExit(
+            f"no out-of-fold neutral 79-atom frames inside {dense}; criterion 3 has no "
+            "honest baseline and would otherwise be scored against an in-sample one")
     all_pristine = select_pristine(ase_read(str(args.data[0]), ":"), 64)
     biggest = max(len(a) for a in all_pristine)
     pristine = with_hole_counter([a for a in all_pristine
@@ -157,7 +176,7 @@ def main() -> None:
             continue
         base = torch.load(path, map_location=args.device,
                           weights_only=False).to(args.device).eval()
-        mine = [a for i, a in enumerate(small_neutral) if i % 4 == k]
+        mine = small_by_fold.get(k, [])
         if mine:
             e, f = errors_on(base, mine, z, 5.0, args.device)
             cf_e.append(e)
@@ -169,7 +188,7 @@ def main() -> None:
                 float(np.mean(cf_f)) if cf_f else float("nan"))
     print(f"  cross-fit baseline on the neutral-dense window: "
           f"E/atom {baseline[0] * 1000:.1f} meV, F {baseline[1] * 1000:.1f} meV/A "
-          f"(out-of-fold)", flush=True)
+          f"(genuinely out-of-fold, {len(small_neutral)} frames)", flush=True)
 
     rows = []
     for mp in args.models:
