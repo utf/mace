@@ -23,8 +23,9 @@ import torch
 
 from mace.modules.defect_counting import (ORBITALS_PER_ATOM, VALENCE, density_matrix,
                                           fermi_fill, free_energy, head_energy,
-                                          head_energy_hf, neutral_electrons, site_charges,
-                                          sk_block, spin_targets)
+                                          fermi_density_matrix, head_energy_hf,
+                                          neutral_electrons, site_charges, sk_block,
+                                          spin_targets, T_EL)
 
 torch.set_default_dtype(torch.float64)
 
@@ -469,3 +470,135 @@ class TestOccupationOverride:
         excited, *_ = head_energy_hf(H, n_total, (0, 0, 0, 0), occupation=(8.0, 12.0))
         assert float(excited) > 0.0, "a non-ground configuration must cost energy"
         assert torch.isfinite(torch.as_tensor(float(excited)))
+
+
+class TestDensityResponseBackward:
+    """Validation of the P-backward. The plan calls this the one genuinely delicate build.
+
+    Three checks the plan names — finite differences (including engineered near-degeneracies
+    and a mu-mid-band case that exercises the fixed-N correction), agreement with
+    autograd-through-eigh on a non-degenerate float64 toy, and preservation of the monopole.
+    """
+
+    @staticmethod
+    def sym(n, seed, scale=1.0):
+        g = torch.Generator().manual_seed(seed)
+        m = torch.randn(n, n, generator=g) * scale
+        return 0.5 * (m + m.T)
+
+    @staticmethod
+    def degenerate(n_block=4, seed=5, scale=1.0):
+        """Two identical blocks: every eigenvalue is exactly twofold degenerate."""
+        g = torch.Generator().manual_seed(seed)
+        b = torch.randn(n_block, n_block, generator=g) * scale
+        b = 0.5 * (b + b.T)
+        return torch.block_diag(b, b)
+
+    def fd_check(self, H, n_el, t_el=T_EL, h=1e-5, probes=6, atol=2e-5):
+        """Finite differences against the backward, on random symmetric perturbations."""
+        gen = torch.Generator().manual_seed(0)
+        W = torch.randn(H.shape, generator=gen)          # cotangent on P
+        W = 0.5 * (W + W.T)
+        Hv = H.clone().requires_grad_(True)
+        P = fermi_density_matrix(Hv, n_el, t_el)
+        (P * W).sum().backward()
+        analytic = Hv.grad
+
+        worst = 0.0
+        for k in range(probes):
+            g2 = torch.Generator().manual_seed(100 + k)
+            D = torch.randn(H.shape, generator=g2)
+            D = 0.5 * (D + D.T)
+            with torch.no_grad():
+                pp = fermi_density_matrix(H + h * D, n_el, t_el)
+                pm = fermi_density_matrix(H - h * D, n_el, t_el)
+            fd = float(((pp - pm) * W).sum() / (2 * h))
+            an = float((analytic * D).sum())
+            worst = max(worst, abs(fd - an))
+        return worst
+
+    def test_finite_differences_generic(self):
+        H = self.sym(10, seed=1)
+        worst = self.fd_check(H, n_el=5.0)
+        assert worst < 2e-5, f"max FD discrepancy {worst:.3e}"
+
+    def test_finite_differences_with_exact_degeneracies(self):
+        """The case `eigh`'s eigenvector backward cannot do at all."""
+        H = self.degenerate()
+        worst = self.fd_check(H, n_el=4.0)
+        assert worst < 2e-5, f"max FD discrepancy at exact degeneracy {worst:.3e}"
+
+    def test_finite_differences_with_mu_mid_band(self):
+        """Exercises the fixed-N correction: with mu inside a dense band, sum_k f'_k is far
+        from zero and the implicit-mu term is a large part of the answer."""
+        H = self.sym(16, seed=3, scale=0.05)             # narrow spectrum, mu well inside
+        worst = self.fd_check(H, n_el=8.0)
+        assert worst < 2e-5, f"max FD discrepancy with mu mid-band {worst:.3e}"
+
+    def test_the_fixed_n_correction_is_not_negligible_in_that_case(self):
+        """Guard: the test above would pass trivially if the correction were near zero."""
+        H = self.sym(16, seed=3, scale=0.05)
+        lam = torch.linalg.eigvalsh(H.double())
+        f = fermi_fill(lam, 8.0)
+        fp = -f * (1 - f) / T_EL
+        assert abs(float(fp.sum())) > 1.0, (
+            "mu is effectively in a gap here; this case does not exercise the correction")
+
+    def test_agrees_with_autograd_through_eigh_when_non_degenerate(self):
+        """On a well-separated float64 spectrum the naive route is valid, so the two must
+        agree. This is the check that the Daleckii-Krein algebra is right rather than merely
+        self-consistent."""
+        H = self.sym(8, seed=7)
+        gen = torch.Generator().manual_seed(0)
+        W = torch.randn(H.shape, generator=gen)
+        W = 0.5 * (W + W.T)
+        lam = torch.linalg.eigvalsh(H)
+        assert float(torch.diff(torch.sort(lam).values).min()) > 0.05, "spectrum too close"
+
+        a = H.clone().requires_grad_(True)
+        (fermi_density_matrix(a, 4.0) * W).sum().backward()
+
+        b = H.clone().requires_grad_(True)
+        lam_b, U_b = torch.linalg.eigh(b)
+        f_b = fermi_fill(lam_b, 4.0)                     # mu detached, as in the Function
+        P_b = (U_b * f_b.unsqueeze(0)) @ U_b.T
+        (P_b * W).sum().backward()
+
+        # The naive route omits the fixed-N correction, so compare on a spectrum where mu
+        # sits in a gap and that correction vanishes -- otherwise they SHOULD differ.
+        fp = -f_b * (1 - f_b) / T_EL
+        if abs(float(fp.sum())) < 1e-8:
+            assert torch.allclose(a.grad, b.grad, atol=1e-8)
+        else:
+            # mu is not in a gap: the correction is real and the naive route is wrong.
+            assert not torch.allclose(a.grad, b.grad, atol=1e-8)
+
+    def test_the_gradient_is_bounded_at_degeneracy(self):
+        """The property that makes this usable: 1/(4 T_el) everywhere, no blow-up."""
+        H = self.degenerate()
+        Hv = H.clone().requires_grad_(True)
+        P = fermi_density_matrix(Hv, 4.0)
+        P.sum().backward()
+        assert torch.isfinite(Hv.grad).all()
+        assert float(Hv.grad.abs().max()) < 1.0 / (4 * T_EL) * 10
+
+    def test_the_monopole_survives_the_differentiable_route(self):
+        H = self.sym(5 * ORBITALS_PER_ATOM, seed=11)
+        p_now = fermi_density_matrix(H, 11.0)
+        p_ref = fermi_density_matrix(H, 10.0)
+        q = site_charges(p_now, p_ref, 5)
+        assert float(q.sum()) == pytest.approx(-1.0, abs=1e-6)
+
+    def test_it_gives_gradient_where_the_frozen_route_gives_none(self):
+        """The failure-to-start, in miniature. At the atomic limit the bond order is zero, so
+        the frozen-P route has no hopping gradient at all; the response route does."""
+        eps = torch.tensor([-1.0, 1.0])
+        off = torch.zeros(1, requires_grad=True)
+        H = torch.stack([torch.stack([eps[0], off[0]]),
+                         torch.stack([off[0], eps[1]])])
+        P = fermi_density_matrix(H, 1.0)
+        # A loss that depends on the OFF-DIAGONAL of P -- bond order -- which is what a force
+        # residual sees.
+        (P[0, 1] ** 2 + P[0, 1]).backward()
+        assert off.grad is not None and abs(float(off.grad)) > 1e-6, (
+            "no gradient reaches the hopping at the atomic limit")

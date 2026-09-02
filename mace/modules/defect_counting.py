@@ -551,3 +551,104 @@ def scc_energy(gamma: torch.Tensor, delta_q: torch.Tensor) -> torch.Tensor:
     treatment, which is why it is a separate edit rather than a few lines here.
     """
     return 0.5 * torch.einsum("ij,i,j->", gamma, delta_q, delta_q)
+
+
+class _FermiDensityMatrix(torch.autograd.Function):
+    """`P = f(H)` at fixed electron number, with its exact Frechet derivative.
+
+    THE TERM THIS RESTORES. The force-loss parameter gradient is
+
+        dl/dtheta = Tr(P d2H/dR dtheta) + Tr(dP/dtheta . dH/dR)
+
+    and the second term -- the density response -- is dropped when `P` is detached. Two
+    consequences, both measured rather than supposed. It zeroes the hopping gradient wherever
+    the bond order is zero, which is exactly an atomic-limit initialisation, so a seed that
+    starts there has no gradient with which to leave: the failure-to-start. And it zeroes the
+    carrier-density gradient, so once E_LR is enabled the long-range branch cannot teach the
+    head where to put the carrier.
+
+    (Stated precisely: relocation still happens by DRIFT, because each forward recomputes P
+    from the current H. What is absent is relocation-from-forces in the GRADIENT. That is why
+    Stage 3's converged seeds learned at all.)
+
+    WHY THIS IS SAFE WHERE `eigh`'s BACKWARD IS NOT. The eigenvector backward carries
+    `1/(lam_i - lam_j)`, unbounded as a gap closes. The Daleckii-Krein derivative of a SMOOTH
+    matrix function carries the divided difference
+
+        L_ij = (f_i - f_j) / (lam_i - lam_j)   ->   f'((lam_i + lam_j)/2)  as lam_i -> lam_j
+
+    which is bounded by `1/(4 T_el)` everywhere, including at exact degeneracy. `P` is
+    gauge-invariant under rotations within a degenerate subspace; individual eigenvectors are
+    not, and nothing here differentiates them.
+
+    THE FIXED-N CORRECTION. `mu` is not a constant: it moves to hold `sum_k f_k = N`. Its
+    response contributes
+
+        dmu = (sum_k f'_k dlam_k) / (sum_k f'_k)
+
+    which adds `-f'_i (sum_j f'_j Ghat_jj) / (sum_k f'_k)` to the diagonal of the transformed
+    cotangent. When `mu` sits in a gap much wider than `T_el` every `f'_k` vanishes, the
+    denominator goes to zero, and the correction is genuinely absent rather than singular --
+    the electron count does not constrain `mu` there. Guarded on the denominator, not on a
+    gap estimate.
+    """
+
+    @staticmethod
+    def forward(ctx, H, n_electrons, t_el, degeneracy_tol):
+        lam, U = torch.linalg.eigh(H.double())
+        f = fermi_fill(lam, float(n_electrons), float(t_el))
+        P = (U * f.unsqueeze(0)) @ U.transpose(-1, -2)
+        ctx.save_for_backward(lam, U, f)
+        ctx.t_el = float(t_el)
+        ctx.tol = float(degeneracy_tol)
+        ctx.in_dtype = H.dtype
+        return P.to(H.dtype)
+
+    @staticmethod
+    def backward(ctx, grad_P):
+        lam, U, f = ctx.saved_tensors
+        t_el, tol = ctx.t_el, ctx.tol
+        G = grad_P.double()
+        # H is symmetric, so only the symmetric part of the cotangent can act on it.
+        G = 0.5 * (G + G.transpose(-1, -2))
+        Ghat = U.transpose(-1, -2) @ G @ U
+
+        fp = -f * (1.0 - f) / t_el                      # f'(lam), bounded by 1/(4 T)
+        dl = lam.unsqueeze(-1) - lam.unsqueeze(-2)
+        df = f.unsqueeze(-1) - f.unsqueeze(-2)
+        near = dl.abs() <= tol
+        # The divided difference away from coincidence, its limit at it. `torch.where` alone
+        # would still evaluate the singular branch and poison the gradient with NaN, so the
+        # denominator is made safe BEFORE the division.
+        safe = torch.where(near, torch.ones_like(dl), dl)
+        mid = 0.5 * (lam.unsqueeze(-1) + lam.unsqueeze(-2))
+        fmid = torch.sigmoid(-(mid - _mu_from(lam, f, t_el)) / t_el)
+        L = torch.where(near, -fmid * (1.0 - fmid) / t_el, df / safe)
+
+        M = L * Ghat
+        denom = fp.sum(-1)
+        if bool((denom.abs() > 1e-12).all()):
+            num = (fp * torch.diagonal(Ghat, dim1=-2, dim2=-1)).sum(-1)
+            M = M - torch.diag_embed(fp * (num / denom).unsqueeze(-1))
+        dH = U @ M @ U.transpose(-1, -2)
+        return dH.to(ctx.in_dtype), None, None, None
+
+
+def _mu_from(lam: torch.Tensor, f: torch.Tensor, t_el: float) -> torch.Tensor:
+    """Recover `mu` from the occupations, for the degenerate-limit branch.
+
+    Read back rather than threaded through: it is exact wherever `f` is not saturated, and the
+    branch it feeds only fires for eigenvalue pairs that have collided -- which cannot all be
+    saturated, or the divided difference would be zero either way.
+    """
+    interior = (f > 1e-6) & (f < 1.0 - 1e-6)
+    if not bool(interior.any()):
+        return lam.median()
+    x = lam[interior] + t_el * torch.log(f[interior] / (1.0 - f[interior]))
+    return x.median()
+
+
+def fermi_density_matrix(H: torch.Tensor, n_electrons: float, t_el: float = T_EL,
+                         degeneracy_tol: float = 1e-7) -> torch.Tensor:
+    """`P = sum_k f_k psi_k psi_k^T` at fixed `N`, differentiable in `H`."""
+    return _FermiDensityMatrix.apply(H, n_electrons, t_el, degeneracy_tol)
