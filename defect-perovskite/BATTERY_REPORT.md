@@ -423,11 +423,95 @@ that had happened. It warned, and the run continued.
 outcome. A run that skipped its calibration was about to record in its own artefact that it
 had performed one. Fixed to report what happened and the value; unit-tested both ways.
 
-The repeat-floor comparison and the saved-model round trip were still running when this was
-written; the config round trip itself is covered by unit test (build `power`, extract, rebuild,
-assert the knob survived), and the call-site evidence above is what section 3 needed.
+**The repeat floor and the round trip, both green.**
+
+```
+read off the saved model: gamma 3.0  hop_range 0.5  envelope exp  decay_length 1.0
+                          family gaussian  width 0.05
+SUMMARY MATCHES THE SAVED HEAD
+CONFIG ROUND TRIP OK
+
+run a: [3.75392417, 3.75182575]
+run b: [3.75392417, 3.75182575]
+max |difference| 0.000e+00  -> within the repeat floor
+```
+
+Not merely within the floor — **bit-identical**. In float64 with cuEq off, two invocations of
+the production trainer reproduce each other exactly across both epochs, so any later
+difference between runs is a change and not the scatter-atomics noise. That is a stronger
+statement than section 3 asked for and it is worth having before eight seeds are spent.
 
 
+
+---
+
+## 4b. The modulation ceiling: F11 and F12
+
+b7's null is scoped, and the scope matters. It varied the **global** radial envelope at
+initialisation, where the learned environment modulation is identically 1 by construction —
+so it measured what a uniform, host-wide change does, and found every candidate worse. It
+never exercised the **defect-local** lever, which is the only one that can raise the hub
+coupling without inflating the bandwidth everywhere. b3 had already found that lever at its
+stop on a third of hub bonds.
+
+### F11 — the cohort splits, and both stops are in use at once
+
+`t = v0 · radial(r) · (1 + hop_range·tanh g)`, so `tanh g` is recovered exactly as
+`(t/(v0·radial) − 1)/hop_range`. A bond is at its stop when `|tanh g| > 0.98`.
+
+| bond type | mean tanh g | at bound | which stop | 4.5–5.5 Å | 5.5–6.5 Å | 6.5–8.0 Å |
+|---|---|---|---|---|---|---|
+| ss-σ | −0.486 ± 0.480 | 33.3% | **lower**, 100% | 33% | 33% | 33% |
+| sp-σ | −0.288 ± 0.496 | 0.0% | — | 0% | 0% | 0% |
+| pp-σ | +0.136 ± 0.651 | 33.3% | **upper**, 100% | 33% | 33% | 33% |
+| pp-π | +0.601 ± 0.358 | 33.3% | **upper**, 100% | 33% | 33% | 33% |
+
+The forecast was "upper stop, concentrated in short-d bins where the dimer forms". Half right
+and half wrong, and the wrong half is the informative one.
+
+**Both stops are in use on the same bond.** ss-σ is pinned at the *lower* bound while pp-σ and
+pp-π are pinned at the *upper* one — the head wants less s–s overlap and more p–p overlap than
+the bound allows, simultaneously. A uniform scale factor on that bond, which is what the
+what-if applies, therefore pushes one channel the right way and another the wrong way.
+
+**It is not concentrated in d; it is concentrated in seeds.** The 33.3% ± 47.1 is exactly two
+of six, and in those two it is 100% of hub bonds in *every* distance bin, while the other four
+are interior everywhere (|tanh g| ≤ 0.79). That also reconciles b3's pooled "33% at the bound"
+with the per-seed picture: it was never a third of the bonds, it was a third of the seeds.
+
+### F12 — the what-if, and the branch it selects
+
+The hub edge's four integrals scaled by ×1.25 and ×1.5 in the trained models, reading the
+79-atom force loss and the 159-atom F4 slope.
+
+| scale | force loss (79) | fell in | F4 (159) |
+|---|---|---|---|
+| ×1.00 | 0.00065 ± 0.00002 | — | −0.0489 ± 0.0068 |
+| **×1.25** | 0.00064 (**−0.8%**) | **4/6 seeds** | **−0.0675 ± 0.0127** |
+| ×1.50 | 0.00068 (+5.5%) | 4/6 seeds | −0.0887 ± 0.0204 |
+
+The registered rule was *force loss falls **and** F4 moves past −0.08*. The first clause is
+met; the second is not — F4 reaches −0.0675. **F12 fails**, and the branch is the one written
+in advance: the stop is not the lever, superexchange moves up the R3 list, and the joint run
+proceeds on the current bound. No head-only rerun was spent.
+
+Two things worth carrying forward rather than discarding with the forecast. The direction is
+right and consistent — F4 moves monotonically toward the reference under scaling, in every
+seed — so the coupling *is* the channel, it is simply not accessible by widening a bound that
+only two seeds are against. And the force loss has a shallow minimum near ×1.25 and rises by
+5.5% at ×1.5, which says the small cells actively prefer a hub coupling close to what the
+head already has.
+
+**Scored on sign and direction only, as registered before the run.** This is a fixed-parameter
+intervention on a variational quantity: the occupations re-solve but the rest of the
+Hamiltonian is frozen at values fitted under the old coupling, so neither magnitude is a
+prediction of what a retrained model would give.
+
+The log-bounded modulation `exp(β·tanh g)` is implemented, tested and **unadopted** — one flag
+away if R3 wants it. It exists because the linear form cannot simply be widened: with
+`hop_range > 1` it drives an integral through zero and flips the sign the Harrison
+initialisation fixed, whereas `exp` is positive everywhere and symmetric in log space, so
+β = ln 3 gives ×[1/3, 3] rather than the lopsided [1/2, 3/2].
 
 ---
 
@@ -465,10 +549,10 @@ envelope candidate raises it at initialisation.
 | Cl saturation / γ | **closed.** Fixed, and it was not the mechanism (F4 moved −0.0613 → −0.0489, away from −0.131). |
 | E_LR | **closed** on sign and magnitude (+0.007 against a required −0.070); trained version still measured free in the staged re-enable. |
 | SCC | **closed on sign** by the reviewer's argument; R3 may measure the number. |
-| Envelope / coupling range | **closed by b7.** Fires as a diagnosis, contraindicated as a remedy. |
+| Envelope / coupling range | **closed by b7 (global) and b9 (local).** The envelope fires as a diagnosis and is contraindicated as a remedy; the defect-local modulation ceiling binds in only 2 of 6 seeds and scaling past it misses F12's target. |
 | Label availability at 79 atoms | **new, measured, and the largest single factor.** The 79-atom energy residual carries +0.132 of base error and no carrier trend; the 159-atom reference is carrier physics (null +0.08 vs charged −0.134). Not a defect of the head. |
 | F4 never being a fitted target | **new.** Resolves in the joint run by construction. |
-| Beyond-two-centre / superexchange | **open.** The hub ablation leaves 30% of the d-response in the indirect channel, which is where this would live. |
+| Beyond-two-centre / superexchange | **open, and now first.** The hub ablation leaves 30% of the d-response in the indirect channel, and F12 removed the direct channel's bound as the lever. |
 | Centred correction | **deferred to R3** per the decision tree, with b4 as its evidence: the channel is inert and its constant mode is an unidentified gauge under a forces-only loss. |
 
 ### The threat that was checked and did not materialise
