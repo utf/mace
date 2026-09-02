@@ -144,20 +144,95 @@ Bound condition `depth / delta_L > 2`, with depth = `lam[k+1] - lam[k]` on the c
 and `delta_L` the median level spacing above the frontier of the **trained** model's pristine
 spectrum.
 
-Seed 1: `delta_L` 0.0100 eV, depth 0.0376 eV, **bound fraction 75%**, R_bound **0.86 [0.76,
-1.16]** on n = 10 — PASS against the ≤ 1.3 gate, and the interval excludes 1.3 as well as the
-band-state value of 2.
+**PASS, 6/6.**
 
-Remaining seeds in flight; this section is updated when they land.
+| seed | delta_L (eV) | depth (eV) | bound | R_bound |
+|---|---|---|---|---|
+| 1 | 0.0100 | 0.0376 | 75% | 0.86 [0.76, 1.16] |
+| 2 | 0.0111 | 0.0420 | 81% | 0.85 [0.80, 0.97] |
+| 3 | 0.0137 | 0.0411 | 69% | 0.84 [0.68, 1.60] |
+| 4 | 0.0135 | 0.0415 | 81% | 0.81 [0.69, 0.86] |
+| 5 | 0.0100 | 0.0359 | 75% | 0.93 [0.82, 1.35] |
+| 6 | 0.0134 | 0.0547 | 81% | 0.84 [0.72, 0.91] |
+
+**R = 0.85 ± 0.04**, bound fraction **77% ± 5%** of the 16 large frames. Every seed's median
+is below 1.0 and far from the band-state value of 2; four of six have intervals excluding the
+1.3 gate outright.
+
+**This is the gate that answers what N_eff could not.** The state is bound — its force on its
+own atoms does not dilute when the cell doubles — so the rise from N_eff 2.92 to 4.75 is the
+bound state relaxing to its own size, not the onset of delocalisation. Of the two readings
+offered above, the first is supported and the second is not: 2.92 was an artefact of a
+gradient that could not move the density.
 
 ## Subset size
 
 Both d-trend gates run on **16** frames, not the 17 the inventory reports: that is what
 `train.xyz` holds at 159 atoms with a locatable vacancy. d range 4.84-7.12 A.
 
+## §4 — the tiling test, and the defect it found
+
+`tests/extensions/defect/test_tiling.py`, in the standing suite. A cubic CsPbCl3 cell against
+its own 2x tiling — the same crystal, described twice. **7 pass, 1 xfail-strict.**
+
+Passing: on-site energies bit-identical per species; the off-diagonal multiset doubles exactly;
+every eigenvalue of the cell appears in the tiling to 1e-8 (band folding); trace doubles and
+bandwidth does not; the neutral fill tiles.
+
+### Correction to the plan's §4: `F(2N) = 2F(N)` is not an identity
+
+The plan states exact extensivity of the free energy. It is not exact and asserting it would
+be wrong: `F` sums the occupied states of a **Gamma-point** Hamiltonian, and tiling ADDS
+Brillouin-zone sampling points. `F(2N)` samples k = 0 and k = pi/L; `2F(N)` samples k = 0
+twice. They agree only in the k-converged limit — measured here, the 2x tiling differs by
+**0.23%**. The test now asserts what the gate was reaching for: the free energy per atom
+CONVERGES under successive tilings rather than drifting. A term that scaled with cell size
+would show a growing difference instead.
+
+### KNOWN DEFECT: phi_LR is not supercell-invariant
+
+**The Madelung potential at chemically equivalent sites of the same crystal changes by eV
+between supercell choices of that crystal.** Cl sits at +4.542 eV in a 2x2x2 cell, +5.869 in
+its 4x2x2 tiling, +5.758 at 3x3x3. Within any one cell all equivalent sites agree to 1e-15, so
+this is not noise.
+
+Traced exactly. The whole change is `-delta(A_ii) * q_i`: it comes entirely from the
+`self_potential_of` subtraction. `(A q)_i` on its own is supercell-invariant, as it must be —
+a supercell adds only k-points at which the structure factor vanishes. `A_ii` scales as 1/L:
+
+| cell | L (A) | V (A^3) | A_ii (eV/e) |
+|---|---|---|---|
+| 1x1x1 | 5.6 | 176 | -7.320 |
+| 2x2x2 | 11.2 | 1405 | -3.666 |
+| 4x2x2 | 22.4 | 2810 | -2.340 |
+| 3x3x3 | 16.8 | 4742 | -2.450 |
+| 4x4x4 | 22.4 | 11239 | -1.843 |
+| 6x6x6 | 33.6 | 37933 | -1.235 |
+
+Halving as the cell doubles in linear size: the Makov-Payne self-image signature, not the
+Gaussian self-energy (which is +11.49 eV/e at sigma = 1 and is V-independent).
+
+**Why it matters here.** Edit 1 sets `eps_i = eps_local_i - phi_LR_i / eps_inf`. With
+`eps_inf = 4`, the same physical site acquires on-site energies differing by roughly
+`0.3 eV * Z_i` between the 79- and 159-atom training cells — **a first-order size dependence,
+in the term Edit 1 introduced, at the two cell sizes the dataset actually contains.** It is
+species-proportional, so it does not cancel between species.
+
+**What is NOT settled, and is a modelling decision rather than a bug to fix quietly.** `A_ii`
+is the self-plus-own-images term of the CURRENT lattice. Removing it is defensible for a
+charged defect (it is the standard self-image correction) and wrong for a neutral crystal
+(it removes real neighbours that a supercell has merely relabelled). The test is
+`xfail(strict=True)` with the measurement in its reason, so the suite stays honest, nothing is
+silently patched, and it turns green the moment the convention is decided.
+
+**This does not invalidate the Stage-3 results above.** Every gate reported here is either
+within one cell size (F4, F5, axial_red, N_eff, gap) or a ratio between two sizes in which the
+head's FORCE, not its on-site energy, is compared (dilution). But it is directly in the path of
+the §5 joint run, which trains across both sizes with `E_LR` enabled.
+
 ## What this does not establish
 
-One cell size for the force fit, forces only, frozen base, one optimiser regime. The §4 tiling
-test is unrun. The production trainer still cannot build these models — `counting_head` and
-`madelung_*` are not plumbed through `arg_parser`/`model_script_utils` — which blocks §5, not
-§3.
+One cell size for the force fit, forces only, frozen base, one optimiser regime. The
+production trainer still cannot build these models — `counting_head` and `madelung_*` are not
+plumbed through `arg_parser`/`model_script_utils` — which blocks §5, not §3. And the phi_LR
+convention above should be settled before the joint run, not after.
