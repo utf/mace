@@ -113,7 +113,14 @@ def pristine_spectrum_check(model, pristine_batches, log):
     everything else. E2 measured exactly that at a 10 A reach, so it is a real available
     minimum and not a hypothetical.
 
-    Reported as `split_fraction = (lam_2 - lam_1) / (lam_max - lam_1)`. Near zero is bands.
+    Reported as `split_fraction = (lam_2 - lam_1) / (lam_last - lam_1)`.
+
+    `lam_last` is the head's LAST COMPUTED state, not the band top: the solve returns
+    `num_states` levels (6 here), so this is a local measure at the bottom of the spectrum and
+    not a true bandwidth. That is what makes the reference value concrete rather than
+    arbitrary -- evenly spaced levels give exactly `1 / (num_states - 1) = 0.2`, while a
+    single mode split off below the rest drives it towards 1. The threshold is the
+    even-spacing value, so "BANDS" means "no more split off than uniform spacing would give".
     """
     from ta_band_edge import capture as _capture
 
@@ -134,10 +141,13 @@ def pristine_spectrum_check(model, pristine_batches, log):
                 gaps.append(float(v[1] - v[0]))
     if not fracs:
         return dict(split_fraction=float("nan"), pristine_gap=float("nan"))
-    out = dict(split_fraction=float(np.mean(fracs)), pristine_gap=float(np.mean(gaps)))
+    even = 1.0 / max(int(model.spectral.num_states) - 1, 1)
+    out = dict(split_fraction=float(np.mean(fracs)), pristine_gap=float(np.mean(gaps)),
+               split_fraction_even=float(even))
     log(f"      pristine spectrum: split fraction {out['split_fraction']:.4f}, "
         f"lam2-lam1 {out['pristine_gap']:.4f} eV "
-        f"({'BANDS' if out['split_fraction'] < 0.2 else 'SUPERATOM RISK'})")
+        f"({'BANDS' if out['split_fraction'] < even else 'SUPERATOM RISK'}, "
+        f"even spacing would give {even:.2f})")
     return out
 
 
@@ -198,6 +208,8 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
         ratio = float(np.nanmean(act) / max(np.nanmean(nul), 1e-30))
     except Exception as exc:                      # diagnostics must not kill a run
         log(f"      capture failed: {exc}")
+    if pristine_batches:
+        metrics.update(pristine_spectrum_check(model, pristine_batches, log))
     metrics.update(seed=seed, stage=stage, madelung=bool(madelung), neff=neff,
                    null_ratio=ratio, force_final=hist[-1], force_first=hist[0],
                    context=ctx.as_dict())
@@ -212,6 +224,8 @@ def main() -> None:
     ap.add_argument("--arch", type=Path, required=True)
     ap.add_argument("--base", type=Path, required=True)
     ap.add_argument("--data", type=Path, default=here / "dataset_pbe" / "valid.xyz")
+    ap.add_argument("--train", type=Path, default=here / "dataset_pbe" / "train.xyz")
+    ap.add_argument("--n-pristine", type=int, default=8)
     ap.add_argument("--stage", type=int, default=1, choices=(1, 2, 3))
     ap.add_argument("--madelung", choices=("on", "off"), default="on")
     ap.add_argument("--frames", type=int, default=48)
@@ -241,6 +255,16 @@ def main() -> None:
     t_ref = measure_t_ref(batches[0][0])
     log(f"  cutoff {cutoff:.1f} A, measured nearest-neighbour {t_ref:.3f} A")
 
+    # Stage 2's gate needs a DEFECT-FREE spectrum: a perfect crystal must show bands, not
+    # one in-phase mode split off below everything else. Selected by composition, which is a
+    # property of the formula unit and not of the defect.
+    from d1_sensitivity import select_pristine
+    from ase.io import read as _read
+    pristine = select_pristine(_read(str(args.train), ":"), args.n_pristine)
+    pristine_batches = make_batches(pristine, z_table, cutoff, args.batch_size, args.device)
+    log(f"  {len(pristine)} pristine frames of {len(pristine[0])} atoms for the "
+        f"band-versus-superatom check")
+
     rng = np.random.default_rng(0)
     frame_masks = {}
     for a in frames:
@@ -256,7 +280,8 @@ def main() -> None:
         try:
             model, met = run_cell(args.arch, args.base, seed, batches, frame_masks,
                                   args.device, args.epochs, args.lr, args.stage,
-                                  args.madelung == "on", args.eps_inf, t_ref, log)
+                                  args.madelung == "on", args.eps_inf, t_ref, log,
+                                  pristine_batches=pristine_batches)
         except Exception as exc:
             log(f"      FAILED: {exc}")
             rows.append(dict(seed=seed, error=str(exc)))
