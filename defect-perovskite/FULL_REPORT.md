@@ -275,17 +275,169 @@ inconsistency between the 79- and 159-atom cells is gone, and F4 gained the sixt
 
 ---
 
+## Steps 1-5 of the co-advisor plan: smearing, widening, rerun, gates
+
+**Regime tag: lr 0.01, AdamW, 60 epochs, frozen Stage-A base, gamma = 3 eV, Gaussian
+sigma = 0.05 eV.**
+
+### The convention, and a latent bug it exposed
+
+The head now uses Gaussian smearing at sigma = 0.05 eV, matching the label pipeline's own
+default (doped, ISMEAR = 0). Both families stay selectable; one module-level switch drives the
+fill, the entropy and the density-response backward, and the head sets it at forward entry and
+restores it at exit.
+
+Switching families exposed a bug that Fermi-Dirac had hidden. The response backward recovered
+`mu` by inverting the occupations, falling back to the spectrum's MEDIAN when no state had a
+fractional filling. Under Gaussian smearing `erfc/2` drops below 1e-6 within 3.5 widths, so a
+gapped spectrum has every `f` at exactly 0 or 1 -- the fallback fired, put `f'` at the wrong
+energy, and failed the degenerate-limit finite-difference check by a **factor of 16**. `mu`
+now comes from the forward and is never re-derived.
+
+**A near miss, recorded because it is the interesting kind.** Switching the family left
+`counting_t_el` at its old 0.025 default, so the first widened run trained at Gaussian
+sigma = 0.025 and would have been reported as the labels' convention. The family was right,
+the width was wrong, nothing raised an error. Caught by loading a saved model and reading
+`spectral.t_el` off it; six seeds discarded, ~20 minutes of GPU. The default lived in four
+places and now says 0.05 in all four, and the queue **builds a model and reads its config back
+before spending a seed**. A grep could not have caught it -- every file said "gaussian" and
+"0.05" somewhere; only the assembled object knows what it will train with.
+
+### F1 -- fires 6/6, but on the anion, not the flanking Pb
+
+The audit's 59.7% was suspiciously exact across five seeds, and 95/159 = 0.5975 with exactly
+95 Cl in a 159-atom V_Cl cell. Resolved by species:
+
+| species | saturated | pre-tanh signed mean |
+|---|---|---|
+| **Cl** | **100.0%**, 6/6 seeds | **-3.604 +- 0.192** |
+| Cs | 0.0% | +0.139 +- 0.240 |
+| Pb | 0.0% | -0.459 +- 0.253 |
+
+F1's **gate** is met. F1's **mechanism** is falsified: the forecast was flanking-Pb
+corrections driven by the missing-anion Madelung shift, and what fires is every chlorine in
+the cell including those far from the vacancy. That is a species-uniform offset, not a
+defect-local effect.
+
+The audit itself had to be rebuilt: the plan puts the flag on `BoundedLocalHead`, and a
+Stage-3 model contains none -- Edit 4 replaced the spectral head wholesale. The live bounded
+forms are the two tanh sites on `SlaterKosterH`. The previous spy guessed submodule names,
+matched nothing, and printed the same output as "no saturation found"; the tensors are now
+stored by the code that computes them, and an empty buffer prints AUDIT DID NOT FIRE.
+
+### The widened rerun: gamma 1 -> 3 eV, Gaussian 0.05
+
+| seed | axial_red | rmse | N_eff | gap |
+|---|---|---|---|---|
+| 1 | +0.621 | 24.6 | 5.11 | 2.389 |
+| 2 | +0.605 | 25.0 | 5.03 | 2.389 |
+| 3 | +0.612 | 24.9 | 5.02 | 2.399 |
+| 4 | +0.606 | 25.5 | 4.48 | 2.409 |
+| 5 | +0.616 | 25.1 | 4.92 | 2.410 |
+| 6 | +0.606 | 25.5 | 4.51 | 2.400 |
+
+**6/6 trained. axial_red +0.611 +- 0.006, rmse 25.1 +- 0.3, N_eff 4.85 +- 0.25, pristine gap
+2.399 +- 0.008** against a 2.40 target. Fit and localisation are unchanged from the
+pre-widening run within a seed spread; the gap gate is met on every seed.
+
+### Gates on the widened models
+
+| gate | result |
+|---|---|
+| **F4** | -0.0489 +- 0.0068 eV/A, sign 6/6, **4/6 in band** (was 5/6 at -0.0613) |
+| **F5** | corr **+0.858 +- 0.031**, positive 6/6, every CI excluding zero |
+| **Dilution** | **R = 0.85 +- 0.09**, gate <= 1.3 met **6/6**, bound fraction **67% +- 7%** |
+
+F5's absolute level moved to +3.58..+3.81 eV from +1.3..+2.1 -- the widened bound letting the
+on-site correction go where it was pinned from before.
+
+### THE PRE-REGISTERED PREDICTION HELD, AND IT EMPTIES THE CANDIDATE LIST
+
+Recorded before the widening ran: *if every Cl is pinned at the same value, the correction is
+a rigid per-species shift and cannot carry a d-trend, so widening gamma should not move F4's
+slope materially.*
+
+F4 went from **-0.0613 +- 0.0090 to -0.0489 +- 0.0068** -- not toward the -0.131 the base
+leaves, but slightly **away** from it. The saturation was real, it was fixed, and it was not
+the F4 mechanism. This is the co-advisor's own second branch: **the candidate list is empty
+going into R3.**
+
+### F2 -- met on the near pair, missed low on the far one
+
+| setting | slope | vs the labels' convention |
+|---|---|---|
+| Gaussian 50 meV | -0.0489 +- 0.0068 | -- |
+| Fermi-Dirac 25 meV | -0.0481 +- 0.0065 | **-1.7%** |
+| Fermi-Dirac 5 meV | -0.0536 +- 0.0085 | **+9.4%** |
+
+Forecast: < 5% for the near pair (**met**, -1.7%), 10-25% at FD 5 meV (**missed low**, +9.4%).
+The tail equivalence is confirmed and the smearing is not a candidate fix -- the labels are
+themselves smeared at 0.05.
+
+### F3 -- E_LR cannot be the missing amplitude, and the threshold undersells it
+
+`dE_LR/dd = +0.00663 +- 0.00552 eV/A`, with the |slope| < 0.01 threshold met by 4/6.
+
+The threshold is the weaker reading. F4's shortfall needs **-0.070 eV/A**, and E_LR supplies
+**+0.007** -- wrong sign and an order of magnitude too small. It cannot close F4 whichever
+side of 0.01 an individual seed lands.
+
+**Caveat that bounds the claim.** These models were BUILT with the branch off, so
+`latent_charges` does not exist on them and no flag can switch it on; the model is rebuilt
+with the branch present and the trained weights copied in, which leaves 13 long-range
+parameters at INITIALISATION. So this is the slope E_LR would contribute on day one of a
+staged re-enable, not after the joint run had fitted it. A large slope would have settled F3
+outright; a small one is strong but not conclusive, and the joint run's staged protocol
+measures the trained version for free.
+
+### Other steps
+
+**Z endpoints.** Z_Cl -0.7575 -> **-0.8160** (shift -0.0585 against a 0.0245 pooled seed
+spread: moved), Z_Pb -> **+2.0094**, essentially nominal. Cs and Pb within spread.
+
+**The eps0/correction degeneracy is not there.** `eps0` spreads across seeds are 0.007-0.047
+eV against a ~1 eV pinned correction, so the optimiser reaches the same place every seed and
+`eps0[Cl]` is pinned by the data rather than wandering a flat direction. The concern I raised
+about the joint run carrying an undetected flat direction does not survive measurement.
+
+**Common-delta_L wired.** `delta_L` came from 80-atom pristine cells while depth came from
+159-atom charged ones -- a depth judged against a level spacing from a different
+Brillouin-zone sampling. Now one size for every frame the bound flag touches, with
+`pristine_size` in the json.
+
+**Protocol into the package.** The c-shift, warmup, `loss_gap`, init gate, trainable mask and
+post-step projection are now functions in `defect_protocol.py` with no harness state, so the
+harness and the trainer call the same code. `protocol_summary()` records the head's live
+smearing family and width beside the stage flags -- it read the module default before, which
+is the same mismatch that trained six seeds at the wrong width one layer up.
+
+**Bit-identity at the final config -- PASS**, with energy now exactly bit-identical and forces
+inside the same-model repeat floor.
+
+---
+
 ## Owed items
 
-1. **Saturation audit** — spy binds to no module; needs the real `BoundedLocalHead` attribute
-   names. The second §4 config decision is unmade.
+1. ~~Saturation audit~~ **done** — rebuilt against `SlaterKosterH`, F1 fires 6/6 on the
+   anion, gamma widened to 3 eV in response.
 2. **Stage-3 protocol in the production trainer** — Harrison init, c-shift, warmup,
    `loss_gap`, init gate. Until then "config path only" cannot be honoured for a real run.
 3. **F4's amplitude shortfall** — pre-correction, the head delivered 46% of what its own base
    left (residual slope −0.1310 [−0.1422, −0.1198], bracketing the −0.134 reference in 6/6),
    so the joint run will not fix it. Per the plan this is close-or-explain at R3, not a
    joint-run gate. Candidates in order: E_LR re-enable, then SCC.
-4. **Z endpoints** for the §5 run not yet compared against the pre-correction run.
+4. ~~Z endpoints~~ **done** — Z_Cl moved, Z_Pb at nominal, no flat direction.
+
+5. **`run_train` call sites** for the protocol module. The logic is in the package; the
+   trainer does not yet call it. This is what "the joint run comes from config" still needs.
+
+6. **F3's caveat**: the long-range slope was measured with 13 LR parameters at
+   initialisation. The trained version is measured for free inside the joint run's staged
+   protocol.
+
+7. **F4's amplitude is unexplained.** Widening gamma was the last first-order candidate and it
+   did not move the slope. SCC (Edit 5) is the remaining one, sign undetermined and second
+   order. Per the plan this is close-or-explain at R3, not a joint-run gate.
 
 ---
 
