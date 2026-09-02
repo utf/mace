@@ -1,15 +1,23 @@
-# Madelung-in-H: D-series, Stage 1, and the λ–d anomaly turning over
+# Madelung-in-H: D-series, Stages 1 and 2, and the fit that was the superatom
 
 *V_Cl+ orthorhombic CsPbCl3. Dataset: Mosquera-Lois & Walsh, PRX Energy **4**, 043008 (2025);
 labels are that paper's low-fidelity PBE set, scalar-relativistic, no SOC.*
 
-**Summary.** The direction change is built and Stage 1 has run. All five Stage-1 gates pass.
-Two results worth your attention: the λ–d anomaly we flagged as an open architectural
-question **turns over and becomes physical** once the host Madelung potential is in `H`, and
-the learnable per-species charges `Z` turn out to be **worse than useless** — pinning them at
-the formal charges improves every headline number and removes a two-seed divergence.
+**Summary.** The direction change is built through Edit 4 and Stages 1 and 2 have run.
 
-One measurement went against its prediction and one came back null, both pre-registered.
+Stage 1 passes all five gates, and the λ–d anomaly we carried as an open architectural
+question **turns over and becomes physical** once the host Madelung potential is in `H`.
+
+Stage 2 is the important one. Bounded elements pass the superatom gate decisively and fail
+force parity badly, and those turn out to be **the same fact**: across 12 seeds,
+`corr(axial_red, split_fraction) = +0.987`, strictly bimodal. Where the pristine spectrum
+comes out as bands, the head fits forces no better than the base it corrects. The force fit
+this project has been getting was the superatom fitting forces.
+
+Read the Stage-1 section first — several of its numbers are contrasts that survive, and one
+of its conclusions Stage 2 withdraws.
+
+One diagnostic came back null and one prediction was refuted, both pre-registered.
 
 ---
 
@@ -77,7 +85,7 @@ We would not yet call this explained. Neither cohort says why the archived one w
 and "removed" is not "understood". But the cheapest explanation is gone and the anomaly does
 not survive either change, so it is no longer the same open item.
 
-### The one thing we want you to decide: `Z` should probably not be learnable
+### `Z` looked unlearnable after Stage 1 — Stage 2 withdrew this (see below)
 
 The ON arm is bimodal and splits by `|Z|`:
 
@@ -96,13 +104,10 @@ weak in practice.
 Pinning `Z` at the formal charges improves everything — axial_red +0.514 → +0.627, force
 32.5 → 30.4, the φ gate 2.0 → 1.2 — with a *narrower* seed spread.
 
-**We have not applied this.** The plan says learnable, so learnable is the arm of record, and
-Stage 2 is running both arms so the answer is complete whichever way you decide. The two
-candidate forms are: fix `Z` at formal, or make it bounded in Edit 3's own idiom,
-`Z[s] = Z_nominal[s] + δ·tanh(·)`. The second is more consistent with the spec's philosophy
-of bounded corrections over physical scales; the first is what the data supports today.
-
----
+**We never applied this**, and Stage 2 says not to: under bounded elements the two `Z` arms
+are indistinguishable and `Z` stops running away, so the pathology was an interaction with
+the *unbounded on-site term* rather than a property of `Z`. Left in place because the
+reasoning is what the next such runaway will need.
 
 ---
 
