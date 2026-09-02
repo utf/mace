@@ -44,7 +44,8 @@ from r1_matrix import make_batches  # noqa: E402
 from stage_run import COMPOSITION, Z_INIT, build, measure_t_ref  # noqa: E402
 from ta_band_edge import load_frames, select  # noqa: E402
 
-FLAG_KEYS = ("counting_head", "madelung_on_site", "madelung_eps_inf",
+FLAG_KEYS = ("counting_head", "counting_on_site_range", "counting_hop_range",
+             "counting_smearing_family", "madelung_on_site", "madelung_eps_inf",
              "madelung_composition", "madelung_z_init")
 
 
@@ -53,6 +54,9 @@ def cli_namespace(eps_inf: float) -> Namespace:
     return Namespace(
         defect_counting_head=True,
         defect_spectral_head=True,
+        defect_counting_on_site_range=3.0,
+        defect_counting_hop_range=0.5,
+        defect_counting_smearing="gaussian",
         defect_madelung_on_site=True,
         defect_madelung_eps_inf=eps_inf,
         defect_madelung_composition=",".join(str(c) for c in COMPOSITION),
