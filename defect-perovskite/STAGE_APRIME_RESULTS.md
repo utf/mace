@@ -131,3 +131,27 @@ the base's long-d error (b1's +0.132 eV/Å carrier-free slope) is shared by all 
 weight, w_E is near-uniform (0.68 median) on the population it was meant to discount.
 Stage B applies it as specified; its effect on the charged 79-atom energy channel is a
 ~0.7× scale, not a selection.
+
+## 5.4 — Stage A′ bases (§1)
+
+Regime: e0 recipe (140 epochs, float32, cuEq, energy 10 / total-energy 10, no long-range
+branch, every carrier regulariser zero, lr default, batch 8) plus the neutral 159-atom
+frames raised to a 0.25 share of BOTH the base energy loss and the base force loss, on the
+columns the base terms read, logged every epoch. No charged frame in any training or
+validation set.
+
+| base | data | 159-atom frames | energy factor | force factor | final train E / F | final valid E / F |
+|---|---|---|---|---|---|---|
+| aprime_f0 | dataset_cf/fold0 (1379 train) | 12 | 92.0× | 46.1× | 2.5 / 11.5 | 1.0 / 6.1 |
+| aprime_f1 | fold1 | 12 | 92.0× | 46.1× | 2.5 / 11.8 | 1.2 / 6.1 |
+| aprime_f2 | fold2 | 12 | 92.0× | 46.1× | 3.1 / 11.8 | 1.8 / 6.1 |
+| aprime_f3 | fold3 (1380 train) | 12 | 73.5× | 36.9× | 1.8 / 11.3 | 1.4 / 6.0 |
+| aprime_prod | dataset_e0 (1616 train) | 15 | 83.9× | 42.1× | 6.1 / 10.9 | 4.9 / 11.8 |
+
+Errors in meV/atom and meV/Å. The fold validation sets are pristine cells only (153
+'ideal' frames each); the production validation set holds 95 pristine, 57 neutral 79-atom
+and 2 neutral 159-atom frames, which is why its numbers are not comparable to the folds'.
+Realised shares 0.2500 / 0.2500 on every base at every epoch. Fold bases trained on b3
+GPUs 4–7 (one shared with the OOD indicator) at 0.8 min/epoch; the production base on the
+local A4000 at 0.85 min/epoch. All five load with `trunk_avg_num_neighbors` equal to the
+blocks' float (14.05 on fold 0), through the cuEq conversion.
