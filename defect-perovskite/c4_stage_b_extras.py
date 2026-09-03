@@ -90,11 +90,15 @@ def lr_constants(model, frames, z_table, cutoff, device, ctx):
             delta_lr = (out["correction_energy"] - out["delta_sr_energy"]).reshape(-1)[0]
             e_lr.append(float(delta_lr))
             if ew is not None:
-                sigma = float(getattr(ew.ewald, "sigma", 1.0))
+                # The kernel's OWN G = 0 constant, as LatentEwald.energy adds it:
+                # E_bg = -norm_factor * sigma^2 * Q^2 / (2 V), for the net carrier charge
+                # the frame carries (|Delta_n| times the frozen amplitude).
+                sigma = float(ew.sigma)
+                norm = float(ew.ewald.norm_factor)
                 vol = float(torch.det(batch.cell.reshape(3, 3)).abs())
-                # LES's neutralising background for a net charge Q = 1 at this smearing,
-                # -norm * sigma^2 * Q^2 / (2 V) with norm = 2 pi (Gaussian units in eV.A)
-                bg.append(float(-2.0 * np.pi * sigma ** 2 / (2.0 * vol) * 14.399645))
+                amp = out.get("screening_amplitude")
+                q_net = float(amp.reshape(-1)[0]) if amp is not None else 1.0
+                bg.append(float(-norm * sigma ** 2 * q_net ** 2 / (2.0 * vol)))
     return (float(np.mean(e_lr)) if e_lr else float("nan"),
             float(np.mean(bg)) if bg else float("nan"))
 
