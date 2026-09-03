@@ -69,8 +69,12 @@ __all__ = ["CORRECTION_PREFIXES", "is_correction_param", "load_stage_a_base",
 # --defect_base_init and --defect_madelung_on_site could not be combined AT ALL from config,
 # which is the joint run's own configuration. Found by running the production trainer end to
 # end; every unit test passed throughout, because each of them exercised one flag.
+# `pristine_` is the centred on-site correction's reference (Stage A' section 2.1): the
+# species-mean first-block feature over the pristine cell, set by the trainer after the
+# base is loaded. Correction state, not base weights; a Stage-A checkpoint never has it.
 CORRECTION_PREFIXES = ("carrier_", "counter_", "latent_charges", "logit",
-                       "defect_", "delta_", "novelty_", "spectral", "madelung")
+                       "defect_", "delta_", "novelty_", "spectral", "madelung",
+                       "pristine_")
 
 
 # Training bookkeeping: neither base weights nor correction state. `current_epoch` drives the
