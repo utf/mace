@@ -420,3 +420,77 @@ patterns that matched the shell carrying them, and a post-run chain that waited 
 so read a deliberate relaunch as the end of the run -- aborting the unattended scoring that was
 its entire purpose. All three now test the condition itself: bracket-quoted patterns, and a
 completion marker in the log rather than a process in the table.
+
+---
+
+## Entry 11 — the joint run leaked, F14 confirmed on 8 of 8, nothing adopted
+
+**Closure.** The joint run was the end of the plan and it ran to completion: six Stage-A seeds
+and two from-scratch seeds, 20 epochs, float64, both size upweights at 0.25, E_LR from epoch
+12, protocol on, on-site channel zero-initialised, scored by code committed before any joint
+model existed. Regime tag: joint `DefectLoss` (energy + force + gap), lr 0.005, base at 0.1x,
+γ = 3, Gaussian 0.05, exp envelope L = 1.0, linear hop form. The charged 159-atom residual
+energy slope, measured against each trained model's own base branch, is −0.0713 ± 0.0076 on
+the Stage-A arm and −0.0843 ± 0.0016 from scratch, against the null-cleared reference
+−0.1338 [−0.1447, −0.1232]. Every seed's interval lies above the −0.10 floor. **F14 confirmed,
+8 of 8; adopted 0 of 8.**
+
+**What that is, said plainly.** The base network was allowed to train alongside the correction
+head with energy terms in the loss, learned the distance-dependent energy itself, and the
+carrier's energy signature largely left the residual. The fit is better by every aggregate
+(arm A 4.5 ± 0.4 meV/atom, 12.4 ± 0.2 meV/Å on validation; forces halved from the start of
+training; gaps 2.39–2.43 eV; the level still a shallow donor). That is the reason rule 2 exists
+and the reason criterion 1 was written on the residual slope: a base that removes M1b's
++0.36 eV/Å artefact by absorbing the carrier passes every other test.
+
+**Forces did not leak; energies did.** The charged 159-atom force slope held (−0.220 against
+−0.190), and the neutral 159-atom force slope, +0.064 of base error at the pre-joint null, fell
+to +0.006…+0.015 — the base learned the long-d region it used to extrapolate into, which is
+what the run was for. The force channel had the large cells upweighted; the energy channel had
+no equivalent protection and is the channel that lost the signal. The next attempt is a
+decision about the objective, not the head: energy-channel large-cell weight, or a frozen base
+while the head fits energies, or both.
+
+**Both arms leak, so this is not a staging result.** The pre-registered reading for a leak in
+one arm and not the other was "a property of initialisation". From scratch leaks slightly less.
+The Stage-A start is not what lets the base take the carrier; the objective is.
+
+**Criterion 2 is left unresolved, as the reading rule required.** Against the registered
+out-of-fold +0.0800 the neutral slope grew on every seed; against the like-for-like production
+base +0.0968 the pooled +0.1101 ± 0.0122 with per-seed intervals ±0.06 wide is not resolved.
+The composite `adopted` boolean is a summary of the six-row table and not the verdict, and the
+scorer's `c1_leakage` flag is named backwards (true = inside the reference interval = no leak);
+recorded, not patched after the fact.
+
+**Zero-init did not hold.** Every seed started with the on-site channel at exactly zero and
+ended with +0.09…+0.40 eV species constants of within-shell spread ≤ 0.026 — b4's gauge, grown
+back under a loss that contains energies. F10 restated on that channel fails by 4.8 meV. The
+centred correction goes to R3 carrying evidence from both objectives.
+
+**The participation split is three and three, and E_LR is part of it.** a1–a3 end near 11
+and a4–a6 near 5.5, and the three delocalised seeds are the three shallow ones by s3_dilution's
+depth (0.011–0.015 against 0.059–0.063 eV). Seed 1 with E_LR off, run locally, is identical to
+joint_a1 to every printed digit through epoch 12 — the same seed, data order and intermediate
+state, so the divergence after that is E_LR alone: 7.80 → 7.75 without it, 9.24 → 11.14 with
+it. The E_LR-on arm may not be converged at 20 epochs. LEDGER_PARTICIPATION_SLOT
+
+**The modulation ceiling on the joint models.** No bond of any type is at its stop in any seed;
+the ×1.25 what-if raises the 79-atom force loss by 24% in 6/6 and leaves F4 at −0.067. F12
+fails both clauses here, more cleanly than on the pre-joint cohort. Superexchange stays first
+on the R3 list.
+
+**Statement of record (assert, never implement around):**
+"A joint objective that carries energy terms and protects only the force channel at large cell
+size will hand the carrier's energy signature to the base. The detector is the null-cleared
+charged 159-atom residual slope measured against the trained model's own base branch, and it
+is scored before the fit is looked at. Any future joint run registers that slope, its floor,
+and the large-cell weight of *every* channel in the loss, before launch."
+
+### The operational lesson, a fourth time
+
+The E_LR-off control queue waited on `pgrep` for the post-run chain. The chain was killed and
+relaunched for the dtype fix, and in that gap the control saw no process and started, concurrent
+with the scoring it was meant to follow. Inside the four-GPU cap by timing, not by design, in a
+script written after entry 10's lesson. The condition it should have tested was the `post-run
+complete` marker. Written into the script header, and the rule is unchanged: test the
+condition, not the liveness of the thing that produces it.

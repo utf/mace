@@ -8,10 +8,18 @@
 # so a participation difference between the cohorts is attributable to E_LR and to nothing
 # else. A control that changed the seeds as well would answer a different question.
 #
-# WHAT IT IS FOR. Carrier participation in arm A ends at 11.14, 11.19, 10.94 and 5.43 -- one
-# seed roughly twice as localised as its siblings. E_LR switches on at epoch 12 of 20 in that
-# cohort, so it is a candidate for the spread, and the only way to know is to run the same
-# seeds without it.
+# WHAT IT IS FOR. Carrier participation in arm A ends at 11.14, 11.19, 10.94, 5.43, 5.51 and
+# 5.73 -- three seeds roughly twice as localised as the other three (this header first said
+# "one of four", written from wave 1 alone). E_LR switches on at epoch 12 of 20 in that cohort,
+# so it is a candidate for the split, and the only way to know is to run the same seeds
+# without it.
+#
+# LIVENESS FAULT, RECORDED. The second wait below watches a PROCESS (pgrep on the post-run
+# chain). The chain was killed and relaunched for the dtype fix, and in that gap this script
+# saw no process and started -- the fourth instance of the fault entry 10 of LEDGER.md
+# describes, in a script written after the lesson. It ran within the four-GPU cap by luck of
+# timing, not by design. A completion marker ("post-run complete" in joint_postrun.log) is
+# the condition it should have waited on.
 #
 # It waits for the joint run AND its scoring to release the GPUs, because the four-GPU cap on
 # b3 is not a tunable.

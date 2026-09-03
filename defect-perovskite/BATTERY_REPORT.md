@@ -5,8 +5,9 @@ PBE scalar-relativistic; defect calculations set up through `doped`.
 
 **Everything below is measured on the widened six-seed cohort (`gamma = 3 eV`, Gaussian
 `sigma = 0.05 eV`, frozen Stage-A base, forces + `loss_gap`, 60 epochs, lr 0.01) unless a row
-says otherwise. Nothing here trained.** The one exception is the two-epoch smoke in section 4,
-which exists to prove the trainer's call sites fire.
+says otherwise. Nothing here trained** except the two-epoch smoke in section 4, which exists to
+prove the trainer's call sites fire, and section 6, which trained eight joint seeds and their
+E_LR-off control; every number there carries its own regime tag.
 
 ---
 
@@ -48,9 +49,11 @@ below the conduction manifold changed by −0.025 eV. Nothing physical happened.
 - Standing-rule addition: any ratio-of-spread criterion registers an absolute floor (F10's
   lesson).
 
-All four were executed. The first is what b9 measures; the second is criterion 1; the third
-fired on every joint seed (`|W_site| 0.00000`, `b_site +0.00000` at epoch 0); the fourth is why
-F10 carries a 50 meV floor beside its 2σ test.
+All four were executed. The first is what b9 measures; the second is criterion 1, and it fired
+on every joint seed (section 6); the third fired on every joint seed (`|W_site| 0.00000`,
+`b_site +0.00000` at epoch 0) and did not hold — the species-constant gauge regrew to
++0.09…+0.40 eV by the end of training, so zero-init removes b4's artefact at initialisation
+and not from the objective; the fourth is why F10 carries a 50 meV floor beside its 2σ test.
 
 **Third correction, to §0's own γ-independence note.** It is sound about a fixed pre-tanh
 value and does not apply here: the widened cohort are fresh builds trained from scratch, not
@@ -327,7 +330,11 @@ by a default.
 | **F7** | t_PbPb at 6–7 Å sits below Harrison by more than the pair-weight factor, or inside a taper | **fires**, 0.183 ± 0.112 against a ×1.5 headroom, and not a taper (0.91 at 6 Å). Remedy contraindicated by b7. |
 | **F8** | Cl remains saturated at γ = 3 (near-certain) | **fails**, 0.0% in 6/6. The γ-independence argument is sound but does not apply to fresh seeds. |
 | **F9** | the λ move is a whole-spectrum offset; depths change by < 0.2 eV | **holds**, 25 meV. |
-| **F10** | with the centred correction in, ligand Cl separates from bulk Cl | **fails** without it, by 2.7 meV. The channel carries no structure to separate. |
+| **F10** | with the centred correction in, ligand Cl separates from bulk Cl | **fails** without it, by 2.7 meV. The channel carries no structure to separate. Restated on the zero-initialised joint channel: fails again, by 4.8 meV. |
+| **F11** | the modulation bound binds at the upper stop, concentrated in the short-d bins | **half right** (§4b). Upper stop for the p channels and lower for ss-σ on the same bonds; concentrated in two of six seeds at 100% in every bin, not in d. |
+| **F12** | ×1.25 on the hub bond lowers the 79-atom force loss and moves F4 past −0.08 | **fails** (§4b): −0.8% and −0.0675. The two seeds at the bound are the two it makes worse. |
+| **F13** | conditional on F12 | **withdrawn** with F12. |
+| **F14** | joint run under the current bound: the 159-atom charged residual slope shrinks below 0.10 in magnitude (leakage); under a widened bound it holds at −0.134 | **confirmed, 8/8** (§6): −0.0713 ± 0.0076 (Stage-A arm) and −0.0843 ± 0.0016 (from scratch). Not adopted. |
 
 **Two scoring rules were amended after the smoke run and before the result, and both
 amendments are disclosed here rather than absorbed.**
@@ -656,13 +663,13 @@ envelope candidate raises it at initialisation.
 | candidate | status |
 |---|---|
 | Cl saturation / γ | **closed.** Fixed, and it was not the mechanism (F4 moved −0.0613 → −0.0489, away from −0.131). |
-| E_LR | **closed** on sign and magnitude (+0.007 against a required −0.070); trained version still measured free in the staged re-enable. |
+| E_LR | **closed** on sign and magnitude (+0.007 against a required −0.070). Trained version now measured in the staged re-enable: it does not close F4 (§6), and it is what turns the carrier's participation from falling to rising at epoch 12 in seed 1 (7.80 → 7.75 without it, 9.24 → 11.14 with it). JOINT_R3_ELR_SLOT |
 | SCC | **closed on sign** by the reviewer's argument; R3 may measure the number. |
 | Envelope / coupling range | **closed by b7 (global) and b9 (local).** The envelope fires as a diagnosis and is contraindicated as a remedy; the defect-local modulation ceiling binds in only 2 of 6 seeds and scaling past it misses F12's target. |
 | Label availability at 79 atoms | **new, measured, and the largest single factor.** The 79-atom energy residual carries +0.132 of base error and no carrier trend; the 159-atom reference is carrier physics (null +0.08 vs charged −0.134). Not a defect of the head. |
-| F4 never being a fitted target | **new.** Resolves in the joint run by construction. |
-| Beyond-two-centre / superexchange | **open, and now first.** The hub ablation leaves 30% of the d-response in the indirect channel, and F12 removed the direct channel's bound as the lever. |
-| Centred correction | **deferred to R3** per the decision tree, with b4 as its evidence: the channel is inert and its constant mode is an unidentified gauge under a forces-only loss. |
+| F4 never being a fitted target | **resolved by the joint run, and the answer is leakage.** F4 became a fitted quantity and the base took it: −0.0713 / −0.0843 against −0.134 in both arms. The next attempt is a decision about the objective (energy-channel large-cell weight, or a frozen base while the head fits energies), not the head. |
+| Beyond-two-centre / superexchange | **open, and first.** The hub ablation leaves 30% of the d-response in the indirect channel, F12 removed the direct channel's bound as the lever on the pre-joint cohort, and on the joint models no bond of any type is at its stop while the ×1.25 what-if fails both clauses in 0/6. |
+| Centred correction | **deferred to R3** per the decision tree, with b4 *and* the joint run as its evidence: the channel is inert under a forces-only loss, and under the joint objective its constant mode regrew from an exact zero to +0.09…+0.40 eV species constants. An unidentified gauge under both objectives. |
 
 ## 6. The joint run
 
@@ -738,7 +745,298 @@ as a verdict on criterion 1.
 arm does not — or the reverse — is a result about *staging*, and will be labelled as one rather
 than folded into a single adoption number.
 
-### JOINT_RUN_RESULTS_PLACEHOLDER
+### The run as it happened
+
+**Regime tag for every number in this section:** joint objective (`DefectLoss` with energy,
+force and gap terms), 20 epochs, batch 8, float64, lr 0.005, `EVAL_INTERVAL=4`, 128 channels,
+`MAX_L=1`, `r_max = 5.0`, carrier cutoff 10.0 Å, γ = 3 eV, Gaussian 0.05 eV, exponential
+envelope L = 1.0, linear hop form, protocol on (Harrison init at 2.861 Å, warmup 5), on-site
+correction zero-initialised, `loss_gap` w = 1.0 at E_gap 2.4 with composition 3,1,1, both
+size upweights 0.25 (both realised 0.25), E_LR staged in at epoch 12, cuEq off. Arm A: six
+seeds (a1–a6) from the Stage-A base `e0_base_s1` at 0.1× the head's rate, trunk normalisation
+inherited (14.08). Arm B: two seeds (b1 = seed 11, b2 = seed 12) from scratch at equal rates,
+trunk normalisation rescaled by the measured edge ratio. This is the *only* trained cohort in
+this report besides the smoke; nothing above it trained.
+
+Timeline on b3 (GPUs 4–7, four at a time): two false starts, at 23:17 and 23:52, both killed
+for the gauge-block bug below; final launch 00:16; preflight (one epoch on `dataset_cf/fold0`,
+required to exit 0 *and* print `Gauge: epoch 0`) passed at 00:36; wave 1 (a1–a4) 00:36:45 →
+04:53:32; wave 2 (a5, a6, b1, b2) 04:53:32 → 09:13:17. Ten minutes per epoch, measured
+(00:42:42 / 00:53:10 / 01:02:43). All eight exit 0. The scorers ran 09:24 → 10:32 by the
+post-run chain, which was written and committed before any joint model existed.
+
+**The training set, for later readers.** `train.xyz` holds 16 charged and 15 neutral 159-atom
+cells; the remaining one of each sits in `valid.xyz`. The seventeen-frame references below are
+measured on train + valid, the same seventeen b1 used.
+
+### F14 confirmed: the base absorbed the carrier, and the run is not adopted
+
+Criterion 1 is the leakage detector, and it fired on every seed of both arms. The charged
+159-atom residual energy slope, measured against each trained model's own base branch:
+
+| arm | charged 159 energy | charged 159 force | neutral 159 energy | neutral 159 force | F4 δ_sr | adopted |
+|---|---|---|---|---|---|---|
+| pre-joint reference (b1) | −0.1338 [−0.1447, −0.1232] | −0.1901 [−0.2103, −0.1700] | +0.0800 (oof) / +0.0968 (prod. base) | +0.0643 | — | — |
+| **A**, Stage-A init, 6 seeds | **−0.0713 ± 0.0076** | −0.2204 ± 0.0125 | +0.1101 ± 0.0122 | +0.0098 ± 0.0040 | −0.0573 ± 0.0155 | **0/6** |
+| **B**, from scratch, 2 seeds | **−0.0843 ± 0.0016** | −0.1902 ± 0.0063 | +0.1153 ± 0.0040 | +0.0206 ± 0.010 | −0.0494 ± 0.0014 | **0/2** |
+
+Spreads are one standard deviation across seeds. Every seed's 95% interval on the charged
+energy slope lies entirely above the reference interval and entirely above the −0.10 floor,
+so F14's clause — "under the current bound the 159-atom charged residual slope shrinks below
+0.10 in magnitude" — holds on 8 of 8, and the run is not adopted on criterion 1 alone.
+
+Per seed, arm A (c-shift is the deterministic calibration at the end of training):
+
+| seed | c-shift | charged 159 E slope [95%] | charged 159 F | neutral 159 E [95%] | neutral-79 window E / F (meV/atom, meV/Å; base 1.7 / 10.8) | F4 δ_sr [95%] | depth from CBM | pristine gap |
+|---|---|---|---|---|---|---|---|---|
+| a1 | +10.96 | **−0.0644** [−0.0746, −0.0542] | −0.1985 | +0.1320 [+0.0625, +0.2014] | 2.0 / 8.8 | −0.0403 [−0.0473, −0.0334] | 0.061 | 2.408 |
+| a2 | +9.87 | **−0.0814** [−0.0945, −0.0683] | −0.2321 | +0.1006 [+0.0399, +0.1613] | 3.0 / 9.1 | −0.0416 [−0.0485, −0.0348] | 0.071 | 2.419 |
+| a3 | +10.14 | **−0.0708** [−0.0826, −0.0590] | −0.2129 | +0.1098 [+0.0489, +0.1707] | 4.8 / 9.0 | −0.0451 [−0.0519, −0.0384] | 0.045 | 2.414 |
+| a4 | +10.49 | **−0.0778** [−0.0884, −0.0672] | −0.2317 | +0.0979 [+0.0360, +0.1597] | 1.9 / 9.2 | −0.0795 [−0.0903, −0.0686] | 0.100 | 2.395 |
+| a5 | +10.77 | **−0.0592** [−0.0703, −0.0481] | −0.2160 | +0.1194 [+0.0541, +0.1848] | 1.9 / 8.9 | −0.0707 [−0.0810, −0.0604] | 0.067 | 2.426 |
+| a6 | +10.49 | **−0.0740** [−0.0859, −0.0621] | −0.2310 | +0.1009 [+0.0366, +0.1653] | 2.0 / 8.7 | −0.0665 [−0.0759, −0.0570] | 0.059 | 2.392 |
+
+Arm B:
+
+| seed | c-shift | charged 159 E slope [95%] | charged 159 F | neutral 159 E [95%] | neutral-79 window E / F | F4 δ_sr [95%] | depth from CBM | pristine gap |
+|---|---|---|---|---|---|---|---|---|
+| b1 | +10.81 | **−0.0859** [−0.0962, −0.0757] | −0.1965 | +0.1193 [+0.0401, +0.1986] | 1.6 / 14.1 | −0.0508 [−0.0589, −0.0426] | 0.049 | 2.422 |
+| b2 | +9.64 | **−0.0827** [−0.0937, −0.0717] | −0.1839 | +0.1112 [+0.0376, +0.1849] | 9.6 / 14.3 | −0.0480 [−0.0549, −0.0411] | 0.044 | 2.389 |
+
+**All six criteria, scored explicitly, per the registered rule** (the composite boolean is a
+summary of this table and not the verdict):
+
+| criterion | rule | arm A | arm B |
+|---|---|---|---|
+| 1 energy | charged 159 energy slope inside [−0.1447, −0.1232]; shrinkage past −0.10 = leakage | **fails 6/6, leakage 6/6** | **fails 2/2, leakage 2/2** |
+| 1 force | charged 159 force slope inside [−0.2103, −0.1700] | 5/6 outside on the *steep* side (−0.213 to −0.232); a1 inside | 2/2 inside |
+| 2 | neutral 159 energy slope moves toward zero from the reference | against the registered +0.0800: grew, 6/6. Against the like-for-like +0.0968: pooled +0.1101 ± 0.0122, per-seed intervals ±0.06 wide — **not resolved** either way | grew against +0.0800; unresolved against +0.0968 |
+| 3 | neutral-79 window error within 1.1× base (E 1.7 meV/atom, F 10.8 meV/Å) | energy degraded 5/6 (1.9–4.8 vs 1.7; a5 passes, narrowly), force *improved* 6/6 (8.7–9.2) | b1 E passes, F fails (14.1); b2 fails both |
+| 4 | F4 δ_sr slope negative and within 1.5× of −0.134 | out of band 6/6 (−0.040 to −0.080) | out of band 2/2 |
+| 5 | pristine gap 2.4 ± 0.1 eV | ok 6/6 (2.392–2.426) | ok 2/2 |
+| 6 | frontier level stays a shallow donor | ok 6/6, 0.045–0.100 eV below the CBM | ok 2/2, 0.044–0.049 |
+| | **adopted** | **0/6** | **0/2** |
+
+One naming defect in the scorer, disclosed rather than patched after the fact: the JSON flag
+`c1_leakage` is *true* when the slope sits inside the reference interval, i.e. when there is
+**no** leakage. The printed verdict reads it correctly (`OUTSIDE THE REFERENCE CI … SHRUNK past
+-0.10: F14 leakage`); the flag name is inverted relative to its meaning and should be read as
+`c1_in_reference_ci`. The numbers are the result either way.
+
+**Both arms leak, so this is not a staging result.** The pre-registered reading was that a
+leak in one arm and not the other would be labelled a property of initialisation. Arm B leaks
+slightly *less* (−0.084 against −0.071), from a base that had never seen the data, so the
+Stage-A start is not what lets the base absorb the carrier. What the two arms share is the
+objective.
+
+### Plain-language statement
+
+The base network was allowed to train alongside the correction head with energy terms in the
+loss. The base learned the distance-dependent energy itself, so the carrier's energy signature
+largely left the residual. The overall fit looks good — forces halved, energies unchanged, gaps
+intact, the level still a shallow donor — which is exactly why the adoption rule was written on
+the residual slope rather than on the fit.
+
+**Forces did not leak; energies did.** The charged 159-atom force slope held or steepened
+(−0.220 against −0.190), while the neutral 159-atom *force* slope, which was +0.064 of base
+error at the pre-joint null, collapsed to +0.006…+0.015 (correlation 0.1–0.3): the base learned
+the long-d force region it used to extrapolate into, which is what the joint run was for. The
+force channel had the large cells upweighted to a quarter of the population loss. The energy
+channel had no equivalent protection, and it is the energy channel that lost the signal.
+
+**The level became shallower**, 0.10–0.13 eV below the CBM before the joint run to
+0.045–0.100 after, consistent with binding energy having moved into the base.
+
+### Final validation errors, and why they are not the verdict
+
+| seed | valid RMSE E (meV/atom) | valid RMSE F (meV/Å) |
+|---|---|---|
+| a1 | 5.1 | 12.6 |
+| a2 | 4.0 | 12.4 |
+| a3 | 4.6 | 12.3 |
+| a4 | 4.5 | 12.6 |
+| a5 | 3.9 | 12.5 |
+| a6 | 4.7 | 12.2 |
+| **arm A** | **4.5 ± 0.4** | **12.4 ± 0.2** |
+| b1 | 9.4 | 16.1 |
+| b2 | 6.3 | 16.9 |
+| **arm B** | **7.9** | **16.5** |
+
+a1 started at 4.12 meV/atom and 26.83 meV/Å on validation: forces more than halved, energy
+slightly worse (it dipped to 3.81 at epoch 12 and rose after E_LR came in). Train against valid
+for a1 is 3.5/10.0 against 5.1/12.6. Rule 2 of this programme is that nothing is ranked by
+total RMSE, and this table is the reason the rule exists: by it, every seed here is an
+improvement on the pre-joint cohort.
+
+### Carrier participation, and the E_LR counterfactual
+
+`partic` in the trainer and `N_eff` in the harness are the same quantity, 1/Σᵢαᵢ² per graph,
+measured on carrier-bearing validation frames every fourth epoch; the counting head broadcasts
+one α across its four slots, so the four printed values are identical and the "null channel"
+ratio the spectral-era gates used is identically 1.000 and is not reported.
+
+| seed | initial | epoch 0 | 4 | 8 | 12 | 16 |
+|---|---|---|---|---|---|---|
+| a1 | 5.23 | 9.25 | 9.22 | 8.54 | 9.24 | **11.14** |
+| a2 | 5.24 | 8.75 | 8.45 | 7.65 | 8.87 | **11.19** |
+| a3 | 5.23 | 9.55 | 9.22 | 8.87 | 8.95 | **10.94** |
+| a4 | 5.26 | 8.39 | 8.10 | 6.48 | 5.23 | **5.43** |
+| a5 | 5.23 | 6.91 | 7.25 | 7.13 | 6.48 | **5.51** |
+| a6 | 5.23 | 8.53 | 8.83 | 6.69 | 5.65 | **5.73** |
+| b1 | 5.27 | 11.08 | 6.84 | 4.92 | 7.56 | 10.53 |
+| b2 | 5.24 | 10.60 | 6.67 | 7.23 | 8.23 | 10.41 |
+
+The six-seed cohort splits three and three, not one against five: a1–a3 end near 11, a4–a6
+near 5.5. (An earlier note in this cycle said "one seed of four"; it was written from wave 1
+alone.) The split is not only in participation. s3_dilution's median depth on the sixteen
+charged 159-atom training frames is 0.011 / 0.015 / 0.013 eV for a1–a3 and 0.063 / 0.060 /
+0.059 eV for a4–a6, and the bound fraction is 31 / 38 / 31% against 75 / 69 / 62%: the three
+delocalised seeds are the three shallow ones.
+
+**Whether E_LR is what separates them was tested, not inferred.** Because E_LR switches on at
+epoch 12, epochs 0–11 of a run with it off are identical to the same seed with it on — same
+seed, same data order, every intermediate state. Seed 1 was run with `USE_LONG_RANGE=False` on
+the local A4000, and its epoch-12 gauge (c-shift +10.2256) matches joint_a1's to four decimals:
+
+| epoch | seed 1, E_LR off | joint_a1, E_LR on at 12 |
+|---|---|---|
+| 0 | 9.250 | 9.250 |
+| 4 | 9.220 | 9.220 |
+| 8 | 8.535 | 8.535 |
+| 12 | **7.797** | **9.238** |
+| 16 | **7.753** | **11.137** |
+
+Without E_LR the carrier keeps localising and then flattens; with it the trend reverses and is
+still climbing at epoch 16, 44% more delocalised. The E_LR-on arm may not be converged at 20
+epochs, so 11.14 need not be its endpoint. The E_LR-off seed finished at 4.2 meV/atom and
+13.8 meV/Å on validation (train 2.7 / 11.0), against a1's 5.1 / 12.6.
+
+JOINT_PARTICIPATION_SLOT
+
+### The gauge, watched every epoch
+
+The on-site correction started at exactly zero on every seed (`|W_site| 0.00000`, `b_site
++0.00000`, Z = (−1, +1, +2) at epoch 0), and the c-shift on every Stage-A seed started within
+3.4 meV of +8.96, the value predicted from the trunk-normalisation repair. Then:
+
+| epoch | a1 c-shift | a1 |W_site| | a1 Z | a4 Z | b1 c-shift |
+|---|---|---|---|---|---|
+| 0 | +8.9600 | 0.00000 | −1.000 +1.000 +2.000 | −1.000 +1.000 +2.000 | +4.9026 |
+| 5 | +9.8098 | 0.01064 | −0.879 +0.765 +1.871 | −0.759 +0.435 +1.843 | +8.4164 |
+| 10 | +10.0860 | 0.01167 | −0.822 +0.751 +1.716 | −0.688 +0.455 +1.609 | +10.3303 |
+| 15 | +10.8081 | 0.01286 | −0.797 +0.783 +1.607 | −0.624 +0.429 +1.444 | +10.7297 |
+| 19 | +11.1135 | 0.01304 | −0.780 +0.783 +1.557 | −0.576 +0.404 +1.322 | +10.8492 |
+
+Three things to read off it. The c-shift is still moving at epoch 19 (about 0.06 eV/epoch on
+a1, from 0.33 at the start), so the head's energy zero is not at rest. The neutrality
+projection held for the whole run on every seed: 3·Z_Cs + Z_Pb + Z_Cl = 0.000 at epoch 19 on
+a1 and −0.002 on a4, some 6 400 optimiser steps each. And b1, from scratch, started its c-shift
+at +4.90 and arrived at +10.85, inside arm A's +9.87…+10.96 — the head's energy zero is a
+property of the data, not of the initialisation.
+
+**Zero-init removed the gauge at initialisation, and the gauge regrew.** b4's diagnosis of the
+on-site channel on the pre-joint cohort was a near-uniform +0.27 eV on every atom with
+within-shell spreads of 1–3 meV. The same probe on the joint models (`joint_peratom.json`)
+finds the channel has grown back a species constant: pooled corrections hub-Pb +0.26,
+ligand-Cl +0.39, bulk-Cl +0.40, bulk-Pb +0.18, Cs +0.09 eV, within-shell pre-tanh spreads
+0.0015–0.026, and per seed the constants wander (Cs from −0.19 on a6 to +0.26 on a2). The F10
+restatement on the zero-initialised channel: ligand-Cl against bulk-Cl differ by 4.8 meV, not
+statistically resolved and far below the 50 meV floor — **F10 fails again**. So §0's third item
+did fire on every seed, and it did not hold: the constant mode of the on-site channel is an
+unidentified gauge under the joint objective too, which is the evidence the centred correction
+carries into R3.
+
+### Dilution (criterion 5's companion), on the joint models
+
+`s3_dilution.py` on the sixteen charged 159-atom training frames, δ_L from four pristine
+80-atom cells: R_bound 0.62 / 0.71 / 0.71 / 0.83 / 0.80 / 0.79 for a1–a6, pooled
+**0.74 ± 0.07**, gate ≤ 1.3 met by 6/6; bound fraction 51 ± 18%. The same script on the
+pre-joint s7 cohort gave R_bound 0.85 ± 0.09, bound fraction 67 ± 7% and median depths of
+0.030–0.040 eV on every seed; the joint cohort is less bound on the fraction and splits on the
+depth, three seeds at 0.011–0.015 and three at 0.059–0.063 eV. R ≈ 1 is a bound carrier, R ≈ 2
+a band state whose hub amplitude halved with the cell, and the script's own caution stands:
+anything between is partial binding and not a pass on physics, only on the gate.
+
+### The modulation ceiling on the joint models (F11, F12 restated)
+
+`b9_hub_ceiling.py` on a1–a6, 40 hub bonds each. **No bond of any type is at its stop in any
+seed** (0.0% at |tanh g| > 0.98, all four integrals, all six seeds): mean tanh g ss-σ +0.361 ±
+0.245, sp-σ +0.092 ± 0.051, pp-σ −0.511 ± 0.097, pp-π +0.283 ± 0.228. The sign pattern is also
+not the pre-joint one (there ss-σ sat at the lower stop and pp at the upper). This is a
+cohort-to-cohort comparison — fresh heads under a different objective, epoch count and learning
+rate — and does not say that training moved the pre-joint seeds off the bound.
+
+The what-if, pooled: ×1.00 force loss (79) 0.00011 ± 0.00001, F4 −0.0567 ± 0.0153; ×1.25
+force loss **+24.3%**, fell in **0/6**, F4 −0.0668 ± 0.0170; ×1.5 +69.3%, 0/6, −0.0774 ±
+0.0183. F12 fails on both clauses here, more cleanly than on the pre-joint cohort, where the
+force loss fell in four seeds. The direction of F4 under scaling is again monotonic toward the
+reference in every seed.
+
+### Depth against both edges (F9 restated)
+
+JOINT_DEPTH_SLOT
+
+### F11–F14, scored
+
+| | forecast | outcome |
+|---|---|---|
+| **F11** | the bound binds at the upper stop, concentrated in the short-d bins | **half right.** Upper stop for pp-σ and pp-π, lower for ss-σ, on the same bonds; concentrated in seeds (2 of 6 at 100% in every bin), not in d. |
+| **F12** | ×1.25 on the hub bond lowers the 79-atom force loss and moves F4 past −0.08 | **fails.** Pooled force loss −0.8% (4/6 seeds), F4 −0.0675; the two seeds at the bound are the two it makes worse. On the joint models it fails both clauses (0/6, +24%). |
+| **F13** | (conditional on F12) | **withdrawn** with F12. |
+| **F14** | under the current bound the joint run leaks: the 159-atom charged residual slope shrinks below 0.10 in magnitude | **confirmed, 8/8.** −0.0713 ± 0.0076 (arm A), −0.0843 ± 0.0016 (arm B), every interval above −0.10. |
+
+### What this says about the next attempt
+
+Not a decision about the head. The joint objective at these weights lets the base and the
+correction compete for the same energy signal, and the base wins it because the energy channel
+has no large-cell protection while the force channel has. The three options are the obvious
+ones and they are about the objective: give the energy channel the same upweight the force
+channel got; keep the base frozen while the head fits energies; or both. F4 is now a fitted
+quantity, so whichever is chosen can be scored by the same rule on the same seventeen frames.
+
+### Bugs found by running it, in the order they cost something
+
+1. **Gauge-block ordering** (cost: all four wave-1 seeds, ~1 h). The per-epoch gauge log was
+   inserted above the line assigning `target`, so epoch 0 raised `UnboundLocalError` on every
+   seed. Fixed by moving it below, with the patch asserting file order; and the queue now
+   flies one epoch on `dataset_cf/fold0` before spending any seed.
+2. `CORRECTION_PREFIXES` omitted `madelung`, so `--defect_base_init` and
+   `--defect_madelung_on_site` could not be combined; `madelung.z` then sat in no optimiser
+   group and the orphan guard refused the run. Both added.
+3. `protocol_summary` reported `c_shift_calibrated: true` when calibration was skipped (it
+   reported the stage, not the outcome). Fixed and unit-tested both ways.
+4. Criterion 3's baseline was partly in-sample (frames partitioned `i % 4` across the whole
+   neutral set, against fold bases trained on three quarters of it). Now drawn from each fold's
+   `null_oof.xyz`.
+5. The trunk normalisation, §4 above — the serious one.
+6. The post-run chain waited on a *process*, so the deliberate relaunch disarmed it (`ABORT: no
+   arm-A models were produced`). It now waits on the completion marker in the queue log.
+7. All four scorers built float32 batches for float64 models and died together on `both
+   inputs should have same dtype` (cost: 12 min). `adopt_model_dtype` is now called per model
+   at load in b10, b13, b4, b9, b6 and s3_dilution.
+8. `tests/unit/test_spectral_v3.py` imported a sibling by bare name inside a package
+   directory, so twelve tests had been silently skipped. Package-path import.
+9. b13's null-channel ratio was identically 1.000 (one α broadcast across four slots). Replaced
+   by the pristine cell scored with the same counters. Its pristine probe then hit α ≡ 0 at
+   `counts = 0` and returned NaN; the harness now keeps a separate pristine pool carrying the
+   hole counter.
+10. **A fourth liveness fault, in a script written after the lesson.** The E_LR-off control
+    queue waited on `pgrep` for the post-run chain. Fix 7 killed and relaunched that chain, and
+    in the gap the control saw no process and started at 09:23, concurrent with the scoring it
+    was meant to follow. It stayed inside the four-GPU cap by timing, not by design. Recorded
+    in the script header; the condition it should have tested is the `post-run complete`
+    marker.
+
+### Determinism, twice
+
+Two identical two-epoch invocations of the production trainer were bit-identical
+(`max |difference| 0.000e+00`, §4). The stronger result came free from the control: seed 1
+trained for a full epoch on the local A4000 and on a b3 Quadro RTX 6000 produced identical
+gauges (c-shift +9.2302, |W_site| 0.01286, b_site −0.00004, Z −0.963 +0.911 +1.979), and the
+local E_LR-off run matched joint_a1 to every printed digit through epoch 12, the last epoch
+before the arms diverge by construction. JOINT_BITID_SLOT The FP64-throughput concern (1/64 on
+the A4000 against 1/32 on the RTX 6000) was wrong: both run at 10.0 min/epoch, so the run is
+not FP64-bound.
 
 ---
 

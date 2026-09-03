@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Carrier participation with the long-range branch on and off, same seeds, one flag apart.
 
-WHY IT IS ASKED. Arm A of the joint run ends with participation 11.14, 11.19, 10.94 and 5.43 --
-one seed roughly twice as localised as its siblings. E_LR switches on at epoch 12 of 20 in that
-cohort, so it is a candidate for the spread. The control is the same four seeds with
-`USE_LONG_RANGE=False` and nothing else changed, so a difference is attributable to E_LR and to
-nothing else.
+WHY IT IS ASKED. Arm A of the joint run ends with participation 11.14, 11.19, 10.94, 5.43, 5.51
+and 5.73 -- the six seeds split three and three, one group roughly twice as localised as the
+other. (This docstring first said "one seed of four"; that was written from wave 1 alone, before
+a5 and a6 had finished.) E_LR switches on at epoch 12 of 20 in that cohort, so it is a candidate
+for the split. The control is seeds 1-4 with `USE_LONG_RANGE=False` and nothing else changed, so
+a difference is attributable to E_LR and to nothing else; a5 and a6 have no E_LR-off partner.
 
 WHAT IS REPORTED, and why more than one number. `N_eff = 1 / sum alpha_i^2` is a spread over a
 FIXED cell, so on its own it is not a statement about boundness -- an earlier cycle measured it
