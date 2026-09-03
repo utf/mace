@@ -61,6 +61,41 @@ def _energy_gradient(
     return -1 * gradient
 
 
+#: Section 2.5 of the Stage A' spec. "uniform" is the historical single-dtype model;
+#: "mixed" runs the trunk in the process default (float32) and the carrier head, the
+#: Madelung term and the long-range branch in float64, with explicit casts at the boundary.
+PRECISION_POLICIES = ("uniform", "mixed")
+
+
+def _sync_trunk_constants_into_state_dict(module, state_dict, prefix, local_metadata):
+    """state_dict hook: the buffer copies the blocks' CURRENT plain-float values.
+
+    The blocks are the source of truth while the model runs (the trainer rescales them, the
+    Stage-A loader resets them); the buffer is only ever a serialisation of them. Refreshing
+    it here, at write time, is what makes the state dict a faithful record.
+    """
+    key = prefix + "trunk_avg_num_neighbors"
+    if key in state_dict and hasattr(module, "interactions"):
+        state_dict[key] = torch.tensor(
+            [float(b.avg_num_neighbors) for b in module.interactions], dtype=torch.float64)
+    return state_dict
+
+
+def _restore_trunk_constants_from_buffer(module, incompatible_keys):
+    """load_state_dict post-hook: the loaded buffer is written back onto the blocks.
+
+    Without this a state dict carries the value but nothing consumes it, which is the
+    original fault in a different coat.
+    """
+    buf = getattr(module, "trunk_avg_num_neighbors", None)
+    blocks = getattr(module, "interactions", None)
+    if buf is None or blocks is None or buf.numel() != len(blocks):
+        return
+    with torch.no_grad():
+        for block, value in zip(blocks, buf.tolist()):
+            block.avg_num_neighbors = float(value)
+
+
 @compile_mode("script")
 class MACEDefect(ScaleShiftMACE):
     """MACE with a carrier-conditioned short-range correction.
@@ -108,6 +143,15 @@ class MACEDefect(ScaleShiftMACE):
         counting_decay_length: float = 1.0,
         counting_hop_form: str = "linear",
         counting_hop_log_beta: float = 1.0986122886681098,
+        # Stage A' spec (section 2.4, 2.2, 2.3, 2.5, 2.1). Every knob is a constructor
+        # argument from the day it exists, so the config round trip carries it (section 5.1).
+        counting_decay_learned: bool = False,
+        counting_decay_log_beta: float = 0.6931471805599453,
+        lr_detach_density: bool = False,
+        lr_freeze: bool = False,
+        image_compensation: bool = False,
+        precision_policy: str = "uniform",
+        on_site_centred: bool = False,
         # The LABELS' width, 0.05 eV, not 25 meV. The old default was a k_B * 300 K
         # coincidence, and leaving it here while switching the family to Gaussian
         # would have trained six seeds at Gaussian 0.025 and reported them as the
@@ -237,6 +281,34 @@ class MACEDefect(ScaleShiftMACE):
         self.counting_decay_length = float(counting_decay_length)
         self.counting_hop_form = str(counting_hop_form)
         self.counting_hop_log_beta = float(counting_hop_log_beta)
+        self.counting_decay_learned = bool(counting_decay_learned)
+        self.counting_decay_log_beta = float(counting_decay_log_beta)
+        if precision_policy not in PRECISION_POLICIES:
+            raise ValueError(f"unknown precision_policy {precision_policy!r}; expected one "
+                             f"of {sorted(PRECISION_POLICIES)}")
+        self.lr_detach_density = bool(lr_detach_density)
+        self.lr_freeze = bool(lr_freeze)
+        self.image_compensation = bool(image_compensation)
+        self.precision_policy = str(precision_policy)
+        self.on_site_centred = bool(on_site_centred)
+        # Section 5.1 of the Stage A' spec: every non-parameter float that touches the forward
+        # travels in the state dict. `avg_num_neighbors` is a plain float on each interaction
+        # block, absent from state_dict, and a Stage-B trunk once normalised every message by
+        # eight times Stage A's value with the loader reporting success. The buffer is
+        # refreshed from the blocks whenever a state dict is written and written back onto
+        # them whenever one is loaded, so the two cannot disagree across a stage boundary.
+        self.register_buffer(
+            "trunk_avg_num_neighbors",
+            torch.tensor([float(b.avg_num_neighbors) for b in self.interactions],
+                         dtype=torch.float64),
+            persistent=True)
+        # Section 2.5: the checksum of the frozen base whose outputs a training run cached,
+        # so a checkpoint records which base its head was trained against. SHA-256 digest
+        # bytes; all zero means no cache was ever built for this model.
+        self.register_buffer("base_cache_checksum", torch.zeros(32, dtype=torch.uint8),
+                             persistent=True)
+        self._register_state_dict_hook(_sync_trunk_constants_into_state_dict)
+        self.register_load_state_dict_post_hook(_restore_trunk_constants_from_buffer)
         self.counting_t_el = float(counting_t_el)
         self.spectral = None
         # 0.0 means "the trunk's receptive field", r_max * num_interactions. That is the
@@ -292,6 +364,8 @@ class MACEDefect(ScaleShiftMACE):
                 decay_length=float(counting_decay_length),
                 hop_form=str(counting_hop_form),
                 hop_log_beta=float(counting_hop_log_beta),
+                decay_learned=bool(counting_decay_learned),
+                decay_log_beta=float(counting_decay_log_beta),
                 t_el=float(counting_t_el))
         elif self.spectral_head:
             from mace.modules.defect_spectral import SpectralCarrierHead

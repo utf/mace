@@ -99,7 +99,14 @@ def test_every_spectral_setting_survives_config_extraction():
 
     flipped = dict(spectral_head=True, spectral_decay=True, spectral_first_shell=True,
                    spectral_sigma=True, spectral_gauge_penalty=True,
-                   spectral_num_states=4, spectral_smearing=0.05, spectral_r_cut=7.5)
+                   spectral_num_states=4, spectral_smearing=0.05, spectral_r_cut=7.5,
+                   # Stage A' spec section 5.1: u_b (learned decay lengths), the modulation
+                   # form, the detach flag, the compensation flag, the precision policy and
+                   # the centred on-site channel all travel from the day they exist.
+                   counting_decay_learned=True, counting_decay_log_beta=0.5,
+                   counting_hop_form="log", counting_hop_log_beta=0.4054651081081644,
+                   lr_detach_density=True, lr_freeze=True, image_compensation=True,
+                   precision_policy="mixed", on_site_centred=True)
 
     torch.manual_seed(0)
     model = MACEDefect(
@@ -128,6 +135,46 @@ def test_every_spectral_setting_survives_config_extraction():
     assert rebuilt.spectral.gauge_penalty is True, "gauge penalty lost in the round trip"
     assert rebuilt.spectral.num_states == 4
     assert rebuilt.spectral.r_cut == pytest.approx(7.5)
+    for key, value in flipped.items():
+        if key.startswith("spectral"):
+            continue
+        assert config[key] == value, f"{key} came back as {config[key]!r}, not {value!r}"
+        assert getattr(rebuilt, key) == value, f"{key} lost in the rebuild"
+    # u_b itself is a parameter, so it travels by state dict; the flag that makes it
+    # trainable is what the config carries, and the rebuilt head must honour it.
+    rebuilt_head = rebuilt.spectral
+    if rebuilt_head is not None and hasattr(rebuilt_head, "h"):
+        assert rebuilt_head.h.decay_learned is True
+        assert rebuilt_head.h.decay_u.requires_grad is True
+        assert rebuilt_head.h.decay_log_beta == pytest.approx(0.5)
+        assert rebuilt_head.h.hop_form == "log"
+
+
+def test_the_stage_aprime_flags_reach_the_model_kwargs():
+    """The seven section-5.1 knobs, launcher -> parser -> constructor kwargs.
+
+    The parametrised test below checks a literal `ctor=args.flag` pattern; the defect kwargs
+    are built through `getattr` with defaults, so they are checked by CALLING the builder on
+    a namespace with every flag flipped and reading what comes out.
+    """
+    from types import SimpleNamespace
+
+    from mace.tools.model_script_utils import _defect_madelung_kwargs
+
+    flags = dict(defect_counting_decay_learned=True, defect_counting_decay_beta=0.5,
+                 defect_lr_detach_density=True, defect_lr_freeze=True,
+                 defect_image_compensation=True, defect_precision_policy="mixed",
+                 defect_on_site_centred=True)
+    assert set(flags) <= cli_flags(), sorted(set(flags) - cli_flags())
+    args = SimpleNamespace(defect_madelung_on_site=False, defect_madelung_composition=None,
+                           defect_madelung_z_init=None, defect_counting_head=True,
+                           defect_spectral_head=True, **flags)
+    kwargs = _defect_madelung_kwargs(args)
+    expected = dict(counting_decay_learned=True, counting_decay_log_beta=0.5,
+                    lr_detach_density=True, lr_freeze=True, image_compensation=True,
+                    precision_policy="mixed", on_site_centred=True)
+    for key, value in expected.items():
+        assert kwargs[key] == value, f"{key}: {kwargs.get(key)!r} != {value!r}"
 
 
 @pytest.mark.parametrize("flag,ctor", [

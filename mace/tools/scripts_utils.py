@@ -470,6 +470,19 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         config["counting_hop_form"] = str(getattr(model, "counting_hop_form", "linear"))
         config["counting_hop_log_beta"] = float(
             getattr(model, "counting_hop_log_beta", 1.0986122886681098))
+        # Stage A' spec section 5.1: the new knobs travel from the day they exist. A rebuilt
+        # model that silently reverts any of these is a different model: fixed decay lengths
+        # where four were learned, a long-range density that carries gradient where it was
+        # detached, a head at float32 where it ran at float64.
+        config["counting_decay_learned"] = bool(
+            getattr(model, "counting_decay_learned", False))
+        config["counting_decay_log_beta"] = float(
+            getattr(model, "counting_decay_log_beta", 0.6931471805599453))
+        config["lr_detach_density"] = bool(getattr(model, "lr_detach_density", False))
+        config["lr_freeze"] = bool(getattr(model, "lr_freeze", False))
+        config["image_compensation"] = bool(getattr(model, "image_compensation", False))
+        config["precision_policy"] = str(getattr(model, "precision_policy", "uniform"))
+        config["on_site_centred"] = bool(getattr(model, "on_site_centred", False))
         config["madelung_on_site"] = bool(getattr(model, "madelung_on_site", False))
         config["madelung_eps_inf"] = float(getattr(model, "madelung_eps_inf", 4.0))
         if getattr(model, "madelung", None) is not None:

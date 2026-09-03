@@ -1317,6 +1317,63 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         type=float,
         default=1.0986122886681098,
     )
+    # Stage A' spec. Each is a constructor argument of MACEDefect and survives the config
+    # round trip (section 5.1); the behaviours land in sections 2.1-2.5.
+    parser.add_argument(
+        "--defect_counting_decay_learned",
+        help="learn the radial decay length per Slater-Koster integral type: "
+        "L_b = L0 * exp(beta_L * tanh u_b), four universal scalars shared across hosts, "
+        "u_b = 0 at initialisation so the fixed-length head is the starting point",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--defect_counting_decay_beta",
+        help="beta_L for the learned decay lengths; ln 2 = 0.6931 keeps every L_b within "
+        "[L0/2, 2 L0]",
+        type=float,
+        default=0.6931471805599453,
+    )
+    parser.add_argument(
+        "--defect_lr_detach_density",
+        help="detach the carrier density before the Ewald energy, so E_LR's forces are "
+        "dE_LR/dR at fixed charge and no gradient reaches the head through the "
+        "long-range branch",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--defect_lr_freeze",
+        help="freeze every long-range parameter at its physical initialisation (screening "
+        "amplitude from eps_inf, host and polarisation charges)",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--defect_image_compensation",
+        help="one-shot image-compensation potential on the on-site energies: a first solve "
+        "of H gives the carrier density, whose periodic-minus-isolated potential is added "
+        "to eps_i before the second solve. Zero on any neutral cell by construction",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--defect_precision_policy",
+        help="'uniform' runs the whole model at --default_dtype; 'mixed' runs the trunk at "
+        "the process default and the carrier head, Madelung term and long-range branch at "
+        "float64 with explicit casts at the boundary",
+        type=str,
+        choices=("uniform", "mixed"),
+        default="uniform",
+    )
+    parser.add_argument(
+        "--defect_on_site_centred",
+        help="the on-site correction is the deviation from the pristine environment: "
+        "gamma * [tanh h(x_i) - tanh h(xbar_s(i))], with xbar_s the mean first-block "
+        "feature of species s over the pristine reference cell",
+        type=str2bool,
+        default=False,
+    )
     parser.add_argument(
         "--defect_protocol_zero_on_site",
         help="start the on-site correction channel at exactly zero output. The measured "

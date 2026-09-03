@@ -145,6 +145,14 @@ ENVELOPE_DEFAULT = "exp"
 HOP_FORMS = ("linear", "log")
 HOP_FORM_DEFAULT = "linear"
 HOP_LOG_BETA_DEFAULT = math.log(3.0)      # x[1/3, 3]
+# Stage A' spec section 2.4: the range-equivalent log modulation. exp(ln 1.5 * tanh g) spans
+# [2/3, 3/2] -- the same upper reach as the linear form's 1 + 0.5 tanh g, without the
+# sign-flip hazard, and no capacity change.
+HOP_LOG_BETA_RANGE_EQUIVALENT = math.log(1.5)
+# Stage A' spec section 2.4: decay lengths as four learned universal scalars, one per
+# Slater-Koster integral type. L_b = L0 * exp(beta_L * tanh u_b), beta_L = ln 2, so with
+# L0 = 1.0 A every L_b lies in [0.5, 2.0] A. u_b = 0 reproduces the fixed-length head exactly.
+DECAY_LOG_BETA_DEFAULT = math.log(2.0)
 # The LIVE setting, read by every fill, every entropy and the density-response backward.
 _FAMILY = SMEARING_FAMILY
 _WIDTH = SMEARING_WIDTH
@@ -324,7 +332,9 @@ class SlaterKosterH(nn.Module):
                  r_cut: float = 10.0, on_site_range: float = 1.0,
                  hop_range: float = 0.5, envelope: str = ENVELOPE_DEFAULT,
                  hop_form: str = HOP_FORM_DEFAULT,
-                 hop_log_beta: float = HOP_LOG_BETA_DEFAULT) -> None:
+                 hop_log_beta: float = HOP_LOG_BETA_DEFAULT,
+                 decay_learned: bool = False,
+                 decay_log_beta: float = DECAY_LOG_BETA_DEFAULT) -> None:
         super().__init__()
         from mace.modules.defect_bounded import ETA_SS_SIGMA, HBAR2_OVER_M
         from mace.modules.defect_spectral import _mlp
@@ -340,6 +350,14 @@ class SlaterKosterH(nn.Module):
         self.d_ref, self.decay_length, self.r_cut = float(d_ref), float(decay_length), \
             float(r_cut)
         self.envelope = str(envelope)
+        # Section 2.4 of the Stage A' spec. One scalar per Slater-Koster integral type,
+        # shared across every host; `decay_length` becomes L0. The parameter exists even when
+        # it is not learned, at zero, so the fixed-length head is the u_b = 0 point of the
+        # same model and the config round trip has one shape to carry.
+        self.decay_learned = bool(decay_learned)
+        self.decay_log_beta = float(decay_log_beta)
+        self.decay_u = nn.Parameter(torch.zeros(len(BOND_TYPES)),
+                                    requires_grad=bool(decay_learned))
         self.on_site_range, self.hop_range = float(on_site_range), float(hop_range)
         self.elem = nn.Embedding(num_elements, elem_dim)
 
@@ -392,7 +410,25 @@ class SlaterKosterH(nn.Module):
         taper = (1.0 - x ** 6) ** 2
         if getattr(self, "envelope", ENVELOPE_DEFAULT) == "power":
             return (self.d_ref / r.clamp_min(1e-9)) ** 2 * taper
+        if getattr(self, "decay_learned", False):
+            # [n_edges, 4]: one length per integral type (spec section 2.4).
+            lengths = self.decay_lengths().to(r.dtype)
+            return (torch.exp(-(r - self.d_ref).unsqueeze(-1) / lengths.unsqueeze(0))
+                    * taper.unsqueeze(-1))
         return torch.exp(-(r - self.d_ref) / self.decay_length) * taper
+
+    def decay_lengths(self) -> torch.Tensor:
+        """`L_b = L0 * exp(beta_L * tanh u_b)` per integral type, `[4]`, in Angstrom.
+
+        Reports the fixed length for every type when the lengths are not learned (or on a
+        model pickled before `decay_u` existed), so a diagnostic can always ask.
+        """
+        u = getattr(self, "decay_u", None)
+        if u is None or not getattr(self, "decay_learned", False):
+            return torch.full((len(BOND_TYPES),), float(self.decay_length),
+                              device=self.v0_raw.device, dtype=self.v0_raw.dtype)
+        return float(self.decay_length) * torch.exp(
+            float(self.decay_log_beta) * torch.tanh(u))
 
     def integrals(self, feats_i, feats_j, r, species_i, species_j) -> torch.Tensor:
         """The four radial integrals per edge, [n_edges, 4]."""
@@ -402,7 +438,10 @@ class SlaterKosterH(nn.Module):
         pre = self.hop(sym)
         self._audit_store("hop", pre)
         correction = self.modulation(pre)
-        return self.v0(species_i, species_j) * self.radial(r).unsqueeze(-1) * correction
+        radial = self.radial(r)
+        if radial.dim() == 1:
+            radial = radial.unsqueeze(-1)
+        return self.v0(species_i, species_j) * radial * correction
 
     def modulation(self, pre: torch.Tensor) -> torch.Tensor:
         """The environment factor multiplying `v0 * radial`. Exactly 1 at `pre = 0`.
@@ -572,7 +611,9 @@ class CountingHead(nn.Module):
                  smearing_family: str = SMEARING_FAMILY,
                  envelope: str = ENVELOPE_DEFAULT,
                  hop_form: str = HOP_FORM_DEFAULT,
-                 hop_log_beta: float = HOP_LOG_BETA_DEFAULT) -> None:
+                 hop_log_beta: float = HOP_LOG_BETA_DEFAULT,
+                 decay_learned: bool = False,
+                 decay_log_beta: float = DECAY_LOG_BETA_DEFAULT) -> None:
         """`on_site_range` is gamma, the half-width of the bounded on-site correction.
 
         THE DEFAULT IS 3 eV, NOT 1. At gamma = 1 the audit found every chlorine in every seed
@@ -588,7 +629,9 @@ class CountingHead(nn.Module):
                                decay_length=decay_length, r_cut=r_cut,
                                on_site_range=on_site_range, hop_range=hop_range,
                                envelope=envelope, hop_form=hop_form,
-                               hop_log_beta=hop_log_beta)
+                               hop_log_beta=hop_log_beta,
+                               decay_learned=decay_learned,
+                               decay_log_beta=decay_log_beta)
         self.smearing_family = str(smearing_family)
         self.t_el = float(t_el)
         self.num_channels = int(num_channels)
