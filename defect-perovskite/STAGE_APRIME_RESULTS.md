@@ -234,3 +234,52 @@ energies at w_E = 1.000, `loss_gap` w = 1 at 2.4 eV, c per (charge, size), 24 ep
   density-sum invariant (Σ q/a + Δn = 0) is checked in the forward and holds.
 - Epoch 0: 10.1 min per epoch on b3 with the cache (the joint run trained the full base at
   10.0); validation after epoch 0: 5.4 meV/atom, 20–21 meV/Å on all four.
+
+## 5.5 — Stage B wave 1 (seeds 1–4), finals and the first gates
+
+Regime as above (Stage B, 24 epochs). Wave 1 ran 19:14–23:40 (b3 clock), 9.7 min/epoch.
+
+| seed | valid E / F (meV/atom, meV/Å) | c_shift | c(79) | c(159) | Δc | |W_site| | Z | partic (epoch 20) |
+|---|---|---|---|---|---|---|---|---|
+| s1 | 5.6 / 16.6 | +0.640 | +10.321 | +11.046 | +0.725 | 0.083 | −0.889 +0.824 +1.843 | 8.08 |
+| s2 | 5.4 / 16.8 | +0.358 | +9.932 | +10.717 | +0.786 | 0.063 | −0.887 +0.795 +1.866 | 6.96 |
+| s3 | 5.5 / 17.1 | +0.548 | +10.186 | +10.966 | +0.780 | 0.066 | −0.908 +0.851 +1.873 | 7.90 |
+| s4 | 5.5 / 17.1 | +0.408 | +9.890 | +10.641 | +0.751 | 0.061 | −0.851 +0.707 +1.847 | 6.14 |
+
+c(79), c(159) are the table entries plus the scalar (both trainable, one gauge). The
+neutrality projection held (3Z_Cs + Z_Pb + Z_Cl = 0.000 on every seed). The centred on-site
+channel carries |W_site| 0.06–0.08 against 0.013 in the joint run.
+
+**Gate 3 (report), c-consistency.** c(79) +10.08 ± 0.18, c(159) +10.84 ± 0.17, Δc = +0.760
+± 0.024 eV over four seeds. Predicted size difference = E_LR difference + Ewald G = 0
+difference = +0.048 ± 0.003 (mean E_LR per carrier −0.066 at 79, −0.019 at 159; background
+−0.0039 / −0.0020). The measured Δc is sixteen times the electrostatic prediction: the
+per-size constant is absorbing something that is not the image interaction — the 79-atom
+base's +0.37 eV/Å residual slope, or the labels' own referencing between the two cells.
+Report, not gate, as registered; the tolerance for a future gate is set by this number.
+
+**Gate 7, stops and decay lengths (four seeds; the rule is ≤ 1 seed in six per type).**
+
+| type | L_b (Å), mean ± sd | seeds with hub bonds at the stop | mean tanh g |
+|---|---|---|---|
+| ss-σ | 1.071 ± 0.012 | 2/4 (98%, 54%) | +0.99, +0.97 there |
+| sp-σ | 1.273 ± 0.073 | 1/4 (25%) | −0.95 |
+| pp-σ | 1.332 ± 0.033 | 2/4 (98%, 98%) | −0.99 |
+| pp-π | 1.359 ± 0.036 | 4/4 (4%, 98%, 88%, 98%) | +0.81 … +0.99 |
+
+**Gate 7 fails on wave 1**: the log modulation at β = ln 1.5 is range-equivalent to the
+linear form at its upper end, and the head presses against it on the hub bond in pp-π on
+every seed and in ss-σ / pp-σ on half of them — the same pattern b9 found on the s7 cohort
+(two seeds of six at the stop) but on more seeds. The learned decay lengths all moved UP
+from 1.0 Å (1.07–1.36), toward longer-ranged hopping, and none is near its own bound
+(0.5–2.0 Å).
+
+**Scoring incident, recorded.** The first b10 run on these four models reported 249 meV/Å
+on the neutral 79-atom window (criterion 3) — impossible for a head that is zero at n = 0.
+Cause: under the mixed policy the forward rebound `positions` to its head-dtype cast, and
+on the scorers' float32 batches the force derivative was then taken with respect to the
+copy, which the trunk's energy does not depend on; the base forces lost the trunk (RMS
+0.30 against the A′ base's 0.010 eV/A on a neutral frame, base energies identical). Float64
+training never took the cast, so the trained models and every training-time number
+(drift guard, validation) are unaffected. Fixed (the gradient leaf never moves; a test
+scores a mixed model on a float32 batch), and the wave-1 adoption scoring was rerun.
