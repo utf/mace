@@ -163,3 +163,32 @@ a fresh launch of the same script saw the files at once. A first attempt to stop
 `pkill -f` matched the ssh shell carrying the launch command and killed that instead — the
 bracket trick protects the pattern, not the other text on the same command line. Recorded
 as the fifth liveness-shaped fault of the programme, and the first on the file side.
+
+## 5.4 — re-derived references against Stage A′ (§1, F17)
+
+Regime: A′ production base `aprime_prod` and the four A′ fold bases; b1's machinery with
+`--fold-prefix aprime_f`, 95% intervals from the per-frame residuals; c5 for the
+production-base neutral slope.
+
+| observable | A′ | pre-joint (e0_base_s1 / cf folds) |
+|---|---|---|
+| charged 159 energy slope, production base | **−0.0948 [−0.1084, −0.0812]**, corr −0.968 | −0.1338 [−0.1447, −0.1232] |
+| charged 159 force slope, production base | **−0.2665 [−0.2938, −0.2393]** | −0.1901 [−0.2103, −0.1700] |
+| neutral 159 null, out-of-fold (energy) | **+0.0243 [−0.0697, +0.1184]** | +0.0800 [−0.0503, +0.2102] |
+| neutral 159 null, out-of-fold (force) | +0.0167 [−0.0163, +0.0497] | +0.0643 |
+| neutral 159, production base (energy) | +0.0920 [+0.0492, +0.1347] | +0.0968 |
+| charged 79, full range (energy) | +0.3724 [+0.3265, +0.4183] | +0.3641 |
+| charged 79, neutral-dense window | +0.0793 [−0.0976, +0.2562] | +0.0806 |
+| neutral 79 window null (energy) | +0.1147 [+0.0947, +0.1348] | +0.1317 |
+
+The reference itself moved: with the neutral 159-atom frames finally weighted in the base
+loss, the out-of-fold null at 159 atoms fell from +0.080 to +0.024 and the charged residual
+from −0.134 to −0.095 — a third of the old reference was the base's own extrapolation at
+large d, removed by giving the base the large neutral cells. The charged residual is still
+carrier physics (its interval and the null's are disjoint). The 79-atom picture is
+unchanged: +0.37 full range, +0.08 in the window, +0.11 of carrier-free base error.
+
+**F17:** 159 null within ±0.05 of zero — holds (+0.024); charged 159 residual inside the old
+interval — no (−0.095 against [−0.145, −0.123]), shifted by 0.039 < the old null's width
+0.26 — holds; 79-atom charged residual magnitude < 0.2 — fails (+0.37). **F17 fails, 2 of 3.**
+The new F4 reference for gate 2 is −0.0948, band [−0.142, −0.063] at 1.5×.
