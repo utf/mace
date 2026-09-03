@@ -475,7 +475,8 @@ state, so the divergence after that is E_LR alone: 7.80 → 7.75 without it, 9.2
 it. The E_LR-on arm may not be converged at 20 epochs. Scored like for like on sixteen charged
 159-atom frames against each model's own pristine cell, the three cohorts read: head-only
 s7 ratio 0.492 ± 0.028 (N_eff 13.2, not the 4.85 its harness printed from a different
-batch), joint E_LR-off 0.478 ± 0.071, joint E_LR-on 0.635 ± 0.143, with the level 36 meV
+batch; the queue's own b13 run wrote no baseline rows, cause not established, and the
+three-cohort numbers are from an explicit rerun), joint E_LR-off 0.478 ± 0.071, joint E_LR-on 0.635 ± 0.143, with the level 36 meV
 shallower under E_LR. The joint objective without E_LR leaves localisation where the
 head-only cohort had it; E_LR is what delocalises, and seed 4 is the most localised in both
 arms, so the three-and-three split has an initialisation component E_LR only widens.

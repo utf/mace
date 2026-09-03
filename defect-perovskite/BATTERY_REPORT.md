@@ -833,7 +833,7 @@ objective.
 
 The base network was allowed to train alongside the correction head with energy terms in the
 loss. The base learned the distance-dependent energy itself, so the carrier's energy signature
-largely left the residual. The overall fit looks good — forces halved, energies unchanged, gaps
+largely left the residual. The overall fit looks good — forces halved, energies roughly unchanged, gaps
 intact, the level still a shallow donor — which is exactly why the adoption rule was written on
 the residual slope rather than on the fit.
 
@@ -896,7 +896,12 @@ delocalised seeds are the three shallow ones.
 **Whether E_LR is what separates them was tested, not inferred.** Because E_LR switches on at
 epoch 12, epochs 0–11 of a run with it off are identical to the same seed with it on — same
 seed, same data order, every intermediate state. Seed 1 was run with `USE_LONG_RANGE=False` on
-the local A4000, and its epoch-12 gauge (c-shift +10.2256) matches joint_a1's to four decimals:
+the local A4000, and its epoch-12 gauge (c-shift +10.2256) matches joint_a1's to four decimals.
+One labelling convention to hold in mind when reading the two traces together: `Gauge: epoch N`
+is printed by the epoch hook *before* epoch N trains, so it is the state after N epochs, while
+`Epoch N:` participation is evaluated *after* epoch N trains. E_LR switches on for epoch 12,
+so the gauge labelled 12 is still identical between the arms and the participation labelled
+12 already differs:
 
 | epoch | seed 1, E_LR off | joint_a1, E_LR on at 12 |
 |---|---|---|
@@ -928,9 +933,18 @@ Paired by seed (on / off): a1 22.11 / 15.86, a2 22.55 / 15.67, a3 21.37 / 16.62,
 11.78; ratios 0.729 / 0.513, 0.733 / 0.508, 0.689 / 0.535, 0.388 / 0.356. Seed spread in
 N_eff 9.5 with E_LR on, 4.8 off.
 
+The trainer's partic for a1 (11.14) and b13's N_eff for the same model (22.11) differ by
+the frame set: the trainer averages over carrier-bearing validation frames of both sizes,
+b13 over the sixteen 159-atom training frames, and a larger cell holds more sites. The
+queue's own b13 invocation wrote zero baseline rows for a cause not established; the
+three-cohort table is from an explicit rerun with the six s7 paths spelled out
+(`nolr_participation3.json`; the in-queue `nolr_participation.json` has the on/off rows
+only, identical).
+
 Three readings. First, the head-only 4.85 was a property of the harness's first batch, not
 of the models: on these frames the same six models read 13.2, so the "4.85 against 11"
-discrepancy was two frame sets, as suspected. Second, the joint objective *without* E_LR
+discrepancy was the frame set, and possibly the smearing, which was not verified equal
+between the harness and b13. Second, the joint objective *without* E_LR
 leaves localisation where the head-only cohort had it — ratio 0.478 against 0.492, depth
 0.108 against 0.095 — while E_LR raises the ratio to 0.635 and makes the level shallower by
 36 meV. Third, seed 4 stays the most localised in both arms (0.356 off, 0.388 on), so the
@@ -1103,8 +1117,8 @@ Two identical two-epoch invocations of the production trainer were bit-identical
 (`max |difference| 0.000e+00`, §4). The stronger result came free from the control: seed 1
 trained for a full epoch on the local A4000 and on a b3 Quadro RTX 6000 produced identical
 gauges (c-shift +9.2302, |W_site| 0.01286, b_site −0.00004, Z −0.963 +0.911 +1.979), and the
-local E_LR-off run matched joint_a1 to every printed digit through epoch 12, the last epoch
-before the arms diverge by construction. The b3 control's seed 1 (`nolr_s1`) then finished
+local E_LR-off run matched joint_a1 to every printed digit through the twelve epochs trained
+before E_LR switches on, which is where the arms diverge by construction. The b3 control's seed 1 (`nolr_s1`) then finished
 the full 20 epochs at the same gauge as the local run to every printed digit (c-shift
 +10.4756, |W_site| 0.01382, b_site −0.00028, Z −0.773 +0.748 +1.570), the same participation
 (7.753 at epoch 16) and the same final errors (train 2.7 / 11.0, valid 4.2 / 13.8): a
