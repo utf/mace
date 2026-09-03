@@ -370,6 +370,7 @@ def profile_step(model, loss_fn, batch, device, output_args: Dict[str, bool],
         activities.append(ProfilerActivity.CUDA)
     model.train()
     batch = batch.to(device)
+    loss_fn = loss_fn.to(device)      # the trainer moves it later; the probe needs it now
     params = [p for p in model.parameters() if p.requires_grad]
 
     def one_step():

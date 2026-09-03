@@ -78,7 +78,11 @@ CORRECTION_PREFIXES = ("carrier_", "counter_", "latent_charges", "logit",
 # rewrites it every epoch. It must be excluded from BOTH operations here: copying it would
 # seed a Stage-B run with Stage A's final epoch number, and checking it would report the base
 # as unfrozen simply because training progressed -- which is how it was noticed.
-BOOKKEEPING_NAMES = ("current_epoch", "base_cache_checksum")
+# `trunk_avg_num_neighbors` is the serialised copy of the blocks' plain floats (Stage A'
+# section 5.1). The loader carries the floats themselves, explicitly, below; the buffer is
+# refreshed from them whenever a state dict is written, so it is neither copied nor
+# checked here -- and a Stage-A checkpoint written before it existed must still load.
+BOOKKEEPING_NAMES = ("current_epoch", "base_cache_checksum", "trunk_avg_num_neighbors")
 
 
 def is_correction_param(name: str) -> bool:
