@@ -46,7 +46,8 @@ from mace.modules.defect_context import EPS_INF_DEFAULT, ForwardContext
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from e0_residual_maps import _assert_repo  # noqa: E402
 from r1_matrix import evaluate, fresh_model, make_batches, masks_for  # noqa: E402
-from ta_band_edge import capture, channel_of, load_frames, select  # noqa: E402
+from ta_band_edge import (capture, channel_of, load_frames,  # noqa: E402
+                          select, with_hole_counter)
 from tb_edge import neff_and_nulls  # noqa: E402
 
 # Pristine stoichiometry of CsPbCl3 in AtomicNumberTable order (Cl 17, Cs 55, Pb 82).
@@ -186,7 +187,8 @@ def pristine_spectrum_check(model, pristine_batches, log):
 
 def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, lr,
              stage, madelung, eps_inf, t_ref, log, pristine_batches=None,
-             freeze_z=False, e_gap=2.4, w_gap=1.0, counting_overrides=None):
+             freeze_z=False, e_gap=2.4, w_gap=1.0, counting_overrides=None,
+             pristine_probe=None):
     model = build(arch_path, base_path, seed, device, stage, madelung, eps_inf, t_ref, log,
                   counting_overrides=counting_overrides)
     ctx = ForwardContext.production(model, device=device, eps_inf=eps_inf,
@@ -247,6 +249,47 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
 
     rng = np.random.default_rng(seed)
     hist = []
+    neff_trace = []
+
+    # A FIXED probe batch, so the trajectory is comparable epoch to epoch and ends on the
+    # same quantity the final N_eff reports. Drawing a different batch each time would mix
+    # the model moving with the frames changing.
+    probe_channel = channel_of(batches[0][0])
+
+    def participation_now():
+        """`(N_eff on the charged probe, N_eff on a pristine cell, their ratio)`.
+
+        WHY THE PRISTINE REFERENCE AND NOT THE NULL CHANNELS. The spectral-era gates compared
+        the supervised channel against the three ungradiented ones, which is a real per-run
+        baseline for a four-channel head. The counting head has no channels -- its `alpha`
+        comes from the density-matrix difference and is broadcast across all four slots -- so
+        the nulls are copies of the active channel and the ratio is identically 1. The
+        defect-free cell under the same counters is the honest baseline: it asks what this
+        model does with a carrier when there is no vacancy to bind it.
+        """
+        was_training = model.training
+        model.eval()
+        try:
+            _, out = capture(model, batches[0][0], ctx=ctx, frames=batches[0][1])
+            act, _ = neff_and_nulls(out, batches[0][0], probe_channel)
+            charged = float(np.nanmean(act))
+            free = float("nan")
+            if pristine_probe is not None:
+                # A SEPARATE pool, carrying the hole counter. `pristine_batches` is
+                # deliberately counter-free -- it feeds loss_gap and the band-versus-superatom
+                # check, neither of which wants a carrier -- and the counting head's alpha is
+                # the density-matrix DIFFERENCE, identically zero at counts = 0. Probing those
+                # batches gives 1/0 and a silent NaN, which is what the first version did.
+                pb, pfr = pristine_probe
+                _, pout = capture(model, pb, ctx=ctx, frames=pfr)
+                pact, _ = neff_and_nulls(pout, pb, channel_of(pb))
+                free = float(np.nanmean(pact))
+        except Exception:                     # a diagnostic must never kill a run
+            return float("nan"), float("nan"), float("nan")
+        finally:
+            model.train(was_training)
+        ratio = charged / free if np.isfinite(free) and free > 0 else float("nan")
+        return charged, free, ratio
     # Wall clock per epoch, reported with the loss. The wired density response costs an extra
     # backward through the H builder; this is the number a later "training got slower" is read
     # against, and it is free to record.
@@ -280,10 +323,20 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
         sched.step()
         hist.append(f_sum / max(n_step, 1))
         if ep % 5 == 0 or ep == epochs - 1:
+            # Participation every five epochs, at the same cadence as the force loss. It was
+            # previously computed ONCE at the end, which made the endpoint the only record --
+            # and the joint run has since shown participation moving during training (9.25 ->
+            # 8.54 -> 11.14), so an endpoint is a poor summary of it. One extra forward per
+            # five epochs, on a no-grad path.
+            n_now, n_free, n_ratio = participation_now()
+            neff_trace.append(dict(epoch=int(ep), neff=n_now, pristine=n_free,
+                                   ratio=n_ratio))
             z = (model.madelung.z.tolist() if getattr(model, "madelung", None) is not None
                  else None)
             now = time.perf_counter()
             log(f"      epoch {ep:3d}  force {hist[-1]:.5f}"
+                + f"  N_eff {n_now:6.2f}"
+                + (f"/{n_free:.2f} = {n_ratio:.3f}" if np.isfinite(n_free) else "")
                 + (f"  Z {['%.3f' % v for v in z]}" if z else "")
                 + f"  [{(now - t_epoch) / max(ep - last_ep, 1):.1f} s/epoch]")
             t_epoch, last_ep = now, ep
@@ -301,6 +354,7 @@ def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, l
         ratio = float(np.nanmean(act) / max(np.nanmean(nul), 1e-30))
     except Exception as exc:                      # diagnostics must not kill a run
         log(f"      capture failed: {exc}")
+    metrics["neff_trace"] = neff_trace
     if pristine_batches:
         metrics.update(pristine_spectrum_check(model, pristine_batches, log))
         # Stage 3's gate of record: the pristine FRONTIER gap, eps_{N+1} - eps_N, which is
@@ -398,6 +452,12 @@ def main() -> None:
     pristine_batches = make_batches(pristine, z_table, cutoff, args.batch_size, args.device)
     log(f"  {len(pristine)} pristine frames of {len(pristine[0])} atoms for the "
         f"band-versus-superatom check")
+    # The same cells with the hole counter, for the participation reference only. Scoring a
+    # defect-free cell with a carrier it cannot hold is off-distribution by construction, and
+    # that is the point: it asks where this Hamiltonian would put a carrier if there were no
+    # vacancy, which is the baseline a localisation number needs. Diagnostic, never a loss.
+    pristine_probe = make_batches(with_hole_counter(pristine), z_table, cutoff,
+                                  args.batch_size, args.device)[0]
 
     rng = np.random.default_rng(0)
     frame_masks = {}
@@ -418,7 +478,8 @@ def main() -> None:
                                   pristine_batches=pristine_batches,
                                   freeze_z=args.freeze_z, e_gap=args.e_gap,
                                   w_gap=args.w_gap,
-                                  counting_overrides=counting_overrides)
+                                  counting_overrides=counting_overrides,
+                                  pristine_probe=pristine_probe)
         except Exception as exc:
             log(f"      FAILED: {exc}")
             rows.append(dict(seed=seed, error=str(exc)))
