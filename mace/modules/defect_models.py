@@ -446,6 +446,56 @@ class MACEDefect(ScaleShiftMACE):
             # different smearings or different G = 0 conventions, which is the whole point of
             # "same code, same convention" in the spec.
             self.latent_ewald = LatentEwald(les_arguments)
+        # Section 2.5: the per-frame base cache is attached by the trainer, never pickled
+        # (see __getstate__), and absent means "compute everything".
+        self._base_cache = None
+        self._apply_precision_policy()
+        self._apply_long_range_policy()
+
+    # ------------------------------------------------------------ Stage A' policies
+
+    def _apply_precision_policy(self) -> None:
+        """Section 2.5: trunk float32, everything the carrier sees float64.
+
+        The process default dtype is whatever the trainer set (float64 for every production
+        run); under "mixed" the trunk -- embeddings, interactions, products, base readouts --
+        is cast to float32 and the head, its readouts, the Madelung term and the long-range
+        branch to float64. The casts at the two boundaries live in `forward`. Under "uniform"
+        nothing is touched and the model runs at the process default, as it always did.
+        """
+        if getattr(self, "precision_policy", "uniform") != "mixed":
+            return
+        for name in ("node_embedding", "radial_embedding", "interactions", "products",
+                     "readouts"):
+            module = getattr(self, name, None)
+            if module is not None:
+                module.float()
+        for name in ("defect_feature_readouts", "counter_embedding", "carrier_pooling",
+                     "spectral", "madelung", "latent_charges", "latent_ewald"):
+            module = getattr(self, name, None)
+            if module is not None:
+                module.double()
+
+    def _apply_long_range_policy(self) -> None:
+        """Section 2.2: `lr_freeze` pins every long-range parameter at its initialisation."""
+        if not getattr(self, "lr_freeze", False):
+            return
+        for name in ("latent_charges", "latent_ewald"):
+            module = getattr(self, name, None)
+            if module is not None:
+                for p in module.parameters():
+                    p.requires_grad_(False)
+
+    def set_base_cache(self, cache) -> None:
+        """Attach (or detach, with None) the per-frame base cache of section 2.5."""
+        self._base_cache = cache
+
+    def __getstate__(self) -> Dict[str, Any]:
+        # The cache is a training-time object keyed to one dataset; a checkpoint carries the
+        # checksum buffer that names it, never the values.
+        state = self.__dict__.copy()
+        state["_base_cache"] = None
+        return state
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
         """Fill in attributes added after a checkpoint was written.
@@ -470,6 +520,13 @@ class MACEDefect(ScaleShiftMACE):
             ("host_carrier_coupling", True),
             ("carrier_self_isolated", False),
             ("lr_start_epoch", 0),
+            ("precision_policy", "uniform"),
+            ("counting_decay_learned", False),
+            ("lr_detach_density", False),
+            ("lr_freeze", False),
+            ("image_compensation", False),
+            ("on_site_centred", False),
+            ("_base_cache", None),
         ):
             if not hasattr(self, name):
                 object.__setattr__(self, name, default)
@@ -691,6 +748,24 @@ class MACEDefect(ScaleShiftMACE):
         lengths = ctx.lengths
         cell = ctx.cell
 
+        # Section 2.5 of the Stage A' spec. Under the mixed policy the trunk runs in float32
+        # and the head in float64, with the casts here: trunk inputs down at the embedding,
+        # trunk outputs up at the head boundary. Under "uniform" both are the data dtype and
+        # every cast below is a no-op.
+        mixed = getattr(self, "precision_policy", "uniform") == "mixed"
+        trunk_dtype = torch.float32 if mixed else vectors.dtype
+        head_dtype = torch.float64 if mixed else vectors.dtype
+        # The base cache: present only when the trainer attached one AND the batch carries
+        # frame keys. Any scorer that builds its own batches gets the full forward.
+        base_cache = getattr(self, "_base_cache", None)
+        cache_hit = base_cache is not None and "frame_key" in data
+        cached_energy = cached_forces = cached_feats_rest = None
+        if cache_hit:
+            cached_energy, cached_forces, cached_feats_rest, _ = base_cache.lookup(
+                data["frame_key"])
+            cached_energy = cached_energy.to(head_dtype)
+            cached_forces = cached_forces.to(head_dtype)
+
         # The carrier Hamiltonian needs a LONGER range than the trunk's message passing.
         #
         # Measured on this dataset: the two under-coordinated Pb that share the hole sit a
@@ -734,17 +809,19 @@ class MACEDefect(ScaleShiftMACE):
             src=node_e0, index=data["batch"], dim=0, dim_size=num_graphs
         ).to(vectors.dtype)
 
-        # Embeddings
-        node_feats = self.node_embedding(data["node_attrs"])
-        edge_attrs = self.spherical_harmonics(vectors)
+        # Embeddings, in the trunk's dtype
+        trunk_attrs = data["node_attrs"].to(trunk_dtype)
+        node_feats = self.node_embedding(trunk_attrs)
+        edge_attrs = self.spherical_harmonics(vectors.to(trunk_dtype))
         edge_feats, cutoff = self.radial_embedding(
-            lengths, data["node_attrs"], data["edge_index"], self.atomic_numbers
+            lengths.to(trunk_dtype), trunk_attrs, data["edge_index"], self.atomic_numbers
         )
 
         if hasattr(self, "pair_repulsion"):
             pair_node_energy = self.pair_repulsion_fn(
-                lengths, data["node_attrs"], data["edge_index"], self.atomic_numbers
-            )
+                lengths.to(trunk_dtype), trunk_attrs, data["edge_index"],
+                self.atomic_numbers
+            ).to(vectors.dtype)
             if is_lammps:
                 pair_node_energy = pair_node_energy[: lammps_natoms[0]]
         else:
@@ -773,7 +850,11 @@ class MACEDefect(ScaleShiftMACE):
         for i, (interaction, product) in enumerate(
             zip(self.interactions, self.products)
         ):
-            node_attrs_slice = data["node_attrs"]
+            if cache_hit and i > 0:
+                # Everything after the first block is a function of the frozen base and the
+                # geometry alone, and the head only differentiates through block 0.
+                break
+            node_attrs_slice = trunk_attrs
             if is_lammps and i > 0:
                 node_attrs_slice = node_attrs_slice[: lammps_natoms[0]]
             node_feats, sc = interaction(
@@ -796,35 +877,55 @@ class MACEDefect(ScaleShiftMACE):
 
         # Base branch readouts, and the invariant features the correction heads see.
         defect_feats_list: List[torch.Tensor] = []
-        for i, (readout, defect_readout) in enumerate(
-            zip(self.readouts, self.defect_feature_readouts)
-        ):
-            feat_idx = -1 if len(self.readouts) == 1 else i
-            node_es = readout(node_feats_list[feat_idx], node_heads)[
-                num_atoms_arange, node_heads
-            ]
-            node_es_list.append(node_es)
-            defect_feats_list.append(defect_readout(node_feats_list[feat_idx]))
+        node_energy: Optional[torch.Tensor] = None
+        if cache_hit:
+            # Block 0's invariant readout is fresh (it carries the position gradient the
+            # head's forces need); the later blocks' readouts come from the cache, and so
+            # do the base energy and forces.
+            defect_feats_list.append(
+                self.defect_feature_readouts[0](node_feats_list[0].to(head_dtype)))
+            if cached_feats_rest is not None:
+                defect_feats_list.append(cached_feats_rest.to(head_dtype))
+            inter_e = cached_energy - e0.to(head_dtype)
+            base_energy = cached_energy
+        else:
+            for i, (readout, defect_readout) in enumerate(
+                zip(self.readouts, self.defect_feature_readouts)
+            ):
+                feat_idx = -1 if len(self.readouts) == 1 else i
+                node_es = readout(node_feats_list[feat_idx], node_heads)[
+                    num_atoms_arange, node_heads
+                ].to(vectors.dtype)
+                node_es_list.append(node_es)
+                defect_feats_list.append(
+                    defect_readout(node_feats_list[feat_idx].to(head_dtype)))
 
+            node_inter_es = torch.sum(torch.stack(node_es_list, dim=0), dim=0)
+            node_inter_es = self.scale_shift(node_inter_es, node_heads)
+            inter_e = scatter_sum(node_inter_es, data["batch"], dim=-1,
+                                  dim_size=num_graphs)
+
+            base_energy = (e0 + inter_e).to(head_dtype)
+            node_energy = to_high_precision(node_e0.clone()) + to_high_precision(
+                node_inter_es.clone()
+            )
         node_feats_out = torch.cat(node_feats_list, dim=-1)
-        node_inter_es = torch.sum(torch.stack(node_es_list, dim=0), dim=0)
-        node_inter_es = self.scale_shift(node_inter_es, node_heads)
-        inter_e = scatter_sum(node_inter_es, data["batch"], dim=-1, dim_size=num_graphs)
-
-        base_energy = e0 + inter_e
-        node_energy = to_high_precision(node_e0.clone()) + to_high_precision(
-            node_inter_es.clone()
-        )
+        # The head's geometry, in the head's dtype. A no-op under "uniform".
+        if positions.dtype != head_dtype:
+            positions = positions.to(head_dtype)
+        head_cell = data["cell"].to(head_dtype)
+        head_lengths = head_lengths.to(head_dtype)
+        head_vectors = head_vectors.to(head_dtype)
 
         # Carrier correction. The counters are canonicalised at data loading and at every
         # inference entry point, so the network never sees a non-canonical vector.
         defect_feats = torch.cat(defect_feats_list, dim=-1)
-        counts = data["carrier_counts"].view(num_graphs, -1).to(vectors.dtype)
+        counts = data["carrier_counts"].view(num_graphs, -1).to(head_dtype)
         # The counter the paired difference is measured from. Absent (zeros) is the
         # closed-shell reference, for which the correction vanishes identically -- so a
         # dataset without reference counters behaves exactly as before.
         if "carrier_counts_ref" in data:
-            counts_ref = data["carrier_counts_ref"].view(num_graphs, -1).to(vectors.dtype)
+            counts_ref = data["carrier_counts_ref"].view(num_graphs, -1).to(head_dtype)
         else:
             counts_ref = torch.zeros_like(counts)
 
@@ -873,7 +974,7 @@ class MACEDefect(ScaleShiftMACE):
             edge_vector=head_vectors,
             logit_bias=logit_bias,
             positions=positions,
-            cell=data["cell"],
+            cell=head_cell,
             occupations=data.get("occupations"),
             force_out=force_out,
         )
@@ -943,7 +1044,7 @@ class MACEDefect(ScaleShiftMACE):
             edge_vector=head_vectors,
             logit_bias=logit_bias,
             positions=positions,
-            cell=data["cell"],
+            cell=head_cell,
             occupations=data.get("occupations"),
             force_out=force_out_ref,
         )
@@ -964,7 +1065,7 @@ class MACEDefect(ScaleShiftMACE):
         if self.use_long_range and int(self.current_epoch) >= self.lr_start_epoch:
             # A null cell selects the isolated evaluator inside LES, which is how
             # non-periodic configurations are handled.
-            cell_les = cell.clone()
+            cell_les = head_cell.clone()
             pbc_tensor = data["pbc"].to(device=cell.device)
             no_pbc_rows = (~pbc_tensor.any(dim=-1)).repeat_interleave(3)
             cell_les[no_pbc_rows] = torch.zeros(
@@ -987,8 +1088,17 @@ class MACEDefect(ScaleShiftMACE):
                 batch=data["batch"],
                 num_graphs=num_graphs,
                 edge_index=data["edge_index"],
-                edge_lengths=lengths,
+                edge_lengths=lengths.to(head_dtype),
             )
+            if getattr(self, "lr_detach_density", False):
+                # Section 2.2: the charge entering the Ewald energy carries no gradient.
+                # Forces from E_LR are dE_LR/dR at fixed q; nothing reaches the head or
+                # the trunk through the long-range branch. Neutrality is asserted on the
+                # detached charge: sum_i q_i must equal minus the net carrier count times
+                # the amplitude-free sign convention the charges are built with.
+                latent_charge = latent_charge.detach()
+                q_host = q_host.detach()
+                q_carrier = q_carrier.detach()
             energy_lr_host = self.latent_ewald.energy(
                 q_host, positions, cell_les, data["batch"]
             )
@@ -1137,6 +1247,13 @@ class MACEDefect(ScaleShiftMACE):
             # Both terms gained the same response, so the base branch is untouched -- which is
             # correct: the response belongs to the head, and L_base must not see it.
             base_forces = forces - correction_forces
+        if cache_hit and forces is not None:
+            # `inter_e` was a constant above, so the derivative pass carried only the
+            # long-range host term and the correction; the trunk's own forces are the
+            # cached ones.
+            forces = forces + cached_forces
+            if base_forces is not None:
+                base_forces = base_forces + cached_forces
 
         atomic_virials: Optional[torch.Tensor] = None
         atomic_stresses: Optional[torch.Tensor] = None

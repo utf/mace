@@ -9,6 +9,8 @@ import glob
 import json
 import logging
 import os
+
+import numpy as np
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -961,6 +963,13 @@ def run(args) -> None:
                 if name.startswith("madelung."):
                     param.requires_grad_(False)
             logging.info("Stage-3 protocol: Z pinned at its initialisation")
+        # Section 2.2 of the Stage A' spec: the head-only mask above marks the long-range
+        # charge MLPs trainable (they are correction parameters); `lr_freeze` re-pins them
+        # here, AFTER the mask, or the flag would be silently undone by it.
+        if getattr(model, "lr_freeze", False):
+            model._apply_long_range_policy()
+            logging.info("Long-range branch frozen at its physical initialisation "
+                         "(--defect_lr_freeze)")
 
     if model.__class__.__name__ == "MACEDefect":
         # Ship the band edges that referenced the labels with the model, so inference
@@ -1340,6 +1349,15 @@ def run(args) -> None:
             # directions a forces-only objective cannot see -- both move the whole spectrum
             # and neither changes a force -- so they are logged every epoch rather than
             # inspected once at the end, when a drift is already baked in.
+            if base_cache_rng is not None and getattr(target, "_base_cache", None) is not None:
+                from mace.modules import defect_cache as _dc
+
+                drift = _dc.check_drift(target, train_set, device, base_cache_rng)
+                if drift:
+                    logging.info("Base cache drift guard: epoch %d frame %d (%d atoms) "
+                                 "|dE| %.2e eV  max|dF| %.2e eV/A",
+                                 epoch, drift["frame"], drift["n_atoms"],
+                                 drift["d_energy"], drift["d_forces"])
             if protocol_on:
                 head = getattr(target, "spectral", None)
                 if head is not None:
@@ -1524,6 +1542,53 @@ def run(args) -> None:
     # runs on the loss's OWN loader, for the same reason the reach assertion below does: a
     # calibration performed on a differently-built batch is a calibration for a run that is
     # not happening.
+    # ------------------------------------------------ Stage A' section 2.5: precision, cache
+    #
+    # The mixed policy keeps the DATA in float64 (labels at float32 lose ~5e-5 eV on a
+    # 500 eV cell, which is not the loss's precision) and casts only the trunk down, so the
+    # process default must be float64 for it to mean what it says.
+    if (model.__class__.__name__ == "MACEDefect"
+            and getattr(model, "precision_policy", "uniform") == "mixed"
+            and torch.get_default_dtype() != torch.float64):
+        raise RuntimeError(
+            "--defect_precision_policy mixed needs --default_dtype float64: the policy casts "
+            "the trunk to float32 and keeps everything else, data included, at float64")
+    base_cache_rng = None
+    if bool(getattr(args, "defect_base_cache", False)):
+        from mace.modules import defect_cache
+
+        if model.__class__.__name__ != "MACEDefect":
+            raise RuntimeError("--defect_base_cache only applies to MACEDefect")
+        # Later-block invariant readouts feed only the (detached) long-range charges; they
+        # are cached, so they must not train. Freeze them before the cacheability check.
+        for i, ro in enumerate(model.defect_feature_readouts):
+            if i > 0:
+                for p in ro.parameters():
+                    p.requires_grad_(False)
+        defect_cache.require_cacheable(model)
+        n_keys = defect_cache.attach_frame_keys(train_set, z_table=z_table)
+        for _head, _vset in valid_sets.items():
+            n_keys += defect_cache.attach_frame_keys(_vset, z_table=z_table)
+        logging.info("Base cache: frame keys attached to %d frames", n_keys)
+        probe_batch = next(iter(train_loader))
+        table_before, wall_before = defect_cache.profile_step(
+            model, loss_fn, probe_batch, device, output_args)
+        logging.info("Profile, full forward (one training step, mean of 3): %.3f s/step\n%s",
+                     wall_before, table_before)
+        cache_dir = str(getattr(args, "defect_base_cache_dir", "") or args.checkpoints_dir)
+        os.makedirs(cache_dir, exist_ok=True)
+        digest = defect_cache.base_checksum(model)
+        cache_path = os.path.join(cache_dir, f"{args.name}_basecache_{digest.hex()[:12]}.pt")
+        cache = defect_cache.build_base_cache(
+            model, [train_loader] + list(valid_loaders.values()), device, path=cache_path)
+        model.set_base_cache(cache)
+        table_after, wall_after = defect_cache.profile_step(
+            model, loss_fn, probe_batch, device, output_args)
+        logging.info("Profile, cached forward (one training step, mean of 3): %.3f s/step "
+                     "(%.2fx)\n%s", wall_after, wall_before / max(wall_after, 1e-9),
+                     table_after)
+        base_cache_rng = np.random.default_rng(int(args.seed))
+
     protocol_post_step = None
     if protocol_on:
         from mace.modules import defect_protocol

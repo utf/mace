@@ -1367,6 +1367,22 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default="uniform",
     )
     parser.add_argument(
+        "--defect_base_cache",
+        help="cache the frozen base's energy, forces and later-block features per frame "
+        "(section 2.5 of the Stage A' spec) and recompute only the first interaction block "
+        "each step. Refuses to start unless the base is frozen, the head reads the first "
+        "block only, and any long-range branch is detached and frozen",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--defect_base_cache_dir",
+        help="where the base cache file is written and looked for (named by the base's "
+        "checksum); empty means the checkpoints directory",
+        type=str,
+        default="",
+    )
+    parser.add_argument(
         "--defect_on_site_centred",
         help="the on-site correction is the deviation from the pristine environment: "
         "gamma * [tanh h(x_i) - tanh h(xbar_s(i))], with xbar_s the mean first-block "

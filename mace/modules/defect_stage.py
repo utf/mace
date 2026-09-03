@@ -78,7 +78,7 @@ CORRECTION_PREFIXES = ("carrier_", "counter_", "latent_charges", "logit",
 # rewrites it every epoch. It must be excluded from BOTH operations here: copying it would
 # seed a Stage-B run with Stage A's final epoch number, and checking it would report the base
 # as unfrozen simply because training progressed -- which is how it was noticed.
-BOOKKEEPING_NAMES = ("current_epoch",)
+BOOKKEEPING_NAMES = ("current_epoch", "base_cache_checksum")
 
 
 def is_correction_param(name: str) -> bool:

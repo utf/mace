@@ -283,6 +283,8 @@ DEFECT_LR_FREEZE="${DEFECT_LR_FREEZE:-False}"
 DEFECT_IMAGE_COMPENSATION="${DEFECT_IMAGE_COMPENSATION:-False}"
 DEFECT_PRECISION_POLICY="${DEFECT_PRECISION_POLICY:-uniform}"
 DEFECT_ON_SITE_CENTRED="${DEFECT_ON_SITE_CENTRED:-False}"
+DEFECT_BASE_CACHE="${DEFECT_BASE_CACHE:-False}"
+DEFECT_BASE_CACHE_DIR="${DEFECT_BASE_CACHE_DIR:-}"
 DEFECT_PROTOCOL_ZERO_ON_SITE="${DEFECT_PROTOCOL_ZERO_ON_SITE:-False}"
 DEFECT_NEUTRAL_SIZE_UPWEIGHT="${DEFECT_NEUTRAL_SIZE_UPWEIGHT:-0.0}"
 DEFECT_COUNTING_ENVELOPE="${DEFECT_COUNTING_ENVELOPE:-exp}"
@@ -457,6 +459,8 @@ python -m mace.cli.run_train \
     --defect_image_compensation="${DEFECT_IMAGE_COMPENSATION}" \
     --defect_precision_policy="${DEFECT_PRECISION_POLICY}" \
     --defect_on_site_centred="${DEFECT_ON_SITE_CENTRED}" \
+    --defect_base_cache="${DEFECT_BASE_CACHE}" \
+    --defect_base_cache_dir="${DEFECT_BASE_CACHE_DIR}" \
     --defect_protocol_zero_on_site="${DEFECT_PROTOCOL_ZERO_ON_SITE}" \
     --defect_neutral_size_upweight="${DEFECT_NEUTRAL_SIZE_UPWEIGHT}" \
     --defect_counting_envelope="${DEFECT_COUNTING_ENVELOPE}" \
