@@ -307,6 +307,18 @@ class MACEDefect(ScaleShiftMACE):
         # bytes; all zero means no cache was ever built for this model.
         self.register_buffer("base_cache_checksum", torch.zeros(32, dtype=torch.uint8),
                              persistent=True)
+        # Section 2.1: the species-mean output of the FIRST interaction block over the
+        # pristine reference cell, set by the trainer from a stoichiometric frame once the
+        # base is loaded and frozen. The trunk feature, not the readout of it: the readout
+        # is a correction parameter and trains, so it is applied live in forward. All-zero
+        # rows with `pristine_centre_set` False mean "not set", and the centred correction
+        # then refuses to run rather than centring on zero.
+        block0_dim = o3.Irreps(kwargs["hidden_irreps"]).dim
+        self.register_buffer("pristine_block0_mean",
+                             torch.zeros(int(kwargs["num_elements"]), block0_dim),
+                             persistent=True)
+        self.register_buffer("pristine_centre_set", torch.zeros((), dtype=torch.bool),
+                             persistent=True)
         self._register_state_dict_hook(_sync_trunk_constants_into_state_dict)
         self.register_load_state_dict_post_hook(_restore_trunk_constants_from_buffer)
         self.counting_t_el = float(counting_t_el)
@@ -490,6 +502,30 @@ class MACEDefect(ScaleShiftMACE):
         """Attach (or detach, with None) the per-frame base cache of section 2.5."""
         self._base_cache = cache
 
+    @torch.no_grad()
+    def set_pristine_centre(self, block0_feats: torch.Tensor, species: torch.Tensor) -> None:
+        """Section 2.1: record the per-species mean of the first block's features over a
+        pristine cell. `block0_feats` is the `trunk_block0` output of a forward on that cell."""
+        n_el = int(self.pristine_block0_mean.shape[0])
+        mean = torch.zeros_like(self.pristine_block0_mean)
+        for s in range(n_el):
+            sel = species == s
+            if bool(sel.any()):
+                mean[s] = block0_feats[sel].to(mean.dtype).mean(dim=0)
+        self.pristine_block0_mean.copy_(mean)
+        self.pristine_centre_set.fill_(True)
+
+    def pristine_centre(self, head_dtype: torch.dtype) -> Optional[torch.Tensor]:
+        """The centre in the head's feature space, through the LIVE first readout."""
+        if not getattr(self, "on_site_centred", False):
+            return None
+        if not bool(self.pristine_centre_set):
+            raise RuntimeError(
+                "on_site_centred is set but no pristine centre has been recorded; call "
+                "set_pristine_centre from a stoichiometric frame before the first forward")
+        feats = self.defect_feature_readouts[0](self.pristine_block0_mean.to(head_dtype))
+        return feats[:, : self.spectral_feature_dim]
+
     def __getstate__(self) -> Dict[str, Any]:
         # The cache is a training-time object keyed to one dataset; a checkpoint carries the
         # checksum buffer that names it, never the values.
@@ -614,6 +650,8 @@ class MACEDefect(ScaleShiftMACE):
         cell: Optional[torch.Tensor] = None,
         occupations: Optional[torch.Tensor] = None,
         force_out: Optional[Dict[str, torch.Tensor]] = None,
+            centre: Optional[torch.Tensor] = None,
+        graph_sizes: Optional[torch.Tensor] = None,
     ):
         """Either carrier head, behind one signature.
 
@@ -689,6 +727,11 @@ class MACEDefect(ScaleShiftMACE):
             madelung=madelung,
             occupations=occupations,
         )
+        # Only the counting head knows the centred correction and the c table; the older
+        # spectral heads keep their signature.
+        if getattr(self.spectral, "accepts_centre", False):
+            head_kwargs["centre"] = centre
+            head_kwargs["graph_sizes"] = graph_sizes
         # Section 2.3 of the Stage A' spec: image compensation in H, one shot. A first solve
         # without the term gives the carrier density; its periodic-minus-isolated potential,
         # with the electron sign convention of Edit 1, goes onto the on-site energies for the
@@ -931,6 +974,9 @@ class MACEDefect(ScaleShiftMACE):
                 node_inter_es.clone()
             )
         node_feats_out = torch.cat(node_feats_list, dim=-1)
+        trunk_block0 = node_feats_list[0].detach()
+        graph_sizes = data["ptr"][1:] - data["ptr"][:-1]
+        centre = self.pristine_centre(head_dtype)
         # The head's geometry, in the head's dtype. A no-op under "uniform".
         if positions.dtype != head_dtype:
             positions = positions.to(head_dtype)
@@ -998,6 +1044,8 @@ class MACEDefect(ScaleShiftMACE):
             cell=head_cell,
             occupations=data.get("occupations"),
             force_out=force_out,
+            centre=centre,
+            graph_sizes=graph_sizes,
         )
         # Intrinsic gap: the same pooling with the seed switched off, so the logged gap
         # separates what MLP_l has learned from what the seed is supplying. The dead
@@ -1068,6 +1116,8 @@ class MACEDefect(ScaleShiftMACE):
             cell=head_cell,
             occupations=data.get("occupations"),
             force_out=force_out_ref,
+            centre=centre,
+            graph_sizes=graph_sizes,
         )
 
         # Long-range branch (plan section 3.4).
@@ -1315,6 +1365,8 @@ class MACEDefect(ScaleShiftMACE):
             # Section 2.3: the image-compensation shift per atom (None when the term is off),
             # so the tiling drift test can separate it from the ion Madelung term.
             "image_compensation": head_extras.get("image_compensation"),
+            # Section 2.1: the first block's trunk features, for `set_pristine_centre`.
+            "trunk_block0": trunk_block0,
             # The exact inputs the correction readouts consume, exposed so that seeding
             # and diagnostics do not have to re-derive the trunk (defect_seed.py).
             "defect_features": defect_feats,

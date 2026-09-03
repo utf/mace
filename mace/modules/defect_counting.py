@@ -319,6 +319,24 @@ def free_energy(eps: torch.Tensor, n_electrons: float, t_el: float = T_EL) -> to
 # --------------------------------------------------------------------------- the H builder
 
 
+C_SHIFT_SIZE_THRESHOLD = 100      # atoms; 79 and 80 below, 159 above, on this dataset
+
+
+def c_shift_classes(counts: torch.Tensor, graph_sizes: torch.Tensor):
+    """`(charge_class, size_class)` per graph, both long `[n_graphs]`.
+
+    charge_class: 0 for Delta_n < 0, 1 for Delta_n = 0, 2 for Delta_n > 0, with
+    Delta_n = n_e_maj + n_e_min - n_h_maj - n_h_min; size_class: 0 below the threshold,
+    1 at or above. Shared by the head (application) and the calibration (assignment), so
+    the two cannot disagree about which cell a constant belongs to.
+    """
+    c = counts.reshape(counts.shape[0], -1)
+    delta_n = c[:, 0] + c[:, 1] - c[:, 2] - c[:, 3]
+    charge_cls = torch.where(delta_n < 0, 0, torch.where(delta_n > 0, 2, 1)).long()
+    size_cls = (graph_sizes.reshape(-1) >= C_SHIFT_SIZE_THRESHOLD).long()
+    return charge_cls, size_cls
+
+
 class SlaterKosterH(nn.Module):
     """Assembles the s+p Hamiltonian from Stage 2's radial scales and bounded corrections.
 
@@ -492,18 +510,32 @@ class SlaterKosterH(nn.Module):
         if getattr(self, "_audit", False):
             self._audit_bin.setdefault(name, []).append(value.detach().reshape(-1).cpu())
 
-    def on_site(self, feats, species, madelung: Optional[torch.Tensor] = None):
+    def on_site(self, feats, species, madelung: Optional[torch.Tensor] = None,
+                centre: Optional[torch.Tensor] = None):
         """`[n_nodes, 2]`: the s and p levels.
 
         The Madelung shift is added to BOTH shells identically. It is the electrostatic
         potential at a site and has no angular-momentum dependence; giving the shells
         different shifts would be inventing a crystal-field term and calling it electrostatics.
+
+        `centre`, when given, is `[num_elements, feature_dim]`: the mean first-block feature
+        of each species over the pristine reference cell (Stage A' section 2.1). The
+        correction becomes its DEVIATION from the pristine environment,
+
+            corr_i = gamma * [ tanh h(x_i) - tanh h(xbar_s(i)) ],
+
+        which is zero on every atom whose feature equals its species mean, and removes the
+        species-constant mode that b4 measured (+0.27 eV on every atom) and the joint run
+        regrew after zero-init -- not by initialisation this time, but by construction.
         """
         e = self.elem(species)
-        pre_site = self.site(torch.cat([feats, self.elem(species)], dim=-1))
+        pre_site = self.site(torch.cat([feats, e], dim=-1))
         self._audit_store("site", pre_site)
-        levels = self.eps0[species] + self.on_site_range * torch.tanh(
-            self.site(torch.cat([feats, e], dim=-1)))
+        corr = torch.tanh(pre_site)
+        if centre is not None:
+            pre_centre = self.site(torch.cat([centre.to(feats.dtype)[species], e], dim=-1))
+            corr = corr - torch.tanh(pre_centre)
+        levels = self.eps0[species] + self.on_site_range * corr
         if madelung is not None:
             levels = levels + madelung.reshape(-1, 1)
         return levels
@@ -653,6 +685,13 @@ class CountingHead(nn.Module):
         # -- the role mu_c used to play, without mu_c's per-channel bookkeeping. Calibrated
         # once on an init batch against the median energy target, then trainable.
         self.c_shift = nn.Parameter(torch.zeros(()))
+        # Stage A' section 3: `c` per (charge, size). Rows index the sign of the net carrier
+        # count (Delta_n < 0, = 0, > 0), columns the cell-size class (below / at or above
+        # C_SHIFT_SIZE_THRESHOLD atoms). Added to the scalar `c_shift`, which stays the
+        # global offset so a model calibrated the old way is the all-zero table.
+        self.c_shift_table = nn.Parameter(torch.zeros(3, 2))
+        # `_carrier_head` hands `centre` and `graph_sizes` only to a head that declares it.
+        self.accepts_centre = True
         # Read by `_carrier_head` to decide whether to hand this head `positions` and a
         # `force_out` dict. A capability flag rather than an isinstance check: the model must
         # not import the head module to know what its own head can do.
@@ -661,8 +700,12 @@ class CountingHead(nn.Module):
     def forward(self, node_feats, counter_emb, counts, batch, num_graphs, edge_index,
                 edge_length, site_bias=None, node_species=None, clamp_mask=None,
                 edge_vector=None, madelung=None, occupations=None, internals=None,
-                positions=None, force_out=None):
+                positions=None, force_out=None, centre=None, graph_sizes=None):
         """`occupations`, when given, is [n_graphs, 2] holding (N_maj, N_min) directly.
+
+        `centre` is the pristine species-mean feature for the centred on-site correction
+        (section 2.1); `graph_sizes` is `[n_graphs]` atom counts for the per-(charge, size)
+        c table (section 3). Both optional; absent, the head behaves as it always has.
 
         Stage 4's interface, and it is an INPUT change rather than an architecture one: the
         counters already map to a fill, and this simply lets a caller state the fill instead.
@@ -681,14 +724,14 @@ class CountingHead(nn.Module):
             return self._forward(
                 node_feats, counter_emb, counts, batch, num_graphs, edge_index,
                 edge_length, site_bias, node_species, clamp_mask, edge_vector, madelung,
-                occupations, internals, positions, force_out)
+                occupations, internals, positions, force_out, centre, graph_sizes)
         finally:
             use_smearing(*previous)
 
     def _forward(self, node_feats, counter_emb, counts, batch, num_graphs, edge_index,
                  edge_length, site_bias=None, node_species=None, clamp_mask=None,
                  edge_vector=None, madelung=None, occupations=None, internals=None,
-                 positions=None, force_out=None):
+                 positions=None, force_out=None, centre=None, graph_sizes=None):
         from mace.modules.defect_spectral import SpectralOutput
 
         if node_species is None or edge_vector is None:
@@ -700,7 +743,13 @@ class CountingHead(nn.Module):
         device, dtype = node_feats.device, node_feats.dtype
         n_nodes = int(node_feats.shape[0])
 
-        levels = self.h.on_site(node_feats, node_species, madelung) + self.c_shift
+        levels = self.h.on_site(node_feats, node_species, madelung, centre=centre) \
+            + self.c_shift
+        table = getattr(self, "c_shift_table", None)
+        if table is not None and graph_sizes is not None:
+            charge_cls, size_cls = c_shift_classes(counts, graph_sizes)
+            per_graph = table[charge_cls, size_cls]                     # [n_graphs]
+            levels = levels + per_graph[batch].reshape(-1, 1)
         if clamp_mask is not None:
             # DIAGNOSTIC ONLY, same contract as the spectral heads: sites outside the mask are
             # pushed far above the frontier so no occupied state can live on them.
