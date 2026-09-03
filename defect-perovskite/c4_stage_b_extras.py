@@ -132,13 +132,19 @@ def main() -> None:
         ctx = ForwardContext.production(model, device=args.device, eps_inf=args.eps_inf)
         head = model.spectral
         table = head.c_shift_table.detach().cpu()
-        c_small, c_large = float(table[2, 0]) + float(head.c_shift), \
-            float(table[2, 1]) + float(head.c_shift)
+        # The charge class the dataset's charged frames actually occupy (Delta_n < 0 here:
+        # the counter is a hole), read off the frames rather than assumed.
+        from mace.modules.defect_counting import c_shift_classes
+        counts0 = torch.tensor([large[0].info["carrier_counts"]], dtype=torch.float64)
+        charge_cls = int(c_shift_classes(counts0, torch.tensor([159]))[0][0])
+        c_small, c_large = float(table[charge_cls, 0]) + float(head.c_shift), \
+            float(table[charge_cls, 1]) + float(head.c_shift)
         lb = head.h.decay_lengths().detach().cpu().tolist()
         e_lr_small, bg_small = lr_constants(model, small, z, cutoff, args.device, ctx)
         e_lr_large, bg_large = lr_constants(model, large, z, cutoff, args.device, ctx)
         stops = hub_stops(model, large + small, z, cutoff, args.device, ctx)
-        row = dict(model=mp.name, c_79=c_small, c_159=c_large, dc=c_large - c_small,
+        row = dict(model=mp.name, charge_class=charge_cls, c_79=c_small, c_159=c_large,
+                   dc=c_large - c_small,
                    e_lr_79=e_lr_small, e_lr_159=e_lr_large, bg_79=bg_small, bg_159=bg_large,
                    predicted_dc=(e_lr_large - e_lr_small) + (bg_large - bg_small),
                    decay_lengths=dict(zip(BOND_TYPES, lb)), stops=stops,

@@ -1376,6 +1376,16 @@ def run(args) -> None:
                 head = getattr(target, "spectral", None)
                 if head is not None:
                     parts = [f"c_shift {float(head.c_shift):+.4f}"]
+                    table = getattr(head, "c_shift_table", None)
+                    if table is not None and float(table.detach().abs().sum()) > 0:
+                        nz = table.detach().cpu()
+                        rows = [(i, j, float(nz[i, j])) for i in range(nz.shape[0])
+                                for j in range(nz.shape[1]) if nz[i, j] != 0]
+                        parts.append("c_table " + " ".join(
+                            f"({i},{j}){v:+.4f}" for i, j, v in rows))
+                    resid = getattr(target, "_lr_neutrality_residual", None)
+                    if resid is not None:
+                        parts.append(f"lr_neutral_resid {float(resid):.3e}")
                     site = getattr(getattr(head, "h", None), "site", None)
                     if site is not None:
                         last = [m for m in site.modules()
