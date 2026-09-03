@@ -151,7 +151,12 @@ def main() -> None:
         g["REF_NEUTRAL_159"] = float(ref["neutral_159"])
         g["REF_NEUTRAL_159_PRODUCTION_BASE"] = float(ref.get(
             "neutral_159_production_base", ref["neutral_159"]))
-        print(f"reference constants from {args.reference_json}: energy {REF_ENERGY_SLOPE:+.4f} "
+        # The leakage floor scales with the reference: the registered -0.10 was 0.75 x the
+        # pre-joint -0.1338, and a literal floor above a smaller reference would flag the
+        # frozen base's own slope as a leak.
+        g["LEAK_FLOOR"] = float(ref.get("leak_floor", 0.75 * ref["energy_slope"]))
+        print(f"reference constants from {args.reference_json}: leak floor {LEAK_FLOOR:+.4f}; "
+              f"energy {REF_ENERGY_SLOPE:+.4f} "
               f"{REF_ENERGY_CI}, force {REF_FORCE_SLOPE:+.4f} {REF_FORCE_CI}, neutral "
               f"{REF_NEUTRAL_159:+.4f} / {REF_NEUTRAL_159_PRODUCTION_BASE:+.4f}", flush=True)
 

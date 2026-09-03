@@ -1027,8 +1027,11 @@ class MACEDefect(ScaleShiftMACE):
         graph_sizes = data["ptr"][1:] - data["ptr"][:-1]
         centre = self.pristine_centre(head_dtype)
         # The head's geometry, in the head's dtype. A no-op under "uniform".
-        if positions.dtype != head_dtype:
-            positions = positions.to(head_dtype)
+        # The head sees the geometry in its own dtype through a DIFFERENTIABLE cast; the
+        # gradient leaf stays `positions`, whatever the data dtype. Rebinding the name to the
+        # cast copy made every force derivative below blind to the trunk on float32 batches.
+        head_positions = (positions if positions.dtype == head_dtype
+                          else positions.to(head_dtype))
         head_cell = data["cell"].to(head_dtype)
         head_lengths = head_lengths.to(head_dtype)
         head_vectors = head_vectors.to(head_dtype)
@@ -1089,7 +1092,7 @@ class MACEDefect(ScaleShiftMACE):
             clamp_mask=head_clamp,
             edge_vector=head_vectors,
             logit_bias=logit_bias,
-            positions=positions,
+            positions=head_positions,
             cell=head_cell,
             occupations=data.get("occupations"),
             force_out=force_out,
@@ -1161,7 +1164,7 @@ class MACEDefect(ScaleShiftMACE):
             clamp_mask=head_clamp,
             edge_vector=head_vectors,
             logit_bias=logit_bias,
-            positions=positions,
+            positions=head_positions,
             cell=head_cell,
             occupations=data.get("occupations"),
             force_out=force_out_ref,
@@ -1235,7 +1238,7 @@ class MACEDefect(ScaleShiftMACE):
                             f"max |sum q_carrier/a + Delta_n| = "
                             f"{float((dens_sum + delta_n).abs().max()):.3e}")
             energy_lr_host = self.latent_ewald.energy(
-                q_host, positions, cell_les, data["batch"]
+                q_host, head_positions, cell_les, data["batch"]
             )
             # At n = 0 the polarisation and carrier channels vanish identically, so the
             # two evaluations see the same charges and this difference is exactly zero.
@@ -1243,7 +1246,7 @@ class MACEDefect(ScaleShiftMACE):
             if self.host_carrier_coupling:
                 delta_lr = (
                     self.latent_ewald.energy(
-                        latent_charge, positions, cell_les, data["batch"]
+                        latent_charge, head_positions, cell_les, data["batch"]
                     )
                     - energy_lr_host
                 )
@@ -1270,7 +1273,7 @@ class MACEDefect(ScaleShiftMACE):
                 # Delta E_SR structurally cannot do: the monopole self-interaction and
                 # interactions between separated carriers.
                 delta_lr = self.latent_ewald.energy(
-                    latent_charge - q_host, positions, cell_les, data["batch"]
+                    latent_charge - q_host, head_positions, cell_les, data["batch"]
                 )
 
             # The same at the reference counter. This branch is *not* inert at q = 0:
@@ -1290,28 +1293,28 @@ class MACEDefect(ScaleShiftMACE):
             if self.host_carrier_coupling:
                 delta_lr_ref = (
                     self.latent_ewald.energy(
-                        latent_charge_ref, positions, cell_les, data["batch"]
+                        latent_charge_ref, head_positions, cell_les, data["batch"]
                     )
                     - energy_lr_host
                 )
             else:
                 delta_lr_ref = self.latent_ewald.energy(
-                    latent_charge_ref - q_host, positions, cell_les, data["batch"]
+                    latent_charge_ref - q_host, head_positions, cell_les, data["batch"]
                 )
 
             if self.carrier_self_isolated:
                 # E_LR = E_periodic[Q] - sum_c E_isolated[Q^c]: only the image interaction
                 # survives, with 1/L monopole scaling by construction.
                 delta_lr = delta_lr - self._isolated_carrier_self(
-                    alpha, counts, amplitude, positions, data["batch"], num_graphs
+                    alpha, counts, amplitude, head_positions, data["batch"], num_graphs
                 )
                 delta_lr_ref = delta_lr_ref - self._isolated_carrier_self(
-                    alpha_ref, counts_ref, amplitude, positions, data["batch"], num_graphs
+                    alpha_ref, counts_ref, amplitude, head_positions, data["batch"], num_graphs
                 )
 
             if dilute:
                 dilute_correction = self.latent_ewald.dilute_correction(
-                    q_carrier, positions, cell_les, data["batch"], num_graphs
+                    q_carrier, head_positions, cell_les, data["batch"], num_graphs
                 )
                 delta_lr = delta_lr + dilute_correction
 

@@ -203,3 +203,25 @@ def test_frame_keys_are_content_hashes():
     assert defect_cache.frame_key(numbers, positions + 1e-8, cell) == k
     assert defect_cache.frame_key(numbers, positions + 1e-3, cell) != k
     assert defect_cache.frame_key(numbers[::-1], positions, cell) != k
+
+
+def test_a_float32_batch_through_a_mixed_model_keeps_the_trunk_in_the_forces(frames):
+    """The scorers build float32 batches. The head-boundary cast then makes a NEW positions
+    tensor; the force derivative must still be taken with respect to the data's positions,
+    or the base forces lose the trunk entirely (measured: 0.30 against 0.010 eV/A RMS on a
+    neutral frame before the fix)."""
+    uniform = _model(precision_policy="uniform")
+    mixed = copy.deepcopy(uniform)
+    mixed.precision_policy = "mixed"
+    mixed._apply_precision_policy()
+    torch.set_default_dtype(torch.float32)
+    try:
+        f32 = _frames(2, seed=3, charged=False)
+        batch = _batch(f32)
+        out_u = uniform.float()(batch.to_dict(), training=False, compute_force=True)
+        out_m = mixed(_batch(f32).to_dict(), training=False, compute_force=True)
+    finally:
+        torch.set_default_dtype(torch.float64)
+    d = float((out_u["base_forces"].double() - out_m["base_forces"].double()).abs().max())
+    assert d < 1e-4, f"base forces differ by {d:.3e} eV/A between uniform-f32 and mixed"
+    assert float(out_m["base_forces"].abs().max()) > 1e-3
