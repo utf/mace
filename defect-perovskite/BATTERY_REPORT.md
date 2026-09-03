@@ -663,7 +663,7 @@ envelope candidate raises it at initialisation.
 | candidate | status |
 |---|---|
 | Cl saturation / γ | **closed.** Fixed, and it was not the mechanism (F4 moved −0.0613 → −0.0489, away from −0.131). |
-| E_LR | **closed** on sign and magnitude (+0.007 against a required −0.070). Trained version now measured in the staged re-enable: it does not close F4 (§6), and it is what turns the carrier's participation from falling to rising at epoch 12 in seed 1 (7.80 → 7.75 without it, 9.24 → 11.14 with it). JOINT_R3_ELR_SLOT |
+| E_LR | **closed** on sign and magnitude (+0.007 against a required −0.070). Trained version now measured in the staged re-enable: it does not close F4 (§6), and it is what turns the carrier's participation from falling to rising at epoch 12 in seed 1 (7.80 → 7.75 without it, 9.24 → 11.14 with it). Like-for-like on sixteen charged 159-atom frames, E_LR raises the charged/pristine participation ratio from 0.478 (off, = head-only 0.492) to 0.635 and shallows the level by 36 meV; the most-localised seed stays most localised either way. Scored by the adoption rule (an addition), the E_LR-off models leak *more* (−0.046 against −0.074), so E_LR is not the leak and partly resists it. |
 | SCC | **closed on sign** by the reviewer's argument; R3 may measure the number. |
 | Envelope / coupling range | **closed by b7 (global) and b9 (local).** The envelope fires as a diagnosis and is contraindicated as a remedy; the defect-local modulation ceiling binds in only 2 of 6 seeds and scaling past it misses F12's target. |
 | Label availability at 79 atoms | **new, measured, and the largest single factor.** The 79-atom energy residual carries +0.132 of base error and no carrier trend; the 159-atom reference is carrier physics (null +0.08 vs charged −0.134). Not a defect of the head. |
@@ -911,7 +911,59 @@ still climbing at epoch 16, 44% more delocalised. The E_LR-on arm may not be con
 epochs, so 11.14 need not be its endpoint. The E_LR-off seed finished at 4.2 meV/atom and
 13.8 meV/Å on validation (train 2.7 / 11.0), against a1's 5.1 / 12.6.
 
-JOINT_PARTICIPATION_SLOT
+**Three cohorts on one frame set, for the first time.** The s7 harness reported N_eff
+4.85 ± 0.25 on its first training batch; the joint trainer logs partic ≈ 11 on
+carrier-bearing validation frames. Those were never comparable. `b13_participation.py`
+scores all three cohorts on the same sixteen charged 159-atom training frames, with the
+pristine 80-atom cell under the same counters as each model's own reference for
+"delocalised" (the null-channel ratio is identically 1.000 for this head and is not used):
+
+| cohort | N_eff, charged | N_eff, pristine | charged / pristine | depth from CBM |
+|---|---|---|---|---|
+| head-only s7 (6 seeds, frozen base, forces + gap) | 13.17 ± 0.94 | 26.77 ± 0.55 | **0.492 ± 0.028** | 0.095 ± 0.023 |
+| joint, E_LR off (seeds 1–4) | 14.98 ± 1.88 | 31.50 ± 0.93 | **0.478 ± 0.071** | 0.108 ± 0.008 |
+| joint, E_LR on at 12 (a1–a4) | 19.77 ± 3.89 | 31.44 ± 1.31 | **0.635 ± 0.143** | 0.072 ± 0.021 |
+
+Paired by seed (on / off): a1 22.11 / 15.86, a2 22.55 / 15.67, a3 21.37 / 16.62, a4 13.07 /
+11.78; ratios 0.729 / 0.513, 0.733 / 0.508, 0.689 / 0.535, 0.388 / 0.356. Seed spread in
+N_eff 9.5 with E_LR on, 4.8 off.
+
+Three readings. First, the head-only 4.85 was a property of the harness's first batch, not
+of the models: on these frames the same six models read 13.2, so the "4.85 against 11"
+discrepancy was two frame sets, as suspected. Second, the joint objective *without* E_LR
+leaves localisation where the head-only cohort had it — ratio 0.478 against 0.492, depth
+0.108 against 0.095 — while E_LR raises the ratio to 0.635 and makes the level shallower by
+36 meV. Third, seed 4 stays the most localised in both arms (0.356 off, 0.388 on), so the
+a4/a5/a6 group is an initialisation effect that E_LR does not create; what E_LR does is
+double the spread among the seeds it acts on (a1–a3 gain +4.8 to +6.9 in N_eff, a4 +1.3).
+N_eff is a spread over a fixed cell and T_el-sensitive; the ratio is the localisation
+statement, and it is a metric, not a gate.
+
+### An addition to the plan: the E_LR-off models by the adoption rule
+
+The control was launched for participation. Scoring it by `b10_adoption.py` cost one GPU
+for ten minutes and answers a question the plan did not pose: whether E_LR is part of the
+energy leak. It is not. With E_LR off the leak is *larger*:
+
+| seed | c-shift | charged 159 E slope [95%] | charged 159 F | neutral 159 E | window E / F | F4 δ_sr [95%] | depth | gap |
+|---|---|---|---|---|---|---|---|---|
+| nolr_s1 | +10.41 | **−0.0381** [−0.0482, −0.0280] | −0.1790 | +0.1450 | 2.2 / 9.9 | −0.0629 [−0.0724, −0.0535] | 0.118 | 2.410 |
+| nolr_s2 | +10.27 | **−0.0445** [−0.0568, −0.0321] | −0.2083 | +0.1204 | 2.7 / 9.8 | −0.0887 [−0.1011, −0.0762] | 0.104 | 2.393 |
+| nolr_s3 | +10.30 | **−0.0391** [−0.0500, −0.0282] | −0.1931 | +0.1283 | 2.5 / 10.0 | −0.0932 [−0.1094, −0.0771] | 0.096 | 2.416 |
+| nolr_s4 | +10.51 | **−0.0627** [−0.0739, −0.0514] | −0.2230 | +0.1049 | 2.0 / 10.1 | −0.0932 [−0.1065, −0.0799] | 0.099 | 2.393 |
+| **pooled** | | **−0.0461 ± 0.0099** | −0.2008 ± 0.0164 | +0.1246 ± 0.0144 | | −0.0845 ± 0.0126 | | |
+| arm A, same seeds, E_LR on | | −0.0736 ± 0.0066 | −0.2188 ± 0.0139 | +0.1101 ± 0.0134 | | −0.0516 ± 0.0161 | | |
+
+Adopted 0/4. Criterion 1 fails on every seed by a wider margin than with E_LR on (the same
+four seeds read −0.0644 / −0.0814 / −0.0708 / −0.0778 with it), the neutral 159-atom slope
+grows further, and the level is deeper (0.096–0.118 against 0.045–0.100). Two things the
+addition changes in the reading. E_LR is not the mechanism of the leak and partly *resists*
+it: the long-range branch carries some of the carrier's distance dependence that the base
+otherwise takes. And F4's own slope is closer to the reference without E_LR (−0.0845, two
+seeds inside the 1.5× band) while the residual it is meant to explain has leaked further,
+which is the decomposition failing in the other direction: δ_sr keeps its shape while the
+energy it was fitted to has moved into the base. Neither arm is adoptable and the two fail
+differently, which is more information about the objective than one arm alone gave.
 
 ### The gauge, watched every epoch
 
@@ -974,7 +1026,25 @@ reference in every seed.
 
 ### Depth against both edges (F9 restated)
 
-JOINT_DEPTH_SLOT
+The post-run chain passed only `joint_a1` to `b6_depth_edges.py`, so `joint_depth.json` is
+n = 1; the six-seed rerun (`joint_depth6.json`, `queue_joint_followup.sh`) is what is
+reported here. Same eight charged frames and 80-atom pristine cells as b6, aligned by
+matched quantiles of the occupied manifold.
+
+| arm | λ_frontier | from VBM | from CBM | pristine gap | alignment spread |
+|---|---|---|---|---|---|
+| pre-joint, s7 (n = 6) | +3.7020 ± 0.0267 | +2.2949 ± 0.0330 | +0.1025 ± 0.0259 | 2.3974 ± 0.0086 | 0.1257 ± 0.0155 |
+| joint arm A (n = 6) | +4.5647 ± 0.3286 | +2.3157 ± 0.0302 | +0.0922 ± 0.0249 | 2.4079 ± 0.0122 | 0.1177 ± 0.0201 |
+| moved | **+0.863** | +0.021 | −0.010 | — | — |
+
+Per seed, from the CBM: a1 0.074, a2 0.085, a3 0.059, a4 0.138, a5 0.102, a6 0.094 eV. On
+b6's frames the level moved by 10 meV, inside the alignment floor, and F9's form holds a
+second time; on b10's frames (the adoption table above) the same seeds read 0.045–0.100,
+also shallower by a few tens of meV. The two probes agree in ordering (a3 shallowest, a4
+deepest) and differ in level by about 0.02 eV, which is the alignment floor. The λ offset
+this time is +0.86 eV with a seed spread of 0.33, against +2.10 with a spread of 0.03 at the
+γ widening: the joint objective moves `eps0`'s gauge differently per seed, which is the same
+unidentified constant mode as the on-site channel's, seen from the spectrum.
 
 ### F11–F14, scored
 
@@ -1034,7 +1104,12 @@ Two identical two-epoch invocations of the production trainer were bit-identical
 trained for a full epoch on the local A4000 and on a b3 Quadro RTX 6000 produced identical
 gauges (c-shift +9.2302, |W_site| 0.01286, b_site −0.00004, Z −0.963 +0.911 +1.979), and the
 local E_LR-off run matched joint_a1 to every printed digit through epoch 12, the last epoch
-before the arms diverge by construction. JOINT_BITID_SLOT The FP64-throughput concern (1/64 on
+before the arms diverge by construction. The b3 control's seed 1 (`nolr_s1`) then finished
+the full 20 epochs at the same gauge as the local run to every printed digit (c-shift
++10.4756, |W_site| 0.01382, b_site −0.00028, Z −0.773 +0.748 +1.570), the same participation
+(7.753 at epoch 16) and the same final errors (train 2.7 / 11.0, valid 4.2 / 13.8): a
+20-epoch cross-hardware identity, so the local model and `nolr_s1` are interchangeable and
+the participation counterfactual above stands on either. The FP64-throughput concern (1/64 on
 the A4000 against 1/32 on the RTX 6000) was wrong: both run at 10.0 min/epoch, so the run is
 not FP64-bound.
 

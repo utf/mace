@@ -472,7 +472,20 @@ and a4–a6 near 5.5, and the three delocalised seeds are the three shallow ones
 depth (0.011–0.015 against 0.059–0.063 eV). Seed 1 with E_LR off, run locally, is identical to
 joint_a1 to every printed digit through epoch 12 — the same seed, data order and intermediate
 state, so the divergence after that is E_LR alone: 7.80 → 7.75 without it, 9.24 → 11.14 with
-it. The E_LR-on arm may not be converged at 20 epochs. LEDGER_PARTICIPATION_SLOT
+it. The E_LR-on arm may not be converged at 20 epochs. Scored like for like on sixteen charged
+159-atom frames against each model's own pristine cell, the three cohorts read: head-only
+s7 ratio 0.492 ± 0.028 (N_eff 13.2, not the 4.85 its harness printed from a different
+batch), joint E_LR-off 0.478 ± 0.071, joint E_LR-on 0.635 ± 0.143, with the level 36 meV
+shallower under E_LR. The joint objective without E_LR leaves localisation where the
+head-only cohort had it; E_LR is what delocalises, and seed 4 is the most localised in both
+arms, so the three-and-three split has an initialisation component E_LR only widens.
+
+**E_LR is not the leak (an addition to the plan, labelled as one).** The four E_LR-off
+models scored by the same adoption rule read −0.0461 ± 0.0099 on criterion 1, a larger leak
+than the same seeds with E_LR on (−0.0736 ± 0.0066), with the neutral slope grown further and
+the level deeper. Adopted 0/4. The long-range branch carries part of the carrier's distance
+dependence that the base otherwise absorbs; removing it makes the objective's problem worse,
+not better.
 
 **The modulation ceiling on the joint models.** No bond of any type is at its stop in any seed;
 the ×1.25 what-if raises the 79-atom force loss by 24% in 6/6 and leaves F4 at −0.067. F12
