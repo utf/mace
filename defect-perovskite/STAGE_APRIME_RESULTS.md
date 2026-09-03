@@ -212,3 +212,25 @@ the indicator does not distinguish the charged 79-atom population at all. Stage 
 it as specified (944/944 frames matched, mean w_E 1.000), which is to say it applies no
 weight; the charged 79-atom energy channel enters at its natural per-frame weight and the
 charged 159-atom frames at a 25% share of the charged energy loss (factor 19.3).
+
+## 5.5 — Stage B, in flight (wave 1: seeds 1–4, launched 19:14 b3 clock)
+
+Regime: head only on `aprime_prod` (frozen, cached), first-shell features, counting head,
+γ = 3, Gaussian 0.05, exp envelope L0 = 1.0 with learned decay lengths (β_L = ln 2), log
+modulation β = ln 1.5, centred on-site correction (centre from 544 pristine frames), E_LR
+from epoch 0 with the density detached and the branch frozen at physical values (host
+charges zero, polarisation off, amplitude 1/√4), forces on every charged frame at a 0.25
+large-cell share, charged 159-atom energies at a 0.25 share (factor 19.3), charged 79-atom
+energies at w_E = 1.000, `loss_gap` w = 1 at 2.4 eV, c per (charge, size), 24 epochs, lr
+0.005, warmup 5, batch 8, trunk float32 / head float64, image compensation off.
+
+- Setup identical on all four seeds: 944/944 charged frames matched; charged energy share
+  25.0%; centre norms per species (5.50, 8.59, 6.42); base cache 2797 frames.
+- c table at initialisation (E_LR in the residual): c(79) = +9.164 ± 0.002, c(159) = +9.920
+  ± 0.002 eV over the four seeds (Δc = +0.756 eV); the scalar `c_shift` starts at 0 and
+  drifts by 0.01–0.10 eV in the first epoch, sharing the gauge with the table.
+- The spec's neutrality residual `|Σq + Δn|` logs as exactly 0.500 on every seed: with
+  the amplitude frozen at 1/√ε∞ = 0.5 the detached carrier charge sums to −0.5·Δn. The
+  density-sum invariant (Σ q/a + Δn = 0) is checked in the forward and holds.
+- Epoch 0: 10.1 min per epoch on b3 with the cache (the joint run trained the full base at
+  10.0); validation after epoch 0: 5.4 meV/atom, 20–21 meV/Å on all four.
