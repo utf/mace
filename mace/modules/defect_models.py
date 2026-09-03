@@ -689,6 +689,27 @@ class MACEDefect(ScaleShiftMACE):
             madelung=madelung,
             occupations=occupations,
         )
+        # Section 2.3 of the Stage A' spec: image compensation in H, one shot. A first solve
+        # without the term gives the carrier density; its periodic-minus-isolated potential,
+        # with the electron sign convention of Edit 1, goes onto the on-site energies for the
+        # second solve. No gradient through the density (the first solve is detached); the
+        # position dependence at fixed q_c is kept, so it reaches the forces. Zero on any
+        # neutral cell: alpha is zero where no carrier is.
+        image_comp: Optional[torch.Tensor] = None
+        if (getattr(self, "image_compensation", False)
+                and positions is not None and cell is not None
+                and getattr(self, "latent_ewald", None) is not None):
+            from mace.modules.defect_madelung import image_potential
+
+            with torch.no_grad():
+                probe = self.spectral(**head_kwargs)
+            rho = probe.alpha[:, 0].detach().to(positions.dtype)          # sums to 1 per carrier
+            q_c = -rho                                                    # electron: sum = -1
+            phi_img = image_potential(self.latent_ewald, q_c, positions, cell, batch,
+                                      num_graphs)
+            comp = -phi_img / float(self.madelung_eps_inf)
+            head_kwargs["madelung"] = comp if madelung is None else madelung + comp
+            image_comp = comp
         # Section 1. `force_out` is both the request and the reply: a head that can supply the
         # density response advertises `wants_positions`, and gets asked only when the caller
         # is in a training force pass. Absent here, no second backward is built -- which is
@@ -716,7 +737,7 @@ class MACEDefect(ScaleShiftMACE):
                                dim_size=num_graphs) / node_count
         delta_u = weighted - mean_eps
         return (out.delta_sr, out.alpha, out.site_energy, out.gap, delta_u,
-                out.site_energy, {"eps_mean": out.eps_mean})
+                out.site_energy, {"eps_mean": out.eps_mean, "image_compensation": image_comp})
 
     def forward(  # pylint: disable=too-many-branches
         self,
@@ -1291,6 +1312,9 @@ class MACEDefect(ScaleShiftMACE):
             # T5: the per-frame mean site energy, so the loss can pin the gauge with a
             # penalty rather than by subtraction (which made lambda size-dependent).
             "carrier_eps_mean": head_extras.get("eps_mean"),
+            # Section 2.3: the image-compensation shift per atom (None when the term is off),
+            # so the tiling drift test can separate it from the ion Madelung term.
+            "image_compensation": head_extras.get("image_compensation"),
             # The exact inputs the correction readouts consume, exposed so that seeding
             # and diagnostics do not have to re-derive the trunk (defect_seed.py).
             "defect_features": defect_feats,
