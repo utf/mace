@@ -96,3 +96,32 @@ scaled; (iii) `weight_column(population, channel)` now names the column per popu
 `realised_shares` reads the same column, and a test asserts the `DefectLoss` VALUE moves.
 The charged two-size upweight was never affected: charged frames are scored by the totals
 terms, which read the generic columns it scaled.
+
+## 5.3 — the extrapolation indicator on the existing Stage-A folds (§1, F16)
+
+Regime: the four cross-fit fold bases `cf_base_f0..3` (Stage-A recipe, neutral quarters)
+and the production base `e0_base_s1`; 2877 frames of train + valid; `c1_ood_indicator.py`.
+
+| population | n | ood_E median (eV/atom) | p95 | ood_F median (eV/Å) | w_E median | w_E > 0.5 |
+|---|---|---|---|---|---|---|
+| neutral 79/80 | 1813 | 0.00094 | 0.00103 | 0.0040 | 1.000 | 100% |
+| neutral 159 | 17 | 0.00097 | 0.00102 | 0.0034 | 1.000 | 100% |
+| charged 79 | 1030 | 0.00125 | 0.00147 | 0.0069 | 0.683 | 93.7% |
+| charged 159 | 17 | 0.00101 | 0.00102 | 0.0030 | 1.000 | 100% |
+
+s_E (95th percentile of ood_E over neutral frames) = 0.00103 eV/atom. w_E against d on the
+charged 79-atom frames is flat: median 0.65–0.76 in every bin from 4.5 to 7.0 Å.
+
+Charged 79-atom residual slope d(E_label − E_base)/dd against the production base:
+full range +0.3692 [+0.3241, +0.4143] (n = 1030); **w_E > 0.5: +0.3593 [+0.3144, +0.4042]**
+(n = 965); w_E ≤ 0.5: +0.0622 [−0.4057, +0.5302] (n = 65). Charged 159: −0.1338
+[−0.1445, −0.1230] (b1's reference reproduced).
+
+**F16 fails.** The +0.36 slope is not carried by the low-w_E frames; the frames the fold
+bases agree on carry it unchanged. The four fold bases disagree by about 1 meV/atom on
+charged and neutral geometries alike, so the disagreement between bases trained on
+quarters of the neutral set does not mark the charged 79-atom frames as extrapolation —
+the base's long-d error (b1's +0.132 eV/Å carrier-free slope) is shared by all four. As a
+weight, w_E is near-uniform (0.68 median) on the population it was meant to discount.
+Stage B applies it as specified; its effect on the charged 79-atom energy channel is a
+~0.7× scale, not a selection.
