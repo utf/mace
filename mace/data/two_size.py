@@ -23,7 +23,7 @@ from typing import Sequence, Tuple
 import numpy as np
 
 __all__ = ["apply_two_size_upweight", "apply_neutral_size_upweight",
-           "apply_size_upweight", "realised_shares"]
+           "apply_size_upweight", "realised_shares", "apply_energy_weights_from_json"]
 
 
 def _n_atoms(d) -> int:
@@ -58,6 +58,38 @@ def _in_population(d, population: str) -> bool:
     if population == "neutral":
         return not _is_charged(d)
     raise ValueError(f"unknown population {population!r}")
+
+
+def apply_energy_weights_from_json(dataset: Sequence, path, z_table=None,
+                                   population: str = "charged"):
+    """Multiply `energy_weight` on the frames of `population` by the `w_E` recorded for
+    their `frame_key` in the JSON `c1_ood_indicator.py` writes. Returns
+    (n_matched, n_in_population, mean_w_applied)."""
+    import json
+
+    from mace.modules.defect_cache import frame_key
+
+    payload = json.load(open(path))
+    table = payload.get("frames", payload)
+    hit = total = 0
+    applied = []
+    for d in dataset:
+        if not _in_population(d, population):
+            continue
+        total += 1
+        numbers = d.node_attrs.argmax(dim=-1).cpu().numpy()
+        if z_table is not None:
+            numbers = np.array([z_table.zs[int(i)] for i in numbers], dtype=np.int64)
+        key = str(frame_key(numbers, d.positions.detach().cpu().numpy(),
+                            d.cell.detach().cpu().numpy()))
+        entry = table.get(key)
+        if entry is None:
+            continue
+        w = float(entry["w_E"] if isinstance(entry, dict) else entry)
+        d.energy_weight = d.energy_weight * w
+        applied.append(w)
+        hit += 1
+    return hit, total, (float(np.mean(applied)) if applied else float("nan"))
 
 
 def realised_shares(dataset: Sequence, population: str = "neutral",

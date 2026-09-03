@@ -63,6 +63,65 @@ def calibrate_c_shift(out, energy_target, counts) -> Optional[float]:
     return float(torch.median(terms))
 
 
+def c_shift_table_terms(out, energy_target, counts, graph_sizes):
+    """Stage A' section 3: per-frame ratios keyed by (charge class, size class), with
+    E_LR's value INCLUDED in the residual -- `correction_energy` is delta_sr + delta_lr, so
+    what remains is what the per-(charge, size) constant has to absorb and nothing the
+    long-range branch already accounts for."""
+    from mace.modules.defect_counting import c_shift_classes
+
+    if energy_target is None:
+        return None
+    counts = counts.reshape(counts.shape[0], -1)
+    delta_n = (counts[:, 0] + counts[:, 1] - counts[:, 2] - counts[:, 3]).to(
+        out["correction_energy"].dtype)
+    sel = delta_n.abs() > 0
+    if not bool(sel.any()):
+        return None
+    resid = energy_target.to(delta_n.dtype) - out["base_energy"] - out["correction_energy"]
+    ratio = (resid / torch.where(sel, delta_n, torch.ones_like(delta_n))).detach()
+    charge_cls, size_cls = c_shift_classes(counts, graph_sizes)
+    return [(int(c), int(s), float(r)) for c, s, r, keep
+            in zip(charge_cls.tolist(), size_cls.tolist(), ratio.tolist(), sel.tolist())
+            if keep]
+
+
+def calibrate_c_shift_table_over_loader(model, loader, device, forward=None):
+    """The (charge, size) medians over EVERY charged frame, written into the head's table.
+
+    Returns `{(charge_cls, size_cls): (median, n)}`. The scalar `c_shift` is left at zero
+    so the table is the whole calibration and reads directly as c(79), c(159).
+    """
+    terms: Dict[tuple, list] = {}
+    was_training = model.training
+    model.eval()
+    try:
+        for batch in loader:
+            batch = batch.to(device)
+            with torch.no_grad():
+                out = (forward(batch) if forward is not None
+                       else model(batch.to_dict(), training=False, compute_force=False))
+            sizes = batch.ptr[1:] - batch.ptr[:-1]
+            t = c_shift_table_terms(out, getattr(batch, "energy", None),
+                                    batch.carrier_counts, sizes)
+            for c, s, r in (t or []):
+                terms.setdefault((c, s), []).append(r)
+    finally:
+        model.train(was_training)
+    head = getattr(model, "spectral", None)
+    table = getattr(head, "c_shift_table", None)
+    result = {}
+    with torch.no_grad():
+        if table is not None:
+            table.zero_()
+        for (c, s), vals in terms.items():
+            med = float(torch.median(torch.tensor(vals)))
+            result[(c, s)] = (med, len(vals))
+            if table is not None:
+                table[c, s] = med
+    return result
+
+
 def calibrate_c_shift_over_loader(model, loader, device, forward=None,
                                   max_batches: Optional[int] = None):
     """`c` from EVERY charged frame the loader holds, in one pass. Shuffle-independent.

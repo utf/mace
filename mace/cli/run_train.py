@@ -1356,6 +1356,13 @@ def run(args) -> None:
                 logging.info("Realised neutral large-cell shares: epoch %d "
                              "realised_share_E %.4f realised_share_F %.4f",
                              epoch, s["energy"], s["forces"])
+            if float(getattr(args, "defect_charged_energy_share", 0.0) or 0.0) > 0:
+                from mace.data.two_size import realised_shares as _shares
+
+                s = _shares(train_set, population="charged")
+                logging.info("Realised charged large-cell shares: epoch %d "
+                             "realised_share_E %.4f realised_share_F %.4f",
+                             epoch, s["energy"], s["forces"])
             if base_cache_rng is not None and getattr(target, "_base_cache", None) is not None:
                 from mace.modules import defect_cache as _dc
 
@@ -1553,6 +1560,29 @@ def run(args) -> None:
                 f"Neutral two-size upweight: factor {factor:.2f}, realised neutral-force-loss "
                 f"share {share:.1%} (target "
                 f"{float(args.defect_neutral_size_upweight):.0%})")
+    # Stage A' section 3: the charged 79-atom energies weighted by w_E, then the charged
+    # large cells raised to their target share of the (weighted) charged ENERGY loss. Order
+    # matters: the share is a share of the loss actually minimised.
+    if str(getattr(args, "defect_energy_weights_json", "") or ""):
+        from mace.data.two_size import apply_energy_weights_from_json
+
+        n_hit, n_charged, w_mean = apply_energy_weights_from_json(
+            train_set, args.defect_energy_weights_json, z_table=z_table)
+        logging.info("Per-frame energy weights (w_E): %d of %d charged training frames "
+                     "matched, mean w_E %.3f", n_hit, n_charged, w_mean)
+        if n_hit < n_charged:
+            logging.warning("%d charged frames had no w_E entry and keep weight 1.0",
+                            n_charged - n_hit)
+    if float(getattr(args, "defect_charged_energy_share", 0.0) or 0.0) > 0:
+        from mace.data.two_size import apply_size_upweight
+
+        ce = apply_size_upweight(
+            train_set, population="charged",
+            target_share=float(args.defect_charged_energy_share), channels=("energy",))
+        realised_shares["charged_large_E"] = ce["energy"][1]
+        logging.info(f"Charged energy share: factor {ce['energy'][0]:.2f} -> realised "
+                     f"{ce['energy'][1]:.1%} (target "
+                     f"{float(args.defect_charged_energy_share):.0%})")
     if realised_shares:
         logging.info("Realised large-cell shares: %s", json.dumps(
             {k: round(v, 4) for k, v in realised_shares.items()}, sort_keys=True))
@@ -1563,6 +1593,37 @@ def run(args) -> None:
     # runs on the loss's OWN loader, for the same reason the reach assertion below does: a
     # calibration performed on a differently-built batch is a calibration for a run that is
     # not happening.
+    # ------------------------------------------------ Stage A' section 2.1: the centre
+    if getattr(model, "on_site_centred", False):
+        from mace.modules.defect_cache import attach_frame_keys  # noqa: F401  (same module family)
+
+        # A stoichiometric frame, selected by COMPOSITION and never by a label: the pristine
+        # ratio is the Madelung composition the model already carries.
+        comp = getattr(model.madelung, "composition", None) if getattr(
+            model, "madelung", None) is not None else None
+        if comp is None:
+            raise RuntimeError("--defect_on_site_centred needs --defect_madelung_composition "
+                               "to recognise a pristine frame by composition")
+        comp = torch.as_tensor([float(x) for x in comp])
+        comp = comp / comp.sum()
+        chosen = None
+        for d in train_set:
+            counts = d.node_attrs.sum(dim=0)
+            if torch.allclose(counts / counts.sum(), comp.to(counts.dtype), atol=1e-6):
+                chosen = d
+                break
+        if chosen is None:
+            raise RuntimeError("no stoichiometric frame in the training set to centre on")
+        probe = next(iter(torch_geometric.dataloader.DataLoader([chosen], batch_size=1)))
+        probe = probe.to(device)
+        with torch.no_grad():
+            out0 = model(probe.to_dict(), training=False, compute_force=False)
+        model.set_pristine_centre(out0["trunk_block0"], probe.node_attrs.argmax(dim=-1))
+        logging.info("Centred on-site correction: pristine centre set from a %d-atom "
+                     "stoichiometric frame (block-0 feature means per species, norms %s)",
+                     int(probe.positions.shape[0]),
+                     [round(float(v), 3) for v in model.pristine_block0_mean.norm(dim=1)])
+
     # ------------------------------------------------ Stage A' section 2.5: precision, cache
     #
     # The mixed policy keeps the DATA in float64 (labels at float32 lose ~5e-5 eV on a
@@ -1621,7 +1682,21 @@ def run(args) -> None:
         # shuffle put first is a run-to-run difference with no physical content. The
         # degenerate case is worse: a first batch that happens to be all neutral skips the
         # calibration entirely, which is what the production smoke hit on a cross-fit fold.
-        c, c_n = defect_protocol.calibrate_c_shift_over_loader(model, train_loader, device)
+        c_table_summary = None
+        if bool(getattr(args, "defect_c_shift_per_class", False)):
+            c_table_summary = defect_protocol.calibrate_c_shift_table_over_loader(
+                model, train_loader, device)
+            c = None if not c_table_summary else float(
+                sum(m for m, _ in c_table_summary.values()) / len(c_table_summary))
+            c_n = sum(n for _, n in c_table_summary.values())
+            for (cc, ss), (med, n) in sorted(c_table_summary.items()):
+                logging.info("Stage-3 protocol: c-shift table (charge class %d, size class "
+                             "%d): %+.4f eV over %d charged frames", cc, ss, med, n)
+            if c is not None:
+                c_n_scalar = c_n
+        else:
+            c, c_n = defect_protocol.calibrate_c_shift_over_loader(model, train_loader,
+                                                                   device)
         if c is None:
             # NOT silently zero. Delta_n = 0 on every frame makes the ratio undefined, and a
             # 0.0 written here would be indistinguishable from a calibration that happened.
@@ -1630,6 +1705,9 @@ def run(args) -> None:
                 "carries a net carrier, so Delta_n = 0 everywhere and the ratio is undefined. "
                 "The head starts at c = 0, which is a choice this run did not make "
                 "deliberately; the protocol summary records c_shift_calibrated: false.")
+        elif c_table_summary is not None:
+            logging.info(f"Stage-3 protocol: c-shift TABLE calibrated over {c_n} charged "
+                         f"frames (per (charge, size) class; scalar c_shift left at 0)")
         else:
             with torch.no_grad():
                 model.spectral.c_shift.fill_(float(c))

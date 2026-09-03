@@ -1375,6 +1375,30 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=False,
     )
     parser.add_argument(
+        "--defect_c_shift_per_class",
+        help="calibrate c per (charge, size) class over every charged frame at "
+        "initialisation, with E_LR's value in the residual (Stage A' spec section 3), "
+        "instead of one scalar",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--defect_energy_weights_json",
+        help="per-frame energy weights keyed by frame_key (the JSON c1_ood_indicator.py "
+        "writes): each CHARGED training frame's energy_weight is multiplied by its w_E. "
+        "Label-free -- w_E is the disagreement of four fold bases on the geometry",
+        type=str,
+        default="",
+    )
+    parser.add_argument(
+        "--defect_charged_energy_share",
+        help="target share of the CHARGED energy loss carried by the large cells (Stage A' "
+        "spec section 3: 0.25-0.5). Applied after the per-frame energy weights, so the "
+        "share is realised on the weighted mass. 0 disables",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
         "--defect_base_cache",
         help="cache the frozen base's energy, forces and later-block features per frame "
         "(section 2.5 of the Stage A' spec) and recompute only the first interaction block "
