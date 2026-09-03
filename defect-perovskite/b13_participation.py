@@ -13,12 +13,26 @@ moving from 5.51 to 14.47 as the electronic temperature went from 5 to 100 meV, 
 was demoted from a gate to a metric. Three things are printed together:
 
   * `N_eff` on the charged 159-atom frames, per seed and pooled;
-  * the ratio to the run's OWN null channels, which take no gradient and so are that run's
+  * the ratio to the PRISTINE cell scored with the same counters, which is this run's own
     baseline for what "delocalised" looks like -- the ratio, not N_eff, is the localisation
     statement;
   * the frontier level's depth below the pristine conduction manifold, because a participation
     difference that comes with a depth difference is a different physical claim from one that
     does not.
+
+WHY NOT THE NULL CHANNELS, which is what the spectral-era gates used. `neff_and_nulls` compares
+the supervised channel against the mean of the other three, and for a four-channel head those
+three take no gradient and are a genuine per-run baseline. The counting head has NO channels:
+its `alpha` comes from the density-matrix difference and is broadcast across the four slots, so
+the "nulls" are copies of the active channel and the ratio is identically 1.000. The training
+log shows it plainly -- `partic=[11.137 11.137 11.137 11.137]`, four identical numbers. A
+column of 1.000 would have looked like a measurement.
+
+The pristine reference is the honest replacement and it is the same trick Delta_bind uses: the
+defect-free cell scored with the SAME counters, which is off-distribution for it by
+construction -- a perfect crystal has no carrier to hold -- and that is exactly the point. It
+asks where this Hamiltonian would put a carrier if there were no vacancy, which is the
+reference a localisation claim needs. Diagnostic only, never a loss.
 
 Paired by seed as well as pooled: with four seeds a pooled mean can hide a swap, and the whole
 point is that one seed behaved differently from the other three.
@@ -47,21 +61,47 @@ from r1_matrix import make_batches  # noqa: E402
 from s3_dehead_trend import CLEAN_NATOMS  # noqa: E402
 from ta_band_edge import (capture, channel_of, load_frames, select,  # noqa: E402
                           with_hole_counter)
-from tb_edge import neff_and_nulls  # noqa: E402
+
+
+def participation(out, batch, channel):
+    """`1 / sum_i alpha_i^2` per graph on the supervised channel. The atom count for a
+    uniform field, 1 for a fully localised one -- the same quantity the trainer logs as
+    `partic`, computed here from the same `carrier_alpha`."""
+    alpha = out["carrier_alpha"]
+    idx = batch.batch
+    per = []
+    for g in range(int(batch.num_graphs)):
+        v = alpha[idx == g, channel]
+        s2 = float((v * v).sum())
+        per.append(1.0 / s2 if s2 > 0 else float("nan"))
+    return per
 
 
 def measure(model, charged, pristine, z, cutoff, device, ctx):
-    """`(N_eff, null ratio, depth below the conduction manifold)` for one model."""
+    """`(N_eff, pristine ratio, depth below the conduction manifold)` for one model."""
+    # The delocalised reference FIRST: the defect-free cell under the same counters. Its
+    # participation is what this model does with a carrier when there is no vacancy to bind
+    # it, so the charged cell's participation divided by it is a localisation statement that
+    # does not depend on the cell size or on T_el the way N_eff alone does.
+    free = []
+    for b, fr in make_batches(pristine, z, cutoff, 1, device):
+        try:
+            _, out = capture(model, b, ctx=ctx, frames=fr)
+            free += participation(out, b, channel_of(b))
+        except Exception:
+            continue
+    free_mean = float(np.nanmean(free)) if free else float("nan")
+
     neff, ratio = [], []
     for b, fr in make_batches(charged, z, cutoff, 1, device):
         try:
             _, out = capture(model, b, ctx=ctx, frames=fr)
-            act, nul = neff_and_nulls(out, b, channel_of(b))
-            a, n = float(np.nanmean(act)), float(np.nanmean(nul))
+            a = float(np.nanmean(participation(out, b, channel_of(b))))
             neff.append(a)
-            # The nulls take no gradient, so they are THIS run's own baseline for what a
-            # delocalised channel looks like. A ratio near 1 is no localisation at all.
-            ratio.append(a / max(n, 1e-30))
+            # Below 1 means the vacancy localises the carrier relative to no vacancy at all.
+            # Near 1 means it does not.
+            ratio.append(a / free_mean if np.isfinite(free_mean) and free_mean > 0
+                         else float("nan"))
         except Exception:                       # a diagnostic must not kill the comparison
             continue
 
@@ -87,7 +127,8 @@ def measure(model, charged, pristine, z, cutoff, device, ctx):
         depth.append(float(np.mean(cbm)) + shift - float(lam[k]))
     return (float(np.nanmean(neff)) if neff else float("nan"),
             float(np.nanmean(ratio)) if ratio else float("nan"),
-            float(np.nanmean(depth)) if depth else float("nan"))
+            float(np.nanmean(depth)) if depth else float("nan"),
+            free_mean)
 
 
 def main() -> None:
@@ -126,13 +167,13 @@ def main() -> None:
                          float(getattr(model, "spectral_r_cut", 0.0) or 0.0))
             ctx = ForwardContext.production(model, device=args.device,
                                             eps_inf=args.eps_inf)
-            neff, ratio, depth = measure(model, charged, pristine, z, cutoff,
-                                         args.device, ctx)
-            rows[arm].append(dict(model=Path(mp).name, neff=neff, null_ratio=ratio,
-                                  depth_from_cbm=depth,
+            neff, ratio, depth, free = measure(model, charged, pristine, z, cutoff,
+                                               args.device, ctx)
+            rows[arm].append(dict(model=Path(mp).name, neff=neff, pristine_ratio=ratio,
+                                  pristine_neff=free, depth_from_cbm=depth,
                                   long_range=bool(getattr(model, "use_long_range", False))))
-            print(f"  [{arm:3s}] {Path(mp).name:22s} N_eff {neff:7.3f}   "
-                  f"null ratio {ratio:6.3f}   depth {depth:+.3f} eV", flush=True)
+            print(f"  [{arm:3s}] {Path(mp).name:22s} N_eff {neff:7.3f}   pristine "
+                  f"{free:7.3f}   ratio {ratio:6.3f}   depth {depth:+.3f} eV", flush=True)
             del model
             if args.device.startswith("cuda"):
                 torch.cuda.empty_cache()
@@ -147,11 +188,12 @@ def main() -> None:
           f"{'ratio on':>9} {'ratio off':>9}   {'depth on':>9} {'depth off':>9}")
     for a, b in zip(rows["on"], rows["off"]):
         print(f"  {a['model'][-8:-6]:6s} {a['neff']:10.3f} {b['neff']:10.3f} "
-              f"{a['neff'] - b['neff']:+8.3f}   {a['null_ratio']:9.3f} "
-              f"{b['null_ratio']:9.3f}   {a['depth_from_cbm']:+9.3f} "
+              f"{a['neff'] - b['neff']:+8.3f}   {a['pristine_ratio']:9.3f} "
+              f"{b['pristine_ratio']:9.3f}   {a['depth_from_cbm']:+9.3f} "
               f"{b['depth_from_cbm']:+9.3f}")
 
-    for key, label in (("neff", "N_eff"), ("null_ratio", "null ratio"),
+    for key, label in (("neff", "N_eff"), ("pristine_neff", "N_eff, pristine"),
+                       ("pristine_ratio", "charged / pristine"),
                        ("depth_from_cbm", "depth from CBM")):
         on = np.array([r[key] for r in rows["on"]], dtype=float)
         off = np.array([r[key] for r in rows["off"]], dtype=float)
@@ -166,7 +208,9 @@ def main() -> None:
           "If it\n  survives, the outlier is the initialisation and E_LR is not implicated.")
     print("\n  N_eff is a spread over a FIXED cell and is T_el-sensitive (5.51 to 14.47 over "
           "5 to\n  100 meV in an earlier cycle), so it is a metric and not a gate. The ratio "
-          "to this run's\n  own null channels is the localisation statement.")
+          "to the SAME\n  model's pristine cell under the same counters is the localisation "
+          "statement -- the null\n  channels cannot serve, because this head broadcasts one "
+          "alpha across all four slots and\n  the ratio to them is identically 1.")
     print(f"wrote {args.out}")
 
 
