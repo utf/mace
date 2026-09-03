@@ -313,6 +313,31 @@ def evaluate(model, batches, frame_masks, device, clamp=None, ctx=None):
     )
 
 
+def adopt_model_dtype(model):
+    """Set torch's default dtype to the model's, and return the previous one.
+
+    WHY EVERY SCORER NEEDS THIS. `AtomicData` builds positions, shifts and cell at
+    `torch.get_default_dtype()`, which is float32 in a fresh process. The joint run trains at
+    DEFAULT_DTYPE=float64, so its saved models carry float64 weights and every forward on a
+    freshly-built batch dies inside e3nn with "both inputs should have same dtype". Nothing
+    caught it earlier because every model scored before the joint run was float32, so the
+    default happened to be right.
+
+    Set from the MODEL rather than from a flag: a scorer that is told the dtype can be told
+    the wrong one, and several of these scripts load models of both kinds in one process --
+    the cross-fit bases are float32 and the joint models float64 -- so it has to be per model
+    and immediately before that model's batches are built.
+    """
+    try:
+        dtype = next(model.parameters()).dtype
+    except StopIteration:
+        return torch.get_default_dtype()
+    previous = torch.get_default_dtype()
+    if dtype in (torch.float32, torch.float64):
+        torch.set_default_dtype(dtype)
+    return previous
+
+
 def fresh_model(arch_path, base_path, seed, device, response=None, madelung=None,
                 eps_inf=4.0, z_init=None, counting=False, counting_overrides=None):
     """Architecture from a current-code model, base weights from Stage-A, head freshly drawn.

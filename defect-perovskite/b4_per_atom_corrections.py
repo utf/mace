@@ -47,7 +47,7 @@ from mace.modules.defect_context import EPS_INF_DEFAULT, ForwardContext
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from e0_residual_maps import _assert_repo  # noqa: E402
-from r1_matrix import make_batches  # noqa: E402
+from r1_matrix import adopt_model_dtype, make_batches  # noqa: E402
 from s3_dehead_trend import CLEAN_NATOMS  # noqa: E402
 from ta_band_edge import load_frames, select  # noqa: E402
 from vacancy_site import locate_vacancy  # noqa: E402
@@ -125,6 +125,9 @@ def main() -> None:
             continue
         model = torch.load(mp, map_location=args.device,
                            weights_only=False).to(args.device).eval()
+        # The batches built for this model must carry ITS dtype: AtomicData uses the
+        # process default, which is float32, while the joint run trains at float64.
+        adopt_model_dtype(model)
         gamma = float(model.spectral.h.on_site_range)
         cutoff = max(float(model.r_max),
                      float(getattr(model, "spectral_r_cut", 0.0) or 0.0))

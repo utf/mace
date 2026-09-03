@@ -55,7 +55,7 @@ from b1_label_slope_by_size import (charged_frames, fit_arm,  # noqa: E402
 from b6_depth_edges import align, occupied_count, spectrum  # noqa: E402
 from d1_sensitivity import select_pristine  # noqa: E402
 from e0_residual_maps import _assert_repo, evaluate  # noqa: E402
-from r1_matrix import make_batches  # noqa: E402
+from r1_matrix import adopt_model_dtype, make_batches  # noqa: E402
 from s3_dehead_trend import CLEAN_NATOMS, fit_with_ci, hub_separation  # noqa: E402
 from ta_band_edge import capture, counts_of, load_frames, select, with_hole_counter  # noqa: E402
 
@@ -175,7 +175,10 @@ def main() -> None:
         if not path.exists():
             continue
         base = torch.load(path, map_location=args.device,
-                          weights_only=False).to(args.device).eval()
+                           weights_only=False).to(args.device).eval()
+        # The batches built for this model must carry ITS dtype: AtomicData uses the
+        # process default, which is float32, while the joint run trains at float64.
+        adopt_model_dtype(base)
         mine = small_by_fold.get(k, [])
         if mine:
             e, f = errors_on(base, mine, z, 5.0, args.device)
@@ -196,6 +199,9 @@ def main() -> None:
             continue
         model = torch.load(mp, map_location=args.device,
                            weights_only=False).to(args.device).eval()
+        # The batches built for this model must carry ITS dtype: AtomicData uses the
+        # process default, which is float32, while the joint run trains at float64.
+        adopt_model_dtype(model)
         cutoff = max(float(model.r_max),
                      float(getattr(model, "spectral_r_cut", 0.0) or 0.0))
         ctx = ForwardContext.production(model, device=args.device, eps_inf=args.eps_inf)
