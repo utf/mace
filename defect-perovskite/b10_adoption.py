@@ -120,6 +120,12 @@ def main() -> None:
     here = Path(__file__).resolve().parent
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--models", nargs="+", type=Path, required=True)
+    ap.add_argument("--fold-prefix", default="cf_base_f",
+                    help="fold bases are <cf-runs>/<prefix><k>/<prefix><k>.model")
+    ap.add_argument("--reference-json", type=Path, default=None,
+                    help="override the pre-joint reference constants with the ones a "
+                    "re-derivation wrote (keys: energy_slope, energy_ci, force_slope, "
+                    "force_ci, neutral_159, neutral_159_production_base)")
     ap.add_argument("--data", nargs="+", type=Path,
                     default=[here / "dataset_pbe" / "train.xyz",
                              here / "dataset_pbe" / "valid.xyz"])
@@ -133,6 +139,21 @@ def main() -> None:
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
+    if args.reference_json is not None:
+        # Module-level constants by design (the pre-joint rule was registered as literals);
+        # a re-derived reference replaces them here, once, before anything is scored.
+        ref = json.load(open(args.reference_json))
+        g = globals()
+        g["REF_ENERGY_SLOPE"] = float(ref["energy_slope"])
+        g["REF_ENERGY_CI"] = tuple(float(x) for x in ref["energy_ci"])
+        g["REF_FORCE_SLOPE"] = float(ref["force_slope"])
+        g["REF_FORCE_CI"] = tuple(float(x) for x in ref["force_ci"])
+        g["REF_NEUTRAL_159"] = float(ref["neutral_159"])
+        g["REF_NEUTRAL_159_PRODUCTION_BASE"] = float(ref.get(
+            "neutral_159_production_base", ref["neutral_159"]))
+        print(f"reference constants from {args.reference_json}: energy {REF_ENERGY_SLOPE:+.4f} "
+              f"{REF_ENERGY_CI}, force {REF_FORCE_SLOPE:+.4f} {REF_FORCE_CI}, neutral "
+              f"{REF_NEUTRAL_159:+.4f} / {REF_NEUTRAL_159_PRODUCTION_BASE:+.4f}", flush=True)
 
     _assert_repo()
     z = tools.AtomicNumberTable(sorted({17, 55, 82}))
@@ -171,7 +192,7 @@ def main() -> None:
     # ------------------------------------------------- criterion 3's baseline: the cf bases
     cf_e, cf_f = [], []
     for k in range(4):
-        path = args.cf_runs / f"cf_base_f{k}" / f"cf_base_f{k}.model"
+        path = args.cf_runs / f"{args.fold_prefix}{k}" / f"{args.fold_prefix}{k}.model"
         if not path.exists():
             continue
         base = torch.load(path, map_location=args.device,

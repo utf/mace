@@ -151,6 +151,8 @@ def main() -> None:
     ap.add_argument("--runs", type=Path, default=Path.home() / "runs")
     ap.add_argument("--folds", type=int, default=4)
     ap.add_argument("--production-base", default="e0_base_s1")
+    ap.add_argument("--fold-prefix", default="cf_base_f",
+                    help="fold bases are <runs>/<prefix><k>/<prefix><k>.model")
     ap.add_argument("--null-dir", type=Path,
                     default=Path(__file__).resolve().parent / "dataset_cf",
                     help="cross-fit folds holding each base's held-out NEUTRAL frames")
@@ -170,7 +172,7 @@ def main() -> None:
     # --------------------------------------------------------------- cross-fit arms
     rows = []
     for k in range(args.folds):
-        path = args.runs / f"cf_base_f{k}" / f"cf_base_f{k}.model"
+        path = args.runs / f"{args.fold_prefix}{k}" / f"{args.fold_prefix}{k}.model"
         if not path.exists():
             raise SystemExit(f"missing fold base {path}; run run_crossfit_bases.sh first")
         model = torch.load(path, map_location=args.device,
@@ -207,7 +209,7 @@ def main() -> None:
     if args.null_dir is not None and args.null_dir.exists():
         for k in range(args.folds):
             pool = args.null_dir / f"fold{k}" / "null_oof.xyz"
-            path = args.runs / f"cf_base_f{k}" / f"cf_base_f{k}.model"
+            path = args.runs / f"{args.fold_prefix}{k}" / f"{args.fold_prefix}{k}.model"
             if not pool.exists() or not path.exists():
                 continue
             model = torch.load(path, map_location=args.device,
