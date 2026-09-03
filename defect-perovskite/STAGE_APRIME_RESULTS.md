@@ -192,3 +192,23 @@ unchanged: +0.37 full range, +0.08 in the window, +0.11 of carrier-free base err
 interval — no (−0.095 against [−0.145, −0.123]), shifted by 0.039 < the old null's width
 0.26 — holds; 79-atom charged residual magnitude < 0.2 — fails (+0.37). **F17 fails, 2 of 3.**
 The new F4 reference for gate 2 is −0.0948, band [−0.142, −0.063] at 1.5×.
+
+## 5.4 — w_E from the Stage A′ folds (§1), the weight Stage B uses
+
+Regime: the four A′ fold bases and `aprime_prod`; 2877 frames.
+
+| population | ood_E median | p95 | w_E median | w_E > 0.5 |
+|---|---|---|---|---|
+| neutral 79/80 | 0.00121 | 0.00139 | 1.000 | 100% |
+| neutral 159 | 0.00105 | 0.00106 | 1.000 | 100% |
+| charged 79 | 0.00108 | 0.00125 | 1.000 | 100% |
+| charged 159 | 0.00097 | 0.00105 | 1.000 | 100% |
+
+s_E = 0.00139 eV/atom. With the neutral 159-atom cells in the base loss, the four A′ fold
+bases disagree on the charged 79-atom geometries by LESS than on the neutral ones (median
+1.08 against 1.21 meV/atom), so w_E = 1.000 on every charged frame and the w_E > 0.5 slope
+is the full-range slope, +0.3679 [+0.3244, +0.4113]. F16 fails here too, and more plainly:
+the indicator does not distinguish the charged 79-atom population at all. Stage B applies
+it as specified (944/944 frames matched, mean w_E 1.000), which is to say it applies no
+weight; the charged 79-atom energy channel enters at its natural per-frame weight and the
+charged 159-atom frames at a 25% share of the charged energy loss (factor 19.3).
