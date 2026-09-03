@@ -682,7 +682,7 @@ separates a bound carrier from a band-like one and are 1.6% of the charged force
 natural weight. The *neutral* 159-atom frames are the base's only direct constraint at large d.
 Raising the charged seventeen alone would ask the correction to absorb a base error the base
 was never given the chance to fix, which is precisely the leakage the adoption rule tests for.
-Both realised **25.0%** of their own population's force loss. Recorded for later readers: the
+Both realised **25.0%** of their own population's force loss. **[Corrected 3 Sep: the neutral share was inert -- the upweight scaled a column the base terms do not read; see LEDGER.md entry 12. The charged share stands.]** Recorded for later readers: the
 training file holds 16 charged and 15 neutral 159-atom cells; the remaining one of each is in
 the validation file, and the seventeen-frame references are measured on train + valid.
 

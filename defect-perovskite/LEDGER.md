@@ -508,3 +508,29 @@ with the scoring it was meant to follow. Inside the four-GPU cap by timing, not 
 script written after entry 10's lesson. The condition it should have tested was the `post-run
 complete` marker. Written into the script header, and the rule is unchanged: test the
 condition, not the liveness of the thing that produces it.
+
+---
+
+## Entry 12 — the neutral two-size upweight never reached the loss
+
+**Correction, and it applies to entry 11.** `DefectLoss` scores an n = 0 frame through its
+base terms, which read `base_energy_weight` and `base_forces_weight`; the neutral upweight
+scaled the generic `forces_weight`, which no term reads for a neutral frame. Printing the
+columns of a 159-atom neutral frame after the upweight: `forces_weight` 0.497,
+`base_forces_weight` 1.0. So the joint run's "both size upweights realised exactly 0.25"
+was true of the charged population and false of the neutral one: the neutral 159-atom
+frames trained at natural weight, and the neutral 159-atom force-slope collapse (+0.064 to
++0.01) reported in entry 11 happened without any upweight. The logged 25% was the
+function's own arithmetic on the column it had written -- intent, not outcome, the fault
+class entry 10 names, one level down: the unit tests read the column they had written too.
+
+**What changed.** `weight_column(population, channel)` names the column the loss reads for
+each population; the upweight and the realised-share read the same column; and a test
+builds real `AtomicData` through the defect pipeline and asserts the `DefectLoss` VALUE
+moves. The first Stage A' launches (3 Sep, 16:36 and 16:55) trained on the inert weight for
+about forty minutes and were stopped and restarted.
+
+**Statement of record (assert, never implement around):**
+"A weight is realised when the loss term that scores the population reads the column it was
+written to. A share computed by the function that set the weight is a statement of intent
+until a test has moved the loss with it."

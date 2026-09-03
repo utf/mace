@@ -71,9 +71,15 @@ Madelung term (2.78 → 2.49 → 2.34 eV).
 | R_bound | 0.738 | 0.590 | −0.148 ± 0.039 | 6/6 − |
 | force loss, 79 | 0.00066 | 0.00075 | +0.00009 | 6/6 + |
 
-F15 clauses: depth rises more at 79 than 159 — false (the aligned depth is unchanged to
-1e-4 at both sizes); the ratio falls — true; R → 0.9–1.0 — false (0.59, further from 1);
-the 79-atom force loss does not rise — false (+13%). **F15 fails, 1 of 4.**
+F15 clauses: depth rises more at 79 than 159 — **unmeasurable under the aligned depth**,
+not "no effect": for a localised carrier (N_eff ≈ 3) the potential of its periodic images is
+nearly constant over the home cell, so the term is a near-uniform on-site shift that the
+quantile alignment of the occupied manifold removes by construction. Measured on the
+tiling frames: the per-atom compensation has mean −0.53 eV and spread 0.062 eV at 1×,
+−0.29 / 0.024 at 2×, −0.20 / 0.016 at 3× (against the 0.06 eV² variance of the uniform-
+carrier identity, which is the opposite regime). The ratio falls — true; R → 0.9–1.0 —
+false (0.59, further from 1); the 79-atom force loss does not rise — false (+13%).
+**F15 fails, 1 of 4** (one clause not scorable by this probe).
 
 **Adoption:** the tiling test passes and the probe fails, so under the registered rule
 ("adopt as config default only if both pass") the term is **not adopted** as a default. It
