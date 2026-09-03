@@ -1349,6 +1349,13 @@ def run(args) -> None:
             # directions a forces-only objective cannot see -- both move the whole spectrum
             # and neither changes a force -- so they are logged every epoch rather than
             # inspected once at the end, when a drift is already baked in.
+            if bool(getattr(args, "defect_neutral_size_upweight_energy", False)):
+                from mace.data.two_size import realised_shares as _shares
+
+                s = _shares(train_set, population="neutral")
+                logging.info("Realised neutral large-cell shares: epoch %d "
+                             "realised_share_E %.4f realised_share_F %.4f",
+                             epoch, s["energy"], s["forces"])
             if base_cache_rng is not None and getattr(target, "_base_cache", None) is not None:
                 from mace.modules import defect_cache as _dc
 
@@ -1523,15 +1530,29 @@ def run(args) -> None:
     # this is what lets it LEARN that region instead of leaving the correction to absorb the
     # difference, which is exactly the leakage the adoption rule tests for.
     if float(getattr(args, "defect_neutral_size_upweight", 0.0) or 0.0) > 0:
-        from mace.data.two_size import apply_neutral_size_upweight
+        from mace.data.two_size import apply_neutral_size_upweight, apply_size_upweight
 
-        factor, share = apply_neutral_size_upweight(
-            train_set, target_share=float(args.defect_neutral_size_upweight))
-        realised_shares["neutral_large"] = share
-        logging.info(
-            f"Neutral two-size upweight: factor {factor:.2f}, realised neutral-force-loss "
-            f"share {share:.1%} (target "
-            f"{float(args.defect_neutral_size_upweight):.0%})")
+        if bool(getattr(args, "defect_neutral_size_upweight_energy", False)):
+            # Stage A' section 1: the same target in the energy loss AND the force loss.
+            both = apply_size_upweight(
+                train_set, population="neutral",
+                target_share=float(args.defect_neutral_size_upweight),
+                channels=("energy", "forces"))
+            realised_shares["neutral_large_E"] = both["energy"][1]
+            realised_shares["neutral_large_F"] = both["forces"][1]
+            logging.info(
+                f"Neutral size upweight, both channels: energy factor {both['energy'][0]:.2f} "
+                f"-> share {both['energy'][1]:.1%}; forces factor {both['forces'][0]:.2f} "
+                f"-> share {both['forces'][1]:.1%} (target "
+                f"{float(args.defect_neutral_size_upweight):.0%})")
+        else:
+            factor, share = apply_neutral_size_upweight(
+                train_set, target_share=float(args.defect_neutral_size_upweight))
+            realised_shares["neutral_large"] = share
+            logging.info(
+                f"Neutral two-size upweight: factor {factor:.2f}, realised neutral-force-loss "
+                f"share {share:.1%} (target "
+                f"{float(args.defect_neutral_size_upweight):.0%})")
     if realised_shares:
         logging.info("Realised large-cell shares: %s", json.dumps(
             {k: round(v, 4) for k, v in realised_shares.items()}, sort_keys=True))

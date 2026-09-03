@@ -1367,6 +1367,14 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default="uniform",
     )
     parser.add_argument(
+        "--defect_neutral_size_upweight_energy",
+        help="apply --defect_neutral_size_upweight to the ENERGY loss as well as the force "
+        "loss, each channel solved on its own mass (Stage A' spec section 1). The realised "
+        "share of both channels is logged every epoch",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
         "--defect_base_cache",
         help="cache the frozen base's energy, forces and later-block features per frame "
         "(section 2.5 of the Stage A' spec) and recompute only the first interaction block "

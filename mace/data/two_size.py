@@ -22,11 +22,103 @@ from typing import Sequence, Tuple
 
 import numpy as np
 
-__all__ = ["apply_two_size_upweight", "apply_neutral_size_upweight"]
+__all__ = ["apply_two_size_upweight", "apply_neutral_size_upweight",
+           "apply_size_upweight", "realised_shares"]
 
 
 def _n_atoms(d) -> int:
     return int(d.positions.shape[0])
+
+
+def _frame_weight(d) -> float:
+    """The frame-level `weight` (config_type_weights) every loss term multiplies."""
+    w = getattr(d, "weight", None)
+    return 1.0 if w is None else float(w)
+
+
+def _mass(d, channel: str) -> float:
+    """What one frame contributes to a channel's loss normalisation.
+
+    Forces: `weight * forces_weight * n_atoms` (every atom is a term). Energy: the loss is a
+    per-atom MSE with one term per frame, so `weight * energy_weight` -- atom count does not
+    enter. The frame-level `weight` is included in both: pristine frames carry 5.0 in this
+    dataset, and a share computed without it is a share of a loss that is not the one being
+    minimised.
+    """
+    if channel == "forces":
+        return _frame_weight(d) * float(getattr(d, "forces_weight", 1.0)) * _n_atoms(d)
+    if channel == "energy":
+        return _frame_weight(d) * float(getattr(d, "energy_weight", 1.0))
+    raise ValueError(f"unknown channel {channel!r}")
+
+
+def _in_population(d, population: str) -> bool:
+    if population == "charged":
+        return _is_charged(d)
+    if population == "neutral":
+        return not _is_charged(d)
+    raise ValueError(f"unknown population {population!r}")
+
+
+def realised_shares(dataset: Sequence, population: str = "neutral",
+                    size_threshold: int = 100, channels=("energy", "forces")) -> dict:
+    """The large-cell share of each channel's loss mass within `population`, as it stands."""
+    out = {}
+    for ch in channels:
+        large = small = 0.0
+        for d in dataset:
+            if not _in_population(d, population):
+                continue
+            m = _mass(d, ch)
+            if _n_atoms(d) >= size_threshold:
+                large += m
+            else:
+                small += m
+        out[ch] = large / (large + small) if (large + small) > 0 else 0.0
+    return out
+
+
+def apply_size_upweight(dataset: Sequence, population: str = "neutral",
+                        target_share: float = 0.25, size_threshold: int = 100,
+                        channels=("energy", "forces")) -> dict:
+    """Section 1 of the Stage A' spec: the SAME target share in the energy loss AND the
+    force loss, each solved on its own mass. Returns {channel: (factor, realised_share)}.
+
+    Scales `energy_weight` and `forces_weight` on the large frames of `population`. The two
+    channels have different masses (atom count enters the force loss and not the energy
+    loss) so the two factors differ; both realised shares are returned and should be logged
+    every epoch, because a weight chosen from frame counts alone drifts if the loss weights
+    or the mix ever change.
+    """
+    target = float(np.clip(target_share, 1e-6, 0.95))
+    result = {}
+    for ch in channels:
+        large, small_mass, large_mass = [], 0.0, 0.0
+        for d in dataset:
+            if not _in_population(d, population):
+                continue
+            m = _mass(d, ch)
+            if _n_atoms(d) >= size_threshold:
+                large.append(d)
+                large_mass += m
+            else:
+                small_mass += m
+        if not large or large_mass <= 0:
+            logging.warning("Size upweight (%s, %s): no large frames; nothing applied",
+                            population, ch)
+            result[ch] = (1.0, 0.0)
+            continue
+        factor = target * small_mass / max((1.0 - target) * large_mass, 1e-30)
+        attr = "forces_weight" if ch == "forces" else "energy_weight"
+        for d in large:
+            setattr(d, attr, getattr(d, attr) * factor)
+        realised = (factor * large_mass) / (factor * large_mass + small_mass)
+        logging.info(
+            f"Size upweight ({population}, {ch}): {len(large)} frames at >= "
+            f"{size_threshold} atoms scaled by {factor:.1f}x -> {realised:.1%} of the "
+            f"{population} {ch} loss (target {target:.0%}).")
+        result[ch] = (float(factor), float(realised))
+    return result
 
 
 def _is_charged(d) -> bool:

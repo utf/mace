@@ -70,3 +70,53 @@ def test_idempotent_target_when_applied_to_an_already_weighted_set():
     apply_two_size_upweight(ds, target_share=0.25)
     _, share = apply_two_size_upweight(ds, target_share=0.25)
     assert abs(share - 0.25) < 1e-6
+
+
+# ---------------------------------------------------------------- Stage A' section 1
+# The same target share in the ENERGY loss and the FORCE loss, each solved on its own mass,
+# with the frame-level `weight` (config_type_weights) counted in both.
+
+from mace.data.two_size import apply_size_upweight, realised_shares  # noqa: E402
+
+
+class FakeData2(FakeData):
+    def __init__(self, n, charged, weight=1.0, frame_weight=1.0):
+        super().__init__(n, charged, weight)
+        self.energy_weight = torch.tensor(weight)
+        self.weight = torch.tensor(frame_weight)
+
+
+def make2(n_small=1057, n_large=15, n_pristine=544):
+    return ([FakeData2(79, False) for _ in range(n_small)]
+            + [FakeData2(159, False) for _ in range(n_large)]
+            + [FakeData2(80, False, frame_weight=5.0) for _ in range(n_pristine)]
+            + [FakeData2(79, True) for _ in range(30)])
+
+
+def test_both_channels_reach_the_same_target_on_their_own_mass():
+    ds = make2()
+    res = apply_size_upweight(ds, population="neutral", target_share=0.25)
+    assert abs(res["energy"][1] - 0.25) < 1e-6
+    assert abs(res["forces"][1] - 0.25) < 1e-6
+    # Atom count enters the force mass and not the energy mass, so the factors differ.
+    assert res["energy"][0] != res["forces"][0]
+    after = realised_shares(ds, population="neutral")
+    assert abs(after["energy"] - 0.25) < 1e-6 and abs(after["forces"] - 0.25) < 1e-6
+
+
+def test_the_frame_weight_is_part_of_the_mass():
+    """Pristine frames carry weight 5.0; a share that ignored it would be a share of a
+    different loss from the one being minimised."""
+    a = make2(n_pristine=544)
+    b = make2(n_pristine=0)
+    fa = apply_size_upweight(a, population="neutral", target_share=0.25)["forces"][0]
+    fb = apply_size_upweight(b, population="neutral", target_share=0.25)["forces"][0]
+    assert fa > fb
+
+
+def test_charged_frames_are_untouched_by_the_neutral_upweight():
+    ds = make2()
+    apply_size_upweight(ds, population="neutral", target_share=0.25)
+    for d in ds:
+        if float(d.carrier_counts.abs().sum()) > 0:
+            assert float(d.energy_weight) == 1.0 and float(d.forces_weight) == 1.0

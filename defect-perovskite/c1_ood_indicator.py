@@ -38,7 +38,8 @@ from ase.io import read
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from e0_residual_maps import _assert_repo, evaluate  # noqa: E402
-from r1_matrix import adopt_model_dtype  # noqa: E402
+from r1_matrix import adopt_model_dtype, graph_cutoff_for  # noqa: E402
+from mace import tools  # noqa: E402
 from s3_dehead_trend import fit_with_ci, hub_separation  # noqa: E402
 from ta_band_edge import counts_of  # noqa: E402
 
@@ -53,13 +54,10 @@ def load(path, device):
 
 def per_frame(model, frames, device, batch_size):
     """(E_base [n_frames], F_base list) from one base, in frame order."""
-    energies, forces = [], []
-    for k in range(0, len(frames), batch_size):
-        chunk = frames[k: k + batch_size]
-        out = evaluate(model, chunk, device=device)
-        energies.extend([float(e) for e in out["base_energy"]])
-        forces.extend([np.asarray(f) for f in out["base_forces"]])
-    return np.array(energies), forces
+    z_table = tools.AtomicNumberTable([17, 55, 82])
+    cutoff = graph_cutoff_for(model)
+    forces, energies = evaluate(model, frames, z_table, cutoff, device, batch_size)
+    return np.asarray(energies, dtype=float), [np.asarray(f) for f in forces]
 
 
 def main() -> None:
