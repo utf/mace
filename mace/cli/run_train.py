@@ -1616,17 +1616,11 @@ def run(args) -> None:
         # EVERY stoichiometric training frame, not the first: the pristine frames are
         # thermal snapshots, and one frame's species means would carry its distortion into
         # every corr_i. The mean over the population is the pristine environment.
-        feats_all, species_all = [], []
-        with torch.no_grad():
-            for probe in torch_geometric.dataloader.DataLoader(chosen, batch_size=8):
-                probe = probe.to(device)
-                out0 = model(probe.to_dict(), training=False, compute_force=False)
-                feats_all.append(out0["trunk_block0"].detach())
-                species_all.append(probe.node_attrs.argmax(dim=-1))
-        model.set_pristine_centre(torch.cat(feats_all), torch.cat(species_all))
+        n_atoms_centre = model.collect_pristine_centre(
+            torch_geometric.dataloader.DataLoader(chosen, batch_size=8), device=device)
         logging.info("Centred on-site correction: pristine centre set from %d stoichiometric "
-                     "training frames (block-0 feature means per species, norms %s)",
-                     len(chosen),
+                     "training frames, %d atoms (block-0 feature means per species, norms %s)",
+                     len(chosen), n_atoms_centre,
                      [round(float(v), 3) for v in model.pristine_block0_mean.norm(dim=1)])
 
     # ------------------------------------------------ Stage A' section 2.5: precision, cache

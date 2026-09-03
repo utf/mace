@@ -94,12 +94,10 @@ def test_the_correction_vanishes_on_the_cubic_pristine_cell():
     batch = _batch(atoms)
     with pytest.raises(RuntimeError, match="pristine centre"):
         model(batch.to_dict(), compute_force=False)
-    out0 = model.__class__.forward  # noqa: F841  (silence linters about unused model)
-    # Set the centre from the same cell, then the deviation is zero on every atom.
-    model.on_site_centred = False
-    out = model(batch.to_dict(), compute_force=False)
-    model.on_site_centred = True
-    model.set_pristine_centre(out["trunk_block0"], batch.node_attrs.argmax(dim=-1))
+    # Set the centre from the same cell through the one entry point the trainer uses;
+    # then the deviation is zero on every atom.
+    n = model.collect_pristine_centre([batch])
+    assert n == len(atoms)
     corr = _correction(model, batch)
     assert float(corr.abs().max()) < 1e-9, float(corr.abs().max())
     # And NOT zero without the centre: the uncentred channel carries the species constant.
@@ -113,10 +111,7 @@ def test_the_centre_survives_the_state_dict():
     model = _model()
     atoms = _cubic()
     batch = _batch(atoms)
-    model.on_site_centred = False
-    out = model(batch.to_dict(), compute_force=False)
-    model.on_site_centred = True
-    model.set_pristine_centre(out["trunk_block0"], batch.node_attrs.argmax(dim=-1))
+    model.collect_pristine_centre([batch])
     other = _model()
     other.load_state_dict(model.state_dict())
     assert bool(other.pristine_centre_set)

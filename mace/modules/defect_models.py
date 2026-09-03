@@ -537,20 +537,48 @@ class MACEDefect(ScaleShiftMACE):
 
     def pristine_centre(self, head_dtype: torch.dtype) -> Optional[torch.Tensor]:
         """The centre in the head's feature space, through the LIVE first readout."""
-        if not getattr(self, "on_site_centred", False):
+        if not getattr(self, "on_site_centred", False) or getattr(
+                self, "_collecting_centre", False):
             return None
         if not bool(self.pristine_centre_set):
             raise RuntimeError(
                 "on_site_centred is set but no pristine centre has been recorded; call "
-                "set_pristine_centre from a stoichiometric frame before the first forward")
+                "collect_pristine_centre on the stoichiometric frames before the first "
+                "forward")
         feats = self.defect_feature_readouts[0](self.pristine_block0_mean.to(head_dtype))
         return feats[:, : self.spectral_feature_dim]
+
+    @torch.no_grad()
+    def collect_pristine_centre(self, batches, device=None) -> int:
+        """Section 2.1, the one entry point: forward every batch of stoichiometric frames
+        with the centre switched OFF for the duration, then record the per-species mean of
+        the first block's features over all of them. Returns the number of atoms averaged.
+
+        One method rather than a trainer-side loop, so the trainer and the tests set the
+        centre the same way -- and so the probing forward cannot trip the "no centre yet"
+        guard, which is what a bare forward with the flag on does."""
+        feats, species = [], []
+        self._collecting_centre = True
+        try:
+            for batch in batches:
+                if device is not None:
+                    batch = batch.to(device)
+                out = self(batch.to_dict(), training=False, compute_force=False)
+                feats.append(out["trunk_block0"].detach())
+                species.append(batch.node_attrs.argmax(dim=-1))
+        finally:
+            self._collecting_centre = False
+        if not feats:
+            raise RuntimeError("no stoichiometric frames to centre on")
+        self.set_pristine_centre(torch.cat(feats), torch.cat(species))
+        return int(sum(f.shape[0] for f in feats))
 
     def __getstate__(self) -> Dict[str, Any]:
         # The cache is a training-time object keyed to one dataset; a checkpoint carries the
         # checksum buffer that names it, never the values.
         state = self.__dict__.copy()
         state["_base_cache"] = None
+        state["_collecting_centre"] = False
         return state
 
     def __setstate__(self, state: Dict[str, Any]) -> None:
@@ -583,6 +611,7 @@ class MACEDefect(ScaleShiftMACE):
             ("image_compensation", False),
             ("on_site_centred", False),
             ("_base_cache", None),
+            ("_collecting_centre", False),
         ):
             if not hasattr(self, name):
                 object.__setattr__(self, name, default)
