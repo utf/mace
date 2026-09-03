@@ -23,7 +23,8 @@ from typing import Sequence, Tuple
 import numpy as np
 
 __all__ = ["apply_two_size_upweight", "apply_neutral_size_upweight",
-           "apply_size_upweight", "realised_shares", "apply_energy_weights_from_json"]
+           "apply_size_upweight", "realised_shares", "apply_energy_weights_from_json",
+           "weight_column"]
 
 
 def _n_atoms(d) -> int:
@@ -36,19 +37,38 @@ def _frame_weight(d) -> float:
     return 1.0 if w is None else float(w)
 
 
-def _mass(d, channel: str) -> float:
+def weight_column(population: str, channel: str) -> str:
+    """The AtomicData column the loss actually reads for this population and channel.
+
+    THE COLUMNS DIFFER BY POPULATION, and getting this wrong is silent. `DefectLoss` scores a
+    neutral (n = 0) frame through its BASE terms, which read `base_energy_weight` and
+    `base_forces_weight`; it scores a charged frame through its TOTALS terms, which read the
+    generic `energy_weight` and `forces_weight`. The generic columns exist on a neutral frame
+    too -- and no term reads them. The first neutral upweight scaled those, logged a realised
+    25% share of a loss that never saw it, and every unit test passed because each of them
+    read the column it had written. Found by printing `base_forces_weight` before and after.
+    """
+    if population == "neutral":
+        return "base_forces_weight" if channel == "forces" else "base_energy_weight"
+    if population == "charged":
+        return "forces_weight" if channel == "forces" else "energy_weight"
+    raise ValueError(f"unknown population {population!r}")
+
+
+def _mass(d, channel: str, population: str = "charged") -> float:
     """What one frame contributes to a channel's loss normalisation.
 
-    Forces: `weight * forces_weight * n_atoms` (every atom is a term). Energy: the loss is a
-    per-atom MSE with one term per frame, so `weight * energy_weight` -- atom count does not
+    Forces: `weight * <column> * n_atoms` (every atom is a term). Energy: the loss is a
+    per-atom MSE with one term per frame, so `weight * <column>` -- atom count does not
     enter. The frame-level `weight` is included in both: pristine frames carry 5.0 in this
     dataset, and a share computed without it is a share of a loss that is not the one being
-    minimised.
+    minimised. `<column>` is `weight_column(population, channel)`.
     """
+    col = float(getattr(d, weight_column(population, channel), 1.0))
     if channel == "forces":
-        return _frame_weight(d) * float(getattr(d, "forces_weight", 1.0)) * _n_atoms(d)
+        return _frame_weight(d) * col * _n_atoms(d)
     if channel == "energy":
-        return _frame_weight(d) * float(getattr(d, "energy_weight", 1.0))
+        return _frame_weight(d) * col
     raise ValueError(f"unknown channel {channel!r}")
 
 
@@ -101,7 +121,7 @@ def realised_shares(dataset: Sequence, population: str = "neutral",
         for d in dataset:
             if not _in_population(d, population):
                 continue
-            m = _mass(d, ch)
+            m = _mass(d, ch, population)
             if _n_atoms(d) >= size_threshold:
                 large += m
             else:
@@ -129,7 +149,7 @@ def apply_size_upweight(dataset: Sequence, population: str = "neutral",
         for d in dataset:
             if not _in_population(d, population):
                 continue
-            m = _mass(d, ch)
+            m = _mass(d, ch, population)
             if _n_atoms(d) >= size_threshold:
                 large.append(d)
                 large_mass += m
@@ -141,7 +161,7 @@ def apply_size_upweight(dataset: Sequence, population: str = "neutral",
             result[ch] = (1.0, 0.0)
             continue
         factor = target * small_mass / max((1.0 - target) * large_mass, 1e-30)
-        attr = "forces_weight" if ch == "forces" else "energy_weight"
+        attr = weight_column(population, ch)
         for d in large:
             setattr(d, attr, getattr(d, attr) * factor)
         realised = (factor * large_mass) / (factor * large_mass + small_mass)
@@ -226,7 +246,7 @@ def apply_neutral_size_upweight(dataset: Sequence, target_share: float = 0.25,
     for d in dataset:
         if _is_charged(d):
             continue
-        w = float(getattr(d, "forces_weight", 1.0))
+        w = float(getattr(d, "base_forces_weight", 1.0))
         m = w * _n_atoms(d)
         if _n_atoms(d) >= size_threshold:
             large.append(d)
@@ -244,7 +264,9 @@ def apply_neutral_size_upweight(dataset: Sequence, target_share: float = 0.25,
     target = float(np.clip(target_share, 1e-6, 0.95))
     factor = target * small_mass / max((1.0 - target) * large_mass, 1e-30)
     for d in large:
-        d.forces_weight = d.forces_weight * factor
+        # The BASE column: it is the one the loss reads for an n = 0 frame. Scaling the
+        # generic `forces_weight` here, as this function first did, changed nothing.
+        d.base_forces_weight = d.base_forces_weight * factor
 
     realised = (factor * large_mass) / (factor * large_mass + small_mass)
     logging.info(

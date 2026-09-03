@@ -78,3 +78,21 @@ the 79-atom force loss does not rise — false (+13%). **F15 fails, 1 of 4.**
 **Adoption:** the tiling test passes and the probe fails, so under the registered rule
 ("adopt as config default only if both pass") the term is **not adopted** as a default. It
 stays implemented behind `--defect_image_compensation` (off).
+
+## Correction to the joint-run report (found while building Stage A′, 3 Sep 2026)
+
+The neutral two-size upweight of the joint run **never reached the loss**. `DefectLoss`
+scores an n = 0 frame through its base terms, which read `base_energy_weight` and
+`base_forces_weight`; the upweight scaled the generic `forces_weight`, which no term reads
+for a neutral frame. Verified by printing the columns on a 159-atom neutral frame from
+`dataset_cf/fold0`: after the upweight `forces_weight` = 0.497, `base_forces_weight` = 1.0.
+The joint run's logged "neutral large-cell share 25.0%" was the function's own arithmetic
+on the column it had written — intent, not outcome, the fault class ledger entry 10 names.
+Consequences: (i) the joint run's neutral 159-atom frames trained at natural weight, so
+the neutral 159-atom force-slope collapse (+0.064 → +0.01) happened without any upweight;
+(ii) the first Stage A′ fold launch (16:36, b3) and production launch trained with the
+same inert weight for ~40 minutes and were killed and restarted with the base columns
+scaled; (iii) `weight_column(population, channel)` now names the column per population,
+`realised_shares` reads the same column, and a test asserts the `DefectLoss` VALUE moves.
+The charged two-size upweight was never affected: charged frames are scored by the totals
+terms, which read the generic columns it scaled.

@@ -80,9 +80,13 @@ from mace.data.two_size import apply_size_upweight, realised_shares  # noqa: E40
 
 
 class FakeData2(FakeData):
+    """Carries every weight column a real AtomicData has: the generic pair the totals
+    terms read (charged frames) and the base pair the base terms read (neutral frames)."""
     def __init__(self, n, charged, weight=1.0, frame_weight=1.0):
         super().__init__(n, charged, weight)
         self.energy_weight = torch.tensor(weight)
+        self.base_energy_weight = torch.tensor(weight)
+        self.base_forces_weight = torch.tensor(weight)
         self.weight = torch.tensor(frame_weight)
 
 
@@ -120,3 +124,53 @@ def test_charged_frames_are_untouched_by_the_neutral_upweight():
     for d in ds:
         if float(d.carrier_counts.abs().sum()) > 0:
             assert float(d.energy_weight) == 1.0 and float(d.forces_weight) == 1.0
+
+
+def test_the_neutral_upweight_reaches_the_loss_the_base_terms_read():
+    """The columns differ by population, and the first neutral upweight scaled one no term
+    reads. This test builds real AtomicData through the defect pipeline and checks the
+    DefectLoss VALUE moves -- outcome, not the function's own arithmetic."""
+    import numpy as np
+
+    from mace import data as mace_data
+    from mace import tools
+    from mace.data.defects import prepare_defect_configurations
+    from mace.data.two_size import weight_column
+    from mace.modules.loss import DefectLoss
+
+    torch.manual_seed(0)
+    rng = np.random.default_rng(0)
+    z = tools.AtomicNumberTable([17, 55, 82])
+    configs = []
+    for n in (12, 24, 12):
+        numbers = np.array([17] * (n // 2) + [55] * (n // 4) + [82] * (n // 4))
+        configs.append(mace_data.Configuration(
+            atomic_numbers=numbers, positions=rng.uniform(0, 8, size=(n, 3)),
+            cell=np.eye(3) * 9.0, pbc=(True, True, True),
+            properties={"energy": float(rng.normal()), "forces": rng.normal(size=(n, 3)),
+                        "carrier_counts": [0.0, 0.0, 0.0, 0.0]},
+            property_weights={"energy": 1.0, "forces": 1.0}))
+    prepare_defect_configurations(configs)
+    ds = [mace_data.AtomicData.from_config(c, z_table=z, cutoff=4.0) for c in configs]
+    assert weight_column("neutral", "forces") == "base_forces_weight"
+    big = ds[1]
+    assert float(big.base_forces_weight) == 1.0 and float(big.base_energy_weight) == 1.0
+    apply_size_upweight(ds, population="neutral", target_share=0.75, size_threshold=20)
+    assert float(big.base_forces_weight) != 1.0, "the base force column did not move"
+    assert float(big.base_energy_weight) != 1.0, "the base energy column did not move"
+
+    loader = tools.torch_geometric.dataloader.DataLoader(ds, batch_size=3)
+    batch = next(iter(loader))
+    # A fake prediction with a fixed error, so the loss is a pure function of the weights.
+    pred = dict(base_energy=batch.base_energy + 0.1, base_forces=batch.base_forces + 0.1,
+                delta_energy=batch.delta_energy, delta_forces=batch.delta_forces,
+                energy=batch.energy, forces=batch.forces, correction_energy=torch.zeros(3),
+                counter_input_l2=torch.zeros(()), stress=None, virials=None)
+    loss_fn = DefectLoss(energy_weight=1.0, forces_weight=1.0, total_energy_weight=0.0,
+                         delta_energy_weight=0.0, delta_forces_weight=0.0)
+    after = float(loss_fn(batch, pred))
+    with torch.no_grad():
+        batch.base_forces_weight[1] = 1.0
+        batch.base_energy_weight[1] = 1.0
+    before = float(loss_fn(batch, pred))
+    assert after != before, "the upweighted column does not change the loss value"

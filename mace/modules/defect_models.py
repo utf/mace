@@ -489,9 +489,29 @@ class MACEDefect(ScaleShiftMACE):
                 module.double()
 
     def _apply_long_range_policy(self) -> None:
-        """Section 2.2: `lr_freeze` pins every long-range parameter at its initialisation."""
+        """Section 2.2: `lr_freeze` pins the long-range branch at PHYSICAL values.
+
+        Physical, not "whatever the initialisation drew". The branch's charge is
+        `q_host + q_pol + q_carrier`; the host and polarisation MLPs are random at
+        construction, and a Stage-B base trained without E_LR cannot absorb a
+        geometry-dependent term nobody fitted -- so under the freeze the host charges are
+        zeroed (the ion lattice is already in H through the Madelung term), the
+        polarisation channel is off, and the amplitude stays at its 1/sqrt(eps_inf)
+        initialisation. What survives is exactly the spec's `E_LR = E_per(q) - E_iso(q)`
+        with `q = a * alpha` from the density-matrix difference, and every parameter of the
+        branch has `requires_grad = False`.
+        """
         if not getattr(self, "lr_freeze", False):
             return
+        charges = getattr(self, "latent_charges", None)
+        if charges is not None:
+            with torch.no_grad():
+                last = [m for m in charges.host_charge.modules()
+                        if isinstance(m, torch.nn.Linear)][-1]
+                last.weight.zero_()
+                if last.bias is not None:
+                    last.bias.zero_()
+            charges.use_polarisation = False
         for name in ("latent_charges", "latent_ewald"):
             module = getattr(self, name, None)
             if module is not None:
@@ -1164,12 +1184,27 @@ class MACEDefect(ScaleShiftMACE):
             if getattr(self, "lr_detach_density", False):
                 # Section 2.2: the charge entering the Ewald energy carries no gradient.
                 # Forces from E_LR are dE_LR/dR at fixed q; nothing reaches the head or
-                # the trunk through the long-range branch. Neutrality is asserted on the
-                # detached charge: sum_i q_i must equal minus the net carrier count times
-                # the amplitude-free sign convention the charges are built with.
+                # the trunk through the long-range branch.
                 latent_charge = latent_charge.detach()
                 q_host = q_host.detach()
                 q_carrier = q_carrier.detach()
+                # The spec's check, `|sum_i q_i + Delta_n| < 1e-8`, on the detached charge.
+                # The density-matrix difference sums to -Delta_n exactly, so the carrier
+                # charge sums to -a * Delta_n; the check as written holds only at a = 1.
+                # The invariant that MUST hold is the density's; the spec's version is
+                # measured and kept in `lr_neutrality_residual` for the run log.
+                delta_n = (counts[:, 0] + counts[:, 1] - counts[:, 2] - counts[:, 3])
+                q_sum = scatter_sum(latent_charge, data["batch"], dim=0, dim_size=num_graphs)
+                self._lr_neutrality_residual = (q_sum + delta_n).abs().max().detach()
+                if amplitude is not None:
+                    dens_sum = scatter_sum(q_carrier, data["batch"], dim=0,
+                                           dim_size=num_graphs) / amplitude.clamp_min(1e-12)
+                    bad = (dens_sum + delta_n).abs() > 1e-6
+                    if bool(bad.any()):
+                        raise RuntimeError(
+                            "the detached carrier density does not sum to -Delta_n: "
+                            f"max |sum q_carrier/a + Delta_n| = "
+                            f"{float((dens_sum + delta_n).abs().max()):.3e}")
             energy_lr_host = self.latent_ewald.energy(
                 q_host, positions, cell_les, data["batch"]
             )
