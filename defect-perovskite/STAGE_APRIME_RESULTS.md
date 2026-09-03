@@ -155,3 +155,11 @@ Realised shares 0.2500 / 0.2500 on every base at every epoch. Fold bases trained
 GPUs 4–7 (one shared with the OOD indicator) at 0.8 min/epoch; the production base on the
 local A4000 at 0.85 min/epoch. All five load with `trunk_avg_num_neighbors` equal to the
 blocks' float (14.05 on fold 0), through the cuEq conversion.
+
+Operational note: the post-A′ chain (`queue_after_aprime.sh`, waiting on the five model
+files at a 120 s poll) did not wake for over ten minutes after the production model landed
+on b3 at 18:33 (b3 clock), while its process was alive and sleeping. Cause not established;
+a fresh launch of the same script saw the files at once. A first attempt to stop it with
+`pkill -f` matched the ssh shell carrying the launch command and killed that instead — the
+bracket trick protects the pattern, not the other text on the same command line. Recorded
+as the fifth liveness-shaped fault of the programme, and the first on the file side.
