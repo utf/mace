@@ -186,8 +186,9 @@ def pristine_spectrum_check(model, pristine_batches, log):
 
 def run_cell(arch_path, base_path, seed, batches, frame_masks, device, epochs, lr,
              stage, madelung, eps_inf, t_ref, log, pristine_batches=None,
-             freeze_z=False, e_gap=2.4, w_gap=1.0):
-    model = build(arch_path, base_path, seed, device, stage, madelung, eps_inf, t_ref, log)
+             freeze_z=False, e_gap=2.4, w_gap=1.0, counting_overrides=None):
+    model = build(arch_path, base_path, seed, device, stage, madelung, eps_inf, t_ref, log,
+                  counting_overrides=counting_overrides)
     ctx = ForwardContext.production(model, device=device, eps_inf=eps_inf,
                                     stage=stage, madelung=bool(madelung), seed=seed)
     # The in-loop reach assertion, on a batch this run actually consumes. Skipping it is how
@@ -356,7 +357,22 @@ def main() -> None:
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--save-dir", type=Path, default=None)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--hop-form", choices=("linear", "log"), default="linear",
+                    help="environment modulation on the hopping integrals. 'log' is "
+                    "exp(beta*tanh g), symmetric in log space and positive everywhere, so "
+                    "widening cannot flip the sign the Harrison initialisation fixed")
+    ap.add_argument("--hop-beta", type=float, default=1.0986122886681098,
+                    help="beta in the 'log' modulation; ln 3 spans x[1/3, 3]")
     args = ap.parse_args()
+
+    # Threaded into `build` so the knob reaches the CONFIG, and therefore survives
+    # `extract_config_mace_model` on the way back out of the saved model. Setting it on the
+    # head after construction would build at the old value and leave the artefact disagreeing
+    # with the object that trained.
+    counting_overrides = None
+    if args.hop_form != "linear":
+        counting_overrides = {"counting_hop_form": args.hop_form,
+                              "counting_hop_log_beta": float(args.hop_beta)}
 
     _assert_repo()
     log = log_to(str(args.out) + ".log")
@@ -401,7 +417,8 @@ def main() -> None:
                                   args.madelung == "on", args.eps_inf, t_ref, log,
                                   pristine_batches=pristine_batches,
                                   freeze_z=args.freeze_z, e_gap=args.e_gap,
-                                  w_gap=args.w_gap)
+                                  w_gap=args.w_gap,
+                                  counting_overrides=counting_overrides)
         except Exception as exc:
             log(f"      FAILED: {exc}")
             rows.append(dict(seed=seed, error=str(exc)))

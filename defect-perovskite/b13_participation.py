@@ -136,6 +136,12 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--on", nargs="+", type=Path, required=True)
     ap.add_argument("--off", nargs="+", type=Path, required=True)
+    ap.add_argument("--baseline", nargs="*", type=Path, default=[],
+                    help="a third cohort scored on the SAME frames, so participation can be "
+                    "compared across regimes. The head-only s7 models report N_eff 4.85 +- "
+                    "0.25 in their own harness while the joint run logs partic ~11, but "
+                    "those came from different frame sets at different points in training, "
+                    "so the comparison has never actually been made like for like")
     ap.add_argument("--data", type=Path, default=here / "dataset_pbe" / "train.xyz")
     ap.add_argument("--frames", type=int, default=16)
     ap.add_argument("--n-pristine", type=int, default=3)
@@ -155,8 +161,9 @@ def main() -> None:
     print(f"{len(charged)} charged {CLEAN_NATOMS}-atom frames, {len(pristine)} pristine "
           f"of {biggest}", flush=True)
 
-    rows = {"on": [], "off": []}
-    for arm, paths in (("on", args.on), ("off", args.off)):
+    rows = {"on": [], "off": [], "baseline": []}
+    for arm, paths in (("on", args.on), ("off", args.off),
+                       ("baseline", args.baseline)):
         for mp in paths:
             if not Path(mp).exists():
                 print(f"  MISSING {mp}", flush=True)
@@ -172,7 +179,7 @@ def main() -> None:
             rows[arm].append(dict(model=Path(mp).name, neff=neff, pristine_ratio=ratio,
                                   pristine_neff=free, depth_from_cbm=depth,
                                   long_range=bool(getattr(model, "use_long_range", False))))
-            print(f"  [{arm:3s}] {Path(mp).name:22s} N_eff {neff:7.3f}   pristine "
+            print(f"  [{arm:8s}] {Path(mp).name:22s} N_eff {neff:7.3f}   pristine "
                   f"{free:7.3f}   ratio {ratio:6.3f}   depth {depth:+.3f} eV", flush=True)
             del model
             if args.device.startswith("cuda"):
@@ -197,9 +204,14 @@ def main() -> None:
                        ("depth_from_cbm", "depth from CBM")):
         on = np.array([r[key] for r in rows["on"]], dtype=float)
         off = np.array([r[key] for r in rows["off"]], dtype=float)
-        print(f"\n  {label:16s} on {np.nanmean(on):+8.3f} +- {np.nanstd(on):.3f}   "
-              f"off {np.nanmean(off):+8.3f} +- {np.nanstd(off):.3f}   "
-              f"difference {np.nanmean(on) - np.nanmean(off):+.3f}")
+        line = (f"\n  {label:18s} E_LR on {np.nanmean(on):+8.3f} +- {np.nanstd(on):.3f}   "
+                f"off {np.nanmean(off):+8.3f} +- {np.nanstd(off):.3f}   "
+                f"difference {np.nanmean(on) - np.nanmean(off):+.3f}")
+        if rows["baseline"]:
+            base = np.array([r[key] for r in rows["baseline"]], dtype=float)
+            line += (f"\n  {'':18s} head-only baseline {np.nanmean(base):+8.3f} "
+                     f"+- {np.nanstd(base):.3f}")
+        print(line)
     on_n = np.array([r["neff"] for r in rows["on"]], dtype=float)
     off_n = np.array([r["neff"] for r in rows["off"]], dtype=float)
     print(f"\n  Seed spread in N_eff: on {np.nanmax(on_n) - np.nanmin(on_n):.3f}, "

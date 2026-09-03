@@ -84,7 +84,9 @@ echo; echo "=== participation, E_LR on against E_LR off ==="
 CUDA_VISIBLE_DEVICES=4 python -u defect-perovskite/b13_participation.py \
     --on "$R"/joint_a1/joint_a1.model "$R"/joint_a2/joint_a2.model \
          "$R"/joint_a3/joint_a3.model "$R"/joint_a4/joint_a4.model \
-    --off "${MODELS[@]}" --device cuda --out "$R/${TAG}_participation.json" \
+    --off "${MODELS[@]}" \
+    --baseline "$R"/s7_models/s3_on_s*.model \
+    --device cuda --out "$R/${TAG}_participation.json" \
     > "$R/${TAG}_participation.log" 2>&1
 grep -avE "Warning|warn|openequivariance|falling back|visitor|shape = |_Jd|np.reshape|UNDER-DET|alternative|^ *$" \
     "$R/${TAG}_participation.log" | tail -24
