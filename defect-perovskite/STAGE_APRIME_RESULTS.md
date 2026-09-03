@@ -283,3 +283,30 @@ copy, which the trunk's energy does not depend on; the base forces lost the trun
 training never took the cast, so the trained models and every training-time number
 (drift guard, validation) are unaffected. Fixed (the gradient leaf never moves; a test
 scores a mixed model on a float32 batch), and the wave-1 adoption scoring was rerun.
+
+**Wave 1 by the adoption rule (b10 against the A′ references, leak floor 0.75 × ref):**
+
+| seed | c1 charged 159 E / F | c2 neutral 159 E | c3 window E / F (meV/atom, meV/Å; oof base 2.0 / 12.8) | F4 δ_sr [95%] | gap | depth from CBM |
+|---|---|---|---|---|---|---|
+| s1 | −0.0948 / −0.2665 (= ref) | +0.0919 | 7.1 / 11.2 | −0.0812 [−0.0909, −0.0716] | 2.381 | 0.014 |
+| s2 | = ref | +0.0919 | 7.1 / 11.2 | −0.1244 [−0.1398, −0.1091] | 2.384 | 0.042 |
+| s3 | = ref | +0.0920 | 7.1 / 11.2 | −0.0877 [−0.0963, −0.0791] | 2.384 | 0.040 |
+| s4 | = ref | +0.0920 | 7.1 / 11.2 | −0.1111 [−0.1279, −0.0942] | 2.426 | 0.111 |
+
+- Gate 1 (regression): the charged 159-atom residual slopes against the frozen A′ base
+  equal the §1 reference on every seed, to four decimals, in both channels — an identity by
+  construction now that the base does not move, and the test that would have caught a base
+  that did.
+- Gate 2 (F4): correct sign and within 1.5× of −0.0948 on **4 of 4** (pooled −0.1011 ±
+  0.0174). The gate asks ≥ 4/6, already met before wave 2.
+- Criterion 2 (neutral 159): +0.0920 = the production base's own value, unchanged by the
+  head (as it must be at n = 0); against the out-of-fold +0.0243 it reads "grew", which is a
+  statement about the production base, not the head.
+- Criterion 3 (neutral-79 window): E 7.1 meV/atom against the out-of-fold cross-fit base's
+  2.0; F 11.2 against 12.8. The energy figure is the production A′ base's own error on
+  those frames (a frozen base, so the head cannot change it); the production base's final
+  train energy error (6.1 meV/atom) is worse than the fold bases' (2.5) and the old
+  e0 base's (3.3), which is a finding about the A′ production run rather than Stage B.
+- Gate 5: pristine gap 2.381–2.426 eV, all within 2.4 ± 0.1.
+- Depth from the CBM 0.014–0.111 eV (shallow donor), seed spread larger than the joint
+  cohort's.
