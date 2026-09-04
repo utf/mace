@@ -1201,3 +1201,56 @@ against is above rather than discovered afterwards.
 
 It also revises this cycle's schedule: arm B's two waves cost about 1.8× what arm A's did,
 which is most of the slip in the completion estimate.
+
+---
+
+## Arm B, wave 1 — F23's Δc clause fails, and the null gate is why
+
+Four of six seeds, scored on GPUs 6–7 while wave 2 trains on 4–5.
+
+### Gate 7 got worse again
+
+| type | Stage B | arm A (6 seeds) | **arm B (4 seeds)** |
+|---|---|---|---|
+| ss-σ | 3/6 | 5/6 | **4/4** |
+| sp-σ | 1/6 | 3/6 | **4/4** |
+| pp-σ | 2/6 | 2/6 | **4/4** |
+| pp-π | 5/6 | 4/6 | **4/4** |
+
+Every seed is at the stop on every integral type. L_b: 1.132 ± 0.090, 1.223 ± 0.021,
+1.459 ± 0.047, 1.229 ± 0.018 Å. The image term did not relieve the hub coupling; it tightened
+it. Arm C's wider bound is now the only lever left in this cycle, and the trend across three
+regimes (Stage B → arm A → arm B) is monotone in the wrong direction.
+
+### Δc barely moved, and F23's first clause fails
+
+| | c(79) | c(159) | **Δc** |
+|---|---|---|---|
+| arm A (6 seeds) | +9.746 ± 0.197 | +10.789 ± 0.394 | **+1.042 ± 0.197** |
+| **arm B (4 seeds)** | +10.455 ± 0.319 | +11.449 ± 0.638 | **+0.994 ± 0.320** |
+| fall | | | **0.048 eV** |
+
+F23's pre-registered clause was Δc(A) − 0.40 ≤ Δc(B) ≤ Δc(A) − 0.20, i.e. **[+0.64, +0.84]**.
+Measured **+0.994** — above the band. **The clause fails**, and by a wide margin: the fall is
+0.048 eV against a forecast 0.2–0.4.
+
+**And that contradicts the calibration-stage evidence, which is the interesting part.** At
+epoch 0, before any training, the image term cut Δc₀ from +0.766 to +0.417 — a fall of
+**0.349 eV**, inside the forecast band, and the first direct proof the term does anything.
+After 24 epochs that fall is 0.048 eV. Training erased 86% of it.
+
+The mechanism is §0's own rule 2. Under the null gate c(79) receives no gradient and is
+frozen at its epoch-0 calibration; c(159) is the only energy-referenced constant left and is
+trained. So the *trained* Δc is dominated by wherever the 159 column drifts to — and it
+drifts to roughly the same place in both arms, because it is absorbing whatever the energy
+loss cannot place elsewhere, which the image term does not change.
+
+**The null gate made Δc insensitive to the thing F23 asked it to measure.** F23 was written
+before the null gate's consequence for the c table was understood, and it is measuring the
+159 column's drift rather than the image compensation. That is a defect in the *forecast*,
+not in the term: the honest reading is that Δc cannot score the image term while one column
+of the c table is frozen, and the term's evidence has to come from gate 10's tiling drift —
+which is what §2.5 said in the first place, and now for a third reason.
+
+*(F23's other three clauses — R in band, thermal drift ≤ 0.3·D0, F4 holds — are scored on the
+six-seed set.)*
