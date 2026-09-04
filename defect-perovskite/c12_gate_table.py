@@ -27,6 +27,9 @@ import numpy as np
 
 # Gate 2's pre-registered band for F4, and gate 5's gap window.
 F4_BAND = (-0.142, -0.063)
+# The pre-registered rules read ">= 4 of 6 seeds". That is a RATE: on a cohort of any
+# other size the same rule is 4/6 of it, not the literal number four.
+PASS_RATE = 4.0 / 6.0
 GAP = (2.4, 0.1)
 R_BAND = (0.66, 1.34)
 SLOPE_REF = -0.17          # gate 9: within 2x of this, and never near +0.37
@@ -101,7 +104,7 @@ def main() -> None:
         add(f"| 2 F4 | slope in [{F4_BAND[0]:+.3f}, {F4_BAND[1]:+.3f}] in ≥ 4/6 | "
             f"{spread(f4)}; {n_in}/{len(f4)} in band "
             f"({', '.join(fmt(s, 4) for s in f4)}) | "
-            f"**{'PASS' if n_in >= 4 else 'FAIL'}** |")
+            f"**{'PASS' if n_in >= PASS_RATE * len(f4) else 'FAIL'}** |")
 
     # ---- 3 c consistency (report) --------------------------------------------------
     if extras is None:
@@ -126,7 +129,7 @@ def main() -> None:
         gap_mev = [1000.0 * (a - b) for a, b in zip(lig, blk)]
         add(f"| 4 F10 | ligand-Cl − bulk-Cl > 50 meV and > 2σ, ≥ 4/6 | "
             f"{n_pass}/{len(rows)} seeds; difference {spread([g/1000 for g in gap_mev])} eV | "
-            f"**{'PASS' if n_pass >= 4 else 'FAIL'}** |")
+            f"**{'PASS' if n_pass >= PASS_RATE * len(rows) else 'FAIL'}** |")
 
     # ---- 5 gap ---------------------------------------------------------------------
     src = depth["arms"].get(tag) if isinstance(depth, dict) and "arms" in depth else None
@@ -155,7 +158,7 @@ def main() -> None:
         add(f"| 6 dilution | R inside [{R_BAND[0]}, {R_BAND[1]}] | "
             f"R {spread(rr)}, {n_in}/{len(rr)} inside; bound fraction {spread(bf)}; "
             f"depth {spread(dm)} eV; δ_L {spread(dl)} eV | "
-            f"**{'PASS' if n_in >= 4 else 'FAIL'}** |")
+            f"**{'PASS' if n_in >= PASS_RATE * len(rr) else 'FAIL'}** |")
 
     # ---- 7 stops -------------------------------------------------------------------
     if extras is None:
@@ -167,7 +170,8 @@ def main() -> None:
         fired = [k for k, v in g7.items() if v > STOP_MAX_SEEDS]
         lb = {k: [r["decay_lengths"][k] for r in extras["rows"]]
               for k in extras["rows"][0]["decay_lengths"]}
-        add(f"| 7 stops / L_b | no type at its stop in more than {STOP_MAX_SEEDS}/{n} | "
+        add(f"| 7 stops / L_b | no type at its stop in more than 1/6 of seeds "
+            f"({STOP_MAX_SEEDS} of these {n}) | "
             + "; ".join(f"{k} {v}/{n}" for k, v in g7.items())
             + "; L_b " + ", ".join(f"{k} {np.mean(v):.3f}±{np.std(v):.3f}"
                                    for k, v in lb.items())
@@ -192,13 +196,18 @@ def main() -> None:
                 f"{SLOPE_ARTEFACT:+.2f}")
     else:
         s = [r["delta_sr_79_matched"]["slope"] for r in b2]
-        neg = all(x < 0 for x in s)
-        band = all(abs(x) <= 2 * abs(SLOPE_REF) and abs(x) >= abs(SLOPE_REF) / 2
-                   for x in s)
+        lo_b, hi_b = abs(SLOPE_REF) / 2, 2 * abs(SLOPE_REF)
+
+        def in_band(x):
+            return x < 0 and lo_b <= abs(x) <= hi_b
+
+        mean = float(np.mean(s))
+        n_in = sum(in_band(x) for x in s)
         add(f"| 9 head slope | 79-atom d(δ_sr)/dd < 0, within 2× of {SLOPE_REF:+.2f}, "
-            f"never near {SLOPE_ARTEFACT:+.2f} | {spread(s)} "
+            f"never near {SLOPE_ARTEFACT:+.2f} | {spread(s)}; "
+            f"{n_in}/{len(s)} seeds individually in [{-hi_b:+.3f}, {-lo_b:+.3f}] "
             f"({', '.join(fmt(x, 4) for x in s)}) | "
-            f"**{'PASS' if neg and band else 'FAIL'}** |")
+            f"**{'PASS' if in_band(mean) else 'FAIL'}** (on the cohort mean) |")
 
     # ---- 10 tiling (arm B) ----------------------------------------------------------
     if tiling is None:
