@@ -310,3 +310,28 @@ scores a mixed model on a float32 batch), and the wave-1 adoption scoring was re
 - Gate 5: pristine gap 2.381–2.426 eV, all within 2.4 ± 0.1.
 - Depth from the CBM 0.014–0.111 eV (shallow donor), seed spread larger than the joint
   cohort's.
+
+## 5.5 — Stage B wave 2 (seeds 5–6) finals, and participation over all six
+
+Wave 2 ran 23:40–04:02 (b3 clock). Finals: s5 5.6 / 16.6, s6 5.5 / 16.8 meV/atom, meV/Å;
+c(79) / c(159) +9.709 / +10.452 (s5), +9.535 / +10.292 (s6); |W_site| 0.059 / 0.084; Z
+projection held.
+
+Participation (1/Σα² on carrier-bearing validation frames) at epochs 0 / 4 / 8 / 12 / 16
+/ 20:
+
+| seed | 0 | 4 | 8 | 12 | 16 | 20 |
+|---|---|---|---|---|---|---|
+| s1 | 10.17 | 9.05 | 7.88 | 7.49 | 6.70 | 8.08 |
+| s2 | 9.82 | 8.36 | 8.23 | 6.06 | 6.64 | 6.96 |
+| s3 | 9.57 | 8.41 | 7.46 | 7.85 | 8.21 | 7.90 |
+| s4 | 11.36 | 8.67 | 7.70 | 7.56 | 6.09 | 6.14 |
+| s5 | 9.71 | 8.46 | 6.41 | 7.53 | 7.61 | 6.75 |
+| s6 | 9.60 | 6.88 | 6.49 | 6.23 | 6.96 | 6.27 |
+
+Six seeds, one direction: 9.6–11.4 at epoch 0 to 6.1–8.1 at epoch 20, spread 2.0 at the
+end against the joint cohort's 5.7 (11.2 vs 5.4). No reversal at any epoch and no
+three-and-three split: with E_LR on from epoch 0, detached and frozen, the branch that
+turned the joint cohort's participation around at epoch 12 does not act. F18's first
+clause (spread halves relative to the joint cohort) is met on this measure: 2.0 against
+5.7; the registered measure is the charged/pristine ratio from b13, scored with the gates.
