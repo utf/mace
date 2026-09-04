@@ -203,7 +203,52 @@ Harrison's 1/d² rescales the pair initialisations by 1.97, 1.33, 0.68, 0.96, 0.
 
 ## 4. The arms
 
-*(pending — arm A launched 4 Sep, six seeds; arm B follows; arm C only if gate 7 fires)*
+### 4.1 The regime, which is one string for both arms but one difference
+
+Six seeds each, launched 4 Sep 2026 on b3 GPUs 4–7, four at a time, two waves of four and
+two. Head only on the frozen A′ production base (`aprime_prod`); no charged label touches the
+base in either arm.
+
+| | value |
+|---|---|
+| trunk | frozen `aprime_prod`, `BASE_LR_FACTOR=0`, base cache on, trunk f32 / head f64 |
+| head | counting head, γ = 3.0, hop range 0.5, Gaussian smearing at t_el = 0.05 |
+| centring | `DEFECT_ON_SITE_CENTRED=True`, **`CENTRE_FORM=argument`** — §2.1's corrected form |
+| envelope | exp, L0 = 1.0 Å, four learned decay lengths at β_L = ln 2, anchored at r_cov(s) + r_cov(s′); **no `d_ref`** |
+| hopping | log modulation, β = ln 1.5 (arms A and B); **ln 2 in arm C** and nothing else changes |
+| charges | Madelung on-site, ε∞ = 4.0 passed explicitly, composition 3,1,1, Z init (−1, 1, 2), **ζ = 1.0 e per-site channel** |
+| E_LR | on from epoch 0, density detached, branch frozen |
+| objective | forces on every charged frame, large-cell share 0.25; **charged energies only for size classes with a neutral null**, share 0.25; no `w_E` |
+| batching | **size-grouped**, batch 8, 24 epochs, lr 5e-3, eval every 4 |
+| protocol | head-only, warm-up 5, c per (charge, size) |
+| **the arm difference** | `DEFECT_IMAGE_COMPENSATION` — **False in A, True in B** |
+
+The null file was rebuilt from `aprime_reference.json` at launch and read:
+
+    79 atoms   +0.1147 [+0.0947, +0.1348] eV/Å   resolved, not nulled
+    159 atoms  +0.0243 [−0.0697, +0.1184] eV/Å   NULLED
+    charged energies will enter the loss for sizes [159]
+
+so §0 rule 2 bites exactly where it was designed to: 159 keeps its charged energies, 79 keeps
+only its forces.
+
+### 4.2 What each arm cost
+
+*(pending — wall clock per wave, epochs, and the realised shares)*
+
+### 4.3 Arm A
+
+*(pending)*
+
+### 4.4 Arm B
+
+*(pending)*
+
+### 4.5 Arm C
+
+*(pending — runs only if gate 7 fires on arm A, under the trigger pre-registered in
+`CYCLE_SPEED_ARMS_RESULTS.md` before arm A's numbers existed: any integral type at its stop,
+|tanh g| > 0.98, in more than 1/6 seeds)*
 
 ---
 
