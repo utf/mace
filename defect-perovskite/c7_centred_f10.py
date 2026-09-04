@@ -80,7 +80,8 @@ def main() -> None:
     ap.add_argument("--data", type=Path, default=here / "dataset_pbe" / "train.xyz")
     ap.add_argument("--frames", type=int, default=8)
     ap.add_argument("--device", default="cuda")
-    ap.add_argument("--eps-inf", type=float, default=4.0)
+    ap.add_argument("--eps-inf", type=float, default=None,
+                    help="per-host input; read off the model when omitted")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
 

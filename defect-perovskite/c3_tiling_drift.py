@@ -104,7 +104,8 @@ def main() -> None:
                     help="thermal pristine snapshots to tile as well as the ideal cell "
                          "(gate 10); 0 for the ideal arm alone")
     ap.add_argument("--device", default="cuda")
-    ap.add_argument("--eps-inf", type=float, default=4.0)
+    ap.add_argument("--eps-inf", type=float, default=None,
+                    help="per-host input; read off the model when omitted")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
 

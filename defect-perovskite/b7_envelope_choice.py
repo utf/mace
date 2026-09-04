@@ -47,7 +47,7 @@ from ase.io import read as ase_read
 
 import mace  # noqa: F401  (before e3nn)
 from mace import tools
-from mace.modules.defect_context import EPS_INF_DEFAULT, ForwardContext
+from mace.modules.defect_context import ForwardContext
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from b3_hopping_channel import (HubProbe, derivative, hub_of,  # noqa: E402
@@ -83,7 +83,8 @@ def main() -> None:
     ap.add_argument("--seeds", type=int, default=2)
     ap.add_argument("--e-gap", type=float, default=2.4)
     ap.add_argument("--step", type=float, default=0.05)
-    ap.add_argument("--eps-inf", type=float, default=EPS_INF_DEFAULT)
+    ap.add_argument("--eps-inf", type=float, required=True,
+                    help="per-host input; this script builds a model rather than loading one, so there is nothing to read it off and no default to fall back on")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()

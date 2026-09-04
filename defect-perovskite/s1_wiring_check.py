@@ -35,7 +35,7 @@ import torch
 
 import mace  # noqa: F401  (before e3nn)
 from mace import tools
-from mace.modules.defect_context import EPS_INF_DEFAULT, ForwardContext
+from mace.modules.defect_context import ForwardContext
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from r1_matrix import make_batches  # noqa: E402
@@ -88,7 +88,8 @@ def main() -> None:
                          "float32 used to fail on")
     ap.add_argument("--steps", type=int, default=6)
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--eps-inf", type=float, default=EPS_INF_DEFAULT)
+    ap.add_argument("--eps-inf", type=float, required=True,
+                    help="per-host input; this script builds a model rather than loading one, so there is nothing to read it off and no default to fall back on")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
 

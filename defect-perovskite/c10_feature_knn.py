@@ -36,7 +36,7 @@ import torch
 
 import mace  # noqa: F401  (before e3nn)
 from mace import tools
-from mace.modules.defect_context import EPS_INF_DEFAULT, ForwardContext
+from mace.modules.defect_context import ForwardContext
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from e0_residual_maps import _assert_repo  # noqa: E402
@@ -77,7 +77,8 @@ def main() -> None:
     ap.add_argument("--n-neutral", type=int, default=400,
                     help="neutral frames sampled for the reference cloud")
     ap.add_argument("--n-charged", type=int, default=400)
-    ap.add_argument("--eps-inf", type=float, default=EPS_INF_DEFAULT)
+    ap.add_argument("--eps-inf", type=float, default=None,
+                    help="per-host input; read off the model when omitted")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", type=Path, required=True)

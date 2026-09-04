@@ -42,7 +42,7 @@ import torch
 
 import mace  # noqa: F401  (before e3nn)
 from mace import tools
-from mace.modules.defect_context import EPS_INF_DEFAULT, ForwardContext
+from mace.modules.defect_context import ForwardContext
 from mace.modules.defect_protocol import c_shift_terms, zero_on_site_correction
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -83,7 +83,8 @@ def main() -> None:
                     "trainer's whole-set value rather than the harness's first-48 value, the "
                     "difference is the frame set after all -- in the term b11 could not see, "
                     "which is E_head")
-    ap.add_argument("--eps-inf", type=float, default=EPS_INF_DEFAULT)
+    ap.add_argument("--eps-inf", type=float, required=True,
+                    help="per-host input; this script builds a model rather than loading one, so there is nothing to read it off and no default to fall back on")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()

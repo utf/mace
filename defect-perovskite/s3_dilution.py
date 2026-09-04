@@ -47,7 +47,7 @@ from ase.io import read as ase_read
 
 import mace  # noqa: F401  (before e3nn)
 from mace import tools
-from mace.modules.defect_context import EPS_INF_DEFAULT, ForwardContext
+from mace.modules.defect_context import ForwardContext
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from d1_sensitivity import select_pristine  # noqa: E402
@@ -151,7 +151,8 @@ def main() -> None:
     ap.add_argument("--data", type=Path, default=here / "dataset_pbe" / "train.xyz")
     ap.add_argument("--tol", type=float, default=0.10, help="d-matching window, A")
     ap.add_argument("--n-pristine", type=int, default=4)
-    ap.add_argument("--eps-inf", type=float, default=EPS_INF_DEFAULT)
+    ap.add_argument("--eps-inf", type=float, default=None,
+                    help="per-host input; read off the model when omitted")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", type=Path, required=True)

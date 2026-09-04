@@ -25,8 +25,13 @@ window, `d(delta_sr)/dd` and `dlambda_frontier/dd`.
 | `dlambda_frontier/dd`, Stage B | +0.1885 ± 0.0240 | +0.1409 ± 0.0242 |
 | `dlambda_frontier/dd`, s7 | +0.1846 ± 0.0223 | +0.0736 ± 0.0103 |
 
-Per seed, 79 atoms: s1 −0.1611, s2 −0.1810, s3 −0.1901, s4 −0.1817, s5 −0.1926, s6 −0.1757
-(`~/runs/stageb_b2.json` on b3).
+Per seed, 79 atoms: s1 −0.2156, s2 −0.1697, s3 −0.1922, s4 −0.1367, s5 −0.1926, s6 −0.1757
+(`~/runs/stageb_b2.json` on b3; mean −0.1804, sd 0.0244). Per seed, 159 atoms (matched):
+−0.1050, −0.1578, −0.1055, −0.1475, −0.1498, −0.1119.
+
+*(An earlier revision of this line listed a different six numbers; they were mis-transcribed
+from the JSON. The aggregates quoted in the table above were always the JSON's own and are
+unchanged.)*
 
 **F25 clause 1 fails.** The forecast was that giving the head full-weight 79-atom charged
 energies moved its small-cell slope *toward* the base's +0.37 artefact. It did not: the
@@ -332,3 +337,105 @@ against the retired single 2.861, so Harrison's 1/d² rescales the pair initiali
 1.97, 1.33, 0.68, 0.96, 0.54 and 0.34. The gate is unmoved: the initialisation is still
 band-like, with a slightly wider band and slightly tighter frontier edges. §2.3's
 "init gate unchanged" holds as measured rather than as assumed.
+
+---
+
+## Pre-registration, written 2026-09-04 while arm A is still training
+
+Everything below is fixed **before** arm A's numbers exist. It is here so that the arm-C
+decision, the F22 verdict and the Δc reading are not choices made after seeing the answer.
+
+### The arm-C trigger (spec §4, gate 7)
+
+Gate 7 is a *report* in §6, so the spec does not itself define the firing condition; the
+condition is carried over verbatim from Stage A′, where it was pre-registered and failed:
+
+> **fires if any integral type is at its stop in more than 1/6 seeds**, "at the stop" meaning
+> the type's log modulation satisfies `|tanh g| > 0.98`.
+
+Stage B's counts under exactly this rule: ss-σ 3/6, sp-σ 1/6, pp-σ 2/6, pp-π 5/6 — it fired
+on three of four types. Arm A is expected to fire too; the arm-C launch is therefore planned,
+not contingent on a surprise. If it fires, arm C is `ARM=c` in `queue_arms.sh` (β widened to
+ln 2 = 0.693), six seeds in two waves of four and two, ≈ 3.3 h, scored on gates 2, 5 and 7 at
+minimum and on the full ten if the wall clock allows.
+
+### F22's pass condition
+
+F22 says "the pp stop falls by half". Against Stage B's baseline that is
+
+| type | Stage B at the stop | F22 passes if |
+|---|---|---|
+| pp-σ | 2/6 | ≤ 1/6 |
+| pp-π | 5/6 | ≤ 2/6 |
+
+Both must hold. ss-σ and sp-σ are reported but do not enter F22.
+
+### How Δc will be read (spec §8.5, the Δc-origin decision)
+
+Three measurements, of which two now exist and the third arrives with arm B:
+
+1. **Stage B**: Δc = +0.772 ± 0.029 eV, predicted +0.049 ± 0.003. 79-atom charged *energies*
+   were in the objective.
+2. **Arm A**: the null gate removes 79-atom charged energies from the loss entirely. c(79) is
+   still *calibrated* (the residual mean per (charge, size) is still computed) but no energy
+   gradient reaches it. So arm A's Δc is the calibration offset alone, with no fitted
+   component — a measurement Stage B could not make.
+3. **Arm B**: arm A plus the image term. The image term is the only electrostatic change.
+
+The decision rule, fixed now:
+
+- If **Δc(A) ≈ Δc(B)** to within the seed spread, the image interaction is not its origin.
+- If **Δc(A) ≈ Δc(Stage B)**, the fit was not making it either: it is in the labels'
+  size referencing, entering through the calibration, and the remedy is a label-side
+  re-referencing, not a model term.
+- If **Δc(A) falls towards the predicted +0.05** while Stage B's was +0.77, then the 79-atom
+  charged energies *were* driving it, and dropping them (which the null gate does
+  permanently) has already fixed it.
+- If **Δc(B) < Δc(A)** by more than the spread, the image term is carrying part of it and the
+  compensation is doing real work on the referencing.
+
+Any other pattern is reported as unresolved rather than forced into one of these.
+
+### Gate 10 must be run by hand
+
+The chain now running on b3 parsed its `gates()` body at launch, before the
+`c3_tiling_drift.py --thermal 3` block was added to the file. `gates armb` will therefore
+**not** run gate 10. After arm B lands:
+
+    CUDA_VISIBLE_DEVICES=6 python -u c3_tiling_drift.py \
+        --models ~/runs/armb_models/armb_s*.model --thermal 3 \
+        --device cuda --out ~/runs/armb_tiling.json
+
+and the `s` distribution per frame goes in gate 10's row alongside the drift verdicts.
+
+---
+
+## Regression check: the Stage B cohort is still scorable under the new code
+
+Run 2026-09-04 on the local A4000, forward-only, `stageb_s1.model` (md5
+`00ffb8ad…`, byte-identical to b3's `stageb_models/stageb_s1.model`), against the value
+recorded in `~/runs/stageb_b2.json` from before any of this cycle's model edits.
+
+| path | `d(delta_sr)/dd`, 79 atoms | difference from the recorded value |
+|---|---|---|
+| recorded, pre-cycle (b3) | −0.215623631885 | — |
+| new code, batched solve | −0.215623620610 | +1.1e-08 |
+| new code, `batch_by_size` forced off (loop solve) | −0.215623622067 | +9.8e-09 |
+| new code, `zero_at_neutral_counts` forced off (reference computed, not skipped) | −0.215623623284 | +8.6e-09 |
+
+Three claims are checked at once and all three hold:
+
+1. **The legacy pickle path is exact.** A Stage B model has no `d_ref_pair` buffer and no
+   `centre_form` attribute; the scalar-`d_ref` fallback in `radial`/`_anchor` and the
+   `"output"` default in `__setstate__` reproduce that model's own arithmetic to 1e-8 across
+   a different GPU. Old cohorts stay comparable to new ones.
+2. **The batched solve is the loop solve.** Not a synthetic bit-identity test this time but a
+   fitted slope over 120 frames, which would amplify any per-frame discrepancy.
+3. **The neutral-reference skip is exactly the branch it replaces**, on a real trained model
+   rather than on the test's constructed one — the branch really was computing zero.
+
+The residual 1e-8 is the two GPUs' reduction order, not a code difference.
+
+**One correction fell out of this.** The per-seed list under §5.1 did not match
+`stageb_b2.json`; it has been replaced with the JSON's own numbers. The cohort aggregates
+quoted against the gates were read from the JSON and never changed.

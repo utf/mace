@@ -41,7 +41,7 @@ import torch
 
 import mace  # noqa: F401  (before e3nn)
 from mace import tools
-from mace.modules.defect_context import EPS_INF_DEFAULT, ForwardContext
+from mace.modules.defect_context import ForwardContext
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from e0_residual_maps import _assert_repo  # noqa: E402
@@ -404,7 +404,8 @@ def main() -> None:
     ap.add_argument("--lr", type=float, default=0.01)
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--seed-start", type=int, default=1)
-    ap.add_argument("--eps-inf", type=float, default=EPS_INF_DEFAULT)
+    ap.add_argument("--eps-inf", type=float, required=True,
+                    help="per-host input; this script builds a model rather than loading one, so there is nothing to read it off and no default to fall back on")
     ap.add_argument("--e-gap", type=float, default=2.4,
                     help="host band gap for loss_gap (stage 3); sensitivity 2.2")
     ap.add_argument("--w-gap", type=float, default=1.0)

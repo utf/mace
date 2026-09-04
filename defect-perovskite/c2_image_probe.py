@@ -68,7 +68,8 @@ def main() -> None:
     ap.add_argument("--n-small", type=int, default=24)
     ap.add_argument("--n-pristine", type=int, default=3)
     ap.add_argument("--device", default="cuda")
-    ap.add_argument("--eps-inf", type=float, default=4.0)
+    ap.add_argument("--eps-inf", type=float, default=None,
+                    help="per-host input; read off the model when omitted")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
 

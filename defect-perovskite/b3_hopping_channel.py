@@ -57,7 +57,7 @@ import mace  # noqa: F401  (before e3nn)
 from ase.geometry import get_distances
 
 from mace import tools
-from mace.modules.defect_context import EPS_INF_DEFAULT, ForwardContext
+from mace.modules.defect_context import ForwardContext
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from e0_residual_maps import _assert_repo  # noqa: E402
@@ -254,7 +254,8 @@ def main() -> None:
     ap.add_argument("--frames", type=int, default=16)
     ap.add_argument("--step", type=float, default=0.05,
                     help="half the total hub displacement, A")
-    ap.add_argument("--eps-inf", type=float, default=EPS_INF_DEFAULT)
+    ap.add_argument("--eps-inf", type=float, default=None,
+                    help="per-host input; read off the model when omitted")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()

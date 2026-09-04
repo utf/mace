@@ -23,7 +23,7 @@ import torch
 
 import mace  # noqa: F401  (before e3nn)
 from mace import tools
-from mace.modules.defect_context import EPS_INF_DEFAULT, ForwardContext
+from mace.modules.defect_context import ForwardContext
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from r1_matrix import make_batches  # noqa: E402
@@ -39,7 +39,8 @@ def main() -> None:
     ap.add_argument("--models", nargs="+", type=Path, required=True)
     ap.add_argument("--data", type=Path, default=here / "dataset_pbe" / "train.xyz")
     ap.add_argument("--atoms", type=int, default=159)
-    ap.add_argument("--eps-inf", type=float, default=EPS_INF_DEFAULT)
+    ap.add_argument("--eps-inf", type=float, default=None,
+                    help="per-host input; read off the model when omitted")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()

@@ -35,7 +35,7 @@ import torch
 
 import mace  # noqa: F401  (before e3nn)
 from mace import tools
-from mace.modules.defect_context import EPS_INF_DEFAULT, ForwardContext
+from mace.modules.defect_context import ForwardContext
 from mace.tools.model_script_utils import _defect_madelung_kwargs
 from mace.tools.scripts_utils import extract_config_mace_model
 
@@ -70,7 +70,8 @@ def main() -> None:
     ap.add_argument("--arch", type=Path, required=True)
     ap.add_argument("--base", type=Path, required=True)
     ap.add_argument("--data", type=Path, default=here / "dataset_pbe" / "valid.xyz")
-    ap.add_argument("--eps-inf", type=float, default=EPS_INF_DEFAULT)
+    ap.add_argument("--eps-inf", type=float, required=True,
+                    help="per-host input; this script builds a model rather than loading one, so there is nothing to read it off and no default to fall back on")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
 

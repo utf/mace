@@ -29,7 +29,6 @@ import torch
 
 import mace  # noqa: F401  (before e3nn)
 from mace import tools
-from mace.modules.defect_context import EPS_INF_DEFAULT
 from mace.modules.defect_madelung import self_potential_of
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -45,7 +44,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--models", nargs="+", type=Path, required=True)
     ap.add_argument("--data", type=Path, default=here / "dataset_pbe" / "train.xyz")
-    ap.add_argument("--eps-inf", type=float, default=EPS_INF_DEFAULT)
+    ap.add_argument("--eps-inf", type=float, default=None,
+                    help="per-host input; read off the model when omitted")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
@@ -74,7 +74,13 @@ def main() -> None:
             cell = batch.cell.reshape(1, 3, 3).to(args.device)
             a_ii = float(self_potential_of(model.latent_ewald, cell)[0])
             # delta_eps_s = -A_ii Z_s / eps_inf: what the correction adds back.
-            deltas = {SYMBOL[i]: -a_ii * z / args.eps_inf
+            # Standing rule 1: the model's own eps_inf, not a constant in this file.
+            eps_inf = float(args.eps_inf if args.eps_inf else
+                            getattr(model, "madelung_eps_inf", 0.0) or 0.0)
+            if eps_inf <= 0.0:
+                raise SystemExit(
+                    "this model carries no madelung_eps_inf; pass --eps-inf")
+            deltas = {SYMBOL[i]: -a_ii * z / eps_inf
                       for i, z in enumerate(z_learned)}
             entry["sizes"][str(n)] = {"A_ii": a_ii, "delta_eps": deltas}
             print(f"  {entry['model']:20s} n={n:3d}  A_ii {a_ii:+.4f} eV  "
