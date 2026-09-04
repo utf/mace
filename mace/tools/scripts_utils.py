@@ -500,6 +500,8 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         config["composition_classes"] = None if classes is None else copy.deepcopy(classes)
         ctor = getattr(model, "class_constructor", None)
         config["class_constructor"] = None if ctor is None else dict(ctor)
+        functional = getattr(model, "functional", None)
+        config["functional"] = None if functional is None else copy.deepcopy(functional)
         if getattr(model, "madelung", None) is not None:
             config["madelung_composition"] = [
                 float(x) for x in model.madelung.composition]

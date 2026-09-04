@@ -62,7 +62,8 @@ __all__ = ["CLASS_TABLE_VERSION", "QUANTILES", "TIER2_NAMES", "EdgeAlignment",
            "align_edges", "tier1", "class_integers", "frame_counts", "head_spectra",
            "tiling_factors", "tiling_map", "tile_frame", "build_class_table",
            "lookup_class", "verify_class_table", "describe", "DEFAULT_CONSTRUCTOR",
-           "constructor_config"]
+           "constructor_config", "frame_counts_batch", "frame_static_densities",
+           "pristine_placement", "species_charges", "tiled_pristine_scaled"]
 
 CLASS_TABLE_VERSION = 1
 BOUNDARY_TOL = 1e-9   # eV; a level exactly on the window's edge is on the edge, not inside
@@ -242,6 +243,8 @@ class ClassRecord:
     gamma: Tuple[float, ...] = field(default_factory=tuple)   # Tier 2 endpoint spectrum
     correspondence: Optional[Dict[str, Any]] = None           # Tier 2 site correspondence
     tier1_reason: str = ""                                    # why Tier 1 handed it on
+    perm: Tuple[int, int, int] = (0, 1, 2)                    # frame axis i <- tiled axis perm[i]
+    placement: Optional[Dict[str, Any]] = None                # density-level pristine placement
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -253,7 +256,7 @@ class ClassRecord:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "ClassRecord":
         d = dict(d)
-        for k in ("n_sigma", "m_vb", "n_e", "n_h", "gamma", "tiling"):
+        for k in ("n_sigma", "m_vb", "n_e", "n_h", "gamma", "tiling", "perm"):
             if k in d and d[k] is not None:
                 d[k] = tuple(d[k])
         return cls(**d)
@@ -558,18 +561,115 @@ def build_class_table(model, frames: Sequence, device="cpu", formula=None,
         m_vb = (m_vb_one, m_vb_one)
         accepted = tier is not None
         n_e, n_h, q_core = class_integers(m_vb, n_sig) if accepted else ((0, 0), (0, 0), 0)
+        placement = pristine_placement(model, fr, pristine_frame, factors, perm)
         record = ClassRecord(
             key=key, n_atoms=spec["n_atoms"], reference_frame_key=_frame_key_of(fr),
             n_total=spec["n_total"], n_sigma=n_sig, tier=tier, ambiguous=not accepted,
             reason=reason, m_vb=m_vb, n_e=n_e, n_h=n_h, q_core=q_core, vbm_al=aligned.vbm_al,
             cbm_al=aligned.cbm_al, shift=aligned.shift, spread=aligned.spread,
             gap_pristine=aligned.gap_pristine, delta=delta, nearest=nearest, tiling=factors,
-            **extra)
+            perm=perm, placement=placement, **extra)
         table["classes"][key] = record.to_dict()
         if log:
             logging.info("Composition class %s (%d atoms, ref frame %d): %s", key,
                          record.n_atoms, record.reference_frame_key, describe(record))
     return table
+
+
+def species_charges(model) -> Optional[torch.Tensor]:
+    """`Z0` per species in the model's own order (the Madelung baseline), or None when the
+    model carries no static charges -- then no static density exists."""
+    madelung = getattr(model, "madelung", None)
+    if madelung is None:
+        return None
+    return madelung.z.detach()
+
+
+def tiled_pristine_scaled(model, pristine_frame, factors, perm
+                          ) -> Tuple[torch.Tensor, torch.Tensor]:
+    """The tiled pristine reference as `(species index [n0], scaled positions [n0, 3])`, the
+    scaled coordinates already in the FRAME's axis order (`perm`)."""
+    numbers, pos, cell = _frame_geometry(pristine_frame, model)
+    numbers, pos, cell = tile_frame(numbers, pos, cell, factors)
+    scaled = pos @ np.linalg.inv(cell)
+    scaled = scaled[:, list(perm)]
+    zs = [int(z) for z in model.atomic_numbers]
+    species = torch.tensor([zs.index(int(z)) for z in numbers], dtype=torch.long)
+    return species, torch.tensor(scaled, dtype=torch.get_default_dtype())
+
+
+def pristine_placement(model, class_frame, pristine_frame, factors, perm,
+                       r_res: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    """The fractional shift placing the tiled pristine density in the class reference frame,
+    by minimising `||rho_static^raw||` (`defect_density.align_pristine`). None when the model
+    carries no static charges."""
+    from mace.modules import defect_density as dd
+
+    z0 = species_charges(model)
+    if z0 is None:
+        return None
+    r_res = float(_functional(model)["r_res"]) if r_res is None else float(r_res)
+    numbers, pos, cell = _frame_geometry(class_frame, model)
+    zs = [int(z) for z in model.atomic_numbers]
+    species = torch.tensor([zs.index(int(z)) for z in numbers], dtype=torch.long)
+    dtype = torch.get_default_dtype()
+    present = dd.static_present(z0.to(dtype)[species], torch.tensor(pos, dtype=dtype),
+                                torch.tensor(cell, dtype=dtype), r_res)
+    pri_species, scaled = tiled_pristine_scaled(model, pristine_frame, factors, perm)
+    shared = sorted(set(species.tolist()) & set(pri_species.tolist()))
+    anchor_species = max(shared, key=lambda i: zs[i])
+    anchor = int(torch.nonzero(species == anchor_species).reshape(-1)[0])
+    shift, residual = dd.align_pristine(present, z0.to(dtype)[pri_species], scaled,
+                                        pri_species == anchor_species, anchor)
+    return {"shift": [float(x) for x in shift], "residual_norm": residual, "r_res": r_res}
+
+
+def _functional(model) -> Dict[str, Any]:
+    from mace.modules.defect_density import functional_config
+
+    return functional_config(getattr(model, "functional", None))
+
+
+def frame_static_densities(model, record: ClassRecord, pristine_frame, charges: torch.Tensor,
+                           positions: torch.Tensor, cell: torch.Tensor,
+                           r_res: Optional[float] = None) -> Dict[str, Any]:
+    """`rho_Z^present`, `rho_Z^pristine`, `rho_static^raw`, `g_res` and `rho_static^def` for
+    one frame of `record`'s class, reusing the class placement. `charges` are the frame's
+    static charges `Z_i` (with any per-site deviation), `positions`/`cell` the frame's.
+    Reports `||rho_static^raw||` so a frame from a different origin is visible."""
+    from mace.modules import defect_density as dd
+
+    if record.placement is None:
+        raise ValueError(f"class {record.key} has no pristine placement (no static charges)")
+    r_res = float(record.placement["r_res"]) if r_res is None else float(r_res)
+    z0 = species_charges(model).to(positions.dtype)
+    present = dd.static_present(charges, positions, cell, r_res)
+    pri_species, scaled = tiled_pristine_scaled(model, pristine_frame, record.tiling, record.perm)
+    shift = torch.tensor(record.placement["shift"], dtype=positions.dtype)
+    pristine = dd.pristine_placed(z0[pri_species.to(z0.device)], scaled.to(positions.dtype), cell,
+                                  shift, r_res)
+    raw = dd.static_raw(present, pristine)
+    g_res = dd.residual_shape(raw, positions, pristine.centres)
+    if not record.counted:
+        raise ValueError(f"class {record.key} carries no Q_core; rho_static^def is undefined")
+    static = dd.static_def(raw, g_res, record.q_core)
+    return {"present": present, "pristine": pristine, "raw": raw, "g_res": g_res,
+            "static": static, "q_raw": raw.integral(), "raw_norm": raw.norm()}
+
+
+def frame_counts_batch(table: Dict[str, Any], atomic_numbers: Sequence[Sequence[int]],
+                       state: StateBatch) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """`frame_counts` over a batch: `(n_e [B, 2], n_h [B, 2], q_F [B])` as long tensors, from
+    each graph's composition and the exact state. Refuses a composition outside the table."""
+    n_e, n_h, q_f = [], [], []
+    for g, numbers in enumerate(atomic_numbers):
+        record = lookup_class(table, numbers)
+        e, h, q = frame_counts(record, state, g)
+        n_e.append(e)
+        n_h.append(h)
+        q_f.append(q)
+    return (torch.tensor(n_e, dtype=torch.long), torch.tensor(n_h, dtype=torch.long),
+            torch.tensor(q_f, dtype=torch.long))
 
 
 def _uncounted(key, fr, model, delta, reason) -> ClassRecord:

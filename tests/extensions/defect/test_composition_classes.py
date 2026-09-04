@@ -310,7 +310,16 @@ class TestOnTheHarrisonHead:
         harrison_model.composition_classes = table
         config = extract_config_mace_model(harrison_model)
         assert config["composition_classes"] == table
-        assert config["class_constructor"] == dc.constructor_config(None)
+        # The None defaults were resolved at construction (every non-parameter float is a
+        # number in the config): delta = 2 x smearing, window = smearing.
+        width = float(harrison_model.spectral.t_el)
+        expected = dc.constructor_config(None)
+        expected.update(delta=2 * width, window=width)
+        assert config["class_constructor"] == expected
+        assert config["functional"]["delta"] == 2 * width
+        assert config["functional"]["delta_s"] == width
+        assert config["functional"]["r_split"] == 4.0
+        assert config["functional"]["r_orb"] == {17: 1.02, 55: 2.44, 82: 1.46}
         rebuilt = MACEDefect(**config)
         assert rebuilt.composition_classes == table
         assert pickle.loads(pickle.dumps(harrison_model)).composition_classes == table

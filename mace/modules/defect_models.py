@@ -216,14 +216,21 @@ class MACEDefect(ScaleShiftMACE):
         # `defect_composition.DEFAULT_CONSTRUCTOR`; a None entry means the default).
         composition_classes: Optional[Dict[str, Any]] = None,
         class_constructor: Optional[Dict[str, Any]] = None,
+        # Sections 2.7 and 3: the functional's lengths and switches (r_split, r_orb, r_res,
+        # delta, delta_s, p*, delta_p, a/b bounds, SCF tolerances, C_Q mode --
+        # `defect_density.DEFAULT_FUNCTIONAL`); None entries resolve to concrete values at
+        # construction so the extracted config carries numbers.
+        functional: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
         from mace.modules.defect_composition import constructor_config
+        from mace.modules.defect_density import functional_config
 
         self.composition_classes = (None if composition_classes is None
                                     else dict(composition_classes))
         self.class_constructor = constructor_config(class_constructor)
+        self.functional = functional_config(functional)
         from mace.modules.defect_state import (PRODUCTION_POLICIES, ElectronicStateSpec,
                                                reference_state as default_reference)
         from mace.modules.defect_terms import GAUGES
@@ -493,6 +500,7 @@ class MACEDefect(ScaleShiftMACE):
         self.spectral_decay = bool(spectral_decay)
         self.spectral_sigma = bool(spectral_sigma)
         self.spectral_gauge_penalty = bool(spectral_gauge_penalty)
+        self._resolve_functional_defaults()
 
         self.carrier_pooling = CarrierAttentionPooling(
             feature_dim=feature_dim,
@@ -687,6 +695,31 @@ class MACEDefect(ScaleShiftMACE):
         state["_collecting_centre"] = False
         return state
 
+    def _resolve_functional_defaults(self) -> None:
+        """Every non-parameter float is serialised as a number: `r_split` is the first-block
+        cutoff, `r_orb[Z]` the covalent radius, `delta` twice the head's smearing width,
+        `delta_s` the width itself, and the constructor's `delta`/`window` likewise."""
+        from mace.modules.defect_counting import COVALENT_RADII
+
+        f = self.functional
+        if f.get("r_split") is None:
+            f["r_split"] = float(self.r_max)
+        if f.get("r_orb") is None:
+            f["r_orb"] = {int(z): float(COVALENT_RADII[int(z)]) for z in self.atomic_numbers
+                          if int(z) in COVALENT_RADII}
+        head = getattr(self, "spectral", None)
+        width = float(head.t_el) if head is not None and hasattr(head, "t_el") else None
+        if width is not None:
+            if f.get("delta") is None:
+                f["delta"] = 2.0 * width
+            if f.get("delta_s") is None:
+                f["delta_s"] = width
+            c = self.class_constructor
+            if c.get("delta") is None:
+                c["delta"] = 2.0 * width
+            if c.get("window") is None:
+                c["window"] = width
+
     def __setstate__(self, state: Dict[str, Any]) -> None:
         """Fill in attributes added after a checkpoint was written.
 
@@ -728,6 +761,7 @@ class MACEDefect(ScaleShiftMACE):
             ("gauge", "periodic"),
             ("composition_classes", None),
             ("class_constructor", None),
+            ("functional", None),
         ):
             if not hasattr(self, name):
                 object.__setattr__(self, name, default)
@@ -737,6 +771,17 @@ class MACEDefect(ScaleShiftMACE):
                 "plan v8 deletes; it now evaluates without it, and its numbers are not "
                 "the numbers it was trained to produce")
             object.__setattr__(self, "image_compensation", False)
+        from mace.modules.defect_composition import constructor_config
+        from mace.modules.defect_density import functional_config
+
+        if not isinstance(getattr(self, "class_constructor", None), dict):
+            object.__setattr__(self, "class_constructor", constructor_config(None))
+        if not isinstance(getattr(self, "functional", None), dict):
+            object.__setattr__(self, "functional", functional_config(None))
+            try:
+                self._resolve_functional_defaults()
+            except (AttributeError, KeyError):
+                pass
         if getattr(self, "reference_state", None) is None:
             from mace.modules.defect_state import reference_state as default_reference
 

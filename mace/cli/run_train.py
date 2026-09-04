@@ -1723,6 +1723,13 @@ def run(args) -> None:
     # (`verify_class_table`) and any that moved is a failed invariance, not a re-fit.
     if (model.__class__.__name__ == "MACEDefect"
             and getattr(model, "spectral", None) is not None
+            and hasattr(model.spectral, "valence")
+            and getattr(model, "madelung", None) is None):
+        logging.warning("Composition classes: the model carries no Madelung composition, so "
+                        "no pristine formula is known; no class table is built and the "
+                        "isolated gauge is unavailable for this run")
+    elif (model.__class__.__name__ == "MACEDefect"
+            and getattr(model, "spectral", None) is not None
             and hasattr(model.spectral, "valence")):
         from mace.modules import defect_composition
         from mace.modules.defect_cache import attach_frame_keys as _attach_keys
