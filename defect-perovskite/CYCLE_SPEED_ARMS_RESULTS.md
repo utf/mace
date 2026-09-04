@@ -439,3 +439,34 @@ The residual 1e-8 is the two GPUs' reduction order, not a code difference.
 **One correction fell out of this.** The per-seed list under §5.1 did not match
 `stageb_b2.json`; it has been replaced with the JSON's own numbers. The cohort aggregates
 quoted against the gates were read from the JSON and never changed.
+
+---
+
+## §2.2 — the per-site charge deviation, and an early Δc signal
+
+`c11_site_deviation.py` is new; nothing in the suite reported §2.2's required number.
+Smoke regime: the **one-epoch** local arm A smoke model (`armsmoke_a`), ten charged
+159-atom frames, ζ = 1.0 e. Not a trained result — it is here to say the channel is wired
+and alive, and the 24-epoch numbers replace it.
+
+| statistic | value |
+|---|---|
+| max \|Z_i − Z0\| | 0.085 e |
+| rms \|Z_i − Z0\| | 0.025 e |
+| per-species max (Cl / Cs / Pb) | 0.057 / 0.056 / 0.085 e |
+| sites at the ζ stop (\|dev\| > 0.98 ζ) | 0.0% |
+| \|per-graph sum after centring\| | ≤ 8.9e-16 e |
+
+The channel is neither dead nor at its bound after one epoch, and the centring is exact to
+machine precision, which is the check that the neutrality projection is not being undone by
+the site term.
+
+**An early reading on Δc, from the same one-epoch model.** `c4` on `armsmoke_a` gives
+c(79) +9.487, c(159) +10.274, **Δc +0.787**, predicted +0.055. Stage B's was **+0.772**
+against +0.049 predicted. The null gate removes 79-atom charged energies from the loss
+entirely, so under the pre-registered rule above this is the third branch's *opposite*: Δc
+did not fall towards the prediction when the fit lost those energies. On one epoch that is
+weak evidence — the model has barely moved off its initialisation and c is a residual mean
+dominated by the labels either way — but it is the branch to expect, and it says Δc is a
+property of the labels' size referencing rather than of what the head was trained on.
+Settled on arm A's six 24-epoch seeds, not here.

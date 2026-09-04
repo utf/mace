@@ -233,4 +233,53 @@ Harrison's 1/d² rescales the pair initialisations by 1.97, 1.33, 0.68, 0.96, 0.
 
 ## 8. Operational record
 
-*(pending)*
+### 8.1 What the smokes and tests caught that the loss would not have
+
+Eight defects reached a running configuration and were caught before they reached a number.
+All eight are silent failures: none raises, and each would have produced a plausible loss
+curve.
+
+| # | defect | how it would have shown up | caught by |
+|---|---|---|---|
+| 1 | `apply_size_upweight` returns a factor of **zero** once the null gate zeroes the small cells' energy mass | every charged energy silently deleted from the loss; training proceeds on forces alone and reports a fine RMSE_F | reading the formula for the case the new gate creates; now guarded, logged and covered by a test |
+| 2 | `reference_state_data_loader` copies `train_loader.batch_size`, which is `None` under a `batch_sampler` | `batch_size=None` disables automatic batching; the collater is handed one `Data` object and raises `attribute name must be string, not 'int'` deep inside the mean/rms pass | the local one-epoch smoke |
+| 3 | `zero_at_neutral_counts` and `batch_by_size` were instance attributes set in `__init__` | absent from every pickled checkpoint, so the reference skip and the batched solve silently never fire on a loaded model | the skip's own test, run against a saved-and-reloaded model |
+| 4 | the reference-skip gate tested for the *key* `carrier_counts_ref` | `prepare_defect_configurations` writes that key onto every paired frame, so the gate never fired on real data | instrumenting the gate on a real batch rather than a constructed one; it now tests the *value* |
+| 5 | the init gate reported UNSCORED | the size-grouped sampler makes the first batch a single size group, which need not contain a stoichiometric cell | the local smoke's log; the gate now searches the loader for a stoichiometric batch |
+| 6 | `marks_table` reported all-zero CPU columns | one `record_function` key yields two `key_averages()` rows, a host annotation and a device row; the dict assignment overwrote the first | the numbers not summing to the wall time |
+| 7 | `torch.utils.data.Sampler.__init__(None)` raises | `Sampler.__init__` takes no argument in this version | the sampler's unit tests |
+| 8 | `c10_feature_knn`'s neutral floor was ~0 by construction | the neutral queries were inside the reference cloud, so every charged number looked enormous against a floor of zero | reading the number and disbelieving it; 100 neutral frames are now held out |
+
+### 8.2 The regression check, and the transcription it caught
+
+Scoring `stageb_s1.model` under this cycle's code reproduces its pre-cycle 79-atom head
+slope to **1.1e-08**, and the batched solve, the per-graph loop and the reference-skip-off
+path agree with each other to the same tolerance. The legacy pickle path — a head with no
+`d_ref_pair` buffer and no `centre_form` attribute — is exact, so the Stage A′ and Stage B
+cohorts remain directly comparable to this cycle's.
+
+The check also caught a transcription error: the per-seed list under §5.1 of the results did
+not match `stageb_b2.json`. It was replaced with the JSON's own numbers. Every aggregate
+quoted against a gate had been read from the JSON and did not change. The lesson is narrow
+and worth stating: *a per-seed list retyped from a log is not evidence; the JSON is.*
+
+### 8.3 Machine discipline
+
+- b3 GPUs **4–7 only**, at most four in use at once. Every stage of the chain launches four
+  seeds and waits; the two-seed waves leave 6 and 7 idle rather than starting a fifth.
+  GPU 3 has a recurring fault and 0–3 are off limits.
+- The chain waits on **conditions** (the six model files exist) rather than on processes,
+  which is the rule LEDGER entries 10 and 11 were written for.
+- Code reaches b3 by `rsync`, never by git; `ssh b3 '...'` starts in `$HOME`, so every
+  remote command goes through the `b3_run.sh` launcher with the checkout on `PYTHONPATH`.
+- The local box has one A4000 and runs the smokes, the profiles and the forward-only
+  regression scoring. `local_run.sh` is `b3_run.sh`'s mirror: without it a bare
+  `python defect-perovskite/x.py` imports the *other* checkout's `mace`.
+
+### 8.4 One thing the chain cannot do for itself
+
+The running chain parsed its `gates()` body at launch, before the tiling-drift block was
+added to the file. `gates armb` will therefore not run **gate 10**, and
+`c3_tiling_drift.py --thermal 3` has to be launched by hand once arm B lands. Recorded here
+rather than in a comment because it is the kind of thing that is discovered by its absence
+from a table three days later.
