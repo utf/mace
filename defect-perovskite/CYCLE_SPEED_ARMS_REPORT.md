@@ -526,6 +526,50 @@ of depth and fully closed above 91 meV. Every model this programme has produced 
 on a level this deep. Gate 10 therefore tests the image term itself, and the A-to-B
 difference is attributable to the compensation rather than to the gating.
 
+### 7.4b The image compensation: do not adopt, and here is the target
+
+The term's evidence is split, and every part of it is measured:
+
+| | arm B |
+|---|---|
+| **gate 10, tiling drift** | **PASS** — 0.4179 → 0.0560 eV, **86.8% removed**, 16/16 pairs, thermal tiles as good as ideal |
+| **gate 2, F4** | **FAIL — 0/4**, −0.3200 ± 0.0096 against a band of [−0.142, −0.063] |
+| gate 7, hub stops | worse: 4/4 on every integral type |
+| gates 5, 6 | pass |
+| depth from the CBM | 0.235 — better than arm A's 0.334, worse than Stage B's ≈ 0.05 |
+| Δc | unchanged (and Δc cannot see the term — §7.1b) |
+| cost | **+76% per epoch** |
+
+**It fixes one size dependence and breaks another.** Gate 10 measures how the frontier
+potential changes with **cell size L** under tiling; F4 measures how δ_SR changes with **hub
+separation d** inside a fixed 159-atom cell. They are different geometry dependences and the
+term moves them in opposite directions.
+
+**The knockout localises the failure exactly.** Scoring the same trained models with
+`image_potential` patched to zero — no weight touched — gives F4 = −0.0761 ± 0.0029, inside
+the band on every seed and with a *tighter* spread than arm A's −0.0874 ± 0.0142. The term
+contributes **−0.2439 eV/Å**, which is 2.4× the entire label slope, and it is the whole of
+the excess with no residual.
+
+So the head arm B learned is not damaged — on this measure it is the best-behaved head in the
+cycle. What fails is the term's own additive contribution at evaluation.
+
+**Verdict: do not adopt.** Gate 2 is a gate, not a report, and arm B is the only cohort in
+this programme to fail it. A term that removes 87% of the cell-size drift while tripling the
+hub-separation slope has moved the error from one axis to another rather than removed it.
+
+**And the failure is a magnitude, which §2.5 does not expose.** `comp = −s · φ_img / ε∞`
+carries no amplitude. If the response is linear, a prefactor near λ ≈ 0.27 would put F4 at
+the band's edge and λ ≈ 0.10 near its middle; what is not known is how much of gate 10's
+86.8% survives that scaling. `c20_image_scaling.py` is written and committed to answer it
+cheaply — it wraps `image_potential` with a scale and re-measures the drift — and it was
+**deliberately not run in this cycle**: the amplitude is a design decision, not a
+measurement to be slipped in at the end of a run.
+
+That is what this cycle hands the next one about the image term: not a verdict to trust, but
+a number (−0.244 eV/Å), a mechanism (the term rides on `d` far harder than the labels do),
+and a knob that does not exist yet.
+
 ### 7.5 What the cycle bought
 
 Speed, at 3.4× per epoch against a 4× forecast, from a finding that was not the one being
