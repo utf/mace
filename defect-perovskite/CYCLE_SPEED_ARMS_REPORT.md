@@ -432,10 +432,19 @@ shell-to-shell spread, which nothing in this cycle's spec constrains.
 
 §7.1 and §7.2 are the same mistake:
 
-| | the reference | where it is applied | what leaks in |
-|---|---|---|---|
-| `c_shift_table` | charged frames only, with no same-size neutral | both size classes | +0.75 eV of Δc that is not carrier physics |
-| on-site centre `x̄_s` | 80-atom stoichiometric cells | 79- and 159-atom defective cells | a 0.4–0.6 eV bulk Cl shift that is not defect physics |
+| # | the reference | built on | applied to | what leaks in |
+|---|---|---|---|---|
+| 1 | `c_shift_table` | charged frames, no same-size neutral | both size classes | **+0.75 eV of Δc** that is not carrier physics |
+| 2 | on-site centre `x̄_s` | 80-atom stoichiometric cells | 79- and 159-atom defective cells | a **0.4–0.6 eV bulk Cl shift** that is not defect physics |
+| 3 | participation reference | 80-atom pristine cells | 159-atom charged cells | **every ratio inflated 1.98×** — the diagnostic used to judge 1 and 2 |
+| 4 | `δ_L` | 80-atom stoichiometric cells | 159-atom charged cells | 0.72× error; **nil**, while `s` saturates at 1.000 |
+
+The audit was run rather than filed, and items 3 and 4 came out of it. Item 3 is the
+uncomfortable one: the participation ratio is the statistic this cycle used to say how the
+carrier localises, and its denominator was measured on a cell half the size of its numerator.
+Item 4 is the reassuring one: the pattern is present, the mechanism is confirmed, and the
+consequence is nothing at all on this host — an audit that only ever finds disasters is not
+being run honestly.
 
 **A reference quantity computed on one cell population and applied to another leaks the
 difference between the populations into the physics.** Both instances were invisible to the

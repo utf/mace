@@ -113,7 +113,7 @@ The response still carries a gradient (a detached one would train the wrong thin
 ## §1.2 — Ewald geometry precompute: a measured negative
 
 Regime: `LatentEwald(sigma = 1.0)`, 8 graphs × 79 charges, float64, local A4000, mean of ten
-calls after a warm-up (`$CLAUDE_JOB_DIR/tmp/ewald_split.py`).
+calls after a warm-up (`c18_ewald_split_timing.py`).
 
 | what | ms |
 |---|---|
@@ -860,7 +860,7 @@ evidence about the arms.
 ### Why arm A's level is deep — knocked out term by term
 
 `b6_depth_edges.py` on the same four wave-1 models, with terms disabled at **fixed weights**
-(`probe_depth.py`, `probe_depth2.py`; b3 `~/runs/arma_depth_probe*.log`).
+(`c17_depth_knockouts.py`; b3 `~/runs/arma_depth_probe*.log`).
 
 | configuration | depth from CBM, seeds 1–4 (eV) | mean |
 |---|---|---|
