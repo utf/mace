@@ -1344,3 +1344,37 @@ is carried forward on faith.
 
 **Six seeds will confirm or revise this.** The wave-1 spread is 0.0096, so a reversal is
 unlikely, but the verdict is written against four seeds and says so.
+
+### Why F4 fails — measured, and it is entirely the term
+
+`c19_image_slope.py`: the same four trained arm B models, scored twice, with
+`image_potential` patched to return zeros in the second pass. No weight is touched.
+
+| | F4, `d(δ_sr)/dd` at 159 | in band [−0.142, −0.063] |
+|---|---|---|
+| arm B, **term on** (as trained) | **−0.3200 ± 0.0096** | **0 / 4** |
+| arm B, **term knocked out** | **−0.0761 ± 0.0029** | **4 / 4** |
+| **the term's contribution** | **−0.2439 eV/Å** | |
+| arm A, for comparison | −0.0874 ± 0.0142 | 5 / 6 |
+
+**The image compensation contributes −0.244 eV/Å to the hub-separation slope — 2.4× the
+entire label slope the gate is measured against.** It is the whole of the excess, exactly and
+with no residual: knock it out and arm B's head lands at −0.0761, inside the band, on every
+seed, with a tighter spread (0.0029) than arm A's (0.0142).
+
+**Two things follow, and the second is the useful one.**
+
+First, the head arm B learned is not damaged — it is arguably the best-behaved head in the
+cycle on this measure. The failure is not "training with the term produced a bad head"; it is
+"the term's own additive contribution at evaluation is far too steep in `d`".
+
+Second, **that makes the defect a magnitude problem, and §2.5 has no magnitude to adjust.**
+The term is applied at full strength, `comp = −s · φ_img / ε∞`, with no amplitude anywhere.
+Scaled by about 0.1 it would contribute −0.024 eV/Å, F4 would land near −0.10 — inside the
+band — and the question would become how much of gate 10's 86.8% drift reduction survives
+that scaling. A prefactor on the image compensation, fixed or learned, is the obvious next
+experiment, it is **not** among §9's exclusions, and this measurement gives it a starting
+value rather than a search.
+
+That is the difference between "the term failed a gate" and a target: the excess is
+−0.244 eV/Å, it is all of it, and it has a knob that does not exist yet.
