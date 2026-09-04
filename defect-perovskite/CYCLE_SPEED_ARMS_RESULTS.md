@@ -132,3 +132,112 @@ is the part that survives, and it is a fusion of calls rather than a cache of ke
 
 Recorded as a scope decision from evidence: **the `A_per`/`A_iso` per-frame store and its
 1e-8 drift guard were not built**, and the reason is the four numbers above.
+
+## §1.1 continued — the sampler, and the reference branch that was never there
+
+**The batched solver needs size-uniform batches to fire.** A shuffled loader over 2377
+frames at 79/80 atoms and 34 at 159/160 produces one by chance about a batch in six.
+`mace/data/size_sampler.py` groups by EXACT atom count (79, 80, 159 and 160 are four
+groups), permutes within each group every epoch, then permutes the batches across groups so
+a large-cell step is as likely early in the epoch as late — grouping without that second
+shuffle is a systematic change to the optimiser's trajectory dressed as a speed fix. The
+short tail batch of each group is kept: `drop_last` would discard up to seven of the 34
+large frames every epoch, which is the population the two-size upweight exists to protect.
+
+**The neutral reference branch is exactly zero, and was being computed anyway.** The model
+evaluates the correction twice per forward, once at the frame's counter and once at the
+reference counter, and subtracts. When the reference is the neutral counter — which it is
+unless a caller supplies `carrier_counts_ref` — every term of that second branch is
+identically zero:
+
+| term | why |
+|---|---|
+| `delta_sr_ref` | the head's energy is a difference from the neutral fill; at `counts_ref = 0` the four fills are two identical pairs, the occupations subtract to exactly zero, and `D = 0` |
+| `q^pol` | zero in all three of its branches (the ungated one carries a `total_carriers` factor, the gated one a gate built from the same counts, the disabled one by construction) |
+| `q^carrier` | carries `carrier_signs * counts` |
+| `delta_lr_ref` | therefore `E[q_host] - E[q_host]` coupled, `E[0]` uncoupled; both zero, with zero position gradient since `E` is quadratic in `q` |
+| `_isolated_carrier_self` | the same signed counts |
+
+Skipping it removes a whole head pass, a Madelung potential, an Ewald evaluation and the
+`correction_energy_ref` force gradient. `test_neutral_reference_skip.py` measures the claim
+rather than trusting it: on a real charged batch, in five long-range configurations (frozen,
+live host charges, polarisation on, gated polarisation with the isolated carrier self-term,
+and host-carrier coupling), the energy, forces, `delta_forces`, `base_forces` and **every
+trainable parameter's loss gradient** agree to < 1e-12 with and without the skip. A caller
+that supplies its own reference counter gets the full branch.
+
+Both flags are CLASS attributes on `CountingHead`, not instance ones: every trained
+checkpoint is a pickled module, so an attribute set in `__init__` is absent from every model
+written before it existed and `getattr` silently returns the fallback. That is why the first
+profile after the skip landed showed no change at all.
+
+### The step, by component, after §1.1
+
+Seconds per step, CPU total, same configuration and batch as the table above:
+
+| region | before | +batched solve | +reference skip |
+|---|---|---|---|
+| **wall per step** | **3.63** | **1.51** | **1.07** |
+| step/forward | 1.742 | 0.793 | 0.611 |
+| head/loop | 0.957 | 0.111 | 0.058 |
+| head/bisect | 0.670 | 0.015 | 0.007 |
+| head/eigh | 0.173 | 0.066 | 0.034 |
+| ewald/madelung | 0.092 | 0.095 | 0.049 |
+| ewald/lr | 0.082 | 0.080 | 0.055 |
+| model/grad_corr_ref | — | 0.131 | **0.000** |
+| model/outputs | — | 0.084 | 0.179 |
+| step/backward | 0.147 | 0.077 | 0.084 |
+
+**3.4× on the step.** F24 asks for ≥ 4× and is scored on the epoch wall, not the profiler's
+per-step number; the epoch measurement follows below. What is left is the trunk's own
+overhead (spherical harmonics, the jit-scripted e3nn graphs), the three force gradients, and
+the Ewald branch — of which the fusion of the surviving calls into one reciprocal-space pass
+is worth about 8% and was **measured and not done**, recorded here so the omission is a
+decision.
+
+---
+
+## §2 — decisions recorded before the arms
+
+**The centre is the pristine ENSEMBLE, because there is no single pristine geometry.** All
+544 stoichiometric training frames are 80-atom cells labelled `config_type=ideal`, and they
+are thermal snapshots: the Pb–Cl first-shell spread runs from 0.082 Å at the tightest to
+0.213 Å at the loosest (median 0.144). There is no relaxed pristine cell in the dataset to
+centre on, so the centre stays the per-species mean of the first block's features over all
+of them — one snapshot's means would carry its own distortion into every `corr_i`. Recorded
+as an interpretation of standing rule 1's "pristine geometry".
+
+**The per-species centre is not an atom-by-atom identity on this host.** Pnma CsPbCl₃ has
+more than one Wyckoff site per species and the frames are thermal, so `corr_i` does not
+vanish atom by atom on a real pristine cell. The identity is asserted where it holds (a cell
+with one environment per species: residual 5.2e-18 eV) and the per-species residual on the
+real host is a measurement to be reported with the arms, not a claim.
+
+**`delta_L` comes from the 80-atom pristine cells**, the only pristine size the dataset has,
+and is collected on the same pass as the centre. The common-δ_L convention (one size for
+every frame the bound flag touches) is kept; it is recorded here because the arm-B tiling
+test applies the flag to 639- and 2159-atom cells.
+
+**Both forms of §2.5's constancy identity fail on this host, structurally.** On a simple
+cubic Bravais lattice the periodic potential of equal charges is constant to 2.2e-16 eV — the
+kernel is right. On the 40-atom perovskite it spreads by 8.98e-02 eV, and the
+periodic-minus-isolated difference by 6.06e-02 eV² in variance, because **equal charges on
+five inequivalent sublattices are not a uniform charge density**: the structure factor is
+non-zero away from k = 0. The A′ spec asserted constancy of the difference and the speed
+cycle's moved it to the periodic part; neither holds here. The term's adoption test remains
+the tiling drift, which is a statement about size dependence and does not rest on this.
+
+**The covalent-radius anchor moves the initial hoppings.** Cordero radii give Cl–Cl 2.04,
+Cl–Pb 2.48, Cl–Cs 3.46, Pb–Pb 2.92, Cs–Pb 3.90, Cs–Cs 4.88 Å against the retired single
+2.861 Å, so Harrison's 1/d² scales the pair initialisations by 1.97, 1.33, 0.68, 0.96, 0.54
+and 0.34 respectively. The init gate is reported from the arms' own logs.
+
+**The §3 share is ambiguous once the null gate is in force, and is read as follows.** With
+the 79-atom charged energies zeroed, the 159-atom share of the charged ENERGY loss is 1.000
+by construction, so "realised energy share 0.25–0.5 of the charged energy loss" cannot be a
+target any more. It is logged every epoch and expected to read 1.000 for that stated reason;
+the number to compare across arms is the charged-force share, which stays at its 0.25
+target. `apply_size_upweight` refuses the degenerate case rather than solving it: with the
+small cells' energy mass at zero the old formula returns a factor of **zero**, which would
+have multiplied the surviving large-cell energy weights by nothing and deleted every charged
+energy from the loss without a word.

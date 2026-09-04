@@ -978,9 +978,18 @@ def reference_state_data_loader(train_loader):
             f"Using {len(indices)} of {len(dataset)} configurations (n = 0) for the "
             "energy scale"
         )
+    # `train_loader.batch_size` is None when the loader was built with a `batch_sampler`
+    # -- which the size-grouped sampler of section 1.1 is -- and `batch_size=None` turns
+    # AUTOMATIC BATCHING OFF: the collater is then handed one `Data` object instead of a
+    # list and fails with "attribute name must be string, not 'int'", four frames into the
+    # energy-scale pass and nowhere near the sampler. Fall back to the batch sampler's own
+    # size; this loader wants a plain batched pass, not the grouping.
+    batch_size = train_loader.batch_size
+    if batch_size is None:
+        batch_size = int(getattr(train_loader.batch_sampler, "batch_size", 1) or 1)
     return torch_geometric.dataloader.DataLoader(
         dataset=torch.utils.data.Subset(dataset, indices),
-        batch_size=train_loader.batch_size,
+        batch_size=batch_size,
         shuffle=False,
         drop_last=False,
     )
