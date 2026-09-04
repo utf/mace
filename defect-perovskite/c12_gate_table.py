@@ -206,8 +206,23 @@ def main() -> None:
             f"| **{tag}_tiling.json did not run** — `c3_tiling_drift.py --thermal 3` is "
             "launched by hand, the chain parsed the older gates() body | — |")
     else:
+        ver = tiling.get("verdicts", [])
+        by_tile: dict[str, list] = {}
+        for v in ver:
+            by_tile.setdefault(v["tile"], []).append(v)
+        parts = [f"{t} {sum(bool(x['passes']) for x in vs)}/{len(vs)} "
+                 f"(ratio {np.mean([x['ratio'] for x in vs]):.3f})"
+                 for t, vs in sorted(by_tile.items())]
+        sw = [r["bound_switch"] for r in tiling.get("rows", [])
+              if r.get("term") and np.isfinite(r.get("bound_switch", float("nan")))]
+        n_ok = sum(bool(v["passes"]) for v in ver)
         add(f"| 10 tiling (arm B) | ideal and thermal drift ≤ 0.3·D0 | "
-            f"{json.dumps(tiling.get('summary', 'see the JSON'))[:220]} | (read) |")
+            + "; ".join(parts)
+            + (f"; s median {np.median(sw):.3f}, min {np.min(sw):.3f}, "
+               f"> 0.5 on {100*np.mean(np.asarray(sw) > 0.5):.0f}%" if sw else
+               "; s not logged")
+            + f" | **{'PASS' if ver and n_ok == len(ver) else 'FAIL'}** "
+            f"({n_ok}/{len(ver)} model-tile pairs) |")
 
     add("")
     if site is not None and site.get("rows"):
