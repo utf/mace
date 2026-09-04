@@ -242,11 +242,142 @@ so w_E = 1.000 on every charged frame. F16 fails here too; the indicator does no
 distinguish the population at all. Stage B applies it as specified (944/944 frames matched,
 mean 1.000), which is no weight.
 
-STAGE_B_BODY
+## 6. Section 5.5 — the head edits, six Stage B seeds, and the gates
+
+Regime: head only on `aprime_prod` (frozen under the head-only mask, `base_lr_factor 0`,
+outputs cached with a per-epoch drift guard), counting head reading the first block, γ = 3,
+Gaussian 0.05, exp envelope L0 = 1.0 with the four learned decay lengths (β_L = ln 2), log
+modulation β = ln 1.5, centred on-site correction (centre = species means of the first
+block's features over 544 pristine training frames), Harrison init at 2.861 Å, warmup 5;
+E_LR from epoch 0 with the density detached and the branch frozen at physical values (host
+charges zero, polarisation off, amplitude 1/√4); forces on every charged frame at a 0.25
+large-cell share, charged 159-atom energies at a 0.25 share of the charged energy loss
+(factor 19.3), charged 79-atom energies at w_E = 1.000, `loss_gap` w = 1 at 2.4 eV, c per
+(charge, size) calibrated with E_LR in the residual; 24 epochs, lr 0.005, batch 8, trunk
+float32 / head float64, image compensation off; seeds 1–6 on b3 in two waves of four and
+two, 9.7 min per epoch.
+
+### 6.1 The cohort
+
+| seed | valid E / F (meV/atom, meV/Å) | c(79) | c(159) | Δc | |W_site| | partic (ep 20) | F4 δ_sr [95%] | depth (b10) | gap |
+|---|---|---|---|---|---|---|---|---|---|
+| s1 | 5.6 / 16.6 | +10.321 | +11.046 | +0.725 | 0.083 | 8.08 | −0.0812 [−0.0909, −0.0716] | 0.014 | 2.381 |
+| s2 | 5.4 / 16.8 | +9.932 | +10.717 | +0.786 | 0.063 | 6.96 | −0.1244 [−0.1398, −0.1091] | 0.042 | 2.384 |
+| s3 | 5.5 / 17.1 | +10.186 | +10.966 | +0.780 | 0.066 | 7.90 | −0.0877 [−0.0963, −0.0791] | 0.040 | 2.384 |
+| s4 | 5.5 / 17.1 | +9.890 | +10.641 | +0.751 | 0.061 | 6.14 | −0.1111 [−0.1279, −0.0942] | 0.111 | 2.426 |
+| s5 | 5.6 / 16.6 | +10.321 | +11.094 | +0.773 | 0.059 | 6.75 | −0.1139 [−0.1292, −0.0987] | 0.078 | 2.403 |
+| s6 | 5.5 / 16.8 | +9.920 | +10.738 | +0.818 | 0.084 | 6.27 | −0.0844 [−0.0965, −0.0722] | 0.117 | 2.382 |
+
+The neutrality projection on Z held on every seed (3Z_Cs + Z_Pb + Z_Cl = 0.000). The
+spec's neutrality residual `|Σq + Δn|` logs as exactly 0.500 on every seed: with the
+amplitude frozen at 1/√ε∞ = 0.5 the detached carrier charge sums to −0.5·Δn; the
+density-sum invariant (Σ q/a + Δn = 0) is checked in the forward and holds. Participation
+(1/Σα² on carrier-bearing validation frames) fell in one direction on all six seeds,
+9.6–11.4 at epoch 0 to 6.1–8.1 at epoch 20, with no reversal at any epoch: the branch that
+turned the joint cohort round at epoch 12 does not act here.
+
+### 6.2 The eight gates
+
+| gate | rule | result |
+|---|---|---|
+| 1 regression | charged 159 residual slopes (E, F) against A′ equal the §1 reference | **holds 6/6**, an identity: −0.0948 / −0.2665 on every seed to four decimals |
+| 2 F4 | head d(δ_sr)/dd on the 16 charged 159-atom frames, correct sign, within 1.5× of −0.0948, ≥ 4/6 | **passes 6/6**: pooled −0.1004 ± 0.0166, every interval inside [−0.142, −0.063] |
+| 3 c-consistency (report) | c(79), c(159), predicted difference | c(79) +10.09 ± 0.19, c(159) +10.87 ± 0.17, Δc +0.772 ± 0.029 eV; predicted (E_LR difference + Ewald G = 0 difference) +0.049 ± 0.003 |
+| 4 F10 | ligand-Cl − bulk-Cl correction > 50 meV in ≥ 4/6 (and > 2σ, the amended rule) | **fails 0/6** (section 6.3) |
+| 5 gap | pristine gap 2.4 ± 0.1; pinned continuum exact; bandwidth logged | **passes 6/6**: 2.381–2.426 eV; the pinned-continuum tests pass; init gate on every seed "edges 0.249/0.018 eV (≤ 1.20), bandwidth 32.84 eV (≥ 4.80) → PASS" |
+| 6 dilution / depth (report) | R ≤ 1.3 with bound fraction; depth with seed spread | R_bound 0.95, 0.69, 0.80, 0.70, 0.78, 0.86 → 0.80 ± 0.09, 6/6 under 1.3; bound fraction 61 ± 7%; depth from the CBM (b6) 0.103 ± 0.039 eV against the s7 cohort's 0.103 ± 0.026, unmoved |
+| 7 stops / L_b | no integral type at its stop in more than 1/6 seeds | **fails**: ss-σ 3/6, sp-σ 1/6, pp-σ 2/6, pp-π 5/6 at the stop; L_b 1.072 ± 0.011 / 1.280 ± 0.061 / 1.332 ± 0.040 / 1.374 ± 0.036 Å |
+| 8 participation (report) | charged/pristine ratio with seed spread | 0.619 ± 0.089 (N_eff 17.7 ± 2.3); head-only s7 0.492 ± 0.028, joint E_LR-on 0.635 ± 0.143, joint E_LR-off 0.478 ± 0.071 |
+
+The six-criterion composite adopts 0/6, and it is not the verdict: its criteria 2 and 3
+read properties of the frozen production base (the neutral 159-atom slope +0.0920 and the
+neutral-79 window energy 7.1 meV/atom are the base's own numbers, which a head that is
+zero at n = 0 cannot change). What the gates say is that F4 passes for the first time and
+the head is pressed against its coupling stop again.
+
+**The 6/6 on F4 is against a reference that moved.** −0.1004 ± 0.017 against −0.0948 is a
+pass; against the old −0.134 it would read as the same 75% the s7 cohort managed. The
+reference moved because the base moved: with the large neutral cells in its own loss the
+out-of-fold null at 159 atoms fell from +0.080 to +0.024, and a third of what F4 was
+chasing turns out to have been the base's extrapolation. That is the cycle's central
+result, and it is a result about the base, not the head.
+
+### 6.3 F10 on the centred correction, and where the gauge went
+
+b4's probe reads the raw `γ tanh h(x_i)`; the model applies `γ [tanh h(x_i) − tanh h(x̄_s)]`.
+Scored on what is applied (eight charged 159-atom frames):
+
+| seed | hub Pb | ligand Cl | bulk Cl | bulk Pb | Cs | ligand − bulk Cl | 2σ (bulk Cl) |
+|---|---|---|---|---|---|---|---|
+| s1 | −0.307 ± 0.255 | +0.337 ± 0.767 | −0.103 ± 0.331 | −0.122 ± 0.040 | 0 (saturated) | +0.440 | 0.661 |
+| s2 | +0.028 ± 0.114 | +0.138 ± 0.340 | −0.036 ± 0.110 | −0.121 ± 0.032 | −0.365 ± 0.103 | +0.174 | 0.219 |
+| s3 | −0.454 ± 0.122 | −0.008 ± 0.752 | −0.296 ± 0.361 | −0.046 ± 0.016 | 0 (saturated) | +0.288 | 0.723 |
+| s4 | +0.047 ± 0.079 | 0 (saturated) | 0 (saturated) | −0.164 ± 0.025 | −0.796 ± 0.239 | 0.000 | 0.000 |
+| s5 | −0.520 ± 0.159 | +0.242 ± 0.582 | +0.014 ± 0.325 | −0.118 ± 0.033 | 0 (saturated) | +0.228 | 0.649 |
+| s6 | +0.059 ± 0.028 | 0 (saturated) | 0 (saturated) | −0.210 ± 0.053 | −0.987 ± 0.284 | 0.000 | 0.000 |
+
+Two regimes. On s1, s2, s3, s5 the chlorine channel is alive and ligand-Cl sits 0.17–0.44 eV
+above bulk-Cl, clearing the 50 meV floor every time, but the within-shell spread is
+0.11–0.36 eV and the separation is never two sigma: the channel carries structure now,
+just not (only) the ligand/bulk one. On s4 and s6 the raw output on every chlorine has run
+past |tanh| = 0.98, where the centred difference is identically zero: the channel is dead
+on Cl. Caesium is dead the same way on s1, s3, s5. Centring makes the correction invariant
+to a constant shift of h, so h is free to drift to saturation where the deviation
+vanishes and nothing in the loss pulls it back — b4's constant-mode gauge did not go
+away, it moved from the output to the argument. The remedy is a bounded argument (a
+penalty or a cap on h itself); the spec does not include one and this cycle did not add
+it.
+
+### 6.4 F19
+
+Ten charged frames of each size, the same weights with the detach on and off: RMS force
+difference 0.0002 meV/Å, worst over six seeds. Holds by three orders of magnitude, for a
+reason worth more than the number: the counting head builds its density from eigenvectors
+it already detaches (the degeneracy-safe backward keeps the eigenvalue gradient only), so
+`alpha` carried no gradient into E_LR before the flag existed. The detach was implicit;
+the flag makes it a stated property.
 
 ---
 
-## 7. Operational record
+## 7. The forecasts, scored
+
+| | forecast | outcome |
+|---|---|---|
+| **F15** | the image-compensation probe: depth increases more at 79 than 159, ratio falls, R → 0.9–1.0, 79-atom force loss does not rise | **fails, 1 of 4** (depth unmeasurable under the aligned depth; ratio falls; R 0.74 → 0.59; force loss +13%). The tiling adoption test passes 6/6 (drift ≤ 0.08·D0). Not adopted. |
+| **F16** | the +0.36 slope is carried by low-w_E frames; w_E > 0.5 frames reproduce the window value | **fails** on the Stage-A folds (w_E > 0.5: +0.359 against +0.369 full range; window +0.081) and on the A′ folds (w_E = 1.000 everywhere). |
+| **F17** | 159 null within ±0.05 of zero; charged 159 within the old interval or shifted by less than the old null's width; 79-atom charged residual < 0.2 | **2 of 3**: +0.024 holds; −0.095 is outside [−0.145, −0.123] but shifted 0.039 < 0.26, holds; +0.37 fails. |
+| **F18** | participation-ratio spread halves relative to the joint cohort; no stop hit | **fails**: sd 0.089 against 0.143 (0.62×, not halved); stops hit in three of four types. |
+| **F19** | < 1 meV/Å between forces with and without the detach | **holds**, 0.0002 meV/Å. |
+| **F20** | ≥ 3× per-epoch speedup with identical head outputs | **identity holds; speed fails** at 1.5×. |
+
+Five of six forecasts fail or half-fail; the one that holds outright (F19) holds because
+the property was already there. The pattern is the same one the battery cycle found:
+forecasts written as remedies (image compensation, the extrapolation weight, the stop
+freed by the log form) fail, and forecasts written as measurements resolve.
+
+---
+
+## 8. What this leaves
+
+| item | status |
+|---|---|
+| Base extrapolation at large d | **closed as a cause of a third of F4's shortfall**: the A′ base with the large neutral cells weighted moved the reference from −0.134 to −0.095 and the null from +0.080 to +0.024. |
+| F4 against the re-derived reference | **passes 6/6** on the head-only Stage B cohort, −0.100 ± 0.017. |
+| Hub coupling stop | **open, and unchanged in kind**: at the log form's ln 1.5 the head is at the stop on more seeds than under the linear form, and the learned decay lengths all move up. The lever the head wants is more hub coupling by both routes. Superexchange stays first on the list. |
+| Centred on-site correction | **implemented, F10 fails**: the constant-mode gauge moves into the argument (saturation). Needs a bounded argument before it can be scored. |
+| Image compensation | **implemented, not adopted**: cancels the tiling drift (6/6) and worsens the probe (F15). Behind a flag, off. |
+| Extrapolation indicator w_E | **implemented, inert**: the fold bases do not disagree on the charged 79-atom frames. The +0.37 small-cell slope is not an extrapolation signature the folds can see. |
+| c per (charge, size) | **implemented**: Δc = +0.77 eV against +0.05 predicted; the per-size constant is carrying the labels' referencing. A future gate needs this number's origin first. |
+| Precision and cache | **implemented, 1.5×**: the remaining time is the per-graph eigensolve and Ewald loop, excluded this cycle. |
+| Long-range branch | frozen at physical values and detached; it shapes the head through the force channel only, and the participation ratio lands where the joint E_LR-on arm did (0.62 against 0.635), not where the head-only cohort did (0.49). |
+
+Not in this cycle, as instructed, and now measured to be where the time and the lever are:
+eigensolve batching (the step's cost) and the head's coupling beyond two centres (the
+stop).
+
+---
+
+## 9. Operational record
 
 - Local A4000: F20 measurement, the Stage B smoke, the A′ production base. b3 GPUs 4–7:
   the A′ fold bases, the forward-only probes, the Stage B seeds, the gates; never more than
@@ -255,5 +386,16 @@ STAGE_B_BODY
   `b3_run.sh`, starts every remote job from the worktree, because `ssh b3 '…'` starts in
   `$HOME` and a relative script path fails silently — it did, twice, before the launcher.
 - The Stage B smoke (one epoch, old base, old w_E) is what caught the centre guard and the
-  c-table class; the two costed ~1 h and were the difference between a chain that ran and
-  one that stopped at 20:00 with nobody watching.
+  c-table class; the two cost about an hour and were the difference between a chain that
+  ran and one that stopped at 20:00 with nobody watching.
+- A float32 scoring batch through a mixed-precision model lost the trunk from the forces
+  (the derivative was taken with respect to the head-dtype cast); caught by a criterion-3
+  number that could not be, fixed, tested, and every scorer rerun.
+- The post-A′ chain's file wait did not wake for ten minutes after the last model landed;
+  a fresh launch saw the files at once. Cause not established. The `pkill -f` used to stop
+  it matched the ssh shell carrying the launch command instead — the bracket trick
+  protects the pattern, not the rest of the line.
+- Raw outputs: `~/runs/{aprime_*,stageb_*,c1_ood*,c2_probe,c3_tiling}.{json,log}` on b3,
+  `~/runs/{cachesmoke_*,aprime_prod,stagebsmoke_s1}` locally; the running results file
+  `STAGE_APRIME_RESULTS.md` holds every number in the order it landed; LEDGER.md entries
+  12 and 13.
