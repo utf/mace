@@ -593,3 +593,112 @@ Five things are confirmed by those seven lines, none of which the loss curve wou
 5. **The init gate found a stoichiometric batch.** The size-grouped sampler makes the first
    batch a single size group, which need not contain an 80-atom cell; the search fires,
    announces itself, and the gate passes on the covalent anchors (0.233/0.009 eV, 33.73 eV).
+
+---
+
+## §8.5 SETTLED — where Δc comes from, and why the prediction was never wrong
+
+Three measurements, in order. Regime: arm A wave 1 (four seeds, 24 epochs, the §4.1 regime),
+plus a forward-only pass of the frozen base `aprime_prod` over the training set
+(`c13_c_origin.py`, `~/runs/c13_c_origin.json`).
+
+### 1. Δc is there before training starts
+
+`calibrate_c_shift_table_over_loader` runs **once, before the training loop** — `run_train.py`
+calls it around line 1779 and `tools.train` at 1897 — and writes, into each (charge, size)
+cell, the median over every charged frame of `(E_label − E_base − Δ_SR − Δ_LR)/Δn`. Arm A's
+four wave-1 seeds logged:
+
+| seed | c(79) | c(159) | Δc |
+|---|---|---|---|
+| 1 | +9.4655 | +10.2314 | +0.7659 |
+| 2 | +9.4692 | +10.2349 | +0.7657 |
+| 3 | +9.4678 | +10.2340 | +0.7662 |
+| 4 | +9.4738 | +10.2389 | +0.7651 |
+| | | | **+0.7657 ± 0.0004** |
+
+against Stage B's *trained* +0.772 ± 0.029. **Δc is present at initialisation**, to four
+decimal places, and 24 epochs of training move it by less than the seed spread. The
+seed-to-seed scatter at epoch 0 is 0.4 meV; training adds 29 meV of noise to a 766 meV
+offset that was already there.
+
+The Gauge log confirms the mechanism directly: `c_table (0,0)` reads **+9.4655 at every one
+of arm A's 24 epochs**, because the null gate removed all 928 small-cell charged energies
+and no gradient reaches that column. `(0,1)` drifts +10.2314 → +10.2832, so the large-cell
+column *is* trained. That asymmetry is a consequence of rule 2, not a defect.
+
+### 2. The offset is carrier-independent — it is on the neutral frames too
+
+Neutral frames never enter the c calibration, so they are an independent sample. Median
+`E_label − E_base` from the frozen base alone:
+
+| population | frames | median residual | per atom |
+|---|---|---|---|
+| neutral 79 | 300 | −0.5300 eV | −6.709 meV |
+| neutral 80 | 300 | −0.2455 eV | −3.069 meV |
+| neutral 159 | 15 | −1.2752 eV | −8.020 meV |
+| charged 79 | 300 | −3.8874 eV | −49.208 meV |
+| charged 159 | 16 | −4.6805 eV | −29.437 meV |
+
+The first hypothesis — that the base carries a constant per-atom offset `b`, making
+Δc = b × (159 − 79) — is **falsified**: the per-atom residual is −6.7, −3.1 and −8.0
+meV/atom at the three sizes, sharing no common value and nowhere near the +9.57 meV/atom the
+two c-table points imply.
+
+What is true instead is the **total** step. Going 79 → 159 atoms the base's residual moves by
+−0.7452 eV on *neutral* frames and −0.7931 eV on *charged* ones. Since `Δn = −1` on every
+charged frame here (`carrier_counts = [0, 0, 1, 0]`, one hole) and `c = residual/Δn`, those
+are c-space steps of **+0.745** and **+0.791** eV.
+
+### 3. The decomposition, with a bootstrap
+
+20 000 resamples of each population (the large-cell samples are 15 and 16 frames, so a
+difference of medians needs an interval, not a point):
+
+| quantity | value, 95% |
+|---|---|
+| Δc as calibrated, charged frames only | **+0.7657 ± 0.0004** eV |
+| carrier-**independent** size step, from the neutral frames | **+0.7456 [+0.7199, +0.7790]** eV |
+| carrier-**dependent** remainder | **+0.0440 [−0.0419, +0.1149]** eV |
+| the cycle's electrostatic prediction | **+0.0491 ± 0.0026** eV |
+
+**97% of Δc is a carrier-independent size offset of the frozen base against these labels.**
+The remaining 4 % — the part that is actually about the carrier — is +0.044 eV with the
+prediction of +0.049 eV comfortably inside its interval.
+
+### The decision
+
+The prediction was never wrong; the measurement it was compared against was contaminated.
+`c` is calibrated on **charged frames only**, with no neutral frame of the same size to
+reference against, so it absorbs the base's size-dependent total-energy offset wholesale and
+reports it as if it were carrier physics. Stage B's "Δc = +0.77 against +0.05 predicted"
+was never a fifteen-fold discrepancy in the electrostatics; it was one number measuring two
+things.
+
+Under the pre-registered rule this is the second branch — *"it is in the labels' size
+referencing … the remedy is a label-side re-referencing, not a model term"* — reached by a
+stronger route than the rule anticipated: not "the arms agree" but "it is there before
+training, and it is there on frames with no carrier in them."
+
+**The remedy, stated precisely.** In `c_shift_table_terms`, subtract the median neutral
+residual at the same cell size before dividing by Δn:
+
+    resid_charged(N) → resid_charged(N) − median[ resid_neutral(N) ]
+
+Then c is the carrier's own cost and Δc is +0.044 [−0.042, +0.115] eV. This is one function,
+it changes no model term, and it is **not** in this cycle — §9 excludes label-side work and
+the arms are running on the current definition. It is the first item for the next one, and
+the number to beat is above.
+
+**What stays true meanwhile.** Standing rule 3 — reference formation energies to the largest
+size class with a neutral null (159) — is *correct as written and for the right reason*: it
+avoids the 79-atom column entirely, which is the one carrying an uncorrected 0.75 eV offset.
+Gate 3 remains a report, not a gate, and the interval above says why it could not have been
+promoted this cycle: the quantity it reports is dominated by something that is not the
+quantity it names.
+
+**Caveat, stated rather than buried.** The large-cell populations are 15 neutral and 16
+charged frames. The carrier-dependent remainder's interval is ±0.08 eV, so the agreement
+with +0.049 is "consistent with" and not "confirms". The carrier-*independent* claim is the
+robust one: +0.746 [+0.720, +0.779] eV excludes zero by twenty-eight sigma-equivalents of
+its own interval.
