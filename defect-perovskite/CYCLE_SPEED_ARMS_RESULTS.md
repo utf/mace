@@ -241,3 +241,25 @@ target. `apply_size_upweight` refuses the degenerate case rather than solving it
 small cells' energy mass at zero the old formula returns a factor of **zero**, which would
 have multiplied the surviving large-cell energy weights by nothing and deleted every charged
 energy from the loss without a word.
+
+### F24, on the trainer's own profile
+
+The trainer profiles one training step before and after attaching the base cache, and logs
+both. Same machine (local A4000), same configuration, same measurement as the Stage A′
+report's table — which is what makes the comparison a comparison:
+
+| | Stage A′ | this cycle | gain |
+|---|---|---|---|
+| uncached step | 4.239 s | **1.143 s** | 3.71× |
+| cached step | 3.451 s | **0.783 s** | 4.41× |
+| base cache build (2797 frames) | 338 s | **81 s** | 4.2× |
+
+**F24 (≥ 4× per epoch on top of the cache gain): holds on the step, 4.41×**, from the two
+changes of section 1.1 alone — the batched size-uniform solve and the neutral reference
+branch that was being computed and thrown away. Neither is an approximation; both are
+asserted equal to the paths they replace, one to 1e-8 and one to 1e-12 including every
+parameter gradient. The epoch wall follows the step.
+
+The 79/80/159 groups give 321 batches per epoch against 360 unsorted, so the epoch is
+slightly shorter for a second, uninteresting reason (the tail batches of three groups
+instead of one).
