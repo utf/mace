@@ -80,36 +80,109 @@ def _in_population(d, population: str) -> bool:
     raise ValueError(f"unknown population {population!r}")
 
 
-def apply_energy_weights_from_json(dataset: Sequence, path, z_table=None,
-                                   population: str = "charged"):
-    """Multiply `energy_weight` on the frames of `population` by the `w_E` recorded for
-    their `frame_key` in the JSON `c1_ood_indicator.py` writes. Returns
-    (n_matched, n_in_population, mean_w_applied)."""
-    import json
+def gate_charged_energies_by_null(dataset: Sequence, nulled_sizes: Sequence[int]):
+    """Standing rule 2 of the speed cycle: a charged frame's ENERGY enters the loss only
+    for a size class that has a neutral null. Returns `(kept, dropped, per_size)`.
 
-    from mace.modules.defect_cache import frame_key
+    WHAT THIS REPLACES, and why it is not the same idea in different clothes. Stage A'
+    weighted charged energies by `w_E`, a label-free extrapolation indicator built from the
+    disagreement of four fold bases. It measured nothing: the folds agree on the charged
+    79-atom frames to 1.1 meV/atom, below their disagreement on the neutral ones, so `w_E`
+    came out 1.000 on every charged frame and the weight was inert (F16, failed twice). The
+    rule that replaces it is not a statistic at all -- it is a statement about what the
+    residual MEANS. A charged frame's energy residual against a frozen base is only carrier
+    physics where the base's own carrier-free residual is zero; where the out-of-fold
+    neutral null at that size is resolved and non-zero, the residual is the base's
+    extrapolation and fitting the head to it teaches the head the base's artefact.
+    On this dataset the null is +0.024 [-0.070, +0.118] eV/A at 159 atoms and
+    +0.115 [+0.095, +0.135] at 79, so 159 qualifies and 79 does not.
 
-    payload = json.load(open(path))
-    table = payload.get("frames", payload)
-    hit = total = 0
-    applied = []
+    FORCES ARE UNTOUCHED, for every charged frame at both sizes. The force residual has its
+    own null and its own history; the rule is about energies.
+
+    `energy_weight` is the column `DefectLoss` reads for a charged frame's energy term --
+    NOT `base_energy_weight`, which is the neutral population's. Getting that distinction
+    wrong is what LEDGER entry 12 records.
+    """
+    allowed = {int(n) for n in nulled_sizes}
+    kept = dropped = 0
+    per_size: dict = {}
     for d in dataset:
-        if not _in_population(d, population):
+        if not _in_population(d, "charged"):
             continue
-        total += 1
-        numbers = d.node_attrs.argmax(dim=-1).cpu().numpy()
-        if z_table is not None:
-            numbers = np.array([z_table.zs[int(i)] for i in numbers], dtype=np.int64)
-        key = str(frame_key(numbers, d.positions.detach().cpu().numpy(),
-                            d.cell.detach().cpu().numpy()))
-        entry = table.get(key)
-        if entry is None:
+        n = _n_atoms(d)
+        row = per_size.setdefault(int(n), {"kept": 0, "dropped": 0})
+        if int(n) in allowed:
+            kept += 1
+            row["kept"] += 1
+        else:
+            d.energy_weight = d.energy_weight * 0.0
+            dropped += 1
+            row["dropped"] += 1
+    return kept, dropped, per_size
+
+
+def nulled_sizes_from(payload, tolerance: float = 0.0):
+    """The size classes a null file admits: those whose neutral null bracket contains zero.
+
+    The file is `{"nulls": {"<atoms>": {"slope": ..., "ci": [lo, hi]}, ...}}`. The RULE is
+    here rather than in whatever script wrote the file, so that "has a neutral null" means
+    one thing across the trainer and every scorer; the file carries the evidence and the
+    provenance. A size whose entry has no interval is refused rather than admitted -- a
+    point estimate of zero with unknown width is not a null.
+    """
+    nulls = payload.get("nulls", payload)
+    out = []
+    for key, entry in nulls.items():
+        try:
+            n = int(key)
+        except (TypeError, ValueError):
             continue
-        w = float(entry["w_E"] if isinstance(entry, dict) else entry)
-        d.energy_weight = d.energy_weight * w
-        applied.append(w)
-        hit += 1
-    return hit, total, (float(np.mean(applied)) if applied else float("nan"))
+        ci = (entry or {}).get("ci") if isinstance(entry, dict) else None
+        if not ci or len(ci) != 2:
+            continue
+        lo, hi = float(ci[0]) - tolerance, float(ci[1]) + tolerance
+        if lo <= 0.0 <= hi:
+            out.append(n)
+    return sorted(out)
+
+
+def pristine_cell_atoms(dataset: Sequence, composition: Sequence[float]) -> int:
+    """The atom count of the pristine cell, by COMPOSITION and never by a label.
+
+    Standing rule 1 lists the pristine geometry as a per-host input; this reads the one
+    number the weighting needs off it, so that "a large cell" stops being the hardcoded 100
+    atoms (a CsPbCl3 number: 79 and 80 below, 159 above) and becomes "more than one pristine
+    cell". `min`, because a dataset with pristine frames at two sizes has its primitive
+    multiple at the smaller one. Returns 0 when the training set holds no stoichiometric
+    frame, and the caller then keeps whatever threshold it was given.
+    """
+    ratio = np.asarray([float(x) for x in composition], dtype=float)
+    ratio = ratio / ratio.sum()
+    best = 0
+    for d in dataset:
+        attrs = getattr(d, "node_attrs", None)
+        if attrs is None:
+            continue
+        counts = attrs.sum(dim=0).detach().cpu().numpy().astype(float)
+        if counts.sum() <= 0 or counts.shape != ratio.shape:
+            continue
+        if np.allclose(counts / counts.sum(), ratio, atol=1e-6):
+            n = _n_atoms(d)
+            best = n if best == 0 else min(best, n)
+    return int(best)
+
+
+def large_cell_threshold(pristine_atoms: int, fallback: int = 100) -> int:
+    """Atom count at or above which a frame is a "large cell": two pristine cells or more.
+
+    `1.5 * N_pristine` is the midpoint between one cell and two, so it separates 79/80 from
+    159/160 at `N_pristine = 80` exactly as the retired 100 did, and separates 127/128 from
+    255/256 at `N_pristine = 128`, which 100 could not.
+    """
+    if int(pristine_atoms) <= 0:
+        return int(fallback)
+    return int(round(1.5 * float(pristine_atoms)))
 
 
 def realised_shares(dataset: Sequence, population: str = "neutral",
@@ -159,6 +232,19 @@ def apply_size_upweight(dataset: Sequence, population: str = "neutral",
             logging.warning("Size upweight (%s, %s): no large frames; nothing applied",
                             population, ch)
             result[ch] = (1.0, 0.0)
+            continue
+        if small_mass <= 0:
+            # THE NULL GATE MAKES THIS REACHABLE, and getting it wrong is silent: with the
+            # 79-atom charged energies zeroed by standing rule 2 the small mass is zero, and
+            # `target * 0 / ((1 - target) * large)` is a factor of ZERO -- which would
+            # multiply the surviving 159-atom energy weights by nothing at all and delete
+            # every charged energy from the loss. The large cells already hold the whole
+            # channel, so the realised share is 1.0 and there is nothing to scale.
+            logging.info(
+                "Size upweight (%s, %s): the small cells carry no mass (the null gate "
+                "zeroed them); the large cells are 100%% of this channel and no factor is "
+                "applied.", population, ch)
+            result[ch] = (1.0, 1.0)
             continue
         factor = target * small_mass / max((1.0 - target) * large_mass, 1e-30)
         attr = weight_column(population, ch)

@@ -805,21 +805,60 @@ def run(args) -> None:
             )
             valid_samplers[head] = valid_sampler
 
-    train_loader = torch_geometric.dataloader.DataLoader(
-        dataset=train_set,
-        batch_size=args.batch_size,
-        sampler=train_sampler,
-        shuffle=(train_sampler is None),
-        drop_last=(train_sampler is None and not args.lbfgs),
-        pin_memory=args.pin_memory,
-        num_workers=args.num_workers,
-        generator=torch.Generator().manual_seed(args.seed),
-    )
+    # Speed-cycle spec section 1.1: batches of one atom count, so the counting head can
+    # solve the whole batch as one [B, 4n, 4n] eigenproblem. Refused under `--distributed`
+    # rather than silently ignored -- a DistributedSampler and a batch sampler are two ways
+    # to decide the same thing, and combining them would drop or duplicate frames.
+    grouped = bool(getattr(args, "defect_size_grouped_batches", False))
+    if grouped and args.distributed:
+        raise ValueError(
+            "--defect_size_grouped_batches and --distributed both own the sampler; run the "
+            "grouped batches single-process, or extend the sampler to shard by rank")
+    if grouped:
+        from mace.data.size_sampler import SizeGroupedBatchSampler, frame_sizes
+
+        batch_sampler = SizeGroupedBatchSampler(
+            frame_sizes(train_set), batch_size=args.batch_size, shuffle=True,
+            drop_last=False,
+            generator=torch.Generator().manual_seed(args.seed))
+        logging.info("Size-grouped training batches: %s", batch_sampler.describe())
+        train_loader = torch_geometric.dataloader.DataLoader(
+            dataset=train_set,
+            batch_sampler=batch_sampler,
+            pin_memory=args.pin_memory,
+            num_workers=args.num_workers,
+        )
+    else:
+        train_loader = torch_geometric.dataloader.DataLoader(
+            dataset=train_set,
+            batch_size=args.batch_size,
+            sampler=train_sampler,
+            shuffle=(train_sampler is None),
+            drop_last=(train_sampler is None and not args.lbfgs),
+            pin_memory=args.pin_memory,
+            num_workers=args.num_workers,
+            generator=torch.Generator().manual_seed(args.seed),
+        )
 
     valid_loaders = {heads[i]: None for i in range(len(heads))}
     if not isinstance(valid_sets, dict):
         valid_sets = {"Default": valid_sets}
     for head, valid_set in valid_sets.items():
+        if grouped:
+            # Evaluation order carries no information, and validation is part of the epoch
+            # time, so it is grouped too -- without shuffling, so the reported losses are
+            # over the same frames in the same order every epoch.
+            from mace.data.size_sampler import SizeGroupedBatchSampler, frame_sizes
+
+            valid_loaders[head] = torch_geometric.dataloader.DataLoader(
+                dataset=valid_set,
+                batch_sampler=SizeGroupedBatchSampler(
+                    frame_sizes(valid_set), batch_size=args.valid_batch_size,
+                    shuffle=False, drop_last=False),
+                pin_memory=args.pin_memory,
+                num_workers=args.num_workers,
+            )
+            continue
         valid_loaders[head] = torch_geometric.dataloader.DataLoader(
             dataset=valid_set,
             batch_size=args.valid_batch_size,
@@ -919,19 +958,19 @@ def run(args) -> None:
             raise RuntimeError(
                 "--defect_protocol needs a carrier head; pass --defect_spectral_head and "
                 "--defect_counting_head")
-        bond_length = float(getattr(args, "defect_protocol_bond_length", 0.0) or 0.0)
-        if bond_length <= 0.0:
-            raise RuntimeError(
-                "--defect_protocol needs --defect_protocol_bond_length. eps0 = 0 leaves "
-                "every site degenerate -- the atomic limit, where the bond order vanishes "
-                "and nothing can move the hoppings -- so the Harrison initialisation is not "
-                "optional, and its scale is a measured property of the host rather than a "
-                "constant this code is entitled to guess.")
-        harrison_applied = defect_protocol.apply_harrison(
-            model, model.atomic_numbers, bond_length)
+        # Speed-cycle spec section 2.3: no bond length is passed in any more. The Harrison
+        # scale and the hopping envelope share one anchor, `r_cov(s) + r_cov(s')` from the
+        # universal covalent-radius table, so the head cannot be initialised at one
+        # separation and evaluated against another -- and the per-host 2.861 A that used to
+        # be a required command-line number is gone.
+        harrison_applied = defect_protocol.apply_harrison(model, model.atomic_numbers)
+        anchors = getattr(getattr(model.spectral, "h", None), "d_ref_pair", None)
         logging.info(
-            f"Stage-3 protocol: Harrison initialisation at bond length {bond_length} A "
-            f"-> {'applied' if harrison_applied else 'NOT APPLIED'}")
+            "Stage-3 protocol: Harrison initialisation at the covalent-radius anchors "
+            "%s -> %s",
+            "unavailable" if anchors is None else
+            [round(float(v), 3) for v in anchors.reshape(-1)],
+            "applied" if harrison_applied else "NOT APPLIED")
 
         # The on-site correction channel starts at exactly zero output when asked. What it
         # removes is a measured global gauge -- a near-uniform +0.27 eV on every atom, which
@@ -1352,14 +1391,21 @@ def run(args) -> None:
             if bool(getattr(args, "defect_neutral_size_upweight_energy", False)):
                 from mace.data.two_size import realised_shares as _shares
 
-                s = _shares(train_set, population="neutral")
+                s = _shares(train_set, population="neutral",
+                            size_threshold=large_threshold)
                 logging.info("Realised neutral large-cell shares: epoch %d "
                              "realised_share_E %.4f realised_share_F %.4f",
                              epoch, s["energy"], s["forces"])
             if float(getattr(args, "defect_charged_energy_share", 0.0) or 0.0) > 0:
                 from mace.data.two_size import realised_shares as _shares
 
-                s = _shares(train_set, population="charged")
+                # With standing rule 2 in force the 79-atom charged energies carry
+                # zero weight, so `realised_share_E` is 1.000 BY CONSTRUCTION: the only
+                # charged energies left are the large cells'. Logged anyway, because a
+                # number that is 1.000 for a stated reason is evidence and a number that is
+                # 1.000 for an unnoticed reason is the bug this line exists to catch.
+                s = _shares(train_set, population="charged",
+                            size_threshold=large_threshold)
                 logging.info("Realised charged large-cell shares: epoch %d "
                              "realised_share_E %.4f realised_share_F %.4f",
                              epoch, s["energy"], s["forces"])
@@ -1530,11 +1576,24 @@ def run(args) -> None:
     # reach assertion, because both are properties of the data the optimiser actually sees --
     # the class of thing this project has repeatedly got wrong by configuring somewhere else.
     realised_shares = {}
+    # Standing rule 1: "a large cell" is two pristine cells or more, not 100 atoms. The
+    # pristine size is read off the training set by COMPOSITION -- the same selector the
+    # centre uses -- so the threshold follows the host instead of being one.
+    _comp = getattr(getattr(model, "madelung", None), "composition", None)
+    large_threshold = 100
+    if _comp is not None:
+        from mace.data.two_size import large_cell_threshold, pristine_cell_atoms
+
+        _n_pristine = pristine_cell_atoms(train_set, [float(x) for x in _comp])
+        large_threshold = large_cell_threshold(_n_pristine)
+        logging.info("Size classes: pristine cell %d atoms -> large-cell threshold %d "
+                     "(retired constant: 100)", _n_pristine, large_threshold)
     if float(getattr(args, "defect_two_size_upweight", 0.0) or 0.0) > 0:
         from mace.data.two_size import apply_two_size_upweight
 
         factor, share = apply_two_size_upweight(
-            train_set, target_share=float(args.defect_two_size_upweight))
+            train_set, target_share=float(args.defect_two_size_upweight),
+            size_threshold=large_threshold)
         realised_shares["charged_large"] = share
         logging.info(
             f"Two-size upweight: factor {factor:.2f}, realised charged-force-loss share "
@@ -1554,7 +1613,7 @@ def run(args) -> None:
             both = apply_size_upweight(
                 train_set, population="neutral",
                 target_share=float(args.defect_neutral_size_upweight),
-                channels=("energy", "forces"))
+                size_threshold=large_threshold, channels=("energy", "forces"))
             realised_shares["neutral_large_E"] = both["energy"][1]
             realised_shares["neutral_large_F"] = both["forces"][1]
             logging.info(
@@ -1564,31 +1623,46 @@ def run(args) -> None:
                 f"{float(args.defect_neutral_size_upweight):.0%})")
         else:
             factor, share = apply_neutral_size_upweight(
-                train_set, target_share=float(args.defect_neutral_size_upweight))
+                train_set, target_share=float(args.defect_neutral_size_upweight),
+                size_threshold=large_threshold)
             realised_shares["neutral_large"] = share
             logging.info(
                 f"Neutral two-size upweight: factor {factor:.2f}, realised neutral-force-loss "
                 f"share {share:.1%} (target "
                 f"{float(args.defect_neutral_size_upweight):.0%})")
-    # Stage A' section 3: the charged 79-atom energies weighted by w_E, then the charged
-    # large cells raised to their target share of the (weighted) charged ENERGY loss. Order
-    # matters: the share is a share of the loss actually minimised.
-    if str(getattr(args, "defect_energy_weights_json", "") or ""):
-        from mace.data.two_size import apply_energy_weights_from_json
+    # Speed-cycle standing rule 2: charged ENERGIES enter the loss only for size classes
+    # that have a neutral null. Forces enter for every charged frame. Applied BEFORE the
+    # share below, because the share is a share of the loss actually minimised and a class
+    # with zero energy weight must not be counted into it.
+    if str(getattr(args, "defect_null_reference", "") or ""):
+        from mace.data.two_size import gate_charged_energies_by_null, nulled_sizes_from
 
-        n_hit, n_charged, w_mean = apply_energy_weights_from_json(
-            train_set, args.defect_energy_weights_json, z_table=z_table)
-        logging.info("Per-frame energy weights (w_E): %d of %d charged training frames "
-                     "matched, mean w_E %.3f", n_hit, n_charged, w_mean)
-        if n_hit < n_charged:
-            logging.warning("%d charged frames had no w_E entry and keep weight 1.0",
-                            n_charged - n_hit)
+        with open(args.defect_null_reference, encoding="utf-8") as handle:
+            payload = json.load(handle)
+        nulled = nulled_sizes_from(payload)
+        if not nulled:
+            raise RuntimeError(
+                f"the null file {args.defect_null_reference} admits no size class: every "
+                "charged energy would be dropped and the head would train on forces alone. "
+                "A file with no bracketed null is a missing measurement, not a null.")
+        kept, dropped, per_size = gate_charged_energies_by_null(train_set, nulled)
+        logging.info(
+            "Null-gated charged energies: sizes with a neutral null %s; kept %d charged "
+            "frames' energies, dropped %d. Per size: %s",
+            nulled, kept, dropped, json.dumps(per_size, sort_keys=True))
+    elif float(getattr(args, "defect_charged_energy_share", 0.0) or 0.0) > 0:
+        raise RuntimeError(
+            "--defect_charged_energy_share puts charged energies in the loss, and standing "
+            "rule 2 admits them only for a size class with a neutral null. Pass "
+            "--defect_null_reference with the file that establishes which classes those "
+            "are, or set the share to zero.")
     if float(getattr(args, "defect_charged_energy_share", 0.0) or 0.0) > 0:
         from mace.data.two_size import apply_size_upweight
 
         ce = apply_size_upweight(
             train_set, population="charged",
-            target_share=float(args.defect_charged_energy_share), channels=("energy",))
+            target_share=float(args.defect_charged_energy_share),
+            size_threshold=large_threshold, channels=("energy",))
         realised_shares["charged_large_E"] = ce["energy"][1]
         logging.info(f"Charged energy share: factor {ce['energy'][0]:.2f} -> realised "
                      f"{ce['energy'][1]:.1%} (target "

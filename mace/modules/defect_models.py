@@ -36,6 +36,42 @@ from mace.tools.scatter import scatter_sum
 from mace.tools.torch_tools import to_high_precision
 
 
+def _frontier_spacings(grabbed, batch, valence) -> List[float]:
+    """Median adjacent level spacing just above the frontier, per PRISTINE graph.
+
+    `delta_L`, exactly as `defect-perovskite/s3_dilution.py` has computed it since Stage 3:
+    the eleven levels above the neutral frontier of a pristine cell, their adjacent
+    differences, the median. Taken from the head's own `internals["lam"]` so the trainer and
+    the scorers cannot come to disagree about what the spacing is.
+
+    Returns an empty list when the head produced no spectrum (an attention-head model, or a
+    frame with too few states above the frontier), so a caller that gets nothing records
+    nothing rather than a plausible zero.
+    """
+    out: List[float] = []
+    graph = getattr(batch, "batch", None)
+    attrs = getattr(batch, "node_attrs", None)
+    if graph is None or attrs is None or valence is None:
+        return out
+    # The head's OWN valence table, indexed by species: `batch.atomic_numbers` does not
+    # exist on an `AtomicData` batch (species live one-hot in `node_attrs`), and reading a
+    # table the head does not use would let the two disagree about the electron count.
+    per_node = valence.to(graph.device)[attrs.argmax(dim=-1)]
+    for bucket in grabbed:
+        lam_all = bucket.get("lam")
+        if lam_all is None:
+            continue
+        for g in range(int(lam_all.shape[0])):
+            lam = lam_all[g, 0]
+            lam = torch.sort(lam[lam < 500.0]).values
+            n_el = int(per_node[graph == g].sum()) // 2
+            top = min(n_el + 11, int(lam.numel()))
+            if top - n_el < 3:
+                continue
+            out.append(float(torch.diff(lam[n_el:top]).median()))
+    return out
+
+
 def _readout_input_irreps(block: torch.nn.Module) -> o3.Irreps:
     if isinstance(block, LinearReadoutBlock):
         return o3.Irreps(str(block.linear.irreps_in))  # type: ignore
@@ -148,6 +184,11 @@ class MACEDefect(ScaleShiftMACE):
         # argument from the day it exists, so the config round trip carries it (section 5.1).
         counting_decay_learned: bool = False,
         counting_decay_log_beta: float = 0.6931471805599453,
+        # Speed-cycle spec section 2.1: where the pristine centre is subtracted.
+        counting_centre_form: str = "argument",
+        # Section 2.2: the per-site charge deviation's bound, in e. Zero disables the
+        # channel, which is the Stage-B model exactly.
+        madelung_site_zeta: float = 0.0,
         lr_detach_density: bool = False,
         lr_freeze: bool = False,
         image_compensation: bool = False,
@@ -273,7 +314,9 @@ class MACEDefect(ScaleShiftMACE):
             self.madelung = MadelungOnSite(
                 num_elements=int(kwargs["num_elements"]),
                 composition=madelung_composition,
-                z_init=madelung_z_init)
+                z_init=madelung_z_init,
+                site_zeta=float(madelung_site_zeta),
+                feature_dim=int(self.spectral_feature_dim))
         self.counting_head = bool(counting_head)
         self.counting_on_site_range = float(counting_on_site_range)
         self.counting_hop_range = float(counting_hop_range)
@@ -284,6 +327,8 @@ class MACEDefect(ScaleShiftMACE):
         self.counting_hop_log_beta = float(counting_hop_log_beta)
         self.counting_decay_learned = bool(counting_decay_learned)
         self.counting_decay_log_beta = float(counting_decay_log_beta)
+        self.counting_centre_form = str(counting_centre_form)
+        self.madelung_site_zeta = float(madelung_site_zeta)
         if precision_policy not in PRECISION_POLICIES:
             raise ValueError(f"unknown precision_policy {precision_policy!r}; expected one "
                              f"of {sorted(PRECISION_POLICIES)}")
@@ -319,6 +364,13 @@ class MACEDefect(ScaleShiftMACE):
                              torch.zeros(int(kwargs["num_elements"]), block0_dim),
                              persistent=True)
         self.register_buffer("pristine_centre_set", torch.zeros((), dtype=torch.bool),
+                             persistent=True)
+        # Section 2.5: `delta_L`, the pristine cell's median level spacing just above the
+        # frontier, recorded on the same pass as the centre. It is the denominator of the
+        # image compensation's bound switch, so it is model state and travels in the
+        # checkpoint like the centre does.
+        self.register_buffer("pristine_level_spacing", torch.zeros(()), persistent=True)
+        self.register_buffer("pristine_spacing_set", torch.zeros((), dtype=torch.bool),
                              persistent=True)
         self._register_state_dict_hook(_sync_trunk_constants_into_state_dict)
         self.register_load_state_dict_post_hook(_restore_trunk_constants_from_buffer)
@@ -369,7 +421,8 @@ class MACEDefect(ScaleShiftMACE):
                 num_elements=int(kwargs["num_elements"]),
                 feature_dim=self.spectral_feature_dim,
                 atomic_numbers=[int(z) for z in kwargs["atomic_numbers"]],
-                d_ref=2.8, r_cut=float(self.spectral_r_cut),
+                r_cut=float(self.spectral_r_cut),
+                centre_form=str(counting_centre_form),
                 on_site_range=float(counting_on_site_range),
                 hop_range=float(counting_hop_range),
                 smearing_family=str(counting_smearing_family),
@@ -536,6 +589,35 @@ class MACEDefect(ScaleShiftMACE):
         self.pristine_block0_mean.copy_(mean)
         self.pristine_centre_set.fill_(True)
 
+    @torch.no_grad()
+    def set_pristine_spacing(self, spacing: float) -> None:
+        """Section 2.5: `delta_L`, the pristine cell's own level spacing above the frontier.
+
+        THE COMMON-delta_L CONVENTION, carried over from `s3_dilution.py` and stated here
+        because the bound switch now uses it inside the forward: `delta_L` must come from ONE
+        cell size for every frame the flag touches. The model's continuum is Gamma-only and
+        therefore twice as sparse at 79 atoms as at 159, so a depth from a large cell judged
+        against a spacing from a small one inflates the bound fraction for a reason that has
+        nothing to do with binding.
+        """
+        self.pristine_level_spacing.fill_(float(spacing))
+        self.pristine_spacing_set.fill_(True)
+
+    def bound_switch(self, depth: torch.Tensor) -> torch.Tensor:
+        """`s = sigmoid((depth / delta_L - 2) / 0.5)`: 1 on a split-off level, 0 in the
+        continuum, smooth between. Section 2.5 of the speed cycle's spec.
+
+        The threshold and the width are the spec's, and `depth / delta_L > 2` is the same
+        bound condition `s3_dilution` has scored since Stage 3 -- this is that condition made
+        differentiable so it can multiply a term rather than select frames.
+        """
+        if not bool(self.pristine_spacing_set):
+            raise RuntimeError(
+                "the image compensation's bound switch needs delta_L; call "
+                "collect_pristine_centre (which records it) before the first forward")
+        delta_l = self.pristine_level_spacing.to(depth.dtype).clamp_min(1e-9)
+        return torch.sigmoid((depth / delta_l - 2.0) / 0.5)
+
     def pristine_centre(self, head_dtype: torch.dtype) -> Optional[torch.Tensor]:
         """The centre in the head's feature space, through the LIVE first readout."""
         if not getattr(self, "on_site_centred", False) or getattr(
@@ -558,20 +640,52 @@ class MACEDefect(ScaleShiftMACE):
         One method rather than a trainer-side loop, so the trainer and the tests set the
         centre the same way -- and so the probing forward cannot trip the "no centre yet"
         guard, which is what a bare forward with the flag on does."""
-        feats, species = [], []
+        feats, species, spacings, sizes_seen = [], [], [], []
+        # Section 2.5's `delta_L` comes off the same pass. The head writes its spectra into
+        # an `internals` dict when one is handed to it, and the only way to hand it one is
+        # through its own forward -- so the wrapper is here, once, rather than in each of
+        # the four scorers that used to reimplement it.
+        head = getattr(self, "spectral", None)
+        grabbed: List[Dict[str, torch.Tensor]] = []
+        original = None if head is None else head.forward
+
+        def wrapped(*args, **kwargs):
+            bucket: Dict[str, torch.Tensor] = {}
+            kwargs["internals"] = bucket
+            out = original(*args, **kwargs)
+            grabbed.append(bucket)
+            return out
+
         self._collecting_centre = True
+        if head is not None:
+            head.forward = wrapped
         try:
             for batch in batches:
                 if device is not None:
                     batch = batch.to(device)
+                grabbed.clear()
                 out = self(batch.to_dict(), training=False, compute_force=False)
                 feats.append(out["trunk_block0"].detach())
                 species.append(batch.node_attrs.argmax(dim=-1))
+                spacings.extend(_frontier_spacings(
+                    grabbed, batch, getattr(head, "valence", None)))
+                ptr = getattr(batch, "ptr", None)
+                if ptr is not None:
+                    sizes_seen.extend(int(x) for x in (ptr[1:] - ptr[:-1]).tolist())
         finally:
             self._collecting_centre = False
+            if head is not None:
+                head.forward = original
         if not feats:
             raise RuntimeError("no stoichiometric frames to centre on")
         self.set_pristine_centre(torch.cat(feats), torch.cat(species))
+        # Standing rule 1: the pristine cell's atom count is what the c table's size class
+        # is a multiple of, and it comes from the same pristine geometry the centre does.
+        head = getattr(self, "spectral", None)
+        if head is not None and hasattr(head, "pristine_atoms") and sizes_seen:
+            head.pristine_atoms.fill_(int(min(sizes_seen)))
+        if spacings:
+            self.set_pristine_spacing(float(torch.tensor(spacings).median()))
         return int(sum(f.shape[0] for f in feats))
 
     def __getstate__(self) -> Dict[str, Any]:
@@ -610,6 +724,9 @@ class MACEDefect(ScaleShiftMACE):
             ("lr_detach_density", False),
             ("lr_freeze", False),
             ("image_compensation", False),
+            ("counting_centre_form", "output"),
+            ("madelung_site_zeta", 0.0),
+            ("skip_neutral_reference", True),
             ("on_site_centred", False),
             ("_base_cache", None),
             ("_collecting_centre", False),
@@ -759,9 +876,10 @@ class MACEDefect(ScaleShiftMACE):
             # every mode -- the isolated switch belongs to E_LR alone, and there is no
             # branch here to reach it. Full lattice sum: no self-image subtraction.
             with mark("ewald/madelung"):
-                madelung = self.madelung.on_site_shift(
+                    madelung = self.madelung.on_site_shift(
                     self.latent_ewald, node_species, positions, cell, batch,
-                    eps_inf=self.madelung_eps_inf)
+                    eps_inf=self.madelung_eps_inf,
+                    feats=head_feats, centre=centre, num_graphs=num_graphs)
 
         head_kwargs = dict(
             node_feats=head_feats,
@@ -790,6 +908,7 @@ class MACEDefect(ScaleShiftMACE):
         # position dependence at fixed q_c is kept, so it reaches the forces. Zero on any
         # neutral cell: alpha is zero where no carrier is.
         image_comp: Optional[torch.Tensor] = None
+        bound_flag: Optional[torch.Tensor] = None
         if (getattr(self, "image_compensation", False)
                 and positions is not None and cell is not None
                 and getattr(self, "latent_ewald", None) is not None):
@@ -802,9 +921,19 @@ class MACEDefect(ScaleShiftMACE):
             with mark("ewald/image"):
                 phi_img = image_potential(self.latent_ewald, q_c, positions, cell, batch,
                                           num_graphs)
-            comp = -phi_img / float(self.madelung_eps_inf)
+            # SECTION 2.5's VALIDITY SWITCH. The term is the potential of a LOCALISED
+            # carrier's own images; on a frame whose level is degenerate with the continuum
+            # there is no such carrier, `alpha` is the spread-out density of a resonance, and
+            # the compensation is then a smooth function of nothing in particular. `s` turns
+            # it off there -- `sigmoid((depth/delta_L - 2)/0.5)`, the differentiable form of
+            # the bound condition the dilution scorer has used since Stage 3 -- and the
+            # per-frame value travels out for the run log.
+            depth = probe.gap[:, 0].detach().to(positions.dtype)
+            switch = self.bound_switch(depth)
+            comp = -switch[batch] * phi_img / float(self.madelung_eps_inf)
             head_kwargs["madelung"] = comp if madelung is None else madelung + comp
             image_comp = comp
+            bound_flag = switch
         # Section 1. `force_out` is both the request and the reply: a head that can supply the
         # density response advertises `wants_positions`, and gets asked only when the caller
         # is in a training force pass. Absent here, no second backward is built -- which is
@@ -832,7 +961,8 @@ class MACEDefect(ScaleShiftMACE):
                                dim_size=num_graphs) / node_count
         delta_u = weighted - mean_eps
         return (out.delta_sr, out.alpha, out.site_energy, out.gap, delta_u,
-                out.site_energy, {"eps_mean": out.eps_mean, "image_compensation": image_comp})
+                out.site_energy, {"eps_mean": out.eps_mean, "image_compensation": image_comp,
+                                  "bound_switch": bound_flag})
 
     def forward(  # pylint: disable=too-many-branches
         self,
@@ -1157,26 +1287,64 @@ class MACEDefect(ScaleShiftMACE):
                 )
             gauge_mean_u = torch.stack(gauge_list, dim=1)  # [n_graphs, K, 4]
 
-        counter_emb_ref = self.counter_embedding(counts_ref)
-        delta_sr_ref, alpha_ref, _, _, _, _, _ = self._carrier_head(
-            node_feats=defect_feats,
-            counter_emb=counter_emb_ref,
-            counts=counts_ref,
-            batch=data["batch"],
-            num_graphs=num_graphs,
-            edge_index=head_edge_index,
-            edge_length=head_lengths,
-            node_species=head_species,
-            clamp_mask=head_clamp,
-            edge_vector=head_vectors,
-            logit_bias=logit_bias,
-            positions=head_positions,
-            cell=head_cell,
-            occupations=data.get("occupations"),
-            force_out=force_out_ref,
-            centre=centre,
-            graph_sizes=graph_sizes,
+        # SECTION 1.1, THE REFERENCE BRANCH. When the reference counter is the neutral one
+        # -- which it is unless the caller supplied `carrier_counts_ref` -- every term of
+        # the reference branch is EXACTLY zero for the counting head, and skipping it is an
+        # identity rather than an approximation:
+        #
+        #   * `delta_sr_ref`: the head's energy is a difference between the fill and the
+        #     neutral reference fill. At `counts_ref = 0` the two fills are the same numbers,
+        #     so the occupations subtract to exactly zero, `D = 0`, and both the trace and
+        #     the entropy difference vanish identically. The head declares this as
+        #     `zero_at_neutral_counts`; `test_neutral_reference_skip.py` measures it.
+        #   * `q^pol` at zero counts is zero in all three of its branches (the ungated one
+        #     carries a `total_carriers` factor, the gated one a gate built from the same
+        #     counts, and the disabled one is zero by construction), and `q^carrier` carries
+        #     `carrier_signs * counts`. So `latent_charge_ref = q_host` exactly, and
+        #     `delta_lr_ref` is `E[0]` in the uncoupled branch and `E[q_host] - E[q_host]`
+        #     in the coupled one. Both are zero, with zero position gradient -- E is
+        #     quadratic in q, so `dE/dR` at `q = 0` is zero too.
+        #   * `_isolated_carrier_self` multiplies by the same signed counts.
+        #
+        # What it saves is a whole head pass (eigensolve, fills, Madelung), an Ewald
+        # evaluation, and the `correction_energy_ref` force gradient -- 18% of the step.
+        #
+        # THE GATE IS ON THE VALUE OF `counts_ref`, NOT ON WHETHER THE KEY IS PRESENT.
+        # `prepare_defect_configurations` writes `carrier_counts_ref` onto EVERY paired
+        # frame -- it records which member of the pair the difference is taken against --
+        # so keying the skip on the field's absence never fires on real training data. The
+        # condition the proof above needs is that the reference counter is the neutral one,
+        # which is one reduction and one host synchronisation per forward against the 0.13 s
+        # it saves.
+        skip_reference = (
+            bool(getattr(self, "skip_neutral_reference", True))
+            and getattr(getattr(self, "spectral", None), "zero_at_neutral_counts", False)
+            and bool(counts_ref.abs().sum() == 0)
         )
+        counter_emb_ref = self.counter_embedding(counts_ref)
+        if skip_reference:
+            delta_sr_ref = torch.zeros_like(delta_sr)
+            alpha_ref = torch.zeros_like(alpha)
+        else:
+            delta_sr_ref, alpha_ref, _, _, _, _, _ = self._carrier_head(
+                node_feats=defect_feats,
+                counter_emb=counter_emb_ref,
+                counts=counts_ref,
+                batch=data["batch"],
+                num_graphs=num_graphs,
+                edge_index=head_edge_index,
+                edge_length=head_lengths,
+                node_species=head_species,
+                clamp_mask=head_clamp,
+                edge_vector=head_vectors,
+                logit_bias=logit_bias,
+                positions=head_positions,
+                cell=head_cell,
+                occupations=data.get("occupations"),
+                force_out=force_out_ref,
+                centre=centre,
+                graph_sizes=graph_sizes,
+            )
 
         # Long-range branch (plan section 3.4).
         latent_charge: Optional[torch.Tensor] = None
@@ -1287,18 +1455,29 @@ class MACEDefect(ScaleShiftMACE):
             # The same at the reference counter. This branch is *not* inert at q = 0:
             # q^carrier is a compensated but pointwise non-zero charge whose self-term is
             # the electron-hole interaction, and q^pol carries a factor sum_c n_c. Both
-            # are live whenever the reference state itself carries carriers.
-            latent_charge_ref, _, _, _, _ = self.latent_charges(
-                node_feats=defect_feats,
-                counter_emb=counter_emb_ref,
-                counts=counts_ref,
-                alpha=alpha_ref,
-                batch=data["batch"],
-                num_graphs=num_graphs,
-                edge_index=data["edge_index"],
-                edge_lengths=lengths,
-            )
-            if self.host_carrier_coupling:
+            # are live whenever the reference state itself carries carriers -- which is
+            # exactly what `skip_reference` above tests for, and why the skip is gated on
+            # the caller NOT having supplied a reference counter of its own.
+            if skip_reference:
+                # `latent_charge_ref = q_host` exactly (see above), so both branches below
+                # evaluate the Ewald energy of an identically zero charge. Written as the
+                # zero it is, rather than paying an Ewald call to arrive at it.
+                latent_charge_ref = q_host
+                delta_lr_ref = torch.zeros_like(base_energy)
+            else:
+                latent_charge_ref, _, _, _, _ = self.latent_charges(
+                    node_feats=defect_feats,
+                    counter_emb=counter_emb_ref,
+                    counts=counts_ref,
+                    alpha=alpha_ref,
+                    batch=data["batch"],
+                    num_graphs=num_graphs,
+                    edge_index=data["edge_index"],
+                    edge_lengths=lengths,
+                )
+            if skip_reference:
+                pass
+            elif self.host_carrier_coupling:
                 delta_lr_ref = (
                     self.latent_ewald.energy(
                         latent_charge_ref, head_positions, cell_les, data["batch"]
@@ -1316,9 +1495,12 @@ class MACEDefect(ScaleShiftMACE):
                 delta_lr = delta_lr - self._isolated_carrier_self(
                     alpha, counts, amplitude, head_positions, data["batch"], num_graphs
                 )
-                delta_lr_ref = delta_lr_ref - self._isolated_carrier_self(
-                    alpha_ref, counts_ref, amplitude, head_positions, data["batch"], num_graphs
-                )
+                if not skip_reference:
+                    # Zero at zero counts by the same `carrier_signs * counts` factor.
+                    delta_lr_ref = delta_lr_ref - self._isolated_carrier_self(
+                        alpha_ref, counts_ref, amplitude, head_positions,
+                        data["batch"], num_graphs
+                    )
 
             if dilute:
                 dilute_correction = self.latent_ewald.dilute_correction(
@@ -1362,9 +1544,12 @@ class MACEDefect(ScaleShiftMACE):
                 correction_forces = _energy_gradient(correction_energy, positions,
                                                      training)
             with mark("model/grad_corr_ref"):
-                correction_forces_ref = _energy_gradient(
-                    correction_energy_ref, positions, training
-                )
+                # `correction_energy_ref` is an exact zero with no graph under the skip, so
+                # its gradient is the zero vector; taking it through autograd would either
+                # cost a full backward or fail for an unused input.
+                correction_forces_ref = (
+                    torch.zeros_like(positions) if skip_reference
+                    else _energy_gradient(correction_energy_ref, positions, training))
             if response is not None:
                 correction_forces = correction_forces + response
             if response_ref is not None:
@@ -1447,6 +1632,9 @@ class MACEDefect(ScaleShiftMACE):
             # Section 2.3: the image-compensation shift per atom (None when the term is off),
             # so the tiling drift test can separate it from the ion Madelung term.
             "image_compensation": head_extras.get("image_compensation"),
+            # Section 2.5: `s` per frame, so the tiling test and the run log can report the
+            # distribution the spec asks for rather than inferring it from the term.
+            "bound_switch": head_extras.get("bound_switch"),
             # Section 2.1: the first block's trunk features, for `set_pristine_centre`.
             "trunk_block0": trunk_block0,
             # The exact inputs the correction readouts consume, exposed so that seeding

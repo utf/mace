@@ -110,7 +110,7 @@ def build(arch_path, base_path, seed, device, stage, madelung, eps_inf, t_ref, l
         # is passed in so the head stays host-agnostic.
         from mace.modules import defect_protocol
 
-        defect_protocol.apply_harrison(model, model.atomic_numbers, t_ref)
+        defect_protocol.apply_harrison(model, model.atomic_numbers)
     model = model.to(device)
     head = getattr(model, "spectral", None)
     knobs = ""

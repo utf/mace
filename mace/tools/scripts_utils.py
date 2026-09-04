@@ -483,6 +483,10 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         config["image_compensation"] = bool(getattr(model, "image_compensation", False))
         config["precision_policy"] = str(getattr(model, "precision_policy", "uniform"))
         config["on_site_centred"] = bool(getattr(model, "on_site_centred", False))
+        # Speed-cycle spec sections 2.1 and 2.2.
+        config["counting_centre_form"] = str(
+            getattr(model, "counting_centre_form", "argument"))
+        config["madelung_site_zeta"] = float(getattr(model, "madelung_site_zeta", 0.0))
         config["madelung_on_site"] = bool(getattr(model, "madelung_on_site", False))
         config["madelung_eps_inf"] = float(getattr(model, "madelung_eps_inf", 4.0))
         if getattr(model, "madelung", None) is not None:

@@ -106,7 +106,11 @@ def test_every_spectral_setting_survives_config_extraction():
                    counting_decay_learned=True, counting_decay_log_beta=0.5,
                    counting_hop_form="log", counting_hop_log_beta=0.4054651081081644,
                    lr_detach_density=True, lr_freeze=True, image_compensation=True,
-                   precision_policy="mixed", on_site_centred=True)
+                   precision_policy="mixed", on_site_centred=True,
+                   # Speed-cycle spec sections 2.1 and 2.2: the corrected centred form and
+                   # the per-site charge bound. Same rule -- a knob travels from the day it
+                   # exists, or a rebuilt model silently runs the retired form.
+                   counting_centre_form="output", madelung_site_zeta=0.75)
 
     torch.manual_seed(0)
     model = MACEDefect(
@@ -121,7 +125,8 @@ def test_every_spectral_setting_survives_config_extraction():
         avg_num_neighbors=8.0, atomic_numbers=[17, 55, 82], correlation=2,
         atomic_inter_scale=1.0, atomic_inter_shift=0.0,
         carrier_feature_dim=16, counter_embedding_dim=8, carrier_mlp_hidden=16,
-        use_long_range=False, **flipped)
+        use_long_range=False, madelung_on_site=True,
+        madelung_composition=[3.0, 1.0, 1.0], **flipped)
 
     config = extract_config_mace_model(model)
     missing = [k for k in flipped if k not in config]
@@ -148,6 +153,11 @@ def test_every_spectral_setting_survives_config_extraction():
         assert rebuilt_head.h.decay_u.requires_grad is True
         assert rebuilt_head.h.decay_log_beta == pytest.approx(0.5)
         assert rebuilt_head.h.hop_form == "log"
+        assert rebuilt_head.h.centre_form == "output"
+    # Section 2.2's per-site channel exists on the rebuilt model, with its bound.
+    assert rebuilt.madelung is not None
+    assert rebuilt.madelung.site is not None
+    assert rebuilt.madelung.site_zeta == pytest.approx(0.75)
 
 
 def test_the_stage_aprime_flags_reach_the_model_kwargs():
@@ -164,7 +174,8 @@ def test_the_stage_aprime_flags_reach_the_model_kwargs():
     flags = dict(defect_counting_decay_learned=True, defect_counting_decay_beta=0.5,
                  defect_lr_detach_density=True, defect_lr_freeze=True,
                  defect_image_compensation=True, defect_precision_policy="mixed",
-                 defect_on_site_centred=True)
+                 defect_on_site_centred=True, defect_counting_centre_form="output",
+                 defect_madelung_site_zeta=0.75)
     assert set(flags) <= cli_flags(), sorted(set(flags) - cli_flags())
     args = SimpleNamespace(defect_madelung_on_site=False, defect_madelung_composition=None,
                            defect_madelung_z_init=None, defect_counting_head=True,
@@ -172,7 +183,8 @@ def test_the_stage_aprime_flags_reach_the_model_kwargs():
     kwargs = _defect_madelung_kwargs(args)
     expected = dict(counting_decay_learned=True, counting_decay_log_beta=0.5,
                     lr_detach_density=True, lr_freeze=True, image_compensation=True,
-                    precision_policy="mixed", on_site_centred=True)
+                    precision_policy="mixed", on_site_centred=True,
+                    counting_centre_form="output", madelung_site_zeta=0.75)
     for key, value in expected.items():
         assert kwargs[key] == value, f"{key}: {kwargs.get(key)!r} != {value!r}"
 

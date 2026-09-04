@@ -58,7 +58,7 @@ def head(num_elements=3):
     torch.manual_seed(0)
     h = CountingHead(num_elements=num_elements, feature_dim=4,
                      atomic_numbers=[17, 55, 82], r_cut=R_CUT).double()
-    harrison_initialise(h, [17, 55, 82], bond_length=0.5 * A_LATTICE)
+    harrison_initialise(h, [17, 55, 82])
     return h
 
 

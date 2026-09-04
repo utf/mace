@@ -41,18 +41,35 @@ SAT = 0.98
 
 
 def centred_correction(model, batch, frames, ctx):
-    """Per atom: (corr_s [eV], raw tanh at x_i, raw tanh at xbar_s) for one graph."""
+    """Per atom: (corr_s [eV], raw tanh at x_i, raw tanh at xbar_s) for one graph.
+
+    THE FORM IS THE MODEL'S, NOT THIS SCRIPT'S. Two are in circulation:
+
+        "output"    corr = gamma [ tanh h(x_i) - tanh h(xbar_s) ]   Stage A'
+        "argument"  corr = gamma   tanh[ h(x_i) - h(xbar_s) ]       this cycle
+
+    and scoring one cohort through the other's form reports numbers that model never
+    computed -- which is exactly the mistake this script was written to fix when it took
+    over from b4. It is read off the head, with the pickle-era default ("output") for a
+    model that predates the attribute.
+
+    The two raw tanh values come back in both cases, because the saturation diagnostic is
+    about `h` itself and is what tells a dead channel from a small one.
+    """
     head = model.spectral.h
+    form = getattr(head, "centre_form", "output")
     with torch.no_grad():
         out = model(ctx.forward_dict(batch, frames, requires_grad=False),
                     training=False, compute_force=False)
         feats = out["defect_features"][:, : model.spectral_feature_dim]
         species = batch.node_attrs.argmax(dim=-1)
         e = head.elem(species)
-        raw = torch.tanh(head.site(torch.cat([feats, e], dim=-1)))          # [n, 2]
+        pre = head.site(torch.cat([feats, e], dim=-1))                      # [n, 2]
         centre = model.pristine_centre(feats.dtype)
-        ref = torch.tanh(head.site(torch.cat([centre.to(feats.dtype)[species], e], dim=-1)))
-        corr = float(head.on_site_range) * (raw - ref)
+        pre_ref = head.site(torch.cat([centre.to(feats.dtype)[species], e], dim=-1))
+        raw, ref = torch.tanh(pre), torch.tanh(pre_ref)
+        corr = float(head.on_site_range) * (
+            torch.tanh(pre - pre_ref) if form == "argument" else raw - ref)
     return (corr[:, 0].cpu().numpy(), raw[:, 0].cpu().numpy(), ref[:, 0].cpu().numpy())
 
 

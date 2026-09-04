@@ -264,7 +264,6 @@ DEFECT_COUNTING_T_EL="${DEFECT_COUNTING_T_EL:-0.05}"
 # projection. Off by default -- every run before this one trained without it, and turning it
 # on silently would make old and new runs incomparable while looking identical in the log.
 DEFECT_PROTOCOL="${DEFECT_PROTOCOL:-False}"
-DEFECT_PROTOCOL_BOND_LENGTH="${DEFECT_PROTOCOL_BOND_LENGTH:-0.0}"
 DEFECT_PROTOCOL_WARMUP="${DEFECT_PROTOCOL_WARMUP:-5}"
 DEFECT_PROTOCOL_HEAD_ONLY="${DEFECT_PROTOCOL_HEAD_ONLY:-False}"
 DEFECT_PROTOCOL_FREEZE_Z="${DEFECT_PROTOCOL_FREEZE_Z:-False}"
@@ -282,11 +281,17 @@ DEFECT_LR_DETACH_DENSITY="${DEFECT_LR_DETACH_DENSITY:-False}"
 DEFECT_LR_FREEZE="${DEFECT_LR_FREEZE:-False}"
 DEFECT_IMAGE_COMPENSATION="${DEFECT_IMAGE_COMPENSATION:-False}"
 DEFECT_PRECISION_POLICY="${DEFECT_PRECISION_POLICY:-uniform}"
+# Speed-cycle spec section 1.1: one atom count per batch, so the head solves
+# [B, 4n, 4n] at once. Off by default; the arms turn it on.
+DEFECT_SIZE_GROUPED_BATCHES="${DEFECT_SIZE_GROUPED_BATCHES:-0}"
+# Speed-cycle spec sections 2.1 and 2.2.
+DEFECT_COUNTING_CENTRE_FORM="${DEFECT_COUNTING_CENTRE_FORM:-argument}"
+DEFECT_MADELUNG_SITE_ZETA="${DEFECT_MADELUNG_SITE_ZETA:-0.0}"
 DEFECT_ON_SITE_CENTRED="${DEFECT_ON_SITE_CENTRED:-False}"
 DEFECT_BASE_CACHE="${DEFECT_BASE_CACHE:-False}"
 DEFECT_NEUTRAL_SIZE_UPWEIGHT_ENERGY="${DEFECT_NEUTRAL_SIZE_UPWEIGHT_ENERGY:-False}"
 DEFECT_C_SHIFT_PER_CLASS="${DEFECT_C_SHIFT_PER_CLASS:-False}"
-DEFECT_ENERGY_WEIGHTS_JSON="${DEFECT_ENERGY_WEIGHTS_JSON:-}"
+DEFECT_NULL_REFERENCE="${DEFECT_NULL_REFERENCE:-}"
 DEFECT_CHARGED_ENERGY_SHARE="${DEFECT_CHARGED_ENERGY_SHARE:-0.0}"
 DEFECT_BASE_CACHE_DIR="${DEFECT_BASE_CACHE_DIR:-}"
 DEFECT_PROTOCOL_ZERO_ON_SITE="${DEFECT_PROTOCOL_ZERO_ON_SITE:-False}"
@@ -447,7 +452,6 @@ python -m mace.cli.run_train \
     --defect_counting_smearing="${DEFECT_COUNTING_SMEARING}" \
     --defect_counting_t_el="${DEFECT_COUNTING_T_EL}" \
     --defect_protocol="${DEFECT_PROTOCOL}" \
-    --defect_protocol_bond_length="${DEFECT_PROTOCOL_BOND_LENGTH}" \
     --defect_protocol_warmup="${DEFECT_PROTOCOL_WARMUP}" \
     --defect_protocol_head_only="${DEFECT_PROTOCOL_HEAD_ONLY}" \
     --defect_protocol_freeze_z="${DEFECT_PROTOCOL_FREEZE_Z}" \
@@ -462,11 +466,14 @@ python -m mace.cli.run_train \
     --defect_lr_freeze="${DEFECT_LR_FREEZE}" \
     --defect_image_compensation="${DEFECT_IMAGE_COMPENSATION}" \
     --defect_precision_policy="${DEFECT_PRECISION_POLICY}" \
+    --defect_size_grouped_batches="${DEFECT_SIZE_GROUPED_BATCHES}" \
     --defect_on_site_centred="${DEFECT_ON_SITE_CENTRED}" \
+    --defect_counting_centre_form="${DEFECT_COUNTING_CENTRE_FORM}" \
+    --defect_madelung_site_zeta="${DEFECT_MADELUNG_SITE_ZETA}" \
     --defect_base_cache="${DEFECT_BASE_CACHE}" \
     --defect_neutral_size_upweight_energy="${DEFECT_NEUTRAL_SIZE_UPWEIGHT_ENERGY}" \
     --defect_c_shift_per_class="${DEFECT_C_SHIFT_PER_CLASS}" \
-    --defect_energy_weights_json="${DEFECT_ENERGY_WEIGHTS_JSON}" \
+    --defect_null_reference="${DEFECT_NULL_REFERENCE}" \
     --defect_charged_energy_share="${DEFECT_CHARGED_ENERGY_SHARE}" \
     --defect_base_cache_dir="${DEFECT_BASE_CACHE_DIR}" \
     --defect_protocol_zero_on_site="${DEFECT_PROTOCOL_ZERO_ON_SITE}" \

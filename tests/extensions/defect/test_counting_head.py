@@ -608,10 +608,11 @@ class TestHarrisonInitialisation:
     """Section 3: the init that replaces the atomic limit."""
 
     @staticmethod
-    def head(bond=2.8):
+    def head(numbers=(17, 55, 82)):
         from mace.modules.defect_counting import CountingHead, harrison_initialise
-        h = CountingHead(num_elements=3, feature_dim=8, atomic_numbers=[17, 55, 82])
-        harrison_initialise(h, [17, 55, 82], bond_length=bond)
+        h = CountingHead(num_elements=len(numbers), feature_dim=8,
+                         atomic_numbers=list(numbers))
+        harrison_initialise(h, list(numbers))
         return h
 
     def test_anion_p_sits_below_both_cation_p_levels(self):
@@ -627,18 +628,35 @@ class TestHarrisonInitialisation:
             assert float(h.h.eps0[i, 0]) < float(h.h.eps0[i, 1])
 
     def test_hoppings_follow_the_universal_d_squared_scaling(self):
-        """Halving the bond length must quadruple every integral -- that is the content of
-        the scaling, and a wrong power would be invisible at one distance."""
-        a, b = self.head(bond=2.8), self.head(bond=1.4)
-        ratio = (b.h.v0_raw / a.h.v0_raw)
-        assert torch.allclose(ratio, torch.full_like(ratio, 4.0), atol=1e-10)
+        """The scaling is `eta hbar^2 / (m d^2)` at each PAIR's own anchor, so the ratio of
+        two pairs' integrals is the inverse square of the ratio of their covalent-radius
+        sums. A wrong power would be invisible at one separation."""
+        from mace.modules.defect_counting import COVALENT_RADII
+        h = self.head()
+        numbers = [17, 55, 82]
+        for i, zi in enumerate(numbers):
+            for j, zj in enumerate(numbers):
+                d = COVALENT_RADII[zi] + COVALENT_RADII[zj]
+                ratio = float(h.h.v0_raw[i, j, 0] / h.h.v0_raw[0, 0, 0])
+                expect = (COVALENT_RADII[17] * 2.0 / d) ** 2
+                assert abs(ratio - expect) < 1e-10, f"{zi}-{zj}: {ratio} vs {expect}"
 
-    def test_the_bond_length_is_an_argument_not_a_constant(self):
-        """Passing the measured distance in keeps the head host-agnostic; a baked-in value
-        would make it a CsPbCl3 module."""
+    def test_the_anchor_is_a_universal_table_not_a_per_host_constant(self):
+        """Section 2.3: `d_ref` is gone from the constructor and from `harrison_initialise`;
+        what is left is a covalent-radius sum, which is a property of two elements."""
         import inspect
-        from mace.modules.defect_counting import harrison_initialise
-        assert "bond_length" in inspect.signature(harrison_initialise).parameters
+
+        from mace.modules.defect_counting import (SlaterKosterH, bond_reference,
+                                                  harrison_initialise)
+        assert "bond_length" not in inspect.signature(harrison_initialise).parameters
+        assert "d_ref" not in inspect.signature(SlaterKosterH.__init__).parameters
+        pair = bond_reference([17, 55, 82])
+        assert pair.shape == (3, 3)
+        assert abs(float(pair[0, 0]) - 2.04) < 1e-9        # Cl + Cl
+        assert abs(float(pair[0, 2]) - 2.48) < 1e-9        # Cl + Pb
+        assert torch.allclose(pair, pair.T)
+        with pytest.raises(ValueError, match="no covalent radius"):
+            bond_reference([17, 999])
 
     def test_an_unknown_species_is_refused(self):
         from mace.modules.defect_counting import CountingHead, harrison_initialise
@@ -835,7 +853,7 @@ class TestForceResponseWiring:
         torch.manual_seed(seed)
         head = CountingHead(num_elements=3, feature_dim=8, atomic_numbers=[17, 55, 82],
                             r_cut=6.0)
-        harrison_initialise(head, [17, 55, 82], bond_length=2.8)
+        harrison_initialise(head, [17, 55, 82])
         g = torch.Generator().manual_seed(seed)
         pos = (torch.randn(n_sites, 3, generator=g) * 2.5).requires_grad_(True)
         species = torch.tensor([0, 2, 0, 0, 1, 0])[:n_sites]

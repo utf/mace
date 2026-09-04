@@ -64,6 +64,42 @@ VALENCE: Dict[int, int] = {55: 1, 82: 4, 17: 7}
 T_EL = 0.025                                # eV, electronic temperature for the smearing
 BOND_TYPES = ("ss_sigma", "sp_sigma", "pp_sigma", "pp_pi")
 
+# Cordero et al., Dalton Trans. 2008, 2832: single-bond covalent radii in Angstrom, from a
+# fit over the Cambridge Structural Database. A UNIVERSAL table, keyed by atomic number and
+# containing nothing about this host -- which is the point. Section 2.3 of the speed cycle's
+# spec removes `d_ref`, the per-host bond length that was a default in the head and a
+# command-line number (2.861 A for CsPbCl3) in the launcher; the anchor is now
+# `d_ref[s, s'] = r_cov(s) + r_cov(s')`, a property of the two elements.
+#
+# The choice between the two options the spec allows -- initialising each bond at its own
+# r_ij, or anchoring per species pair at a tabulated reference -- is recorded here as the
+# second. Anchoring keeps `v0` a per-pair PARAMETER with a fixed meaning ("the integral at
+# the reference separation"), which the learned decay lengths then modulate; initialising at
+# r_ij would make the baseline a function of the geometry and put the same distance
+# dependence in two places.
+COVALENT_RADII: Dict[int, float] = {
+    1: 0.31, 6: 0.76, 7: 0.71, 8: 0.66, 13: 1.21, 14: 1.11, 15: 1.07, 16: 1.05,
+    17: 1.02, 31: 1.22, 32: 1.20, 33: 1.19, 34: 1.20, 35: 1.20, 49: 1.42, 50: 1.39,
+    51: 1.39, 52: 1.38, 53: 1.39, 55: 2.44, 79: 1.36, 81: 1.45, 82: 1.46, 83: 1.48,
+}
+
+
+def bond_reference(atomic_numbers: Sequence[int]) -> torch.Tensor:
+    """`d_ref[s, s'] = r_cov(s) + r_cov(s')`, `[n_elements, n_elements]`, in Angstrom.
+
+    Raises on an element the table does not cover, in the same spirit as `VALENCE`: a
+    missing radius silently replaced by a default is a per-host constant re-entering
+    through the back door.
+    """
+    zs = [int(z) for z in atomic_numbers]
+    missing = sorted({z for z in zs if z not in COVALENT_RADII})
+    if missing:
+        raise ValueError(
+            f"no covalent radius recorded for Z = {missing}; the hopping envelope has no "
+            "host-free anchor for those elements and will not invent one")
+    r = torch.tensor([COVALENT_RADII[z] for z in zs], dtype=torch.get_default_dtype())
+    return r.reshape(-1, 1) + r.reshape(1, -1)
+
 
 # --------------------------------------------------------------------------- Slater-Koster
 
@@ -155,6 +191,25 @@ HOP_LOG_BETA_RANGE_EQUIVALENT = math.log(1.5)
 # Slater-Koster integral type. L_b = L0 * exp(beta_L * tanh u_b), beta_L = ln 2, so with
 # L0 = 1.0 A every L_b lies in [0.5, 2.0] A. u_b = 0 reproduces the fixed-length head exactly.
 DECAY_LOG_BETA_DEFAULT = math.log(2.0)
+
+# Section 2.1 of the speed cycle's spec: WHERE THE CENTRE IS SUBTRACTED.
+#
+#   "output"    corr_i = gamma [ tanh h(x_i) - tanh h(xbar_s) ]     (Stage A', retired)
+#   "argument"  corr_i = gamma   tanh[ h(x_i) - h(xbar_s) ]         (this cycle)
+#
+# The output form measured F10 at 0 of 6 and the reason was structural rather than
+# statistical: centring the OUTPUT leaves the correction invariant to a constant shift of
+# `h`, so nothing in the loss stops `h` drifting until every atom of a species is past
+# |tanh| = 0.98, where the difference of two saturated tanhs is identically zero and the
+# channel is dead. Two of six seeds ran Cl into that state and three ran Cs into it. Moving
+# the subtraction inside the tanh keeps the same two properties -- zero on the pristine cell,
+# invariant to a constant shift of h -- while making saturation a property of the DEVIATION,
+# which is bounded by the data rather than free to drift.
+#
+# Both forms stay reachable because the Stage B cohort was trained with the first, and
+# re-scoring it through the second would report numbers that model never computed.
+CENTRE_FORMS = ("output", "argument")
+CENTRE_FORM_DEFAULT = "argument"
 # The LIVE setting, read by every fill, every entropy and the density-response backward.
 _FAMILY = SMEARING_FAMILY
 _WIDTH = SMEARING_WIDTH
@@ -355,21 +410,43 @@ def free_energy(eps: torch.Tensor, n_electrons: float, t_el: float = T_EL) -> to
 # --------------------------------------------------------------------------- the H builder
 
 
-C_SHIFT_SIZE_THRESHOLD = 100      # atoms; 79 and 80 below, 159 above, on this dataset
+# LEGACY ONLY. 100 atoms is a CsPbCl3 number -- 79 and 80 below it, 159 above -- and
+# standing rule 1 of the speed cycle forbids a per-host constant in a default. It survives
+# as the fallback for models pickled before `pristine_atoms` existed, so their size classes
+# are read the way they were trained, and for nothing else.
+C_SHIFT_SIZE_THRESHOLD = 100
+C_SHIFT_SIZE_CLASSES = 2
 
 
-def c_shift_classes(counts: torch.Tensor, graph_sizes: torch.Tensor):
+def c_shift_classes(counts: torch.Tensor, graph_sizes: torch.Tensor,
+                    pristine_atoms=None):
     """`(charge_class, size_class)` per graph, both long `[n_graphs]`.
 
     charge_class: 0 for Delta_n < 0, 1 for Delta_n = 0, 2 for Delta_n > 0, with
-    Delta_n = n_e_maj + n_e_min - n_h_maj - n_h_min; size_class: 0 below the threshold,
-    1 at or above. Shared by the head (application) and the calibration (assignment), so
-    the two cannot disagree about which cell a constant belongs to.
+    Delta_n = n_e_maj + n_e_min - n_h_maj - n_h_min.
+
+    size_class: HOW MANY PRISTINE CELLS THIS FRAME IS, minus one. `round(N / N_pristine)`
+    with `N_pristine` the atom count of the pristine geometry -- which standing rule 1 lists
+    as a per-host INPUT, unlike the 100-atom threshold this replaces. It gives 0 for 79 and
+    80, 1 for 159 and 160, exactly as the threshold did on this dataset, and it gives the
+    right answer on a host whose cells are a different size without anyone editing a
+    constant. Larger multiples clamp to the last column of the table, which is a stated
+    limitation: the table has as many columns as the training set had size classes, and a
+    3x cell at inference is referenced to the largest class that was trained.
+
+    Shared by the head (application) and the calibration (assignment), so the two cannot
+    disagree about which cell a constant belongs to.
     """
     c = counts.reshape(counts.shape[0], -1)
     delta_n = c[:, 0] + c[:, 1] - c[:, 2] - c[:, 3]
     charge_cls = torch.where(delta_n < 0, 0, torch.where(delta_n > 0, 2, 1)).long()
-    size_cls = (graph_sizes.reshape(-1) >= C_SHIFT_SIZE_THRESHOLD).long()
+    sizes = graph_sizes.reshape(-1)
+    n_pristine = 0 if pristine_atoms is None else int(pristine_atoms)
+    if n_pristine <= 0:
+        size_cls = (sizes >= C_SHIFT_SIZE_THRESHOLD).long()
+    else:
+        multiple = torch.round(sizes.to(torch.float64) / float(n_pristine)).long()
+        size_cls = (multiple - 1).clamp(0, C_SHIFT_SIZE_CLASSES - 1)
     return charge_cls, size_cls
 
 
@@ -382,13 +459,15 @@ class SlaterKosterH(nn.Module):
     """
 
     def __init__(self, num_elements: int, feature_dim: int, elem_dim: int = 8,
-                 hidden: int = 64, d_ref: float = 2.8, decay_length: float = 1.0,
+                 hidden: int = 64, atomic_numbers: Optional[Sequence[int]] = None,
+                 decay_length: float = 1.0,
                  r_cut: float = 10.0, on_site_range: float = 1.0,
                  hop_range: float = 0.5, envelope: str = ENVELOPE_DEFAULT,
                  hop_form: str = HOP_FORM_DEFAULT,
                  hop_log_beta: float = HOP_LOG_BETA_DEFAULT,
                  decay_learned: bool = False,
-                 decay_log_beta: float = DECAY_LOG_BETA_DEFAULT) -> None:
+                 decay_log_beta: float = DECAY_LOG_BETA_DEFAULT,
+                 centre_form: str = CENTRE_FORM_DEFAULT) -> None:
         super().__init__()
         from mace.modules.defect_bounded import ETA_SS_SIGMA, HBAR2_OVER_M
         from mace.modules.defect_spectral import _mlp
@@ -399,11 +478,25 @@ class SlaterKosterH(nn.Module):
         if hop_form not in HOP_FORMS:
             raise ValueError(f"unknown hopping modulation {hop_form!r}; expected one of "
                              f"{sorted(HOP_FORMS)}")
+        if centre_form not in CENTRE_FORMS:
+            raise ValueError(f"unknown centre form {centre_form!r}; expected one of "
+                             f"{sorted(CENTRE_FORMS)}")
         self.hop_form = str(hop_form)
         self.hop_log_beta = float(hop_log_beta)
-        self.d_ref, self.decay_length, self.r_cut = float(d_ref), float(decay_length), \
-            float(r_cut)
+        self.centre_form = str(centre_form)
+        self.decay_length, self.r_cut = float(decay_length), float(r_cut)
         self.envelope = str(envelope)
+        # Section 2.3: the envelope's anchor, per species pair, from the universal covalent
+        # radii. A BUFFER, so it travels with the checkpoint and the config round trip does
+        # not have to reconstruct it from an element list. `d_ref` the scalar is gone from
+        # the constructor and from every launcher; models pickled with one keep it in their
+        # `__dict__` and `radial` still honours it, which is what keeps the earlier cohorts
+        # scorable.
+        if atomic_numbers is None:
+            raise ValueError(
+                "SlaterKosterH needs atomic_numbers to anchor its hopping envelope; the "
+                "per-host `d_ref` it replaces was the constant section 2.3 removes")
+        self.register_buffer("d_ref_pair", bond_reference(atomic_numbers))
         # Section 2.4 of the Stage A' spec. One scalar per Slater-Koster integral type,
         # shared across every host; `decay_length` becomes L0. The parameter exists even when
         # it is not learned, at zero, so the fixed-length head is the u_b = 0 point of the
@@ -418,9 +511,10 @@ class SlaterKosterH(nn.Module):
         # Harrison's universal coefficients. eta_ss_sigma is shared with Edit 3 so the two
         # stages cannot disagree about the scale they start from.
         eta = torch.tensor([ETA_SS_SIGMA, 1.84, 3.24, -0.81])
-        scale = HBAR2_OVER_M / (self.d_ref ** 2)
-        self.v0_raw = nn.Parameter(
-            (eta * scale).reshape(1, 1, 4).repeat(num_elements, num_elements, 1))
+        # Harrison's rule AT EACH PAIR'S OWN REFERENCE, not at one host bond length: the
+        # universal scaling is `eta hbar^2 / (m d^2)` and `d` is a property of the pair.
+        scale = HBAR2_OVER_M / (self.d_ref_pair ** 2)            # [n_el, n_el]
+        self.v0_raw = nn.Parameter(eta.reshape(1, 1, 4) * scale.unsqueeze(-1))
         # Two on-site levels per species, one per shell.
         self.eps0 = nn.Parameter(torch.zeros(num_elements, 2))
         self.hop = _mlp([2 * feature_dim + 2 * elem_dim, hidden, hidden, len(BOND_TYPES)],
@@ -435,7 +529,8 @@ class SlaterKosterH(nn.Module):
         m = 0.5 * (self.v0_raw + self.v0_raw.transpose(0, 1))
         return m[species_i, species_j]
 
-    def radial(self, r: torch.Tensor) -> torch.Tensor:
+    def radial(self, r: torch.Tensor, species_i=None,
+               species_j=None) -> torch.Tensor:
         """The distance dependence of every hopping integral, times the cutoff taper.
 
         TWO FAMILIES, and the choice is a measurement rather than a preference (see
@@ -462,14 +557,26 @@ class SlaterKosterH(nn.Module):
         """
         x = (r / self.r_cut).clamp(max=1.0)
         taper = (1.0 - x ** 6) ** 2
+        d = self._anchor(r, species_i, species_j)
         if getattr(self, "envelope", ENVELOPE_DEFAULT) == "power":
-            return (self.d_ref / r.clamp_min(1e-9)) ** 2 * taper
+            return (d / r.clamp_min(1e-9)) ** 2 * taper
         if getattr(self, "decay_learned", False):
             # [n_edges, 4]: one length per integral type (spec section 2.4).
             lengths = self.decay_lengths().to(r.dtype)
-            return (torch.exp(-(r - self.d_ref).unsqueeze(-1) / lengths.unsqueeze(0))
+            return (torch.exp(-(r - d).unsqueeze(-1) / lengths.unsqueeze(0))
                     * taper.unsqueeze(-1))
-        return torch.exp(-(r - self.d_ref) / self.decay_length) * taper
+        return torch.exp(-(r - d) / self.decay_length) * taper
+
+    def _anchor(self, r: torch.Tensor, species_i=None, species_j=None):
+        """`d_ref` per edge: the pair's covalent-radius sum, or a pickled model's scalar.
+
+        The legacy branch is what keeps every cohort trained before section 2.3 scorable --
+        those models carry a float `d_ref` in their `__dict__` and no `d_ref_pair` buffer,
+        and re-anchoring them would silently rescale every hopping they learned."""
+        pair = getattr(self, "d_ref_pair", None)
+        if pair is None or species_i is None or species_j is None:
+            return float(getattr(self, "d_ref", 2.8))
+        return pair.to(r.dtype)[species_i.long(), species_j.long()]
 
     def decay_lengths(self) -> torch.Tensor:
         """`L_b = L0 * exp(beta_L * tanh u_b)` per integral type, `[4]`, in Angstrom.
@@ -492,7 +599,7 @@ class SlaterKosterH(nn.Module):
         pre = self.hop(sym)
         self._audit_store("hop", pre)
         correction = self.modulation(pre)
-        radial = self.radial(r)
+        radial = self.radial(r, species_i, species_j)
         if radial.dim() == 1:
             radial = radial.unsqueeze(-1)
         return self.v0(species_i, species_j) * radial * correction
@@ -567,10 +674,15 @@ class SlaterKosterH(nn.Module):
         e = self.elem(species)
         pre_site = self.site(torch.cat([feats, e], dim=-1))
         self._audit_store("site", pre_site)
-        corr = torch.tanh(pre_site)
-        if centre is not None:
+        if centre is None:
+            corr = torch.tanh(pre_site)
+        else:
             pre_centre = self.site(torch.cat([centre.to(feats.dtype)[species], e], dim=-1))
-            corr = corr - torch.tanh(pre_centre)
+            # `getattr`: a model pickled before the form existed ran the output form.
+            if getattr(self, "centre_form", "output") == "argument":
+                corr = torch.tanh(pre_site - pre_centre)
+            else:
+                corr = torch.tanh(pre_site) - torch.tanh(pre_centre)
         levels = self.eps0[species] + self.on_site_range * corr
         if madelung is not None:
             levels = levels + madelung.reshape(-1, 1)
@@ -707,8 +819,27 @@ class CountingHead(nn.Module):
     graph rather than twice.
     """
 
+    # CLASS attributes, not instance ones, and the difference is what makes them reach the
+    # models that matter: every trained checkpoint is a PICKLED MODULE, so an attribute set
+    # in `__init__` is absent from every model written before it existed and `getattr`
+    # silently returns the fallback. On the class they are found by every instance, old and
+    # new, while an instance assignment (a test, a scorer) still shadows them.
+    #
+    # `batch_by_size`: use the `[B, 4n, 4n]` solver whenever the batch is size-uniform
+    # (section 1.1). It selects between two paths asserted equal to 1e-8, so it is not model
+    # state and does not belong in the state dict.
+    #
+    # `zero_at_neutral_counts`: `E_head` is a difference between the fill and the NEUTRAL
+    # reference fill, so at `counts = 0` the two fills are the same numbers, the occupations
+    # subtract to exactly zero, and the energy, the density difference and `alpha` are all
+    # exactly zero for any spectrum and any parameters. `MACEDefect.forward` reads this to
+    # skip the whole reference branch; `test_neutral_reference_skip.py` measures the claim
+    # on the model's outputs AND on every parameter gradient rather than trusting it.
+    batch_by_size = True
+    zero_at_neutral_counts = True
+
     def __init__(self, num_elements: int, feature_dim: int, atomic_numbers,
-                 elem_dim: int = 8, hidden: int = 64, d_ref: float = 2.8,
+                 elem_dim: int = 8, hidden: int = 64,
                  decay_length: float = 1.0, r_cut: float = 10.0,
                  t_el: float = SMEARING_WIDTH, num_channels: int = 4,
                  on_site_range: float = ON_SITE_RANGE_DEFAULT,
@@ -718,7 +849,8 @@ class CountingHead(nn.Module):
                  hop_form: str = HOP_FORM_DEFAULT,
                  hop_log_beta: float = HOP_LOG_BETA_DEFAULT,
                  decay_learned: bool = False,
-                 decay_log_beta: float = DECAY_LOG_BETA_DEFAULT) -> None:
+                 decay_log_beta: float = DECAY_LOG_BETA_DEFAULT,
+                 centre_form: str = CENTRE_FORM_DEFAULT) -> None:
         """`on_site_range` is gamma, the half-width of the bounded on-site correction.
 
         THE DEFAULT IS 3 eV, NOT 1. At gamma = 1 the audit found every chlorine in every seed
@@ -730,13 +862,15 @@ class CountingHead(nn.Module):
         """
         super().__init__()
         self.h = SlaterKosterH(num_elements=num_elements, feature_dim=feature_dim,
-                               elem_dim=elem_dim, hidden=hidden, d_ref=d_ref,
+                               elem_dim=elem_dim, hidden=hidden,
+                               atomic_numbers=atomic_numbers,
                                decay_length=decay_length, r_cut=r_cut,
                                on_site_range=on_site_range, hop_range=hop_range,
                                envelope=envelope, hop_form=hop_form,
                                hop_log_beta=hop_log_beta,
                                decay_learned=decay_learned,
-                               decay_log_beta=decay_log_beta)
+                               decay_log_beta=decay_log_beta,
+                               centre_form=centre_form)
         self.smearing_family = str(smearing_family)
         self.t_el = float(t_el)
         self.num_channels = int(num_channels)
@@ -762,12 +896,11 @@ class CountingHead(nn.Module):
         # count (Delta_n < 0, = 0, > 0), columns the cell-size class (below / at or above
         # C_SHIFT_SIZE_THRESHOLD atoms). Added to the scalar `c_shift`, which stays the
         # global offset so a model calibrated the old way is the all-zero table.
-        self.c_shift_table = nn.Parameter(torch.zeros(3, 2))
-        # Section 1.1: use the batched `[B, 4n, 4n]` solver whenever the batch is
-        # size-uniform. A plain attribute rather than a buffer -- it selects between two
-        # paths that are asserted equal, so it is not model state and a checkpoint written
-        # with it off must not restore a model that computes something different.
-        self.batch_by_size = True
+        self.c_shift_table = nn.Parameter(torch.zeros(3, C_SHIFT_SIZE_CLASSES))
+        # Standing rule 1: the pristine cell's atom count, which is what the size class is
+        # a multiple of. Zero means "not recorded", and `c_shift_classes` then falls back to
+        # the legacy threshold so a model pickled before this existed keeps its own classes.
+        self.register_buffer("pristine_atoms", torch.zeros((), dtype=torch.long))
         # `_carrier_head` hands `centre` and `graph_sizes` only to a head that declares it.
         self.accepts_centre = True
         # Read by `_carrier_head` to decide whether to hand this head `positions` and a
@@ -825,7 +958,8 @@ class CountingHead(nn.Module):
             + self.c_shift
         table = getattr(self, "c_shift_table", None)
         if table is not None and graph_sizes is not None:
-            charge_cls, size_cls = c_shift_classes(counts, graph_sizes)
+            charge_cls, size_cls = c_shift_classes(
+                counts, graph_sizes, getattr(self, "pristine_atoms", None))
             per_graph = table[charge_cls, size_cls]                     # [n_graphs]
             levels = levels + per_graph[batch].reshape(-1, 1)
         if clamp_mask is not None:
@@ -1467,17 +1601,17 @@ HARRISON_TERMS: Dict[int, Tuple[float, float]] = {
 HARRISON_ETA = (-1.40, 1.84, 3.24, -0.81)
 
 
-def harrison_initialise(head, atomic_numbers: Sequence[int],
-                        bond_length: float = 2.8) -> None:
+def harrison_initialise(head, atomic_numbers: Sequence[int]) -> None:
     """Set on-site levels and hopping scales from the Harrison tables, in place.
 
     On-sites are the tabulated free-atom term values per species and shell. Hoppings are
-    `eta_b * hbar^2 / (m d^2)` at the measured bond length, per bond type.
+    `eta_b * hbar^2 / (m d^2)` at each PAIR's covalent-radius reference, per bond type.
 
-    `bond_length` is the MEASURED median nearest-neighbour distance of the data, not a
-    constant: the universal scaling is a function of the actual bond length, and passing a
-    material-specific number in here rather than baking one into the module keeps the head
-    host-agnostic.
+    SECTION 2.3 REMOVED THE BOND LENGTH. It used to be a measured per-host number -- 2.861 A
+    for CsPbCl3, passed on the command line -- and the same number anchored the envelope, so
+    a host entered the head through two doors. The anchor is now `r_cov(s) + r_cov(s')` from
+    a universal table, and this function reads the head's own `d_ref_pair` buffer so the
+    initialisation and the envelope cannot disagree about what the reference separation is.
     """
     zs = [int(z) for z in atomic_numbers]
     missing = [z for z in zs if z not in HARRISON_TERMS]
@@ -1491,11 +1625,16 @@ def harrison_initialise(head, atomic_numbers: Sequence[int],
             eps_s, eps_p = HARRISON_TERMS[z]
             head.h.eps0[i, 0] = eps_s
             head.h.eps0[i, 1] = eps_p
-        scale = HBAR2_OVER_M_COUNTING / (float(bond_length) ** 2)
+        pair = getattr(head.h, "d_ref_pair", None)
+        if pair is None:
+            raise ValueError(
+                "the head has no d_ref_pair buffer; it was built before section 2.3 and "
+                "re-initialising it here would anchor its hoppings at a different "
+                "separation than its envelope uses")
+        scale = HBAR2_OVER_M_COUNTING / (pair.to(head.h.v0_raw.dtype) ** 2)
         eta = torch.tensor(HARRISON_ETA, dtype=head.h.v0_raw.dtype,
                            device=head.h.v0_raw.device)
-        head.h.v0_raw.copy_(
-            (eta * scale).reshape(1, 1, 4).expand_as(head.h.v0_raw).clone())
+        head.h.v0_raw.copy_(eta.reshape(1, 1, 4) * scale.unsqueeze(-1))
 
 
 HBAR2_OVER_M_COUNTING = 7.62      # eV A^2; same constant Edit 3 uses, named here to avoid

@@ -201,3 +201,35 @@ class TestModelPathsAgree:
         batch = _batch(frames, [[0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 1.0, 0.0]])
         out = self._run(model, batch, True)
         assert out["energy"].isfinite().all() and out["forces"].isfinite().all()
+
+
+class TestMixedPrecision:
+    """The batched path under trunk-f32 / head-f64, on a float32 batch.
+
+    LAST CYCLE'S WORST BUG lived exactly at this cast: rebinding `positions` to its
+    head-dtype copy took the force derivative with respect to a tensor the trunk energy
+    does not depend on, and the base forces silently lost the trunk. The batched solver
+    re-indexes positions-adjacent tensors (`local`, `edge_graph`, the batched diagonal), so
+    the two paths are compared again here rather than only in float64.
+    """
+
+    def test_batched_and_loop_agree_on_a_float32_batch(self):
+        model = _model(precision_policy="mixed")
+        frames = [_perovskite(rattle=0.02, seed=s) for s in (8, 9)]
+        counts = [[0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 1.0, 0.0]]
+        torch.set_default_dtype(torch.float32)
+        try:
+            batch = _batch(frames, counts)
+            model.spectral.batch_by_size = True
+            on = model(batch.to_dict(), training=True, compute_force=True)
+            model.spectral.batch_by_size = False
+            off = model(_batch(frames, counts).to_dict(), training=True,
+                        compute_force=True)
+        finally:
+            torch.set_default_dtype(torch.float64)
+        for key in ("energy", "forces", "base_forces", "delta_sr_energy"):
+            a, b = on[key].double(), off[key].double()
+            worst = float((a - b).abs().max())
+            assert worst < 1e-6, f"{key} differs by {worst:.3e} on a float32 batch"
+        # The trunk must still be in the base forces -- the failure mode the cast caused.
+        assert float(on["base_forces"].abs().max()) > 1e-3

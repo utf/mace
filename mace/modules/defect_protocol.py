@@ -63,7 +63,7 @@ def calibrate_c_shift(out, energy_target, counts) -> Optional[float]:
     return float(torch.median(terms))
 
 
-def c_shift_table_terms(out, energy_target, counts, graph_sizes):
+def c_shift_table_terms(out, energy_target, counts, graph_sizes, pristine_atoms=None):
     """Stage A' section 3: per-frame ratios keyed by (charge class, size class), with
     E_LR's value INCLUDED in the residual -- `correction_energy` is delta_sr + delta_lr, so
     what remains is what the per-(charge, size) constant has to absorb and nothing the
@@ -80,7 +80,7 @@ def c_shift_table_terms(out, energy_target, counts, graph_sizes):
         return None
     resid = energy_target.to(delta_n.dtype) - out["base_energy"] - out["correction_energy"]
     ratio = (resid / torch.where(sel, delta_n, torch.ones_like(delta_n))).detach()
-    charge_cls, size_cls = c_shift_classes(counts, graph_sizes)
+    charge_cls, size_cls = c_shift_classes(counts, graph_sizes, pristine_atoms)
     return [(int(c), int(s), float(r)) for c, s, r, keep
             in zip(charge_cls.tolist(), size_cls.tolist(), ratio.tolist(), sel.tolist())
             if keep]
@@ -102,8 +102,9 @@ def calibrate_c_shift_table_over_loader(model, loader, device, forward=None):
                 out = (forward(batch) if forward is not None
                        else model(batch.to_dict(), training=False, compute_force=False))
             sizes = batch.ptr[1:] - batch.ptr[:-1]
-            t = c_shift_table_terms(out, getattr(batch, "energy", None),
-                                    batch.carrier_counts, sizes)
+            t = c_shift_table_terms(
+                out, getattr(batch, "energy", None), batch.carrier_counts, sizes,
+                getattr(getattr(model, "spectral", None), "pristine_atoms", None))
             for c, s, r in (t or []):
                 terms.setdefault((c, s), []).append(r)
     finally:
@@ -229,12 +230,16 @@ def post_step(model) -> None:
         madelung.project_()
 
 
-def apply_harrison(model, atomic_numbers: Sequence[int], bond_length: float) -> bool:
-    """Harrison term values and universal hoppings, at the MEASURED bond length.
+def apply_harrison(model, atomic_numbers: Sequence[int]) -> bool:
+    """Harrison term values and universal hoppings, at the head's own covalent anchors.
 
     eps0 = 0 makes every site degenerate -- the atomic limit, where the bond order vanishes
-    and, on the frozen-P gradient, nothing could move the hoppings at all. The bond length is
-    passed in rather than baked in so the head stays host-agnostic.
+    and, on the frozen-P gradient, nothing could move the hoppings at all.
+
+    SECTION 2.3 of the speed cycle removed the bond-length argument. It was a measured
+    per-host number that also anchored the envelope, so a host entered the head twice and
+    the two could be given different values; the scale now comes from the head's
+    `d_ref_pair` buffer, which is the same object the envelope reads.
 
     Returns whether it ran, so `protocol_summary` can report an OUTCOME. A caller that infers
     "initialised" from the stage number is recording its own intent, which is the fault the
@@ -245,8 +250,7 @@ def apply_harrison(model, atomic_numbers: Sequence[int], bond_length: float) -> 
     head = getattr(model, "spectral", None)
     if head is None:
         return False
-    harrison_initialise(head, [int(z) for z in atomic_numbers],
-                        bond_length=float(bond_length))
+    harrison_initialise(head, [int(z) for z in atomic_numbers])
     return True
 
 

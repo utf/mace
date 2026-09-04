@@ -314,6 +314,8 @@ def _defect_madelung_kwargs(args) -> dict:
         image_compensation=bool(getattr(args, "defect_image_compensation", False)),
         precision_policy=str(getattr(args, "defect_precision_policy", "uniform")),
         on_site_centred=bool(getattr(args, "defect_on_site_centred", False)),
+        counting_centre_form=str(getattr(args, "defect_counting_centre_form", "argument")),
+        madelung_site_zeta=float(getattr(args, "defect_madelung_site_zeta", 0.0)),
         counting_t_el=float(getattr(args, "defect_counting_t_el", 0.05)),
         madelung_on_site=on_site,
         madelung_eps_inf=float(getattr(args, "defect_madelung_eps_inf", 4.0)),

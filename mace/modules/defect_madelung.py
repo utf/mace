@@ -146,14 +146,33 @@ def project_neutral_(z: torch.Tensor, composition: torch.Tensor) -> torch.Tensor
 
 
 class MadelungOnSite(nn.Module):
-    """Learnable per-species charges {Z} and the on-site shift they induce.
+    """Learnable per-species charges {Z}, an optional per-SITE deviation, and their shift.
 
     Holds no length constants and no material knowledge beyond the pristine stoichiometry,
     which is a property of the training set rather than of the defect.
+
+    SECTION 2.2 OF THE SPEED CYCLE'S SPEC adds the per-site channel, in the same corrected
+    form as the on-site correction:
+
+        Z_i = Z0[s(i)] + zeta * tanh( z(x_i) - z(xbar_{s(i)}) ),   zeta = 1 e
+
+    Zero on a cell whose atoms all sit at their species' pristine environment, bounded by
+    `zeta` per site, and invariant to a constant shift of `z`. At `zeta = 0` the module is
+    the per-species one exactly, which is the Stage-B model.
+
+    NEUTRALITY, AND WHY THE PER-SPECIES PROJECTION IS NOT ENOUGH. `project_neutral_` puts
+    {Z0} on the pristine composition hyperplane, which fixes the SPECIES charges as a group.
+    A per-site deviation is outside that constraint: `sum_i dZ_i` is a learnable per-FRAME
+    net charge, and a net charge moves the Ewald `G = 0` constant frame by frame -- which is
+    precisely the per-(charge, size) constant the c table is supposed to own. The deviation
+    is therefore centred per graph in the forward, so every cell carries exactly the net
+    charge the element baseline gives it and the c table's premise survives.
     """
 
     def __init__(self, num_elements: int, composition: Sequence[float],
-                 z_init: Optional[Sequence[float]] = None) -> None:
+                 z_init: Optional[Sequence[float]] = None,
+                 site_zeta: float = 0.0, feature_dim: int = 0,
+                 hidden: int = 64) -> None:
         super().__init__()
         if len(composition) != num_elements:
             raise ValueError(
@@ -166,15 +185,53 @@ class MadelungOnSite(nn.Module):
                              torch.as_tensor(list(composition),
                                              dtype=torch.get_default_dtype()))
         project_neutral_(self.z.data, self.composition)
+        self.site_zeta = float(site_zeta)
+        self.site = None
+        if self.site_zeta != 0.0:
+            if feature_dim <= 0:
+                raise ValueError(
+                    "a per-site charge deviation needs the head's feature width; "
+                    "madelung_site_zeta was set without one")
+            from mace.modules.defect_spectral import _mlp
 
-    def charges(self, node_species: torch.Tensor) -> torch.Tensor:
-        return self.z[node_species.long()]
+            self.site = _mlp([int(feature_dim), int(hidden), int(hidden), 1],
+                             final_scale=0.05)
+
+    def charges(self, node_species: torch.Tensor, feats: Optional[torch.Tensor] = None,
+                centre: Optional[torch.Tensor] = None,
+                batch: Optional[torch.Tensor] = None,
+                num_graphs: Optional[int] = None) -> torch.Tensor:
+        """`Z_i`. The element baseline alone unless the site channel is on AND the caller
+        supplies the features and the pristine centre -- a scorer that has neither gets the
+        baseline rather than a silently different model, and `deviation` reports which."""
+        base = self.z[node_species.long()]
+        dev = self.deviation(node_species, feats, centre, batch, num_graphs)
+        return base if dev is None else base + dev
+
+    def deviation(self, node_species: torch.Tensor, feats: Optional[torch.Tensor] = None,
+                  centre: Optional[torch.Tensor] = None,
+                  batch: Optional[torch.Tensor] = None,
+                  num_graphs: Optional[int] = None) -> Optional[torch.Tensor]:
+        """`zeta tanh(z(x_i) - z(xbar_s))`, centred per graph. `None` when the channel is off."""
+        if getattr(self, "site", None) is None or feats is None or centre is None:
+            return None
+        from mace.tools.scatter import scatter_mean
+
+        species = node_species.long()
+        x = feats.detach()
+        pre = self.site(x).squeeze(-1)
+        pre_centre = self.site(centre.to(x.dtype)[species]).squeeze(-1)
+        dev = float(self.site_zeta) * torch.tanh(pre - pre_centre)
+        if batch is not None and num_graphs is not None:
+            dev = dev - scatter_mean(dev, batch, dim=0, dim_size=int(num_graphs))[batch]
+        return dev
 
     def project_(self) -> None:
         """The post-step hook. Cheap enough to call unconditionally."""
         project_neutral_(self.z.data, self.composition)
 
-    def potential(self, ewald, node_species, positions, cell, batch) -> torch.Tensor:
+    def potential(self, ewald, node_species, positions, cell, batch,
+                  feats=None, centre=None, num_graphs=None) -> torch.Tensor:
         """``phi_LR`` at every atom, from {Z}. Full lattice sum; see `site_potential`.
 
         `cell` is ALWAYS the periodic cell, in every mode. There is no isolated branch here
@@ -183,10 +240,13 @@ class MadelungOnSite(nn.Module):
         selects LES's isolated evaluator is applied to `cell_les` in the long-range branch
         alone; this function is never handed it.
         """
-        return site_potential(ewald, self.charges(node_species), positions, cell, batch)
+        return site_potential(
+            ewald, self.charges(node_species, feats, centre, batch, num_graphs),
+            positions, cell, batch)
 
     def on_site_shift(self, ewald, node_species, positions, cell, batch, eps_inf: float,
-                      self_potential: Optional[torch.Tensor] = None) -> torch.Tensor:
+                      self_potential: Optional[torch.Tensor] = None,
+                      feats=None, centre=None, num_graphs=None) -> torch.Tensor:
         """``-phi_LR / eps_inf``, the quantity added to ``eps_local``.
 
         Returned as the shift rather than the potential so that the sign lives in one place
@@ -196,4 +256,5 @@ class MadelungOnSite(nn.Module):
             raise ValueError(
                 "on_site_shift no longer accepts a self-potential; see site_potential for "
                 "why the subtraction was removed")
-        return -self.potential(ewald, node_species, positions, cell, batch) / float(eps_inf)
+        return -self.potential(ewald, node_species, positions, cell, batch,
+                               feats, centre, num_graphs) / float(eps_inf)

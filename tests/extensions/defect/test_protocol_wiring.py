@@ -160,38 +160,66 @@ def test_protocol_summary_records_whether_the_c_shift_HAPPENED():
     assert done["c_shift"] == pytest.approx(-1.25)
 
 
+NUMBERS = [17, 55, 82]
+
+
 # ------------------------------------------------------------------------ the envelope
 
 
 @pytest.mark.parametrize("envelope", ENVELOPES)
-def test_the_envelope_agrees_with_harrison_at_d_ref_whichever_family(envelope):
-    """Both families are 1 at d_ref, which is where v0 is initialised. If they were not,
-    switching the envelope would silently rescale every hopping in the model."""
-    h = SlaterKosterH(num_elements=3, feature_dim=8, envelope=envelope)
-    r = torch.tensor([h.d_ref], dtype=torch.float64)
-    taper = (1.0 - (h.d_ref / h.r_cut) ** 6) ** 2
-    assert float(h.radial(r)[0]) == pytest.approx(taper, rel=1e-9)
+@pytest.mark.parametrize("pair", [(0, 0), (0, 2), (1, 2)])
+def test_the_envelope_agrees_with_harrison_at_the_pair_anchor(envelope, pair):
+    """Both families are 1 at that PAIR's anchor, which is where its `v0` is initialised.
+    Section 2.3 made the anchor per species pair, so the property has to hold pair by pair;
+    checking it at one separation would pass on a table that anchors every pair the same."""
+    h = SlaterKosterH(num_elements=3, feature_dim=8, atomic_numbers=NUMBERS,
+                      envelope=envelope)
+    i, j = (torch.tensor([k]) for k in pair)
+    d = h.d_ref_pair[pair[0], pair[1]]
+    r = torch.tensor([float(d)], dtype=h.d_ref_pair.dtype)
+    taper = (1.0 - (float(d) / h.r_cut) ** 6) ** 2
+    # rel 1e-6, not 1e-9: `d_ref_pair` is a buffer at the process default dtype, so on
+    # a float32 default the anchor itself is only good to ~1e-7 relative.
+    assert float(h.radial(r, i, j).reshape(-1)[0]) == pytest.approx(taper, rel=1e-6)
 
 
 def test_the_power_envelope_is_the_bigger_one_at_the_hub_separation():
     """The measurement F7 rests on: at 6 A the exponential is several times smaller."""
-    a = SlaterKosterH(num_elements=3, feature_dim=8, envelope="exp", decay_length=1.0)
-    b = SlaterKosterH(num_elements=3, feature_dim=8, envelope="power")
+    a = SlaterKosterH(num_elements=3, feature_dim=8, atomic_numbers=NUMBERS,
+                      envelope="exp", decay_length=1.0)
+    b = SlaterKosterH(num_elements=3, feature_dim=8, atomic_numbers=NUMBERS,
+                      envelope="power")
     r = torch.tensor([6.0], dtype=torch.float64)
-    assert float(b.radial(r)) / float(a.radial(r)) > 4.0
+    i = j = torch.tensor([2])
+    assert float(b.radial(r, i, j)) / float(a.radial(r, i, j)) > 4.0
 
 
 def test_an_unknown_envelope_is_refused_rather_than_silently_exponential():
     with pytest.raises(ValueError, match="unknown radial envelope"):
-        SlaterKosterH(num_elements=3, feature_dim=8, envelope="gaussian")
+        SlaterKosterH(num_elements=3, feature_dim=8, atomic_numbers=NUMBERS, envelope="gaussian")
 
 
 def test_models_pickled_before_the_envelope_existed_still_evaluate():
     """`radial` reads the attribute through getattr for exactly this case."""
-    h = SlaterKosterH(num_elements=3, feature_dim=8)
+    h = SlaterKosterH(num_elements=3, feature_dim=8, atomic_numbers=NUMBERS)
     del h.envelope
     r = torch.tensor([4.0], dtype=torch.float64)
-    assert torch.isfinite(h.radial(r)).all()
+    i = j = torch.tensor([0])
+    assert torch.isfinite(h.radial(r, i, j)).all()
+
+
+def test_a_model_pickled_before_the_pair_anchor_keeps_its_scalar_d_ref():
+    """Section 2.3's legacy branch. Every cohort trained before the covalent anchor carries
+    a float `d_ref` and no `d_ref_pair`; re-anchoring those models on load would rescale
+    every hopping they learned, so `radial` keeps honouring the scalar."""
+    h = SlaterKosterH(num_elements=3, feature_dim=8, atomic_numbers=NUMBERS,
+                      envelope="exp", decay_length=1.0)
+    del h._buffers["d_ref_pair"]
+    h.d_ref = 2.861
+    r = torch.tensor([2.861], dtype=torch.float64)
+    i = j = torch.tensor([0])
+    taper = (1.0 - (2.861 / h.r_cut) ** 6) ** 2
+    assert float(h.radial(r, i, j)) == pytest.approx(taper, rel=1e-6)
 
 
 # ------------------------------------------------------------- the composition selector
@@ -362,7 +390,7 @@ def test_harrison_reports_whether_it_ran():
     class _NoHead:
         spectral = None
 
-    assert defect_protocol.apply_harrison(_NoHead(), [17], 2.8) is False
+    assert defect_protocol.apply_harrison(_NoHead(), [17]) is False
     summary = defect_protocol.protocol_summary(3, 2.4, 1.0, 5, 1.0, False,
                                                harrison_applied=False)
     assert summary["harrison_init"] is False
@@ -372,13 +400,13 @@ def test_both_modulation_forms_are_exactly_one_on_a_bulk_like_bond():
     """`pre = 0` must give factor 1 in both, or switching forms would rescale every hopping
     in the model rather than only the ones the head is straining on."""
     for form in ("linear", "log"):
-        h = SlaterKosterH(num_elements=3, feature_dim=8, hop_form=form)
+        h = SlaterKosterH(num_elements=3, feature_dim=8, atomic_numbers=NUMBERS, hop_form=form)
         assert float(h.modulation(torch.zeros(1))) == pytest.approx(1.0)
 
 
 def test_the_log_form_is_symmetric_in_log_space_and_the_linear_form_is_not():
-    lin = SlaterKosterH(num_elements=3, feature_dim=8, hop_form="linear", hop_range=0.5)
-    log = SlaterKosterH(num_elements=3, feature_dim=8, hop_form="log")
+    lin = SlaterKosterH(num_elements=3, feature_dim=8, atomic_numbers=NUMBERS, hop_form="linear", hop_range=0.5)
+    log = SlaterKosterH(num_elements=3, feature_dim=8, atomic_numbers=NUMBERS, hop_form="log")
     big = torch.tensor([12.0])            # tanh saturates
     up_lin = float(lin.modulation(big))
     dn_lin = float(lin.modulation(-big))
@@ -393,11 +421,11 @@ def test_the_log_form_is_symmetric_in_log_space_and_the_linear_form_is_not():
 
 def test_an_unknown_modulation_form_is_refused():
     with pytest.raises(ValueError, match="unknown hopping modulation"):
-        SlaterKosterH(num_elements=3, feature_dim=8, hop_form="tanh")
+        SlaterKosterH(num_elements=3, feature_dim=8, atomic_numbers=NUMBERS, hop_form="tanh")
 
 
 def test_models_pickled_before_the_modulation_form_existed_still_evaluate():
-    h = SlaterKosterH(num_elements=3, feature_dim=8)
+    h = SlaterKosterH(num_elements=3, feature_dim=8, atomic_numbers=NUMBERS)
     del h.hop_form
     assert float(h.modulation(torch.zeros(1))) == pytest.approx(1.0)
 
@@ -410,7 +438,7 @@ def test_zero_init_removes_the_on_site_channel_output_entirely():
 
     m = _M()
     m.spectral = type("H", (), {})()
-    m.spectral.h = SlaterKosterH(num_elements=3, feature_dim=8)
+    m.spectral.h = SlaterKosterH(num_elements=3, feature_dim=8, atomic_numbers=NUMBERS)
     last = [x for x in m.spectral.h.site.modules() if isinstance(x, torch.nn.Linear)][-1]
     with torch.no_grad():
         last.weight.fill_(0.3)

@@ -1242,14 +1242,6 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=False,
     )
     parser.add_argument(
-        "--defect_protocol_bond_length",
-        help="measured nearest-neighbour distance for the Harrison initialisation, in "
-        "Angstrom. Passed in rather than baked in so the head stays host-agnostic; 2.861 "
-        "for CsPbCl3. Ignored unless --defect_protocol",
-        type=float,
-        default=0.0,
-    )
-    parser.add_argument(
         "--defect_protocol_warmup",
         help="linear LR warmup in epochs. The counting head's correction is eV-scale at "
         "step 0, so the first steps see gradients three orders larger than the converged "
@@ -1358,6 +1350,44 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=False,
     )
     parser.add_argument(
+        "--defect_null_reference",
+        help="JSON establishing which cell sizes have a NEUTRAL NULL -- "
+        '{"nulls": {"<atoms>": {"slope": ..., "ci": [lo, hi]}}} -- a size qualifying when '
+        "its interval brackets zero. Charged frames of any other size have their energy "
+        "weight zeroed (speed-cycle standing rule 2); their forces are untouched. Required "
+        "whenever --defect_charged_energy_share is non-zero",
+        type=str,
+        default="",
+    )
+    parser.add_argument(
+        "--defect_counting_centre_form",
+        help="where the pristine centre is subtracted in the on-site correction "
+        "(speed-cycle spec section 2.1). 'argument' is gamma tanh(h(x_i) - h(xbar_s)), "
+        "which keeps the channel alive under a drifting h; 'output' is the Stage A' form, "
+        "gamma [tanh h(x_i) - tanh h(xbar_s)], kept so that cohort stays scorable",
+        type=str,
+        choices=("argument", "output"),
+        default="argument",
+    )
+    parser.add_argument(
+        "--defect_madelung_site_zeta",
+        help="bound in e on the PER-SITE charge deviation, Z_i = Z0[s] + zeta tanh(z(x_i) "
+        "- z(xbar_s)) (speed-cycle spec section 2.2). Zero disables the channel, which is "
+        "the per-species model exactly. The deviation is centred per graph so the cell's "
+        "net charge stays the element baseline's",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--defect_size_grouped_batches",
+        help="group training and validation batches by EXACT atom count, so the counting "
+        "head can solve a whole batch as one [B, 4n, 4n] eigenproblem (speed-cycle spec "
+        "section 1.1). Frames are permuted within their group and the batches are then "
+        "permuted across groups; the short tail batch of each group is kept",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
         "--defect_precision_policy",
         help="'uniform' runs the whole model at --default_dtype; 'mixed' runs the trunk at "
         "the process default and the carrier head, Madelung term and long-range branch at "
@@ -1381,14 +1411,6 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         "instead of one scalar",
         type=str2bool,
         default=False,
-    )
-    parser.add_argument(
-        "--defect_energy_weights_json",
-        help="per-frame energy weights keyed by frame_key (the JSON c1_ood_indicator.py "
-        "writes): each CHARGED training frame's energy_weight is multiplied by its w_E. "
-        "Label-free -- w_E is the disagreement of four fold bases on the geometry",
-        type=str,
-        default="",
     )
     parser.add_argument(
         "--defect_charged_energy_share",
