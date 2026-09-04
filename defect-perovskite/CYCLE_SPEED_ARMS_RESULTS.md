@@ -1296,3 +1296,51 @@ two independent reasons now, §8.5's (it is 97% carrier-independent) and this on
 gate freezes the column that would have moved). Both were discovered inside this cycle,
 which is an argument for gate 10 being promoted from "the term's adoption test" to the
 *only* test the term is scored on.
+
+### Arm B, the rest of wave 1 — F4 fails outright, and it changes the recommendation
+
+| | Stage B | arm A | **arm B (4 seeds)** |
+|---|---|---|---|
+| **F4, `d(δ_sr)/dd` at 159, full range** | −0.1004 ± 0.0166, **6/6 in band** | −0.0874 ± 0.0142, **5/6** | **−0.3200 ± 0.0096, 0/4** |
+| pristine gap | 2.392 ± 0.016 | 2.379 ± 0.019 | 2.403 ± 0.005, 4/4 in window |
+| depth from the CBM | 0.014–0.093 | 0.334 | **0.235** (0.200–0.298) |
+| dilution R | 0.868 ± 0.076 | 0.925 ± 0.144 | 0.955 ± 0.000, in band |
+| bound fraction | 0.615 ± 0.067 | 0.635 ± 0.023 | 0.625 ± 0.000 |
+
+**Gate 2 fails on arm B, 0 of 4**, at −0.320 against a band of [−0.142, −0.063]. That is
+3.7× steeper than arm A and 3.2× steeper than Stage B, on every seed, with a seed spread of
+0.0096 — the tightest number in the cycle and the furthest outside its gate.
+
+**The image term fixes one size dependence and breaks another.** Gate 10 measures how the
+frontier potential changes with **cell size L** under tiling: the term removes 86.8% of it.
+F4 measures how δ_SR changes with **hub separation d** inside a fixed 159-atom cell: the term
+triples it. Both are geometry dependences and they are not the same one. The image potential
+of the carrier's own images depends on the carrier's extent, and the extent changes with d —
+so within a fixed cell the term rides on d far more strongly than the labels do.
+
+**This revokes the recommendation recorded an hour ago.** On gate 10 alone the term looked
+adoptable. It is not, on this evidence:
+
+| | arm B |
+|---|---|
+| gate 10, tiling drift | **PASS** — 86.8% removed, 16/16, thermal included |
+| **gate 2, F4** | **FAIL — 0/4, −0.320 against [−0.142, −0.063]** |
+| gate 7, hub stops | worse: 4/4 on every type |
+| gate 5, gap | PASS, 4/4 |
+| gate 6, dilution R | PASS, in band |
+| depth from CBM | 0.235, better than arm A's 0.334, worse than Stage B's ~0.05 |
+| cost | +76% per epoch |
+
+Gate 2 is a **gate**, not a report, and it fails outright — the only cohort in the programme
+to do so. A term that removes 87% of the cell-size drift while tripling the hub-separation
+slope has not been shown to be an improvement; it has been shown to move the error from one
+axis to another. **The honest recommendation is: do not adopt, and find out why the two
+dependences disagree.**
+
+That is a more useful outcome than adoption would have been. The cycle now has a term with a
+large, measured, *specific* defect — F4 at −0.320 with a 0.0096 spread is about as clean a
+target as a diagnosis ever gets — rather than a term that passes everything asked of it and
+is carried forward on faith.
+
+**Six seeds will confirm or revise this.** The wave-1 spread is 0.0096, so a reversal is
+unlikely, but the verdict is written against four seeds and says so.
