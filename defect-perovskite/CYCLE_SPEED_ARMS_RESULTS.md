@@ -1378,3 +1378,10 @@ value rather than a search.
 
 That is the difference between "the term failed a gate" and a target: the excess is
 −0.244 eV/Å, it is all of it, and it has a knob that does not exist yet.
+
+**The prefactor is not explored in this cycle.** `c20_image_scaling.py` is written and
+committed — it wraps `image_potential` with a scale and re-measures the tiling drift, so the
+drift-against-λ curve can be had cheaply — but it was stopped before producing numbers and
+the amplitude question is deferred as a decision, not answered here. What this cycle records
+is the measurement that makes the question askable: the term contributes −0.2439 eV/Å, the
+head alone is at −0.0761, and if the response is linear the band's edge sits near λ ≈ 0.27.
