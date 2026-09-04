@@ -376,21 +376,38 @@ Three measurements, of which two now exist and the third arrives with arm B:
 
 1. **Stage B**: Δc = +0.772 ± 0.029 eV, predicted +0.049 ± 0.003. 79-atom charged *energies*
    were in the objective.
-2. **Arm A**: the null gate removes 79-atom charged energies from the loss entirely. c(79) is
-   still *calibrated* (the residual mean per (charge, size) is still computed) but no energy
-   gradient reaches it. So arm A's Δc is the calibration offset alone, with no fitted
-   component — a measurement Stage B could not make.
+2. **Arm A**: the null gate removes 79-atom charged energies from the loss entirely.
+
+**What c actually is, checked in the code rather than assumed.**
+`calibrate_c_shift_table_over_loader` runs once at the end of training, under `no_grad`: it
+**zeroes** `c_shift_table` and writes, into each (charge class, size class) cell, the
+*median over every charged frame in the loader* of
+
+    [ E_label − E_base − (Δ_SR + Δ_LR) ] / Δn ,
+
+i.e. the residual per carrier. Neither c(79) nor c(159) is a trained parameter, and neither
+is weighted by the loss: the null gate cannot touch them directly. Δc is therefore a
+statement about **how much residual per carrier the model leaves at each cell size**, and it
+changes across arms only through what the model learned, never through which frames were
+scored. This was verified on the parameter itself — arm A's one-epoch smoke carries
+`c_shift_table[0] = (9.4655, 10.2530)` and Stage B `(9.6883, 10.4130)`, with the scalar
+`c_shift` added to both columns by the scorer and therefore cancelling in Δc.
+
+An earlier draft of this block said arm A's Δc would be "the calibration offset alone, with
+no fitted component". That reading was wrong in mechanism — nothing about c is fitted in
+either arm — and it is corrected here, before the numbers exist.
 3. **Arm B**: arm A plus the image term. The image term is the only electrostatic change.
 
 The decision rule, fixed now:
 
 - If **Δc(A) ≈ Δc(B)** to within the seed spread, the image interaction is not its origin.
-- If **Δc(A) ≈ Δc(Stage B)**, the fit was not making it either: it is in the labels'
-  size referencing, entering through the calibration, and the remedy is a label-side
-  re-referencing, not a model term.
-- If **Δc(A) falls towards the predicted +0.05** while Stage B's was +0.77, then the 79-atom
-  charged energies *were* driving it, and dropping them (which the null gate does
-  permanently) has already fixed it.
+- If **Δc(A) ≈ Δc(Stage B)**, then removing the 79-atom charged energies from the objective
+  did not change how much residual per carrier the model leaves at either size. The
+  difference is in the labels' size referencing — a quantity no head trained on these labels
+  can absorb — and the remedy is a label-side re-referencing, not a model term.
+- If **Δc(A) falls towards the predicted +0.05** while Stage B's was +0.77, then fitting the
+  79-atom charged energies was *creating* the residual difference it was meant to remove,
+  and the null gate has already fixed it.
 - If **Δc(B) < Δc(A)** by more than the spread, the image term is carrying part of it and the
   compensation is doing real work on the referencing.
 
@@ -470,3 +487,44 @@ weak evidence — the model has barely moved off its initialisation and c is a r
 dominated by the labels either way — but it is the branch to expect, and it says Δc is a
 property of the labels' size referencing rather than of what the head was trained on.
 Settled on arm A's six 24-epoch seeds, not here.
+
+---
+
+## Two operational findings during the wait, one of which would have killed the chain
+
+### The chain script was edited 13 minutes after the chain started
+
+`bash` reads a script by **byte offset** and seeks back to the end of the last parsed command
+before running it, so editing a running script shifts every offset after the edit point.
+`queue_arms_chain.sh` was 2308 bytes at launch (10:31:49) and 2635 bytes after the gate-10
+block was inserted into `gates()` at 10:45:13 — a 327-byte insertion **above** the driver's
+resume point. When wave 1 finished, the driver would have resumed at the byte offset of
+`stage a "5 6"` in the *old* file, which in the new file is 327 bytes earlier: inside
+`gates()`'s body, on a continuation line with `${tag}` unset. Under `set -u` that aborts the
+shell. The chain would have stopped after wave 1 with four models and no error anyone was
+watching for.
+
+Fixed at 11:11 by restoring the b3 copy to the launch bytes (`git show 89d17a3:` …, md5
+`2dd4d5f8…`, 2308 bytes) — no process killed, the driver's offsets are valid again, and
+gate 10 stays a manual step as already recorded. `queue_arms.sh` (mtime 10:24) and
+`queue_stage_b_gates.sh` (mtime 3 Sep) were both older than the launch and are invoked as
+fresh processes per stage, so neither is affected.
+
+**Statement of record: never edit a shell script while a copy of it is running.** Write the
+change to a differently-named file, or wait. This is the same class of failure as LEDGER
+entry 10's "wait on the condition, not the process": the file on disk is not the program
+that is running.
+
+### A per-host constant still lives in a launcher default (deferred, not fixed)
+
+`defect-example/train_defect_model.sh:302` reads
+
+    DEFECT_MADELUNG_EPS_INF="${DEFECT_MADELUNG_EPS_INF:-4.0}"
+
+which is exactly what standing rule 1 forbids: the trainer's raise can never fire because
+the launcher fills in CsPbCl₃'s number first. `queue_arms.sh` sets it explicitly to 4.0, so
+no arm is affected and no number in this cycle changes.
+
+It is **not** fixed now for the reason immediately above — four copies of that script are
+mid-execution. It is fixed after `=== chain complete ===`, and it is written here so the
+delay is a decision rather than an oversight.
