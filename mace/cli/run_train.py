@@ -1732,7 +1732,7 @@ def run(args) -> None:
             class_frames.extend(list(_vset))
         _attach_keys(class_frames, z_table=z_table)
         model.composition_classes = defect_composition.build_class_table(
-            model, class_frames, device=device, delta=getattr(model, "edge_delta", None))
+            model, class_frames, device=device)
         n_counted = sum(1 for r in model.composition_classes["classes"].values()
                         if r["tier"] is not None)
         logging.info("Composition classes: %d classes, %d counted at Tier 1, %d uncounted",

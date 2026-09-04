@@ -247,20 +247,16 @@ class TestOnTheHarrisonHead:
         assert dc.frame_counts(rec, states, 0) == ((1, 0), (0, 0), -1)
         assert dc.frame_counts(rec, states, 1) == ((0, 0), (0, 0), 0)
 
-    def test_v_cl_at_79_atoms_gives_the_same_q_core_or_is_handed_to_tier_2(self, table):
-        """The class at the larger cell must yield the same integers (plan section 7.1).
-
-        On this toy the vacancy pushes a valence level to VBM_al + 0.14 eV, inside the Tier 1
-        window, so the class is ambiguous at Tier 1 and the identity is Tier 2's to
-        establish (task 0.8). A COUNTED class must match; an uncounted one must say why.
-        """
+    def test_v_cl_at_79_atoms_gives_the_same_integers(self, table):
+        """The class at the larger cell yields the same integers (plan section 7.1). On this
+        toy the vacancy pushes a valence level to VBM_al + 0.14 eV, inside the Tier 1 window,
+        so the class is Tier 2's; the integers are the 39-atom ones."""
         rec = dc.lookup_class(table, [17] * 47 + [55] * 16 + [82] * 16)
         assert rec.tiling == (1, 1, 2)
-        if rec.counted:
-            assert rec.n_e == (1, 0) and rec.n_h == (0, 0) and rec.q_core == 1
-        else:
-            assert "Tier 1 ambiguous" in rec.reason
-            pytest.skip(f"Tier 2 pending for this class: {rec.reason}")
+        assert rec.counted, rec.reason
+        assert rec.n_e == (1, 0) and rec.n_h == (0, 0) and rec.q_core == 1
+        assert rec.tier == 2 and "Tier 1" not in rec.reason
+        assert "a level within" in rec.tier1_reason
 
     def test_the_larger_pristine_cell_is_aligned_against_the_tiled_reference(self, table):
         rec = dc.lookup_class(table, [17] * 48 + [55] * 16 + [82] * 16)
@@ -279,6 +275,11 @@ class TestOnTheHarrisonHead:
         for key in charged["classes"]:
             for f in ("m_vb", "n_e", "n_h", "q_core", "vbm_al", "tier"):
                 assert charged["classes"][key][f] == neutral["classes"][key][f]
+
+    def test_the_table_records_the_constructor_parameters(self, table):
+        for key in dc.DEFAULT_CONSTRUCTOR:
+            assert key in table
+        assert table["eta"] == 0.05 and table["dlambda"] == 0.02 and table["r_match"] == 2.0
 
     def test_a_composition_outside_the_table_is_refused(self, table):
         with pytest.raises(KeyError, match="no class record"):
@@ -306,7 +307,7 @@ class TestOnTheHarrisonHead:
         harrison_model.composition_classes = table
         config = extract_config_mace_model(harrison_model)
         assert config["composition_classes"] == table
-        assert config["edge_delta"] is None
+        assert config["class_constructor"] == dc.constructor_config(None)
         rebuilt = MACEDefect(**config)
         assert rebuilt.composition_classes == table
         assert pickle.loads(pickle.dumps(harrison_model)).composition_classes == table
@@ -343,6 +344,246 @@ class TestTiling:
         assert pos.shape == (12, 3) and np.allclose(pos[2], [0.0, 0.0, 4.0])
 
 
+# ------------------------------------------------------------------ Tier 2
+
+
+def _toy(n_sites, rng, n_deep=None, valence=-9.0, conduction=-1.0, spread=0.5, hop=0.3):
+    """A random tight-binding toy with a GAP: the first `n_deep` sites (default half) carry
+    ORB orbitals each around `valence`, the rest around `conduction`, with hoppings of scale
+    `hop` on a ring. Its occupied manifold at rank `ORB * n_deep` is well separated, which
+    is what makes a valence subspace a definite thing to transport; a gapless toy is a
+    metal, and a metal's "valence subspace" is genuinely path-dependent."""
+    n_deep = n_sites // 2 if n_deep is None else n_deep
+    dim = dc.ORB * n_sites
+    H = np.zeros((dim, dim))
+    for i in range(n_sites):
+        centre = valence if i < n_deep else conduction
+        block = rng.normal(0.0, 0.2, (dc.ORB, dc.ORB))
+        block = 0.5 * (block + block.T) + np.eye(dc.ORB) * (centre + spread * rng.uniform(-1, 1))
+        H[dc.ORB * i: dc.ORB * (i + 1), dc.ORB * i: dc.ORB * (i + 1)] = block
+        j = (i + 1) % n_sites
+        t = rng.normal(0.0, hop, (dc.ORB, dc.ORB))
+        H[dc.ORB * i: dc.ORB * (i + 1), dc.ORB * j: dc.ORB * (j + 1)] += t
+        H[dc.ORB * j: dc.ORB * (j + 1), dc.ORB * i: dc.ORB * (i + 1)] += t.T
+    return H
+
+
+def _groups(dim, ghost=(), added=(), substituted=()):
+    orb = lambda sites: np.array([dc.ORB * s + o for s in sites for o in range(dc.ORB)],
+                                 dtype=np.int64)
+    return {"ghost": orb(ghost), "added": orb(added), "substituted": orb(substituted)}
+
+
+def _embed_removal(H0, site, deep=-14.0):
+    """`H1` for the removal of `site` from the toy `H0`, already in the union basis (the
+    site's rows and columns zeroed). The removed site's levels are first made DEEP in `H0`
+    so all four of its orbitals are occupied at the toy's fill, as an anion's are."""
+    idx = np.arange(dc.ORB * site, dc.ORB * (site + 1))
+    H0[np.ix_(idx, idx)] = np.eye(dc.ORB) * deep + 0.1 * (H0[np.ix_(idx, idx)]
+                                                          - np.diag(np.diag(H0[np.ix_(idx, idx)])))
+    H1 = H0.copy()
+    idx = np.arange(dc.ORB * site, dc.ORB * (site + 1))
+    H1[idx, :] = 0.0
+    H1[:, idx] = 0.0
+    return H1
+
+
+class TestTier2OnTheHarrisonHead:
+    def test_v_cl_at_79_atoms_is_counted_at_tier_2_with_the_same_integers(self, table):
+        """The class Tier 1 hands on: one ghost Cl, four ghost gamma, M_VB = 204."""
+        rec = dc.lookup_class(table, [17] * 47 + [55] * 16 + [82] * 16)
+        assert rec.counted and rec.tier == 2, rec.reason
+        assert rec.n_e == (1, 0) and rec.n_h == (0, 0) and rec.q_core == 1
+        assert rec.m_vb == (204, 204) and rec.n_sigma == (205, 204)
+        assert rec.path_agreement and rec.schedule_agreement
+        assert rec.correspondence["n_ghost"] == 1 and rec.correspondence["ghost_species"] == [17]
+        assert rec.correspondence["n_added"] == 0 and rec.correspondence["n_substituted"] == 0
+        gamma = np.asarray(rec.gamma)
+        assert (gamma > 1 - table["eta"]).sum() == 4 and (gamma < table["eta"]).sum() == 204
+
+    def test_tier_2_reproduces_tier_1_on_the_39_atom_class_on_both_paths_and_schedules(
+            self, harrison_model, frames):
+        spec0 = dc.head_spectra(harrison_model, dc._single_frame_dict(frames["pristine"], "cpu"))[0]
+        spec1 = dc.head_spectra(harrison_model, dc._single_frame_dict(frames["vcl_39"], "cpu"))[0]
+        out = dc.tier2(harrison_model, frames["vcl_39"], frames["pristine"], (1, 1, 1),
+                       (0, 1, 2), 104, spec0["H"], spec1["H"], dc.constructor_config(None))
+        assert out["accepted"] and out["m_vb"] == 100
+        for run in out["runs"].values():
+            assert run["m_vb"] == 100 and run["n_ghost"] == 4 and run["n_closure"] == 0
+            assert run["contiguous"] and run["overlap"] > 0.999
+            assert run["min_separation"] > 0.9
+
+    def test_the_site_correspondence_finds_the_vacancy_through_thermal_noise(self, harrison_model,
+                                                                             frames):
+        n1, p1, c1 = dc._frame_geometry(frames["vcl_79"], harrison_model)
+        n0, p0, c0 = dc._frame_geometry(frames["pristine"], harrison_model)
+        n0, p0, c0 = dc.tile_frame(n0, p0, c0, (1, 1, 2))
+        corr = dc.site_correspondence(n1, p1, c1, n0, p0, c0, perm=(0, 1, 2), r_match=2.0)
+        assert corr["n_ghost"] == 1 and corr["n_added"] == 0 and corr["n_substituted"] == 0
+        assert corr["n_matched"] == 79 and corr["max_displacement"] < 0.2
+        assert int(n0[corr["ghosts"][0]]) == 17
+        # The correspondence is a bijection between matched atoms, species-consistent.
+        assert len(set(corr["match"].values())) == 79
+        assert all(n1[i] == n0[j] for i, j in corr["match"].items())
+
+
+class TestTier2Synthetic:
+    """Toy Hamiltonians whose expected integers are defined by the toy alone."""
+
+    def test_a_removal_gives_one_ghost_site_worth_of_gamma_on_both_paths(self):
+        rng = np.random.default_rng(0)
+        H0 = _toy(12, rng, n_deep=8)
+        H1 = _embed_removal(H0, 5)
+        groups = _groups(H0.shape[0], ghost=[5])
+        rank = 32
+        out = dc.tier2_continuation(H0, H1, groups, rank)
+        assert out["accepted"] and out["m_vb"] == rank - dc.ORB
+        gamma = np.asarray(out["gamma"])
+        assert (gamma > 0.95).sum() == dc.ORB and (gamma < 0.05).sum() == rank - dc.ORB
+
+    def test_charge_character_exchange_between_two_sites_leaves_the_count_unchanged(self):
+        """(i) Two same-species sites swap their on-site levels along lambda: the occupied
+        manifold is the same subspace at both ends, whichever site carries the charge."""
+        rng = np.random.default_rng(1)
+        H0 = _toy(10, rng, n_deep=5)
+        H1 = H0.copy()
+        a, b = np.arange(0, 4), np.arange(12, 16)
+        H1[np.ix_(a, a)], H1[np.ix_(b, b)] = H0[np.ix_(b, b)], H0[np.ix_(a, a)]
+        H1[np.ix_(a, a)] -= 1.5 * np.eye(4)
+        H1[np.ix_(b, b)] += 1.5 * np.eye(4)
+        groups = _groups(H0.shape[0])
+        rank = 20
+        out = dc.tier2_continuation(H0, H1, groups, rank)
+        assert out["accepted"] and out["m_vb"] == rank
+        assert all(r["min_separation"] > 0.5 for r in out["runs"].values())
+
+    def test_levels_crossing_inside_the_valence_manifold_cost_nothing(self):
+        """(ii) Two occupied levels exchange order along the path -- a crossing INSIDE the
+        transported subspace -- and the count is unchanged with unit separation."""
+        dim = 24
+        levels0 = np.linspace(-10.0, -6.0, 12).tolist() + np.linspace(-2.0, 2.0, 12).tolist()
+        H0 = np.diag(levels0)
+        levels1 = list(levels0)
+        levels1[2], levels1[9] = levels0[9], levels0[2]    # both occupied; they cross
+        H1 = np.diag(levels1)
+        # a small coupling so the crossing is avoided, not exact
+        H0[2, 9] = H0[9, 2] = 0.05
+        H1[2, 9] = H1[9, 2] = 0.05
+        groups = _groups(dim)
+        out = dc.tier2_continuation(H0, H1, groups, rank=12)
+        assert out["accepted"] and out["m_vb"] == 12
+        assert all(r["min_separation"] > 0.99 for r in out["runs"].values())
+
+    def test_a_synthetic_interstitial_with_its_level_in_the_gap(self):
+        """An added site whose occupied level lands in the gap: no ghost, the transported
+        rank is the pristine one, so every electron the addition brings is frontier."""
+        rng = np.random.default_rng(2)
+        H0 = _toy(8, rng, n_deep=5)
+        dim0 = H0.shape[0]
+        # union: 8 pristine sites + 1 added site whose on-site block sits in the gap
+        dim = dim0 + dc.ORB
+        H0_u = np.zeros((dim, dim))
+        H0_u[:dim0, :dim0] = H0
+        H1_u = H0_u.copy()
+        add = np.arange(dim0, dim)
+        H1_u[np.ix_(add, add)] = np.eye(dc.ORB) * (-5.0)
+        H1_u[np.ix_(add, np.arange(0, 4))] = 0.2
+        H1_u[np.ix_(np.arange(0, 4), add)] = 0.2
+        groups = _groups(dim, added=[8])
+        rank = 20
+        out = dc.tier2_continuation(H0_u, H1_u, groups, rank)
+        assert out["accepted"] and out["m_vb"] == rank
+        # The class's fill then decides the integers: e.g. two more electrons per spin.
+        assert dc.class_integers((rank, rank), (rank + 2, rank + 2)) == ((2, 2), (0, 0), 4)
+
+    def test_a_synthetic_substitution_keeps_the_site_physical_on_both_paths(self):
+        rng = np.random.default_rng(3)
+        H0 = _toy(10, rng, n_deep=6)
+        H1 = H0.copy()
+        s = np.arange(8, 12)
+        H1[np.ix_(s, s)] = H0[np.ix_(s, s)] - 2.0 * np.eye(4)   # a deeper species
+        H1[np.ix_(s, np.arange(4, 8))] *= 1.3                     # different hoppings
+        H1[np.ix_(np.arange(4, 8), s)] *= 1.3
+        groups = _groups(H0.shape[0], substituted=[2])
+        rank = 24
+        out = dc.tier2_continuation(H0, H1, groups, rank)
+        assert out["accepted"] and out["m_vb"] == rank
+        assert all(r["n_ghost"] == 0 for r in out["runs"].values())
+
+    def test_a_genuine_valence_frontier_closure_raises_the_flag(self):
+        """A substituted site's level rises from inside the valence manifold to above the
+        frontier level while the two are coupled: on Path A (coupled while moving) the two
+        step schedules or the two paths disagree, or a closure eigenvalue appears; either
+        way the class carries no decomposition."""
+        dim = 8
+        H0 = np.diag([-9.0, -8.0, -7.0, -6.0, -1.0, 0.0, 1.0, 2.0])
+        H1 = H0.copy()
+        H1[0, 0] = 2.5          # site 0's s level (occupied) rises through the frontier
+        H0[0, 4] = H0[4, 0] = 0.02
+        H1[0, 4] = H1[4, 0] = 0.02
+        H0[0, 5] = H0[5, 0] = 0.02
+        H1[0, 5] = H1[5, 0] = 0.02
+        groups = _groups(dim, substituted=[0])
+        out = dc.tier2_continuation(H0, H1, groups, rank=4, dlambda=0.05)
+        assert not out["accepted"]
+        assert (not out["path_agreement"] or not out["schedule_agreement"]
+                or out["closure"] or not out["contiguous"]), out
+
+    def test_the_endpoint_classification_is_invariant_under_rotations_in_the_subspace(self):
+        rng = np.random.default_rng(4)
+        H0 = _toy(9, rng, n_deep=5)
+        H1 = _embed_removal(H0, 4)
+        groups = _groups(H0.shape[0], ghost=[4])
+        psi, _ = dc.transport_valence_subspace(H0, H1, groups, 20, "A", 0.02, 100.0)
+        base = dc.endpoint_classification(psi, groups["ghost"], 0.05)
+        q, _ = np.linalg.qr(rng.normal(size=(20, 20)))
+        rotated = dc.endpoint_classification(psi @ q, groups["ghost"], 0.05)
+        assert np.allclose(base["gamma"], rotated["gamma"], atol=1e-10)
+        assert base["n_physical"] == rotated["n_physical"] == 16
+        assert base["n_ghost"] == rotated["n_ghost"] == 4
+
+    @pytest.mark.parametrize("scale", [4.0, 16.0])
+    def test_the_integers_and_gamma_are_unchanged_by_the_sink_energy(self, scale):
+        rng = np.random.default_rng(5)
+        H0 = _toy(10, rng, n_deep=6)
+        H1 = _embed_removal(H0, 3)
+        groups = _groups(H0.shape[0], ghost=[3])
+        a = dc.tier2_continuation(H0, H1, groups, 24, e_sink=100.0)
+        b = dc.tier2_continuation(H0, H1, groups, 24, e_sink=100.0 * scale)
+        assert a["accepted"] and b["accepted"] and a["m_vb"] == b["m_vb"] == 20
+        assert np.allclose(a["gamma"], b["gamma"], atol=1e-8)
+
+    def test_halving_dlambda_changes_nothing(self):
+        rng = np.random.default_rng(6)
+        H0 = _toy(10, rng, n_deep=6)
+        H1 = _embed_removal(H0, 1)
+        groups = _groups(H0.shape[0], ghost=[1])
+        a = dc.tier2_continuation(H0, H1, groups, 24, dlambda=0.02)
+        b = dc.tier2_continuation(H0, H1, groups, 24, dlambda=0.01)
+        assert a["m_vb"] == b["m_vb"] == 20
+        assert np.allclose(a["gamma"], b["gamma"], atol=1e-8)
+
+    def test_both_paths_share_their_endpoints_exactly(self):
+        rng = np.random.default_rng(7)
+        H0 = _toy(6, rng, n_deep=3)
+        H1 = _embed_removal(H0, 2)
+        H1[np.ix_(np.arange(0, 4), np.arange(0, 4))] -= 0.7 * np.eye(4)   # a substitution too
+        groups = _groups(H0.shape[0], ghost=[2], substituted=[0])
+        for lam in (0.0, 1.0):
+            a = dc.interpolated_hamiltonian(H0, H1, lam, "A", groups, 100.0)
+            b = dc.interpolated_hamiltonian(H0, H1, lam, "B", groups, 100.0)
+            assert np.array_equal(a, b)
+        end = dc.interpolated_hamiltonian(H0, H1, 1.0, "A", groups, 100.0)
+        ghost = groups["ghost"]
+        assert np.allclose(end[ghost][:, ghost], 100.0 * np.eye(4))
+        keep = np.setdiff1d(np.arange(H0.shape[0]), ghost)
+        assert np.array_equal(end[np.ix_(keep, keep)], H1[np.ix_(keep, keep)])
+        # ... and the paths differ in between.
+        mid_a = dc.interpolated_hamiltonian(H0, H1, 0.5, "A", groups, 100.0)
+        mid_b = dc.interpolated_hamiltonian(H0, H1, 0.5, "B", groups, 100.0)
+        assert not np.allclose(mid_a, mid_b)
+
+
 # ------------------------------------------------------------------ the fence
 
 
@@ -361,6 +602,7 @@ def _names(path: Path) -> set:
 
 
 PRODUCTION_SAFE = {"frame_counts", "lookup_class", "ClassRecord", "composition_key",
+                   "constructor_config", "DEFAULT_CONSTRUCTOR",
                    "defect_composition"}
 
 

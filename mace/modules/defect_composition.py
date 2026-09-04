@@ -60,8 +60,9 @@ from mace.modules.defect_state import COUNT_FILL, StateBatch
 __all__ = ["CLASS_TABLE_VERSION", "QUANTILES", "TIER2_NAMES", "EdgeAlignment",
            "ClassRecord", "composition_key", "is_stoichiometric", "reference_fill",
            "align_edges", "tier1", "class_integers", "frame_counts", "head_spectra",
-           "tiling_factors", "tile_frame", "build_class_table", "lookup_class",
-           "verify_class_table", "describe"]
+           "tiling_factors", "tiling_map", "tile_frame", "build_class_table",
+           "lookup_class", "verify_class_table", "describe", "DEFAULT_CONSTRUCTOR",
+           "constructor_config"]
 
 CLASS_TABLE_VERSION = 1
 BOUNDARY_TOL = 1e-9   # eV; a level exactly on the window's edge is on the edge, not inside
@@ -76,7 +77,33 @@ QUANTILES = np.linspace(0.05, 0.60, 23)
 # inside the constructor; a production module that mentions any of these has crossed the
 # fence, and the AST test fails it.
 TIER2_NAMES = ("site_correspondence", "union_basis", "transport_valence_subspace",
-               "endpoint_classification", "tier2", "linear_sum_assignment", "ghost_orbitals")
+               "endpoint_classification", "tier2", "linear_sum_assignment", "ghost_orbitals",
+               "interpolated_hamiltonian", "tier2_continuation")
+
+# The constructor's parameters (plan section 3: every one of them is config and round-trips).
+# `delta` and `window` default to 2x and 1x the head's smearing width when None.
+DEFAULT_CONSTRUCTOR: Dict[str, Any] = {
+    "delta": None,        # eV, the counting margin above VBM_al (None: 2 x smearing width)
+    "window": None,       # eV, half-width of the Tier 1 ambiguity window about the cut
+                          # (None: one smearing width)
+    "r_match": 2.0,       # A, the largest displacement a site correspondence may carry
+                          # (half the Cl-Cl distance; thermal Cl swing up to 1.6 A between
+                          # snapshots of the perovskite)
+    "e_sink": 100.0,      # eV, where decoupled orbitals are parked
+    "eta": 0.05,          # endpoint classification threshold on gamma
+    "dlambda": 0.02,      # transport step; the second schedule uses dlambda / 2
+}
+
+
+def constructor_config(overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The full constructor config with `overrides` applied; unknown keys are refused."""
+    config = dict(DEFAULT_CONSTRUCTOR)
+    for key, value in (overrides or {}).items():
+        if key not in config:
+            raise ValueError(f"unknown class-constructor parameter {key!r}; "
+                             f"expected one of {sorted(config)}")
+        config[key] = None if value is None else float(value)
+    return config
 
 
 # ------------------------------------------------------------------ the pure integer layer
@@ -209,6 +236,8 @@ class ClassRecord:
     path_agreement: Optional[bool] = None  # Tier 2 only
     schedule_agreement: Optional[bool] = None
     gamma: Tuple[float, ...] = field(default_factory=tuple)   # Tier 2 endpoint spectrum
+    correspondence: Optional[Dict[str, Any]] = None           # Tier 2 site correspondence
+    tier1_reason: str = ""                                    # why Tier 1 handed it on
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -306,20 +335,23 @@ def head_spectra(model, batch_dict: Dict[str, torch.Tensor]) -> List[Dict[str, A
     return out
 
 
-def tiling_factors(cell: np.ndarray, reference_cell: np.ndarray, n_atoms: int,
-                   n_reference: int, tol: float = 0.05) -> Optional[Tuple[int, int, int]]:
-    """`(n_a, n_b, n_c)`, in the REFERENCE's axis order, such that `cell` is the reference
-    tiled by those factors up to a relabelling of the lattice vectors and a rigid motion;
-    None if no such integer tiling exists within `tol` (relative, per lattice vector).
+def tiling_map(cell: np.ndarray, reference_cell: np.ndarray, n_atoms: int,
+               n_reference: int, tol: float = 0.05
+               ) -> Optional[Tuple[Tuple[int, int, int], Tuple[int, int, int]]]:
+    """`(factors, perm)`: `cell` is the reference tiled by `factors` (in the REFERENCE's
+    axis order) with its lattice vectors relabelled so that `cell[i]` corresponds to the
+    tiled reference's vector `perm[i]`; None if no such integer tiling exists within `tol`
+    (relative, per lattice vector).
 
     The relabelling matters on the data in hand: the 80-atom pristine cell is 2 x 2 x 1 of
     the 20-atom orthorhombic cell and the 159-atom V_Cl cell is 2 x 2 x 2 of it with the
     axes in a different order, so the latter is the former tiled (1, 1, 2) and rotated. The
     head's spectrum is invariant under the rotation (Slater-Koster hoppings and the trunk's
-    invariants see distances and angles only), so only the factors are needed. Thermal
-    cells differ from the reference by ~2 %, so ratios are rounded per axis, the cell
-    ANGLES are required to match under the same relabelling, and the rounded product is
-    checked against the atom-count ratio (tolerating the defect's missing or extra atoms).
+    invariants see distances and angles only), so the spectrum needs only the factors; the
+    site correspondence needs the relabelling too. Thermal cells differ from the reference
+    by ~2 %, so ratios are rounded per axis, the cell ANGLES are required to match under the
+    same relabelling, and the rounded product is checked against the atom-count ratio
+    (tolerating the defect's missing or extra atoms).
     """
     from itertools import permutations
 
@@ -344,8 +376,15 @@ def tiling_factors(cell: np.ndarray, reference_cell: np.ndarray, n_atoms: int,
         factors = [0, 0, 0]
         for i, axis in enumerate(perm):
             factors[axis] = int(n[i])
-        return factors[0], factors[1], factors[2]
+        return (factors[0], factors[1], factors[2]), (int(perm[0]), int(perm[1]), int(perm[2]))
     return None
+
+
+def tiling_factors(cell: np.ndarray, reference_cell: np.ndarray, n_atoms: int,
+                   n_reference: int, tol: float = 0.05) -> Optional[Tuple[int, int, int]]:
+    """The factors of `tiling_map`, or None."""
+    found = tiling_map(cell, reference_cell, n_atoms, n_reference, tol)
+    return None if found is None else found[0]
 
 
 def tile_frame(numbers: Sequence[int], positions: np.ndarray, cell: np.ndarray,
@@ -416,21 +455,25 @@ def _single_frame_dict(frame, device) -> Dict[str, torch.Tensor]:
 
 
 def build_class_table(model, frames: Sequence, device="cpu", formula=None,
-                      delta: Optional[float] = None, window: Optional[float] = None,
+                      config: Optional[Dict[str, Any]] = None,
                       quantiles: np.ndarray = QUANTILES, log: bool = True) -> Dict[str, Any]:
     """Establish the integers of every composition class present in `frames`.
 
     `frames` are `AtomicData` (with `frame_key` attached, `defect_cache.attach_frame_keys`).
     The FIRST frame of each composition, in the order given, is its reference geometry. The
     pristine class is the stoichiometric one under `formula`; its first frame's spectrum
-    defines the edges every other class is aligned to. Returns the JSON-able table that
-    `model.composition_classes` holds.
+    defines the edges every other class is aligned to. A class ambiguous at Tier 1 is handed
+    to Tier 2. `config` overrides the model's `class_constructor`. Returns the JSON-able
+    table that `model.composition_classes` holds.
     """
     formula = _formula_of(model, formula)
     head = model.spectral
     width = float(head.t_el)
-    delta = 2.0 * width if delta is None else float(delta)
-    window = width if window is None else float(window)
+    cfg = constructor_config(getattr(model, "class_constructor", None))
+    if config is not None:
+        cfg.update(constructor_config(config) if not set(config) <= set(cfg) else config)
+    delta = 2.0 * width if cfg["delta"] is None else float(cfg["delta"])
+    window = width if cfg["window"] is None else float(cfg["window"])
     firsts: Dict[str, Any] = {}
     for fr in frames:
         key = composition_key(_numbers_of(fr, model))
@@ -440,6 +483,8 @@ def build_class_table(model, frames: Sequence, device="cpu", formula=None,
     table: Dict[str, Any] = {
         "version": CLASS_TABLE_VERSION, "formula": {str(z): n for z, n in formula.items()},
         "delta": delta, "window": window, "smearing_width": width,
+        "r_match": float(cfg["r_match"]), "e_sink": float(cfg["e_sink"]),
+        "eta": float(cfg["eta"]), "dlambda": float(cfg["dlambda"]),
         "quantiles": [float(q) for q in quantiles],
         "reference_geometry": "first_frame", "pristine_key": pristine_key, "classes": {}}
     if pristine_key is None:
@@ -457,12 +502,13 @@ def build_class_table(model, frames: Sequence, device="cpu", formula=None,
     tiled: Dict[Tuple[int, int, int], Dict[str, Any]] = {}
     for key, fr in firsts.items():
         numbers, _, cell = _frame_geometry(fr, model)
-        factors = tiling_factors(cell, pristine_cell, len(numbers), pristine_frame.num_nodes)
-        if factors is None:
+        mapping = tiling_map(cell, pristine_cell, len(numbers), pristine_frame.num_nodes)
+        if mapping is None:
             table["classes"][key] = _uncounted(
                 key, fr, model, delta, "the class cell is not an integer tiling of the "
                 "pristine reference cell; no aligned edge exists").to_dict()
             continue
+        factors, perm = mapping
         # The pristine spectrum the class is aligned to is the reference TILED to the class
         # cell, so both sample the same k-points: a 2x1x1 cell folds more of the zone and
         # its valence top is higher than the primitive reference's by up to ~0.1 eV, which
@@ -477,28 +523,39 @@ def build_class_table(model, frames: Sequence, device="cpu", formula=None,
         # share the spectrum and M_VB,sigma is the same integer for both; the occupied
         # manifold of S_ref is the lowest max(N_sigma) levels. Aligning per spin would give
         # two edges differing by the quantile shift of one level, which is noise.
-        aligned = align_edges(spec["spectrum"], max(n_sig), pri["spectrum"],
-                              max(reference_fill(pri["n_total"])), quantiles)
+        n_pri = max(reference_fill(pri["n_total"]))
+        aligned = align_edges(spec["spectrum"], max(n_sig), pri["spectrum"], n_pri, quantiles)
         m_vb_one, ambiguous, nearest = tier1(spec["spectrum"], aligned.vbm_al, delta, window)
-        m_vb = (m_vb_one, m_vb_one)
         gap_ok = aligned.gap_pristine >= 4.0 * width
+        tier: Optional[int] = 1
         reason = ""
+        extra: Dict[str, Any] = {}
         if not gap_ok:
-            reason = (f"pristine gap {aligned.gap_pristine:.3f} eV < 4 x smearing "
-                      f"{4 * width:.3f} eV")
+            tier, reason = None, (f"pristine gap {aligned.gap_pristine:.3f} eV < 4 x smearing "
+                                  f"{4 * width:.3f} eV")
         elif ambiguous:
-            reason = (f"a level within +-{window:.3f} eV of the cut VBM_al + delta (nearest "
-                      f"{nearest:+.3f} eV): Tier 1 ambiguous")
-        accepted = gap_ok and not ambiguous
+            # Tier 2: the valence-subspace continuation from the tiled pristine.
+            t2 = tier2(model, fr, pristine_frame, factors, perm, n_pri, pri["H"], spec["H"],
+                       cfg, device=device)
+            extra = dict(path_agreement=t2["path_agreement"],
+                         schedule_agreement=t2["schedule_agreement"],
+                         gamma=tuple(t2["gamma"]), correspondence=t2["correspondence"],
+                         tier1_reason=f"a level within +-{window:.3f} eV of the cut VBM_al + "
+                                      f"delta (nearest {nearest:+.3f} eV)")
+            if t2["accepted"]:
+                tier, m_vb_one = 2, int(t2["m_vb"])
+            else:
+                tier, reason = None, "Tier 1 ambiguous; Tier 2: " + t2["reason"]
+        m_vb = (m_vb_one, m_vb_one)
+        accepted = tier is not None
         n_e, n_h, q_core = class_integers(m_vb, n_sig) if accepted else ((0, 0), (0, 0), 0)
         record = ClassRecord(
             key=key, n_atoms=spec["n_atoms"], reference_frame_key=_frame_key_of(fr),
-            n_total=spec["n_total"], n_sigma=n_sig, tier=1 if accepted else None,
-            ambiguous=not accepted, reason=reason, m_vb=m_vb, n_e=n_e, n_h=n_h,
-            q_core=q_core, vbm_al=aligned.vbm_al, cbm_al=aligned.cbm_al,
-            shift=aligned.shift, spread=aligned.spread,
-            gap_pristine=aligned.gap_pristine, delta=delta, nearest=nearest,
-            tiling=factors)
+            n_total=spec["n_total"], n_sigma=n_sig, tier=tier, ambiguous=not accepted,
+            reason=reason, m_vb=m_vb, n_e=n_e, n_h=n_h, q_core=q_core, vbm_al=aligned.vbm_al,
+            cbm_al=aligned.cbm_al, shift=aligned.shift, spread=aligned.spread,
+            gap_pristine=aligned.gap_pristine, delta=delta, nearest=nearest, tiling=factors,
+            **extra)
         table["classes"][key] = record.to_dict()
         if log:
             logging.info("Composition class %s (%d atoms, ref frame %d): %s", key,
@@ -528,11 +585,18 @@ def _frame_key_of(fr) -> int:
 def describe(record: ClassRecord) -> str:
     if not record.counted:
         return f"UNCOUNTED ({record.reason})"
+    tier2_note = ""
+    if record.tier == 2:
+        c = record.correspondence or {}
+        tier2_note = (f" [Tier 2: {c.get('n_ghost', 0)} ghost, {c.get('n_added', 0)} added, "
+                      f"{c.get('n_substituted', 0)} substituted; gamma physical "
+                      f"{sum(1 for g in record.gamma if g < 0.5)}, ghost "
+                      f"{sum(1 for g in record.gamma if g >= 0.5)}; {record.tier1_reason}]")
     return (f"tier {record.tier}, M_VB={list(record.m_vb)}, N={list(record.n_sigma)}, "
             f"n_e={list(record.n_e)}, n_h={list(record.n_h)}, Q_core={record.q_core:+d}, "
             f"VBM_al={record.vbm_al:.3f} eV (shift {record.shift:+.3f}, spread "
             f"{record.spread:.3f}), nearest level to the cut {record.nearest:+.3f} eV, "
-            f"pristine tiled {'x'.join(str(t) for t in record.tiling)}")
+            f"pristine tiled {'x'.join(str(t) for t in record.tiling)}" + tier2_note)
 
 
 def lookup_class(table: Dict[str, Any], atomic_numbers: Sequence[int]) -> ClassRecord:
@@ -556,7 +620,7 @@ def verify_class_table(model, frames: Sequence, device="cpu", table=None) -> Lis
     table = model.composition_classes if table is None else table
     fresh = build_class_table(model, frames, device=device,
                               formula={int(z): n for z, n in table["formula"].items()},
-                              delta=table["delta"], window=table.get("window"),
+                              config={k: table[k] for k in DEFAULT_CONSTRUCTOR},
                               quantiles=np.asarray(table["quantiles"]), log=False)
     diffs = []
     for key, old in table["classes"].items():
@@ -572,6 +636,354 @@ def verify_class_table(model, frames: Sequence, device="cpu", table=None) -> Lis
 
 # ======================================================================= Tier 2 (fenced)
 #
-# The valence-subspace continuation: site correspondence, union basis, two paths, two
-# schedules, transported projector, endpoint classification. Task 0.8 of the plan. Every
-# name in TIER2_NAMES is defined below this line and used above it only through `tier2`.
+# The valence-subspace continuation (plan section 2.1, Tier 2). Everything below this line
+# is the constructor's own machinery: the site correspondence, the union basis, the two
+# interpolation paths, the transported projector and the endpoint classification. None of
+# it is reachable from a production forward, and the AST test in
+# tests/extensions/defect/test_composition_classes.py holds that line (`TIER2_NAMES`).
+#
+# THE IDEA. A class that Tier 1 cannot count (a level near the counting cut) is counted by
+# CONTINUITY instead: the pristine occupied valence projector P_V^(0), of rank M_V^(0), is
+# carried from the tiled pristine Hamiltonian to the class Hamiltonian along a path of
+# Hamiltonians in a common ("union") orbital basis, tracking the SUBSPACE by maximum overlap
+# with the eigenvectors at each step -- never individual eigenstates, so crossings inside the
+# manifold cost nothing. At the endpoint the transported subspace is split, basis-invariantly,
+# into its physical and ghost parts by the eigenvalues gamma of P_V P_ghost P_V; the physical
+# rank is M_VB^class. Two geometrically distinct paths and two step schedules must agree, no
+# gamma may sit in the closure band, and the physical part must coincide (overlap > 1 - eta)
+# with a spectrally contiguous set of eigenvectors of the class Hamiltonian. Otherwise the
+# class is genuinely ambiguous: it carries no core/frontier decomposition, and no override
+# input exists.
+
+ORB = 4   # orbitals per site (s, px, py, pz), defect_counting.ORBITALS_PER_ATOM
+
+
+def _minimum_image(delta: np.ndarray, cell: np.ndarray) -> np.ndarray:
+    frac = delta @ np.linalg.inv(cell)
+    frac -= np.round(frac)
+    return frac @ cell
+
+
+def site_correspondence(class_numbers, class_positions, class_cell, pristine_numbers,
+                        pristine_positions, pristine_cell, perm=(0, 1, 2),
+                        r_match: float = 2.0, n_candidates: int = 6,
+                        refinements: int = 2) -> Dict[str, Any]:
+    """Minimum-cost assignment on POSITIONS between the class reference geometry and the
+    tiled pristine cell, placed into the class cell through scaled coordinates (with the
+    lattice vectors relabelled by `perm`) and the best rigid translation.
+
+    Unmatched pristine sites are ghosts (vacancies), unmatched class atoms are additions
+    (interstitials), matched pairs of different species are substitutions. A pair further
+    apart than `r_match` is never matched: the assignment is augmented with "unmatched" at
+    a cost of r_match^2 per unmatched pair, so a displaced atom is an addition next to a
+    ghost rather than a match beyond r_match. The correspondence is used only here.
+
+    The translation is searched over the placements of the class's first atom OF THE
+    HEAVIEST SPECIES (the one that moves least thermally -- Pb in the perovskite, whose Cl
+    swing by up to ~1.4 A between snapshots) onto every pristine site of that species, the
+    best few candidates going through the full assignment; the winner is then refined by
+    re-centring on the mean matched displacement and re-assigning.
+    """
+    from scipy.optimize import linear_sum_assignment
+
+    class_numbers = np.asarray(class_numbers, dtype=np.int64)
+    pristine_numbers = np.asarray(pristine_numbers, dtype=np.int64)
+    class_positions = np.asarray(class_positions, dtype=np.float64)
+    class_cell = np.asarray(class_cell, dtype=np.float64).reshape(3, 3)
+    pristine_cell = np.asarray(pristine_cell, dtype=np.float64).reshape(3, 3)
+    n1, n0 = len(class_numbers), len(pristine_numbers)
+    scaled = np.asarray(pristine_positions, dtype=np.float64) @ np.linalg.inv(pristine_cell)
+    mapped = scaled[:, list(perm)] @ class_cell
+    unmatched_cost = 0.5 * r_match ** 2
+    big = 1e6
+
+    def distances(t):
+        d = _minimum_image(class_positions[:, None, :] - (mapped + t)[None, :, :], class_cell)
+        return np.linalg.norm(d, axis=-1), d
+
+    def assign(dist):
+        cost = np.full((n1 + n0, n0 + n1), big)
+        cost[:n1, :n0] = dist ** 2
+        cost[:n1, n0:] = np.where(np.eye(n1, dtype=bool), unmatched_cost, big)
+        cost[n1:, :n0] = np.where(np.eye(n0, dtype=bool), unmatched_cost, big)
+        cost[n1:, n0:] = 0.0
+        rows, cols = linear_sum_assignment(cost)
+        pairs = {int(r): int(c) for r, c in zip(rows, cols) if r < n1 and c < n0}
+        return float(cost[rows, cols].sum()), pairs
+
+    shared = sorted(set(class_numbers.tolist()) & set(pristine_numbers.tolist()))
+    if not shared:
+        raise ValueError("the class and its pristine reference share no species")
+    anchor_species = max(shared)
+    anchor = int(np.nonzero(class_numbers == anchor_species)[0][0])
+    candidates = []
+    for j in np.nonzero(pristine_numbers == anchor_species)[0]:
+        t = class_positions[anchor] - mapped[j]
+        dist, _ = distances(t)
+        candidates.append((-int((dist.min(axis=1) < r_match).sum()), int(j), t))
+    candidates.sort(key=lambda c: c[0])
+    best = None
+    for _, _, t in candidates[:n_candidates]:
+        dist, vec = distances(t)
+        total, pairs = assign(dist)
+        for _ in range(refinements):
+            if not pairs:
+                break
+            # Re-centre: the mean displacement of the matched pairs is the residual
+            # translation; a better centring can only lower the cost, so it is kept if it does.
+            shift = np.mean([vec[i, j] for i, j in pairs.items()], axis=0)
+            dist2, vec2 = distances(t + shift)
+            total2, pairs2 = assign(dist2)
+            if total2 < total - 1e-12:
+                t, dist, vec, total, pairs = t + shift, dist2, vec2, total2, pairs2
+            else:
+                break
+        if best is None or total < best[0]:
+            best = (total, t, dist, pairs)
+    total, t, dist, match = best
+    ghosts = sorted(set(range(n0)) - set(match.values()))
+    added = sorted(set(range(n1)) - set(match))
+    substituted = sorted((i, j) for i, j in match.items()
+                         if class_numbers[i] != pristine_numbers[j])
+    displacements = np.array([dist[i, j] for i, j in match.items()]) if match else np.zeros(0)
+    return dict(match=match, ghosts=ghosts, added=added, substituted=substituted,
+                translation=t, max_displacement=float(displacements.max()) if match else 0.0,
+                mean_displacement=float(displacements.mean()) if match else 0.0,
+                n_ghost=len(ghosts), n_added=len(added), n_substituted=len(substituted),
+                n_matched=len(match), total_cost=total)
+
+
+def union_basis(H0: np.ndarray, H1: np.ndarray, correspondence: Dict[str, Any]
+                ) -> Tuple[np.ndarray, np.ndarray, Dict[str, np.ndarray]]:
+    """Embed the pristine `H0` (n0 sites) and the class `H1` (n1 sites) in the union basis:
+    the pristine sites in their order, then the added atoms. Returns `(H0_u, H1_u, groups)`
+    with `groups` the orbital index arrays `ghost`, `added`, `substituted`."""
+    n0 = H0.shape[0] // ORB
+    n1 = H1.shape[0] // ORB
+    match, ghosts, added = correspondence["match"], correspondence["ghosts"], correspondence["added"]
+    n_union = n0 + len(added)
+    site_of_class = np.zeros(n1, dtype=np.int64)
+    for i in range(n1):
+        site_of_class[i] = match[i] if i in match else n0 + added.index(i)
+    dim = ORB * n_union
+    H0_u = np.zeros((dim, dim))
+    H0_u[:ORB * n0, :ORB * n0] = H0
+    idx1 = (ORB * site_of_class[:, None] + np.arange(ORB)[None, :]).reshape(-1)
+    H1_u = np.zeros((dim, dim))
+    H1_u[np.ix_(idx1, idx1)] = H1
+    orbitals = lambda sites: np.array([ORB * s + o for s in sites for o in range(ORB)],
+                                      dtype=np.int64)
+    groups = {"ghost": orbitals(ghosts), "added": orbitals(n0 + k for k in range(len(added))),
+              "substituted": orbitals(j for _, j in correspondence["substituted"])}
+    return H0_u, H1_u, groups
+
+
+def interpolated_hamiltonian(H0_u: np.ndarray, H1_u: np.ndarray, lam: float, path: str,
+                             groups: Dict[str, np.ndarray], e_sink: float) -> np.ndarray:
+    """H(lambda) on Path A or Path B between the two union Hamiltonians.
+
+    Path A: every matrix element interpolates linearly at once -- hoppings to a ghost fade as
+    (1 - lambda) because H1_u is zero there, hoppings to an addition rise as lambda, a
+    substitution switches alchemically while coupled.
+    Path B, three phases: (1) the hoppings of ghost and substituted sites fade to zero while
+    the unaffected block interpolates and additions stay decoupled; (2) with the affected
+    sites decoupled, substituted on-site levels switch species; (3) the hoppings of additions
+    and substitutions rise to their final values.
+
+    THE SINK IS NEVER CROSSED WHILE COUPLED, on either path. A ghost's on-site level stays
+    where the pristine put it until its hoppings are exactly zero (lambda = 1) and only then
+    is parked at +E_sink; an addition's level leaves the sink at lambda = 0+, when it is still
+    exactly decoupled. Moving a decoupled block is a relabelling of exact eigenstates, so the
+    step is exact and E_sink cannot enter the transport at all. A level that instead rode to
+    the sink while coupled would sweep through every state above it with a residual hopping;
+    the fine-step limit of that sweep is ADIABATIC following, which swaps the ghost for a
+    physical state at each crossing and converges to the wrong answer (the lowest-M subspace
+    of H^(1), which counts the vacancy level as valence). The ghost levels sit inside the
+    occupied manifold throughout, so the crossings they do have are within the transported
+    subspace and cost nothing.
+    """
+    dim = H0_u.shape[0]
+    ghost = np.zeros(dim, dtype=bool)
+    ghost[groups["ghost"]] = True
+    added = np.zeros(dim, dtype=bool)
+    added[groups["added"]] = True
+    subst = np.zeros(dim, dtype=bool)
+    subst[groups["substituted"]] = True
+    affected = ghost | added | subst
+    site = np.arange(dim) // ORB
+    same = site[:, None] == site[None, :]
+    eye = np.eye(dim)
+    sink_ghost = eye * ghost[:, None] * e_sink
+    sink_added = eye * added[:, None] * e_sink
+    on_ghost = same & ghost[:, None]
+    on_added = same & added[:, None]
+    on_subst = same & subst[:, None]
+    ghost_block = sink_ghost if lam >= 1.0 else H0_u
+    added_block = sink_added if lam <= 0.0 else H1_u
+    if path == "A":
+        H = (1.0 - lam) * H0_u + lam * H1_u
+        H[on_ghost] = ghost_block[on_ghost]
+        H[on_added] = added_block[on_added]
+        return H
+    if path != "B":
+        raise ValueError(f"unknown path {path!r}; expected 'A' or 'B'")
+    un = ~affected
+    UU = un[:, None] & un[None, :]
+    G = ghost[:, None] | ghost[None, :]
+    A = added[:, None] | added[None, :]
+    S = subst[:, None] | subst[None, :]
+    off = ~same
+    tau = 3.0 * lam
+    H = np.zeros((dim, dim))
+    if tau <= 1.0:
+        u = tau
+        H[UU] = ((1.0 - u) * H0_u + u * H1_u)[UU]
+        fade = off & (G | S) & ~A
+        H[fade] = ((1.0 - u) * H0_u)[fade]
+        H[on_subst] = H0_u[on_subst]
+    elif tau <= 2.0:
+        v = tau - 1.0
+        H[UU] = H1_u[UU]
+        H[on_subst] = ((1.0 - v) * H0_u + v * H1_u)[on_subst]
+    else:
+        w = tau - 2.0
+        H[UU] = H1_u[UU]
+        rise = off & (A | S) & ~G
+        H[rise] = (w * H1_u)[rise]
+        H[on_subst] = H1_u[on_subst]
+    H[on_ghost] = ghost_block[on_ghost]
+    H[on_added] = added_block[on_added]
+    return H
+
+
+def transport_valence_subspace(H0_u: np.ndarray, H1_u: np.ndarray, groups: Dict[str, np.ndarray],
+                               rank: int, path: str, dlambda: float, e_sink: float
+                               ) -> Tuple[np.ndarray, Dict[str, float]]:
+    """Carry the lowest-`rank` subspace of H(0) to lambda = 1 by maximum subspace overlap.
+
+    At each step the eigenvectors of H(lambda) are ranked by their weight in the current
+    subspace, `w_k = sum_a |<u_k|psi_a>|^2`, and the `rank` heaviest are kept: the subspace,
+    never an eigenstate. The smallest gap between the kept and dropped weights along the
+    path is returned as `min_separation` (1 for a perfectly adiabatic step, ~0 at an
+    unresolved crossing between the manifold and its complement).
+    """
+    n_steps = max(int(round(1.0 / dlambda)), 1)
+    _, U = np.linalg.eigh(interpolated_hamiltonian(H0_u, H1_u, 0.0, path, groups, e_sink))
+    psi = U[:, :rank]
+    min_sep, min_weight = 1.0, 1.0
+    for k in range(1, n_steps + 1):
+        lam = k / n_steps
+        _, U = np.linalg.eigh(interpolated_hamiltonian(H0_u, H1_u, lam, path, groups, e_sink))
+        weight = ((U.T @ psi) ** 2).sum(axis=1)
+        order = np.argsort(-weight, kind="stable")
+        kept = np.sort(order[:rank])
+        sep = float(weight[order[rank - 1]] - weight[order[rank]]) if rank < len(weight) else 1.0
+        min_sep = min(min_sep, sep)
+        min_weight = min(min_weight, float(weight[order[rank - 1]]))
+        psi = U[:, kept]
+    return psi, {"min_separation": min_sep, "min_weight": min_weight, "steps": n_steps}
+
+
+def endpoint_classification(psi: np.ndarray, ghost_orbitals: np.ndarray, eta: float
+                            ) -> Dict[str, Any]:
+    """`gamma = eig(P_V P_ghost P_V)` on ran P_V, basis-invariantly: the eigenvalues of the
+    rank x rank matrix `psi^T P_ghost psi`. `gamma < eta` physical, `> 1 - eta` ghost,
+    between: closure. Returns the spectrum, the counts and the physical part of `psi`."""
+    g = psi[np.asarray(ghost_orbitals, dtype=np.int64), :] if len(ghost_orbitals) else \
+        np.zeros((0, psi.shape[1]))
+    gamma, V = np.linalg.eigh(g.T @ g)
+    gamma = np.clip(gamma, 0.0, 1.0)
+    physical = gamma < eta
+    ghost = gamma > 1.0 - eta
+    closure = ~physical & ~ghost
+    return dict(gamma=gamma, n_physical=int(physical.sum()), n_ghost=int(ghost.sum()),
+                n_closure=int(closure.sum()), psi_physical=psi @ V[:, physical])
+
+
+def _contiguity(psi_physical: np.ndarray, H1_final: np.ndarray, ghost_orbitals, eta: float
+                ) -> Tuple[bool, float, Tuple[int, int]]:
+    """Does the physical part coincide with a spectrally contiguous set of eigenvectors of
+    the class Hamiltonian? Returns `(ok, overlap, (first, last))` over the physical
+    eigenvectors of H^(1)_union (those not parked at the sink)."""
+    m = psi_physical.shape[1]
+    if m == 0:
+        return True, 1.0, (0, -1)
+    _, U = np.linalg.eigh(H1_final)
+    ghost_weight = (U[np.asarray(ghost_orbitals, dtype=np.int64), :] ** 2).sum(axis=0) \
+        if len(ghost_orbitals) else np.zeros(U.shape[1])
+    physical_cols = np.nonzero(ghost_weight < 0.5)[0]
+    weight = ((U[:, physical_cols].T @ psi_physical) ** 2).sum(axis=1)
+    order = np.argsort(-weight, kind="stable")[:m]
+    chosen = np.sort(physical_cols[order])
+    overlap = float(weight[order].sum() / m)
+    contiguous = bool(chosen[-1] - chosen[0] + 1 == m)
+    return contiguous and overlap > 1.0 - eta, overlap, (int(chosen[0]), int(chosen[-1]))
+
+
+def tier2_continuation(H0_u: np.ndarray, H1_u: np.ndarray, groups: Dict[str, np.ndarray],
+                       rank: int, e_sink: float = 100.0, eta: float = 0.05,
+                       dlambda: float = 0.02) -> Dict[str, Any]:
+    """Both paths, both schedules, the endpoint classification and the acceptance rule, on
+    Hamiltonians already in the union basis. `rank` is M_V^(0). Returns the decision with
+    every quantity the cache records."""
+    H1_final = interpolated_hamiltonian(H0_u, H1_u, 1.0, "A", groups, e_sink)
+    runs: Dict[Tuple[str, int], Dict[str, Any]] = {}
+    for path in ("A", "B"):
+        for schedule, dl in ((1, dlambda), (2, dlambda / 2.0)):
+            psi, stats = transport_valence_subspace(H0_u, H1_u, groups, rank, path, dl, e_sink)
+            cls = endpoint_classification(psi, groups["ghost"], eta)
+            ok, overlap, span = _contiguity(cls["psi_physical"], H1_final, groups["ghost"], eta)
+            runs[(path, schedule)] = dict(m_vb=cls["n_physical"], n_ghost=cls["n_ghost"],
+                                          n_closure=cls["n_closure"], gamma=cls["gamma"],
+                                          contiguous=ok, overlap=overlap, span=span, **stats)
+    m_values = {r["m_vb"] for r in runs.values()}
+    path_agreement = runs[("A", 1)]["m_vb"] == runs[("B", 1)]["m_vb"]
+    schedule_agreement = all(
+        runs[(p, 1)]["m_vb"] == runs[(p, 2)]["m_vb"]
+        and float(np.abs(runs[(p, 1)]["gamma"] - runs[(p, 2)]["gamma"]).max()) < eta
+        for p in ("A", "B"))
+    closure = any(r["n_closure"] > 0 for r in runs.values())
+    contiguous = all(r["contiguous"] for r in runs.values())
+    reasons = []
+    if not path_agreement:
+        reasons.append(f"paths disagree (A: {runs[('A', 1)]['m_vb']}, B: {runs[('B', 1)]['m_vb']})")
+    if not schedule_agreement:
+        reasons.append("the two step schedules disagree")
+    if closure:
+        reasons.append("a closure eigenvalue eta <= gamma <= 1 - eta at the endpoint")
+    if not contiguous:
+        worst = min(runs.values(), key=lambda r: r["overlap"])
+        reasons.append(f"the physical part is not a contiguous set of class eigenvectors "
+                       f"(overlap {worst['overlap']:.3f}, span {worst['span']})")
+    accepted = path_agreement and schedule_agreement and not closure and contiguous \
+        and len(m_values) == 1
+    return dict(accepted=accepted, m_vb=int(runs[("A", 1)]["m_vb"]) if accepted else None,
+                gamma=[float(g) for g in runs[("A", 1)]["gamma"]],
+                path_agreement=bool(path_agreement), schedule_agreement=bool(schedule_agreement),
+                closure=bool(closure), contiguous=bool(contiguous),
+                reason="; ".join(reasons),
+                runs={f"{p}{s}": {k: (v.tolist() if isinstance(v, np.ndarray) else v)
+                                  for k, v in r.items()} for (p, s), r in runs.items()})
+
+
+def tier2(model, class_frame, pristine_frame, factors, perm, rank: int, H0, H1,
+          cfg: Dict[str, Any], device="cpu") -> Dict[str, Any]:
+    """Tier 2 for one class: geometry correspondence, union basis, the continuation."""
+    numbers1, pos1, cell1 = _frame_geometry(class_frame, model)
+    numbers0, pos0, cell0 = _frame_geometry(pristine_frame, model)
+    numbers0, pos0, cell0 = tile_frame(numbers0, pos0, cell0, factors)
+    corr = site_correspondence(numbers1, pos1, cell1, numbers0, pos0, cell0, perm=perm,
+                               r_match=float(cfg["r_match"]))
+    H0_u, H1_u, groups = union_basis(_numpy(H0), _numpy(H1), corr)
+    out = tier2_continuation(H0_u, H1_u, groups, rank, e_sink=float(cfg["e_sink"]),
+                             eta=float(cfg["eta"]), dlambda=float(cfg["dlambda"]))
+    out["correspondence"] = {k: corr[k] for k in ("n_ghost", "n_added", "n_substituted",
+                                                    "n_matched", "max_displacement",
+                                                    "mean_displacement")}
+    out["correspondence"]["ghost_species"] = [int(numbers0[j]) for j in corr["ghosts"]]
+    out["correspondence"]["added_species"] = [int(numbers1[i]) for i in corr["added"]]
+    return out
+
+
+def _numpy(H) -> np.ndarray:
+    return H.detach().cpu().numpy() if isinstance(H, torch.Tensor) else np.asarray(H, dtype=np.float64)

@@ -211,16 +211,19 @@ class MACEDefect(ScaleShiftMACE):
         # G_PBC, the training gauge; "isolated" is G_inf, the inference gauge.
         gauge: str = "periodic",
         # Section 2.1: the composition-class table (the cached integers, with the tier and
-        # agreement they were established at) and the edge-count margin delta; None means
-        # "not yet built" and "2 x smearing width" respectively.
+        # agreement they were established at; None means "not yet built") and the
+        # constructor's own parameters (delta, window, r_match, E_sink, eta, dlambda --
+        # `defect_composition.DEFAULT_CONSTRUCTOR`; a None entry means the default).
         composition_classes: Optional[Dict[str, Any]] = None,
-        edge_delta: Optional[float] = None,
+        class_constructor: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
+        from mace.modules.defect_composition import constructor_config
+
         self.composition_classes = (None if composition_classes is None
                                     else dict(composition_classes))
-        self.edge_delta = None if edge_delta is None else float(edge_delta)
+        self.class_constructor = constructor_config(class_constructor)
         from mace.modules.defect_state import (PRODUCTION_POLICIES, ElectronicStateSpec,
                                                reference_state as default_reference)
         from mace.modules.defect_terms import GAUGES
@@ -724,7 +727,7 @@ class MACEDefect(ScaleShiftMACE):
             ("reference_state", None),
             ("gauge", "periodic"),
             ("composition_classes", None),
-            ("edge_delta", None),
+            ("class_constructor", None),
         ):
             if not hasattr(self, name):
                 object.__setattr__(self, name, default)
