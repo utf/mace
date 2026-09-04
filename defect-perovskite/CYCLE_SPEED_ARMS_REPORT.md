@@ -698,6 +698,19 @@ The fix is one clause; the two regression tests were each checked to fail withou
 second asserts the guard does not *latch* — because a latched guard would let arm B train,
 report no error, and silently be arm A, which is worse than the crash.
 
+**11. And one that cost ten minutes for the oldest reason there is.** The arm B gate stage
+was launched over `ssh` with a *relative* path to its script. `ssh host '...'` starts in
+`$HOME`, so it failed instantly with "No such file or directory" and sat there while a
+waiter blocked on a condition that would never come true. `b3_run.sh` exists precisely to
+make this impossible and had been used for every scorer in the cycle; it was bypassed for
+the one command whose failure mattered most, at the point where the chain driver had been
+killed and nothing else would have retried it.
+
+The lesson is not "be careful". It is that a convenience wrapper only helps while it is the
+*only* way in — the moment a command is typed around it, the wrapper's guarantees are gone,
+and the commands most likely to be typed around it are the unusual ones, which are also the
+ones with no second chance.
+
 ### 8.2 The regression check, and the transcription it caught
 
 Scoring `stageb_s1.model` under this cycle's code reproduces its pre-cycle 79-atom head
