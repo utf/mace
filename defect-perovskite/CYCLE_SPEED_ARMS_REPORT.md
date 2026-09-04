@@ -367,9 +367,10 @@ crossing the band's lower edge, and a level 0.29 eV too deep.
 
 ### 8.1 What the smokes and tests caught that the loss would not have
 
-Eight defects reached a running configuration and were caught before they reached a number.
-All eight are silent failures: none raises, and each would have produced a plausible loss
-curve.
+Ten defects reached a running configuration this cycle. Eight were caught before they reached
+a number and are silent failures — none raises, and each would have produced a plausible
+loss curve. The last two are listed separately because they are a different kind: one was
+caught by arithmetic before it fired, and one was not caught at all until it killed an arm.
 
 | # | defect | how it would have shown up | caught by |
 |---|---|---|---|
@@ -381,6 +382,37 @@ curve.
 | 6 | `marks_table` reported all-zero CPU columns | one `record_function` key yields two `key_averages()` rows, a host annotation and a device row; the dict assignment overwrote the first | the numbers not summing to the wall time |
 | 7 | `torch.utils.data.Sampler.__init__(None)` raises | `Sampler.__init__` takes no argument in this version | the sampler's unit tests |
 | 8 | `c10_feature_knn`'s neutral floor was ~0 by construction | the neutral queries were inside the reference cloud, so every charged number looked enormous against a floor of zero | reading the number and disbelieving it; 100 neutral frames are now held out |
+
+### 8.1b The two that were not like the others
+
+**9. The chain script was edited while a copy of it was running.** `bash` reads a script by
+byte offset and seeks back to the end of the last parsed command before running it, so an
+insertion *above* the driver's resume point shifts every offset after it.
+`queue_arms_chain.sh` was 2308 bytes at launch (10:31:49) and 2635 after gate 10's block went
+into `gates()` at 10:45:13. When wave 1 finished, the driver would have resumed 327 bytes
+early — inside `gates()`, on a continuation line with `${tag}` unset — and `set -u` would
+have aborted it: four models, no error, nobody watching. Caught by arithmetic on the two file
+sizes rather than by anything failing, and fixed at 11:11 by restoring the launch bytes
+without killing a process. The chain resumed correctly into wave 2 at 11:39:18.
+
+*Statement of record: never edit a shell script while a copy of it is running.* The file on
+disk is not the program that is running. Every subsequent change went into a new file
+(`post_gates.sh`, `queue_arms_chain_c.sh`, `queue_arms_chain_bc.sh`).
+
+**10. The one that got through.** Arm B failed on every seed within a minute of launch:
+`collect_pristine_centre` — the pristine pass that *measures* δ_L — ran the image term's
+bound switch, which raises when δ_L is unset. It raised from inside itself.
+
+It got through because **every test in `test_image_compensation.py` set δ_L by hand** through
+a `_with_spacing` helper before touching the model. The helper existed precisely because the
+switch needs δ_L, and in supplying it the tests removed the ordering the trainer actually
+uses. A fixture that makes the code under test convenient to call can delete the failure mode
+it was written to expose. Arm A never touched the path because the term is off there, and the
+local smoke was run with `IMAGE=False`.
+
+The fix is one clause; the two regression tests were each checked to fail without it, and the
+second asserts the guard does not *latch* — because a latched guard would let arm B train,
+report no error, and silently be arm A, which is worse than the crash.
 
 ### 8.2 The regression check, and the transcription it caught
 

@@ -993,3 +993,10 @@ This is a second, independent argument for the same-size neutral reference in
 physics is actually there, and the term could be scored on it rather than credited for it.
 Gate 10's tiling drift stays the term's real adoption test for this cycle, exactly as §2.5
 intended, and now for a sharper reason than when that was written.
+
+### The test suite after the guard
+
+`tests/unit` + `tests/extensions/defect`: **953 passed, 1 skipped, 16 errors**. All sixteen
+errors are `fixture 'benchmark' not found` in `tests/unit/test_compile.py` — `pytest-benchmark`
+is not installed in this environment. Pre-existing, unrelated to any change in this cycle, and
+confined to that one file. Recorded rather than rounded away.
