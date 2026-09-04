@@ -618,9 +618,26 @@ four wave-1 seeds logged:
 | | | | **+0.7657 ± 0.0004** |
 
 against Stage B's *trained* +0.772 ± 0.029. **Δc is present at initialisation**, to four
-decimal places, and 24 epochs of training move it by less than the seed spread. The
-seed-to-seed scatter at epoch 0 is 0.4 meV; training adds 29 meV of noise to a 766 meV
-offset that was already there.
+decimal places, and it is the floor both arms start from: the seed-to-seed scatter at epoch
+0 is 0.4 meV against 766 meV of offset.
+
+What training then does depends on the arm, and arm A's four wave-1 seeds say so plainly:
+
+| | Δc at epoch 0 | Δc after 24 epochs |
+|---|---|---|
+| Stage B (both columns trained) | +0.766 | **+0.772 ± 0.029** |
+| arm A (79 column frozen by the null gate) | +0.766 | **+1.096 ± 0.222** |
+
+Stage B barely moves it. Arm A moves it up by a third of an eV and multiplies the seed
+spread by eight, which follows from rule 2 rather than contradicting it: with the 79 column
+receiving no gradient, the 159 column is the *only* energy-referenced constant in the model,
+so everything the energy loss cannot express elsewhere lands there. In Stage B the two
+columns moved together and the difference stayed put.
+
+*(An earlier revision of this paragraph said "24 epochs of training move it by less than the
+seed spread", which was written from Stage B's trained value before arm A's existed. It is
+true of Stage B and false of arm A. The decomposition below is unaffected — it explains the
++0.766 both arms begin with, not what either does to it afterwards.)*
 
 The Gauge log confirms the mechanism directly: `c_table (0,0)` reads **+9.4655 at every one
 of arm A's 24 epochs**, because the null gate removed all 928 small-cell charged energies
@@ -702,3 +719,59 @@ charged frames. The carrier-dependent remainder's interval is ±0.08 eV, so the 
 with +0.049 is "consistent with" and not "confirms". The carrier-*independent* claim is the
 robust one: +0.746 [+0.720, +0.779] eV excludes zero by twenty-eight sigma-equivalents of
 its own interval.
+
+---
+
+## Arm A, wave 1 — an early read on four of six seeds
+
+Scored at 11:46 on GPUs 6 and 7 while wave 2 trains on 4 and 5 (four GPUs in use, the rule
+holds). Four seeds, not six; the six-seed numbers replace these and any of them may move.
+
+### Gate 7 fires. Arm C runs.
+
+| type | Stage B (6 seeds) | arm A wave 1 (4 seeds) |
+|---|---|---|
+| ss-σ | 3/6 | **3/4** |
+| sp-σ | 1/6 | **2/4** |
+| pp-σ | 2/6 | **2/4** |
+| pp-π | 5/6 | **3/4** |
+
+L_b: ss-σ 1.144 ± 0.107, sp-σ 1.275 ± 0.029, pp-σ 1.360 ± 0.093, pp-π 1.316 ± 0.104 Å.
+
+Under the trigger pre-registered before these numbers existed — any type at its stop
+(|tanh g| > 0.98) in more than 1/6 seeds — **gate 7 fires on all four integral types**, more
+broadly than Stage B did. **Arm C is confirmed**, at β = ln 2, after the A/B chain completes.
+
+**F22 fails on this evidence.** Its condition was pp-σ ≤ 1/6 and pp-π ≤ 2/6. Wave 1 gives
+2/4 and 3/4: pp-σ's rate rose (0.33 → 0.50) and pp-π's barely moved (0.83 → 0.75). The
+corrected on-site form and the per-site charges did not relieve the hub coupling; if
+anything the head presses harder against the stop. This is the third cycle in which the
+head's answer to more freedom is more hub coupling, and it is why arm C exists.
+
+### Gate 9 passes, and the size dependence has converged
+
+| | 79 atoms | 159 atoms |
+|---|---|---|
+| arm A wave 1 | **−0.1156 ± 0.0298** | **−0.1085 ± 0.0193** |
+| Stage B | −0.1804 ± 0.0244 | −0.1296 ± 0.0224 |
+| s7 forces-only | −0.1675 ± 0.0231 | −0.0629 ± 0.0087 |
+
+Per seed at 79 atoms: −0.0792, −0.1553, −0.0961, −0.1218. Negative on every seed and nowhere
+near the base's +0.37 artefact, so gate 9's substantive clause holds; seed 1 at −0.079 sits
+just outside a literal reading of "within 2× of −0.17" on the *shallow* side, which is the
+harmless direction.
+
+The result worth naming is the second column. **The head's small- and large-cell slopes now
+agree to 0.007 eV/Å**, against a 0.051 eV/Å gap in Stage B and 0.105 in the forces-only
+cohort. Size-extensivity of the head's own size dependence is what this programme is for, and
+this is the closest it has come.
+
+### Gate 3, with the §8.5 result in hand
+
+Δc = **+1.096 ± 0.222** (Stage B +0.772 ± 0.029), predicted +0.047 ± 0.007. Read through
+§8.5 this is two things: a **+0.766 eV floor** that is in the labels and the base before
+training, plus **+0.33 ± 0.22 eV** that arm A's own objective added by freezing the 79 column
+and leaving the 159 one to absorb whatever else the energy loss could not place. Neither part
+is electrostatic. The remedy for the first is the same-size neutral reference; the second is
+an argument for referencing c to the neutral frames *per size class* rather than leaving one
+column untrained, and it belongs to the next cycle with the rest of the label-side work.
