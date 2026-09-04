@@ -1715,6 +1715,30 @@ def run(args) -> None:
                      len(chosen), n_atoms_centre,
                      [round(float(v), 3) for v in model.pristine_block0_mean.norm(dim=1)])
 
+    # ------------------------------------------------ Plan v8 section 2.1: the class table
+    #
+    # The composition-class integers are established ONCE, before training, on the head as
+    # initialised (after Harrison), over every composition the loaders hold. They are cached
+    # on the model and travel with the checkpoint; Stage 4 recomputes them after training
+    # (`verify_class_table`) and any that moved is a failed invariance, not a re-fit.
+    if (model.__class__.__name__ == "MACEDefect"
+            and getattr(model, "spectral", None) is not None
+            and hasattr(model.spectral, "valence")):
+        from mace.modules import defect_composition
+        from mace.modules.defect_cache import attach_frame_keys as _attach_keys
+
+        class_frames = list(train_set)
+        for _vset in valid_sets.values():
+            class_frames.extend(list(_vset))
+        _attach_keys(class_frames, z_table=z_table)
+        model.composition_classes = defect_composition.build_class_table(
+            model, class_frames, device=device, delta=getattr(model, "edge_delta", None))
+        n_counted = sum(1 for r in model.composition_classes["classes"].values()
+                        if r["tier"] is not None)
+        logging.info("Composition classes: %d classes, %d counted at Tier 1, %d uncounted",
+                     len(model.composition_classes["classes"]), n_counted,
+                     len(model.composition_classes["classes"]) - n_counted)
+
     # ------------------------------------------------ Stage A' section 2.5: precision, cache
     #
     # The mixed policy keeps the DATA in float64 (labels at float32 lose ~5e-5 eV on a

@@ -6,6 +6,7 @@
 
 import argparse
 import ast
+import copy
 import dataclasses
 import json
 import logging
@@ -494,6 +495,11 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         config["reference_state"] = None if ref is None else dict(ref)
         # Section 2.6: the gauge flag.
         config["gauge"] = str(getattr(model, "gauge", "periodic"))
+        # Section 2.1: the cached class integers and the edge-count margin.
+        classes = getattr(model, "composition_classes", None)
+        config["composition_classes"] = None if classes is None else copy.deepcopy(classes)
+        delta = getattr(model, "edge_delta", None)
+        config["edge_delta"] = None if delta is None else float(delta)
         if getattr(model, "madelung", None) is not None:
             config["madelung_composition"] = [
                 float(x) for x in model.madelung.composition]

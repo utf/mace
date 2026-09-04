@@ -1079,6 +1079,7 @@ class CountingHead(nn.Module):
         eps_mean = (torch.zeros(num_graphs, self.num_channels, device=device, dtype=dtype)
                     .index_add_(0, batch, site) / counts_per_graph.unsqueeze(-1))
 
+        hamiltonians = internals.pop("_hamiltonians", []) if internals is not None else []
         if internals is not None:
             internals["lam"] = lam_pad
             internals["eps"] = site
@@ -1087,7 +1088,9 @@ class CountingHead(nn.Module):
             # NOT under the key "H": the spectral heads' H is [G, C, n_sites, n_sites] and
             # this one is [4N, 4N] per graph. A consumer that indexes by site would read
             # orbitals instead and get a plausible wrong answer, so it fails loudly instead.
-            internals["H_orbital"] = spectra
+            # The list is filled by the solver that ran (both record the H they diagonalised;
+            # the composition-class constructor reads it at S_ref).
+            internals["H_orbital"] = hamiltonians
 
         return SpectralOutput(
             delta_sr=delta, alpha=alpha, site_energy=site,
@@ -1137,6 +1140,8 @@ class CountingHead(nn.Module):
         charged = bool(off_reference.any())
         resp_bucket = {} if (force_out is not None and charged) else None
         fill_internals = {} if internals is not None else None
+        if internals is not None:
+            internals["_hamiltonians"] = list(H.detach().unbind(0))
         e_head, lam, D, (n_maj_ref, _) = self.policy.solve_batched(
             H, n_total, counts, self.t_el, response_out=resp_bucket,
             internals=fill_internals)
@@ -1198,6 +1203,8 @@ class CountingHead(nn.Module):
               c = counts[g].tolist() if counts.dim() > 1 else counts.tolist()
               resp_bucket = {} if force_out is not None else None
               fill_internals = {} if internals is not None else None
+              if internals is not None:
+                  internals.setdefault("_hamiltonians", []).append(H.detach())
               e_head, lam, psi, p_now, p_ref = self.policy.solve(
                   H, n_total, c, self.t_el, response_out=resp_bucket,
                   internals=fill_internals)
