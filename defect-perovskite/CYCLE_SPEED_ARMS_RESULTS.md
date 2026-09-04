@@ -893,3 +893,37 @@ next lever, and it is not among §9's exclusions.
 *Caveat, stated: these are knockouts at fixed weights. They measure how much of the level's
 present position each term contributes, not where the level would have settled had the model
 been trained without that term. The second question needs an arm, not a probe.*
+
+### A pre-registered prediction for gate 10, written before arm B runs
+
+§2.5's validity switch is `s = sigmoid((depth/δ_L − 2)/0.5)` with `depth = probe.gap`, the
+frontier level's separation from the continuum in the head's own spectrum, and δ_L the
+pristine level spacing. Arm A's measured δ_L is **0.0166 ± 0.0004 eV**. That fixes where the
+switch actually switches:
+
+| depth (eV) | depth/δ_L | s |
+|---|---|---|
+| 0.020 | 1.20 | 0.169 |
+| **0.033** | 2.00 | **0.500** |
+| 0.051 | 3.10 | 0.900 |
+| 0.091 | 5.45 | 0.999 |
+| 0.27 | 16.3 | 1.000000 |
+| 0.41 | 24.7 | 1.000000 |
+| 0.80 | 48.2 | 1.000000 |
+
+The switch is half-open at a depth of **33 meV** and fully closed above **91 meV**. Arm A's
+frontier gaps run 0.27–0.80 eV and even Stage B's ran ~0.1, so on every model this programme
+has produced, **s = 1.000 to six decimal places**. The `c3_tiling_drift` smoke already
+measured exactly that: min, median and max all 1.000 over six tiled frames.
+
+**Prediction, recorded before arm B exists: gate 10's `s` distribution will be a constant
+1.000, and §2.5's switch will have changed nothing.** The image term in arm B is
+unconditionally on. If that is what lands, the switch is not wrong — it is *inert on this
+host*, because δ_L is 17 meV and the levels this head produces are ten to fifty times
+deeper than the threshold. It would only engage on a genuinely continuum-resonant state,
+which is not what V_Cl⁺ gives here.
+
+The useful consequence is negative and worth stating: **gate 10 is a test of the image term,
+not of the switch**, and any difference between arms A and B is attributable to the
+compensation itself. If instead some frames come back with s < 1, that is news and the
+distribution says which frames.
