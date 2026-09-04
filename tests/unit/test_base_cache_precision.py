@@ -195,6 +195,48 @@ def test_the_drift_guard_trips_when_the_base_moves(frames, tmp_path):
             defect_cache.check_drift(model, frames, "cpu", rng)
 
 
+def test_cache_entries_are_keyed_by_the_electronic_state_too(frames, tmp_path):
+    """Plan v8 section 3: a geometry-only electronic cache is forbidden. The same frame
+    requested under a state it was not cached with is a miss that raises, and the miss
+    surfaces from the model's own forward, not only from the cache object."""
+    from mace.modules.defect_state import StateBatch
+
+    model = _model(precision_policy="mixed")
+    _freeze_base(model)
+    defect_cache.attach_frame_keys(frames, z_table=Z_TABLE)
+    loader = tools.torch_geometric.dataloader.DataLoader(frames, batch_size=2)
+    cache = defect_cache.build_base_cache(model, [loader], device="cpu")
+    batch = _batch(frames)
+    digests = defect_cache.state_digests(model, batch.carrier_counts)
+    assert len(set(digests)) == 2, "the fixture mixes a charged and a neutral state"
+    cache.lookup(batch.frame_key, digests)                       # the states it was built on
+    other = StateBatch.from_counts(torch.tensor([[0.0, 1.0, 0.0, 0.0]])).key_digests()
+    with pytest.raises(KeyError, match="electronic state"):
+        cache.lookup(batch.frame_key[:1], other)
+    model.set_base_cache(cache)
+    d = batch.to_dict()
+    d["carrier_counts"] = torch.tensor([[0.0, 1.0, 0.0, 0.0]] * len(frames),
+                                       dtype=d["carrier_counts"].dtype)
+    with pytest.raises(KeyError, match="electronic state"):
+        model(d, training=False, compute_force=False)
+    # The keys survive a round trip through disk.
+    cache.save(tmp_path / "c.pt")
+    again = defect_cache.BaseOutputCache.load(tmp_path / "c.pt", cache.checksum)
+    assert set(again.entries) == set(cache.entries)
+
+
+def test_the_checksum_carries_the_policy_version(frames, monkeypatch):
+    """The occupation policy's implementation version is part of the key: bumping it
+    invalidates every cache built before, by construction rather than by memory."""
+    from mace.modules import defect_state
+
+    model = _model(precision_policy="mixed")
+    _freeze_base(model)
+    before = defect_cache.base_checksum(model)
+    monkeypatch.setattr(defect_state.CountFillPolicy, "version", 99)
+    assert defect_cache.base_checksum(model) != before
+
+
 def test_frame_keys_are_content_hashes():
     numbers = np.array([17, 55, 82])
     positions = np.array([[0.0, 0.0, 0.0], [1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])

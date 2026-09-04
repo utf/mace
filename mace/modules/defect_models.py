@@ -1045,9 +1045,24 @@ class MACEDefect(ScaleShiftMACE):
         base_cache = getattr(self, "_base_cache", None)
         cache_hit = base_cache is not None and "frame_key" in data
         cached_energy = cached_forces = cached_feats_rest = None
+        # PLAN v8 SECTION 2.1: the electronic state of every graph, built once here from
+        # the counter and used by the cache key, the reference question and the head. A
+        # stated fill (`occupations`) is an alternate policy and is refused: `count_fill`
+        # is the sole policy reachable from any Stage 0-6 configuration.
+        if data.get("occupations") is not None:
+            raise ValueError(
+                "data['occupations'] is an occupation override, which is an alternate "
+                "occupation policy; none is reachable in Stages 0-6 (plan v8 section 2.4)")
+        from mace.modules.defect_state import ElectronicStateSpec, StateBatch
+
+        policy_key = getattr(self, "occupation_policy", "count_fill")
+        state = StateBatch.from_counts(data["carrier_counts"].view(num_graphs, -1),
+                                       policy_key)
         if cache_hit:
+            # Keyed by the state as well as the geometry (section 3): a frame requested
+            # under a state it was not cached with is a miss that raises.
             cached_energy, cached_forces, cached_feats_rest, _ = base_cache.lookup(
-                data["frame_key"])
+                data["frame_key"], state.key_digests())
             cached_energy = cached_energy.to(head_dtype)
             cached_forces = cached_forces.to(head_dtype)
 
@@ -1222,19 +1237,9 @@ class MACEDefect(ScaleShiftMACE):
             counts_ref = data["carrier_counts_ref"].view(num_graphs, -1).to(head_dtype)
         else:
             counts_ref = torch.zeros_like(counts)
-        # PLAN v8 SECTION 2.1: the electronic state is a boundary condition of its own.
-        # Both counters become state batches under the model's policy, and the reference
-        # question below is asked of the state's PHYSICAL KEY against S_ref -- not of the
-        # counter being zero. A stated fill (`occupations`) is an alternate policy and is
-        # refused: `count_fill` is the sole policy reachable from any Stage 0-6 config.
-        if data.get("occupations") is not None:
-            raise ValueError(
-                "data['occupations'] is an occupation override, which is an alternate "
-                "occupation policy; none is reachable in Stages 0-6 (plan v8 section 2.4)")
-        from mace.modules.defect_state import ElectronicStateSpec, StateBatch
-
-        policy_key = getattr(self, "occupation_policy", "count_fill")
-        state = StateBatch.from_counts(counts, policy_key)
+        # The reference counter's state batch (section 2.1); `state` was built above. The
+        # reference question below is asked of the PHYSICAL KEY against S_ref -- not of
+        # the counter being zero.
         state_ref = StateBatch.from_counts(counts_ref, policy_key)
         s_ref = ElectronicStateSpec.from_dict(self.reference_state)
 

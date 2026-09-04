@@ -47,10 +47,24 @@ from typing import Dict, Iterable, Optional, Sequence, Tuple
 import numpy as np
 import torch
 
-__all__ = ["frame_key", "attach_frame_keys", "base_checksum", "BaseOutputCache",
-           "require_cacheable", "build_base_cache", "check_drift", "profile_step"]
+__all__ = ["frame_key", "attach_frame_keys", "state_digests", "base_checksum",
+           "BaseOutputCache", "require_cacheable", "build_base_cache", "check_drift",
+           "profile_step"]
 
-CACHE_FORMAT = 1
+# Format 2 (plan v8 section 3): entries are keyed by (frame_key, state digest) and the
+# checksum carries the state schema and the occupation policy's implementation version.
+# A geometry-only electronic cache is forbidden by the plan; a format-1 cache on disk is
+# discarded by the format check rather than read under the new key.
+CACHE_FORMAT = 2
+
+
+def state_digests(model, counts) -> Tuple[str, ...]:
+    """The canonical physical-state digest of every graph in `counts`, under the model's
+    policy. Part of every cache key from format 2 on."""
+    from mace.modules.defect_state import StateBatch
+
+    policy = getattr(model, "occupation_policy", "count_fill")
+    return StateBatch.from_counts(counts.reshape(counts.shape[0], -1), policy).key_digests()
 
 
 # ----------------------------------------------------------------------------- frame keys
@@ -119,6 +133,14 @@ def base_checksum(model) -> bytes:
             for name, p in sorted(ro.named_parameters()):
                 h.update(f"{i}.{name}".encode())
                 h.update(p.detach().cpu().to(torch.float64).contiguous().numpy().tobytes())
+    # Plan v8 section 3: the state schema and the occupation policy's IMPLEMENTATION
+    # version are part of the key, so a cache built under one fill is never read under
+    # another even though the base outputs themselves are state-blind.
+    from mace.modules.defect_state import STATE_SCHEMA_VERSION, policy_version
+
+    policy = getattr(model, "occupation_policy", "count_fill")
+    h.update(f"state_schema={STATE_SCHEMA_VERSION};policy={policy};"
+             f"policy_version={policy_version(policy)}".encode())
     h.update(str(CACHE_FORMAT).encode())
     return h.digest()
 
@@ -130,17 +152,28 @@ def checksum_to_buffer(digest: bytes) -> torch.Tensor:
 # ---------------------------------------------------------------------------------- cache
 
 class BaseOutputCache:
-    """Per-frame base outputs, looked up by `frame_key`, resident on one device."""
+    """Per-frame base outputs, looked up by `(frame_key, state digest)`, on one device.
+
+    The state digest is the canonical physical key of plan v8 section 2.1. The base
+    outputs do not depend on it -- the base is charge-blind by construction -- but the
+    plan forbids a geometry-only electronic cache, and a frame requested under a state it
+    was not cached with is a miss, not a hit.
+    """
 
     def __init__(self, checksum: bytes, device="cpu"):
         self.checksum = bytes(checksum)
         self.device = torch.device(device)
-        self.entries: Dict[int, Dict[str, torch.Tensor]] = {}
+        self.entries: Dict[Tuple[int, str], Dict[str, torch.Tensor]] = {}
+
+    @staticmethod
+    def entry_key(key, state_digest: str) -> Tuple[int, str]:
+        return (int(key), str(state_digest))
 
     # -- storage -----------------------------------------------------------------------
     def put(self, key: int, energy: torch.Tensor, forces: torch.Tensor,
-            feats_rest: Optional[torch.Tensor], q_host: Optional[torch.Tensor]) -> None:
-        self.entries[int(key)] = dict(
+            feats_rest: Optional[torch.Tensor], q_host: Optional[torch.Tensor],
+            state_digest: str) -> None:
+        self.entries[self.entry_key(key, state_digest)] = dict(
             energy=energy.detach().to(self.device, torch.float64).reshape(()),
             forces=forces.detach().to(self.device, torch.float64),
             feats_rest=(None if feats_rest is None
@@ -153,7 +186,7 @@ class BaseOutputCache:
         return len(self.entries)
 
     def __contains__(self, key) -> bool:
-        return int(key) in self.entries
+        return self.entry_key(*key) in self.entries
 
     def to(self, device) -> "BaseOutputCache":
         self.device = torch.device(device)
@@ -164,21 +197,26 @@ class BaseOutputCache:
         return self
 
     # -- lookup ------------------------------------------------------------------------
-    def lookup(self, keys: torch.Tensor):
+    def lookup(self, keys: torch.Tensor, digests: Sequence[str]):
         """`(energy [n_graphs], forces [n_atoms, 3], feats_rest [n_atoms, d] | None,
         q_host [n_atoms] | None)` for the graphs in `keys`, in batch order.
 
         A missing key raises. A cache that silently fell back to a full forward for some
         frames would make the run's cost depend on the shuffle and hide a keying bug.
         """
+        keys = keys.tolist()
+        if len(digests) != len(keys):
+            raise ValueError(f"{len(keys)} frame keys but {len(digests)} state digests")
         energies, forces, feats, qh = [], [], [], []
-        for k in keys.tolist():
-            e = self.entries.get(int(k))
+        for k, d in zip(keys, digests):
+            e = self.entries.get(self.entry_key(k, d))
             if e is None:
                 raise KeyError(
-                    f"frame_key {k} is not in the base cache ({len(self.entries)} entries); "
-                    "the cache was built on a different dataset, or the keys were not "
-                    "attached to this loader's frames")
+                    f"(frame_key {k}, state {d}) is not in the base cache "
+                    f"({len(self.entries)} entries); the cache was built on a different "
+                    "dataset, the keys were not attached to this loader's frames, or the "
+                    "frame is being requested under an electronic state it was not cached "
+                    "with")
             energies.append(e["energy"])
             forces.append(e["forces"])
             feats.append(e["feats_rest"])
@@ -210,8 +248,8 @@ class BaseOutputCache:
             return None
         cache = cls(checksum, device=device)
         for k, v in payload["entries"].items():
-            cache.entries[int(k)] = {kk: (None if vv is None else vv.to(cache.device))
-                                     for kk, vv in v.items()}
+            cache.entries[cls.entry_key(*k)] = {
+                kk: (None if vv is None else vv.to(cache.device)) for kk, vv in v.items()}
         return cache
 
 
@@ -309,11 +347,12 @@ def build_base_cache(model, loaders: Iterable, device, path=None) -> BaseOutputC
             feats = out["defect_features"].detach()
             feats_rest = feats[:, cfd:] if feats.shape[1] > cfd else None
             ptr = batch.ptr.tolist()
+            digests = state_digests(model, batch.carrier_counts)
             for g, key in enumerate(batch.frame_key.tolist()):
                 lo, hi = ptr[g], ptr[g + 1]
                 cache.put(key, out["base_energy"][g], out["base_forces"][lo:hi],
                           None if feats_rest is None else feats_rest[lo:hi],
-                          None if q_host is None else q_host[lo:hi])
+                          None if q_host is None else q_host[lo:hi], digests[g])
             n_batches += 1
     with torch.no_grad():
         model.base_cache_checksum.copy_(checksum_to_buffer(digest))
@@ -344,7 +383,8 @@ def check_drift(model, dataset: Sequence, device, rng: np.random.Generator,
     d = dataset[idx]
     batch = next(iter(torch_geometric.dataloader.DataLoader([d], batch_size=1)))
     out = _forward_full(model, batch, device, compute_force=True)
-    energy, forces, _, _ = cache.lookup(batch.frame_key)
+    energy, forces, _, _ = cache.lookup(batch.frame_key,
+                                        state_digests(model, batch.carrier_counts))
     d_e = float((out["base_energy"].detach().to(torch.float64) - energy).abs().max())
     d_f = float((out["base_forces"].detach().to(torch.float64) - forces).abs().max())
     result = dict(frame=idx, key=int(batch.frame_key[0]), d_energy=d_e, d_forces=d_f,
