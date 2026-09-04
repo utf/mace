@@ -1385,3 +1385,44 @@ drift-against-λ curve can be had cheaply — but it was stopped before producin
 the amplitude question is deferred as a decision, not answered here. What this cycle records
 is the measurement that makes the question askable: the term contributes −0.2439 eV/Å, the
 head alone is at −0.0761, and if the response is linear the band's edge sits near λ ≈ 0.27.
+
+---
+
+## Arm B, six seeds — the four-seed reading holds
+
+Gate stage 17:18 → 17:39, then F10, gate 9 and `post_gates armb` to 18:06.
+Full table in `~/runs/armb_gates.md` and in the report's §5.
+
+| gate | arm A (6) | **arm B (6)** |
+|---|---|---|
+| 2 F4 | −0.0874 ± 0.0142, 5/6 **PASS** | **−0.3112 ± 0.0151, 0/6 FAIL** |
+| 3 Δc | +1.042 ± 0.197 | +0.876 ± 0.314 |
+| 4 F10 | 1/6 FAIL | 0/6 FAIL |
+| 5 gap | 6/6 PASS | 6/6 PASS |
+| 6 R | 0.925 ± 0.144 PASS | 0.958 ± 0.090 PASS |
+| 7 stops | 5/6, 3/6, 2/6, 4/6 FAIL | **6/6 on all four FAIL** |
+| 8 `N_eff` | 18.79 ± **3.62** | 19.21 ± **0.83** |
+| 9 79-atom slope | −0.1212 ± 0.0268 **PASS** | **−0.3422 ± 0.0249 FAIL** |
+| 10 tiling | not applicable | **24/24 PASS**, 0.133–0.173 of D0 |
+| depth from CBM | 0.334, shallow 5/6 | **0.234 ± 0.049, shallow 6/6** |
+| §2.2 max \|δZ\| | 0.585 ± 0.068 e | 0.663 ± 0.075 e, none at the stop |
+
+Everything the four seeds showed survives, and two things sharpen.
+
+**Gate 9 fails too**, which the four-seed set had not shown: the 79-atom matched slope is
+−0.3422 ± 0.0249 against arm A's −0.1212 ± 0.0268. Gates 2 and 9 fail for the same measured
+reason, and the knockout has already attributed −0.2439 eV/Å of it to the term.
+
+**The term stabilises what §2.1 destabilised.** `N_eff` spread 3.62 → 0.83 at the same mean,
+and the level 0.334 → 0.234 eV with all six seeds shallow rather than five. The revived
+on-site channel made localisation seed-dependent and the level deep; the image term undoes
+much of both. It does not rescue the verdict — gate 2 and gate 9 are gates — but it is the
+strongest reason in the cycle to think the prefactor experiment is worth running.
+
+**F23 final: fails, 2 of 4 clauses.** Δc fell 0.166 eV against a required 0.20–0.40 (fails);
+R 0.958, 6/6 inside (passes); thermal drift 0.133–0.173 of D0, 18/18 (passes); F4 0/6
+(fails). All four were required. The Δc clause was never evidence about the term (§7.1b);
+the F4 clause was, and it is the one that decided it.
+
+`s` = 1.000 at every quantile over all 72 tiled frames — the pre-registered prediction, held
+exactly, across three times the frames it was written against.

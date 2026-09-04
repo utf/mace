@@ -271,7 +271,48 @@ halve; pp-σ's rate was unchanged and ss-σ's nearly doubled.
 
 ### 4.4 Arm B
 
-*(pending — relaunched 13:13 after the ordering defect in §8.1b; wave 1 due ~14:10)*
+Arm A plus §2.5's image compensation, and nothing else. Two waves, relaunched at 13:13 after
+the ordering defect in §8.1b; wave 1 13:13 → 15:09, wave 2 → 17:07, gates → 18:06.
+**3.89 min per epoch against arm A's 2.21 — the term costs +76%**, from a second head solve
+and an Ewald image potential with a live position derivative, neither touched by §1.1's
+batching.
+
+Validation per seed (meV/atom, meV/Å): 5.8/16.6, 5.7/16.6, **8.8**/17.1, 5.7/16.6, 5.6/16.8,
+5.6/16.7. Seed 3 is the outlier, as seed 2 was in arm A.
+
+**What the term does, in one table.** Against arm A, six seeds each:
+
+| | arm A | arm B | |
+|---|---|---|---|
+| gate 10, tiling drift | — (term off) | **0.135–0.173 of D0, 24/24** | the term's purpose, achieved |
+| **gate 2, F4** | −0.0874 ± 0.0142, **5/6** | **−0.3112 ± 0.0151, 0/6** | **the term's cost** |
+| gate 9, 79-atom slope | −0.1212 ± 0.0268, **PASS** | **−0.3422 ± 0.0249, FAIL** | same cause |
+| gate 7, stops | 5/6, 3/6, 2/6, 4/6 | **6/6 on all four** | worse |
+| gate 4, F10 | 1/6 | 0/6 | worse |
+| gate 5, gap | 6/6 | 6/6 | unchanged |
+| gate 6, R | 0.925 ± 0.144, 6/6 | 0.958 ± 0.090, 6/6 | unchanged, tighter |
+| depth from the CBM | 0.334, shallow 5/6 | **0.234 ± 0.049, shallow 6/6** | **better** |
+| `N_eff` | 18.79 ± **3.62** | 19.21 ± **0.83** | same mean, **4.4× tighter** |
+| §2.2 max \|δZ\| | 0.585 ± 0.068 e | 0.663 ± 0.075 e | unchanged |
+
+Three of those deserve naming.
+
+**It removes the drift it was built to remove.** 24 of 24 model–tile pairs inside the gate,
+at 0.135 of D0 on the ideal tile and 0.133–0.173 on the three thermal ones — the thermal
+clause this cycle added, passed as comfortably as the ideal one.
+
+**It triples both size slopes.** F4 goes −0.087 → −0.311 and the 79-atom matched slope
+−0.121 → −0.342, so gate 9 fails too. The knockout in §7.4b attributes −0.2439 eV/Å of that
+to the term itself: patch `image_potential` to zero on the same trained models and F4 returns
+to −0.0761 ± 0.0029, inside the band on every seed. **The head is not damaged; the term's own
+contribution at evaluation is too steep in `d`.**
+
+**It stabilises what arm A destabilised.** `N_eff` spread falls from 3.62 to 0.83 at the same
+mean, and the level comes back from 0.334 to 0.234 eV below the CBM with all six seeds
+classified shallow. §2.1's revived on-site channel made the carrier's localisation
+seed-dependent and the level deep; the image term undoes a good part of both. That is not
+enough to adopt it — gate 2 is a gate — but it is the strongest argument in the cycle for
+the prefactor experiment that §7.4b leaves open.
 
 ### 4.5 Arm C — triggered, and deliberately not run
 
@@ -336,7 +377,32 @@ for the same reason — so they are not evidence about the arm. Of the criteria 
 from each run's init-gate line: 0.233/0.009 eV edges and 33.73 eV on every seed, under the
 covalent anchors that replaced `d_ref`.
 
-**Arm B and arm C tables follow.**
+### Gates — armb
+
+| gate | condition | measured | verdict |
+|---|---|---|---|
+| 1 regression | no criterion that held in Stage B now fails | c1_leakage 6/6; c1_not_shrunk 6/6; c2_neutral_toward_zero 0/6; c3_not_degraded 0/6; c4_f4_in_band 0/6; c6_shallow 6/6; c5_gap 6/6 | (read) |
+| 2 F4 | slope in [-0.142, -0.063] in ≥ 4/6 | -0.3112 ± 0.0151; 0/6 in band (-0.3330, -0.3203, -0.3058, -0.3210, -0.2993, -0.2880) | **FAIL** |
+| 3 c consistency | report only | c(79) +10.3348 ± 0.3142, c(159) +11.2109 ± 0.6282, **Δc +0.8761 ± 0.3140**, predicted +0.0446 ± 0.0025 | (report) |
+| 4 F10 | ligand-Cl − bulk-Cl > 50 meV and > 2σ, ≥ 4/6 | 0/6 seeds; difference +0.3541 ± 0.3518 eV | **FAIL** |
+| 5 gap | pristine gap 2.4 ± 0.1 eV | +2.3915 ± 0.0125; 6/6 in window | **PASS** (pinned continuum and bandwidth: see the init-gate line) |
+| 6 dilution | R inside [0.66, 1.34] | R +0.9579 ± 0.0899, 6/6 inside; bound fraction +0.6146 ± 0.0233; depth +0.0605 ± 0.0084 eV; δ_L +0.0179 ± 0.0019 eV | **PASS** |
+| 7 stops / L_b | no type at its stop in more than 1/6 of seeds (1 of these 6) | ss_sigma 6/6; sp_sigma 6/6; pp_sigma 6/6; pp_pi 6/6; L_b ss_sigma 1.102±0.093, sp_sigma 1.232±0.022, pp_sigma 1.472±0.044, pp_pi 1.280±0.081 | **FAIL — arm C fires** (ss_sigma, sp_sigma, pp_sigma, pp_pi) |
+| 8 participation | report; spread against the comparison cohorts | this arm +0.7818 ± 0.0975; head-only +0.4915 ± 0.0275; E_LR-off +0.4777 ± 0.0711 | (read) |
+| 9 head slope | 79-atom d(δ_sr)/dd < 0, within 2× of -0.17, never near +0.37 | -0.3422 ± 0.0249; 3/6 seeds individually in [-0.340, -0.085] (-0.3191, -0.3221, -0.3926, -0.3454, -0.3461, -0.3278) | **FAIL** (on the cohort mean) |
+| 10 tiling (arm B) | ideal and thermal drift ≤ 0.3·D0 | ideal 6/6 (ratio 0.135); thermal0 6/6 (ratio 0.133); thermal1 6/6 (ratio 0.173); thermal2 6/6 (ratio 0.165); s median 1.000, min 1.000, > 0.5 on 100% | **PASS** (24/24 model-tile pairs) |
+
+**§2.2 per-site charge deviation** (report): max +0.6626 ± 0.0753 e, rms +0.0572 ± 0.0054 e, sites at the ζ stop +0.0000 ± 0.0000, worst |per-graph sum| 2.0e-15 e.
+
+**Arm B fails four gates and passes three.** Gates 2 and 9 fail for one measured reason —
+the image term contributes −0.2439 eV/Å to the size slopes (§7.4b) — and gate 7 continues
+the trend of the whole cycle. **Gate 10 passes 24/24**, which is the term's own adoption
+test and the only gate arm A could not be scored on.
+
+`s` = 1.000 at every quantile across all 72 tiled frames, exactly as pre-registered before
+arm B ran: the switch never engaged, so gate 10 measured the compensation and not the gating.
+
+**No arm C table.** It was triggered by gate 7 and deliberately not run — see §4.5.
 
 ---
 
@@ -350,12 +416,11 @@ itself left a threshold or a baseline unstated, the reading was pre-registered i
 |---|---|---|
 | **F21** | arm A: F10 passes ≥ 4/6 | **fails**: 1/6. Better than Stage B's 0/6 and for a different reason — the channel is alive, and the ligand-Cl − bulk-Cl separation is +0.651 ± 0.266 eV against Stage B's +0.188 ± 0.156 — but its 2σ is larger still, so it does not resolve. |
 | **F22** | arm A: seeds at a pp stop fall by half relative to Stage B | **fails**: pre-registered as pp-σ ≤ 1/6 and pp-π ≤ 2/6 against Stage B's 2/6 and 5/6. Measured 2/6 and 4/6 — pp-σ unchanged, pp-π down by one seed. Gate 7 fires on all four types, and ss-σ nearly doubled (3/6 → 5/6). |
-| **F23** | arm B: Δc falls 0.2–0.4 eV; R inside [0.66, 1.34]; thermal tiling drift ≤ 0.3·D0; F4 holds | **clause 1 fails, clause 3 passes emphatically** (four seeds; the rest on six). Δc(B) +0.994 ± 0.320 against Δc(A) +1.042 ± 0.197 — a fall of **0.048 eV** against a pre-registered band of [+0.64, +0.84]. Thermal tiling drift **0.135 of D0** against a gate of 0.30, 16/16 pairs. The Δc clause is not evidence about the term: see below. |
+| **F23** | arm B: Δc falls 0.2–0.4 eV; R inside [0.66, 1.34]; thermal tiling drift ≤ 0.3·D0; F4 holds | **fails, 2 of 4 clauses.** Δc +0.876 ± 0.314 against arm A's +1.042 ± 0.197 — a fall of **0.166 eV** against a pre-registered [+0.64, +0.84]: **fails**. R 0.958 ± 0.090, 6/6 inside: **passes**. Thermal tiling drift 0.133–0.173 of D0, 18/18 thermal pairs: **passes**. F4 −0.3112 ± 0.0151, 0/6 in band: **fails**. All four were required. The Δc clause is not evidence about the term (§7.1b); the F4 clause is, and it is the one that matters. |
 | **F24** | ≥ 4× per epoch from section 1 | **fails at 3.4× per epoch**; the step it named is 4.41× faster. The gap is the uncached epoch's fixed costs, which section 1 did not touch. |
 | **F25** | the Stage B cohort's 79-atom head slope has moved toward +0.37; arm A restores it | **clause 1 fails**: −0.1804 ± 0.0244 against the forces-only cohort's −0.1675 ± 0.0231 — *further* from +0.37, not nearer. Clause 2 is therefore moot and holds trivially: arm A is −0.1212 ± 0.0268, negative on every seed and nowhere near the artefact. The forecast's premise — that full-weight 79-atom charged energies drag the head toward the base's small-cell artefact — was not observed, so the null gate that removes them is a precaution against an unmeasured harm rather than a repair of a measured one. |
 
-**Three of five scored, all three failed; one is moot because its premise did not hold; F23
-split.** F21 and F22 were the two forecasts that said this cycle's model edits would fix
+**All five scored. Four failed and one is moot because its premise did not hold.** F21 and F22 were the two forecasts that said this cycle's model edits would fix
 something, and neither did. What the edits demonstrably did do — revive a dead channel,
 converge the size slopes, remove 87% of the tiling drift — was forecast by no one, and F23
 asked about the one term that worked using an instrument that could not see it.
@@ -532,11 +597,13 @@ The term's evidence is split, and every part of it is measured:
 
 | | arm B |
 |---|---|
-| **gate 10, tiling drift** | **PASS** — 0.4179 → 0.0560 eV, **86.8% removed**, 16/16 pairs, thermal tiles as good as ideal |
-| **gate 2, F4** | **FAIL — 0/4**, −0.3200 ± 0.0096 against a band of [−0.142, −0.063] |
-| gate 7, hub stops | worse: 4/4 on every integral type |
+| **gate 10, tiling drift** | **PASS** — **24/24 pairs**, 0.135 of D0 on the ideal tile and 0.133–0.173 on the three thermal ones |
+| **gate 2, F4** | **FAIL — 0/6**, −0.3112 ± 0.0151 against a band of [−0.142, −0.063] |
+| gate 7, hub stops | worse: **6/6 on every integral type** |
 | gates 5, 6 | pass |
-| depth from the CBM | 0.235 — better than arm A's 0.334, worse than Stage B's ≈ 0.05 |
+| gate 9, 79-atom slope | **FAIL** — −0.3422 ± 0.0249, same cause as gate 2 |
+| depth from the CBM | **0.234 ± 0.049, shallow 6/6** — better than arm A's 0.334 (5/6) |
+| `N_eff` spread | **0.83 against arm A's 3.62** — the term stabilises localisation |
 | Δc | unchanged (and Δc cannot see the term — §7.1b) |
 | cost | **+76% per epoch** |
 
@@ -554,8 +621,8 @@ the excess with no residual.
 So the head arm B learned is not damaged — on this measure it is the best-behaved head in the
 cycle. What fails is the term's own additive contribution at evaluation.
 
-**Verdict: do not adopt.** Gate 2 is a gate, not a report, and arm B is the only cohort in
-this programme to fail it. A term that removes 87% of the cell-size drift while tripling the
+**Verdict: do not adopt.** Gate 2 is a gate, not a report; arm B is the only cohort in this
+programme to fail it, and it fails gate 9 with it. A term that removes 87% of the cell-size drift while tripling the
 hub-separation slope has moved the error from one axis to another rather than removed it.
 
 **And the failure is a magnitude, which §2.5 does not expose.** `comp = −s · φ_img / ε∞`
