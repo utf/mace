@@ -272,7 +272,94 @@ only its forces.
 
 ## 7. What this leaves
 
-*(pending — including the Δc origin decision)*
+### 7.1 The Δc origin decision (spec §8.5) — settled
+
+`c` is calibrated **once, before training**, as the median over every charged frame of
+`(E_label − E_base − Δ_SR − Δ_LR)/Δn`. At that point, before a single gradient step, arm A's
+six seeds already carry Δc = **+0.766 ± 0.000 eV**.
+
+Neutral frames never enter that calibration, so they are an independent sample, and the
+frozen base's residual steps by −0.745 eV between the 79- and 159-atom cells on neutral
+frames against −0.793 on charged ones. In c units (Δn = −1, one hole):
+
+| | value, 95% |
+|---|---|
+| Δc as calibrated | **+0.7657 ± 0.0004** eV |
+| carrier-**independent** part, measured on frames with no carrier | **+0.7456 [+0.7199, +0.7790]** eV |
+| carrier-**dependent** remainder | **+0.0440 [−0.0419, +0.1149]** eV |
+| the electrostatic prediction | **+0.0491 ± 0.0026** eV |
+
+**97 % of Δc was never about the carrier.** `c` is calibrated on charged frames with no
+same-size neutral reference, so it absorbs the base's size-dependent total-energy offset
+against these labels and reports it as if it were carrier physics. Stage A′'s "Δc = +0.77
+against +0.05 predicted" was not a fifteen-fold failure of the electrostatics; it was one
+number measuring two things, and the prediction was inside the interval all along.
+
+**The remedy, and it is one function.** In `c_shift_table_terms`, subtract the median neutral
+residual at the same cell size before dividing by Δn. It changes no model term. It is *not*
+in this cycle — §9 excludes label-side work and the arms are trained on the current
+definition — and it is the first item for the next, with +0.044 [−0.042, +0.115] eV as the
+number to reproduce.
+
+**Two consequences for the rules as written.** Standing rule 3 (reference formation energies
+to the largest nulled size class, 159) turns out to be correct *for the right reason*: it
+avoids the 79-atom column, which is the one carrying an uncorrected 0.75 eV offset. And gate
+3 could not have been promoted from a report to a gate this cycle, because the quantity it
+reports is dominated by something that is not the quantity it names.
+
+**Caveat.** The large-cell populations are 15 neutral and 16 charged frames; the
+carrier-dependent remainder's interval is ±0.08 eV, so the agreement with +0.049 is
+"consistent with" rather than "confirms". The carrier-independent claim is the robust half.
+
+### 7.2 The on-site channel is alive, and that is now the problem
+
+§2.1 was introduced because Stage A′'s output-centred form `γ[tanh h(x) − tanh h(x̄)]` goes
+flat once `h` saturates, and F10 measured 0/6 with the channel dead. The corrected form
+works exactly as designed: `tanh h` is still saturated on **100 % of Cl atoms**, and the
+corrections are nonetheless ±0.13–0.51 eV, because `γ tanh[h(x) − h(x̄)]` reads the
+difference of the arguments.
+
+Three of this cycle's results are consequences of that revival, and none of them is good yet:
+
+- **The level moved deep.** Knockouts at fixed weights put arm A at 0.41 eV below the CBM,
+  0.12 with the on-site correction disabled and 0.046 with both on-site channels disabled —
+  which is exactly Stage B's 0.05. **Stage B's shallow donor was the absence of a
+  correction, not the presence of good physics.** The revived channel's first act is to push
+  the level 0.29 eV away from the shallow donor V_Cl⁺ is expected to be.
+- **F10 still fails, for the opposite reason.** The ligand-Cl − bulk-Cl separation is
+  +0.49 eV — ten times the 50 meV threshold and 2.6× Stage B's — with a 2σ of 1.43 eV. The
+  channel is loud and inconsistent rather than quiet and dead.
+- **It is seed-unstable**: 0.26 to 0.80 eV of level shift across four seeds, and the
+  alignment IQR roughly doubles when it is switched on.
+
+Nothing in this cycle's spec constrains the channel's magnitude or its shell-to-shell
+spread. A prior or a penalty on that spread is the obvious next lever and it is **not** among
+§9's exclusions.
+
+### 7.3 The hub coupling, for the third cycle running
+
+Gate 7 fires on every integral type. F22 forecast that the corrected on-site form and the
+per-site charges would relieve the pressure by half; instead pp-σ's stop rate rose. Arm C
+widens the log modulation to ln 2 as the spec's escape, but the pattern across Stage 3,
+Stage A′ and now this cycle is consistent: **whatever freedom the head is given, it asks for
+more hub coupling.** Superexchange — a three-centre term, explicitly excluded by §9 — remains
+the standing hypothesis and has now been deferred three times.
+
+### 7.4 The image compensation's switch is inert on this host
+
+`s = sigmoid((depth/δ_L − 2)/0.5)` with the measured δ_L = 0.0166 eV is half-open at 33 meV
+of depth and fully closed above 91 meV. Every model this programme has produced sits at
+0.1–0.8 eV, so `s = 1.000` to six decimal places. The switch is not wrong; it cannot engage
+on a level this deep. Gate 10 therefore tests the image term itself, and the A-to-B
+difference is attributable to the compensation rather than to the gating.
+
+### 7.5 What the cycle bought
+
+Speed, at 3.4× per epoch against a 4× forecast, from a finding that was not the one being
+looked for: the step was never eigensolve-bound. And the closest this programme has come to a
+size-extensive head — arm A's 79- and 159-atom slopes agree to 0.007 eV/Å against 0.051 in
+Stage B and 0.105 in the forces-only cohort — bought at the cost of F4 margin, one seed
+crossing the band's lower edge, and a level 0.29 eV too deep.
 
 ---
 
