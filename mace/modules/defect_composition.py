@@ -328,15 +328,15 @@ def head_spectra(model, batch_dict: Dict[str, torch.Tensor]) -> List[Dict[str, A
     if "H_orbital" not in grabbed:
         raise RuntimeError("the counting head reported no Hamiltonian in its internals")
     hams = grabbed["H_orbital"]
-    batch = grabbed["batch"]
-    species = d["node_attrs"].argmax(dim=-1)
-    valence = head.valence.to(torch.float64)
+    batch = grabbed["batch"].cpu()
+    species = d["node_attrs"].argmax(dim=-1).cpu()
+    valence = head.valence.to(torch.float64).cpu()
     out = []
     for g, H in enumerate(hams):
         sel = batch == g
         n_total = int(round(float(valence[species[sel].long()].sum())))
-        H64 = H.detach().to(torch.float64)
-        lam = torch.linalg.eigvalsh(H64).cpu().numpy()
+        H64 = H.detach().to(torch.float64).cpu()
+        lam = torch.linalg.eigvalsh(H64).numpy()
         out.append({"H": H64, "spectrum": np.sort(lam), "n_total": n_total,
                     "n_atoms": int(sel.sum())})
     return out
@@ -585,7 +585,10 @@ def species_charges(model) -> Optional[torch.Tensor]:
     madelung = getattr(model, "madelung", None)
     if madelung is None:
         return None
-    return madelung.z.detach()
+    # On the CPU whatever device the model trains on: the constructor's densities and its
+    # Newton refinement of the placement are CPU objects, and the trainer calls this hook
+    # after the model has moved to the GPU.
+    return madelung.z.detach().cpu()
 
 
 def tiled_pristine_scaled(model, pristine_frame, factors, perm
@@ -645,12 +648,13 @@ def frame_static_densities(model, record: ClassRecord, pristine_frame, charges: 
     if record.placement is None:
         raise ValueError(f"class {record.key} has no pristine placement (no static charges)")
     r_res = float(record.placement["r_res"]) if r_res is None else float(r_res)
-    z0 = species_charges(model).to(positions.dtype)
+    z0 = species_charges(model).to(dtype=positions.dtype, device=positions.device)
     present = dd.static_present(charges, positions, cell, r_res)
     pri_species, scaled = tiled_pristine_scaled(model, pristine_frame, record.tiling, record.perm)
-    shift = torch.tensor(record.placement["shift"], dtype=positions.dtype)
-    pristine = dd.pristine_placed(z0[pri_species.to(z0.device)], scaled.to(positions.dtype), cell,
-                                  shift, r_res)
+    shift = torch.tensor(record.placement["shift"], dtype=positions.dtype, device=positions.device)
+    pristine = dd.pristine_placed(z0[pri_species.to(z0.device)],
+                                  scaled.to(dtype=positions.dtype, device=positions.device),
+                                  cell, shift, r_res)
     raw = dd.static_raw(present, pristine)
     g_res = dd.residual_shape(raw, positions, pristine.centres)
     if not record.counted:

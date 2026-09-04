@@ -344,8 +344,17 @@ def capture(args):
     print(f"golden: {len(records)} records, {n_fields} fields -> {out_pt} ({out_json})")
 
 
+# Fields a derivative fix may change: everything that is a force, a virial, a stress or a
+# density response. Under `--energies-only` these are reported but not counted as failures;
+# every energy, chemical potential, occupation, spectrum and density matrix must still be
+# bit-identical (Stage 1's first two steps change derivatives, not values).
+DERIVATIVE_FIELDS = ("out.forces", "out.base_forces", "out.delta_forces", "out.virials",
+                     "out.stress")
+
+
 def compare(args):
     ref = torch.load(Path(args.ref).expanduser(), map_location="cpu", weights_only=False)
+    energies_only = bool(getattr(args, "energies_only", False))
     meta = ref["meta"]
     model, ctx, frames, batches = setup(args)
     if model_digest(model) != meta["model_sha256"]:
@@ -360,14 +369,19 @@ def compare(args):
         bname, mode = name.split("/")
         now = run_once(model, ctx, batches[bname], mode)
         bad = records_equal(golden, now)
+        allowed = [b for b in bad if b[0] in DERIVATIVE_FIELDS] if energies_only else []
+        bad = [b for b in bad if b not in allowed]
         status = "identical" if not bad else f"{len(bad)} field(s) differ"
+        if allowed:
+            status += f" ({len(allowed)} derivative field(s) differ, allowed)"
         print(f"  {name:36s} {status}")
-        for k, why in bad:
+        for k, why in bad + allowed:
             print(f"      {k}: {why}")
         if bad:
             failures[name] = bad
     print(f"golden {meta['git_sha'][:10]} vs HEAD {git_sha()[:10]}: "
-          f"{len(ref['records']) - len(failures)}/{len(ref['records'])} records identical")
+          f"{len(ref['records']) - len(failures)}/{len(ref['records'])} records identical"
+          + (" (energies only)" if energies_only else ""))
     return 0 if not failures else 1
 
 
@@ -381,6 +395,9 @@ def main(argv=None):
                        default="~/runs/golden/v6_arma_s1.pt")
         if name == "capture":
             s.add_argument("--manifest", default=str(HERE / "golden" / "v6_arma_s1.json"))
+        else:
+            s.add_argument("--energies-only", action="store_true",
+                           help="derivative fields may differ (Stage 1 derivative fixes)")
     args = p.parse_args(argv)
     _assert_repo()
     return capture(args) if args.cmd == "capture" else compare(args)

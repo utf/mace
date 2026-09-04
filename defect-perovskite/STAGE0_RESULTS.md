@@ -150,7 +150,13 @@ Each is in the module docstring it belongs to; collected here because a reader w
    channel; the channels are separately normalised, unneeded ones are unused (count 0), and a
    needed channel with zero weight refuses. Noted, not changed.
 
-9. **E_sink and η defaults per §2.7** (50 eV above the pristine CBM; 1e-3), resolved to numbers
+9. **Per-frame counts are netted per spin** (`frame_counts`): `net_σ = n_e^class − n_h^class +
+   ΔN_σ`, `n_e = max(net, 0)`, `n_h = max(−net, 0)`. The plan's literal per-channel formula
+   gives V_Cl⁺ one electron *and* one hole (q_F = 0 either way, so the assertion does not
+   discriminate); the plan's own benchmark says n_e = 0, and the netted form is the one that
+   produces it. The benchmark is a test.
+
+10. **E_sink and η defaults per §2.7** (50 eV above the pristine CBM; 1e-3), resolved to numbers
    in the table whether or not a class needed Tier 2. **Every None default is resolved at
    construction** (r_split = first-block cutoff, r_orb = covalent radii, δ = 2·smearing,
    Δ_s = smearing) so the extracted config carries numbers.
