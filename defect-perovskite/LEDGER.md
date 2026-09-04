@@ -587,3 +587,57 @@ with the energies intact — caught by an impossible criterion-3 number, fixed, 
 by a test. The one-epoch Stage B smoke on the old base found two crashes the chain would
 have hit unattended. And a file-wait loop failed to wake for ten minutes after the file
 landed; relaunching it is cheaper than explaining it.
+
+---
+
+## 14. The step was never eigensolve-bound, and half of it was a branch that is zero
+
+**4 Sep 2026, the speed / corrected-forms / two-arms cycle, section 1.**
+
+The Stage A′ report concluded that the training step was "CPU-bound in the head's per-graph
+eigensolve and Ewald loop" from an operator table, and the spec that followed proposed two
+remedies on that reading: batching the eigensolve, and precomputing the Ewald kernels.
+Instrumenting the step by component instead of by operator gave a different answer.
+
+`eigh` was **5%** of the step's CPU time. The largest single region, at **28%**, was the
+Fermi bisection — not its arithmetic, but its host synchronisations: `float(total) > n`
+once per iteration, per fill, per graph, per pass, about 6900 device-to-host round trips a
+step. Removing them (a fixed iteration count computed once from the initial bracket, which
+reaches the same tolerance the early exit found) and then solving a size-uniform batch as
+one `[B, 4n, 4n]` problem took the step from 3.63 to 1.51 s.
+
+The other half was worse, in the sense of being invisible. `MACEDefect.forward` evaluates
+the correction at the frame's counter and again at a reference counter, and subtracts. When
+the reference is the neutral counter — every frame in this dataset — the second branch is
+**identically zero**: the head's energy is a difference from that same fill, so the
+occupations subtract exactly; `q^pol` carries a counter factor and `q^carrier` carries
+signed counts, so the long-range reference charge is `q_host` exactly and its energy
+difference is `E[0]`. A whole head pass, a Madelung potential, an Ewald evaluation and a
+force gradient, computed every step for three years of runs, to produce a zero. Skipping it
+took the step to 1.07 s, and the trainer's own profile from 3.451 to 0.783 s cached.
+
+**And the Ewald precompute the spec asked for should not be built.** Measured: the value of
+`phi` is 12.8 ms of the 52.0 ms the Madelung term costs; the rest is the position
+derivative, which a stored kernel cannot supply, and reconstructing it from one takes 73.6
+ms — slower than what is there. A negative recorded with its four numbers is worth more
+than an optimisation that would have been written, measured, and quietly kept.
+
+**Statement of record (assert, never implement around):**
+"Profile by REGION before optimising, not by operator. An operator table says which kernels
+ran; it cannot say which of them was a branch whose result is zero, and it attributes a
+python loop's synchronisations to whatever kernel happened to be waiting."
+
+### The operational lessons of this cycle
+
+A capability flag that gates behaviour must be a CLASS attribute, not an instance one:
+every trained checkpoint is a pickled module, so an attribute set in `__init__` is absent
+from every model written before it existed and `getattr` returns the fallback silently —
+the first profile after the reference skip landed showed no change at all, because the flag
+that enabled it did not exist on the loaded model. A `DataLoader` built with a
+`batch_sampler` reports `batch_size = None`, and copying that into another loader turns
+automatic batching off and kills the collater four frames into the energy-scale pass,
+nowhere near the sampler; the one-epoch smoke found it, which is what the smoke is for.
+And a weighting formula solved for a target share divides by the small population's mass:
+once the null gate zeroes that population the formula returns a factor of **zero**, which
+would have multiplied the surviving weights by nothing and deleted every charged energy
+from the loss without a word.
