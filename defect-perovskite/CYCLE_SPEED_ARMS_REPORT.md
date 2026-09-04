@@ -232,29 +232,89 @@ The null file was rebuilt from `aprime_reference.json` at launch and read:
 so §0 rule 2 bites exactly where it was designed to: 159 keeps its charged energies, 79 keeps
 only its forces.
 
-### 4.2 What each arm cost
+### 4.2 What arm A cost
 
-*(pending — wall clock per wave, epochs, and the realised shares)*
+| | |
+|---|---|
+| wave 1 (seeds 1–4, GPUs 4–7) | 10:31:49 → 11:39:18, **67 min** |
+| wave 2 (seeds 5–6, GPUs 4–5) | 11:39:18 → 12:45:45, **66 min** |
+| gates (six scorers, four GPUs) | 12:45:45 → 13:05:15, **20 min** |
+| per epoch | **2.2 min** at 24 epochs |
+
+Wave 2 took as long as wave 1 with a third of the seeds because two of the four GPUs were
+running wave-1 scoring in parallel — four GPUs in use throughout, never five.
+
+Validation, per seed (meV/atom, meV/Å): 5.3/16.8, 6.9/16.8, 5.5/16.6, 5.6/16.5, 5.3/16.5,
+5.5/16.4. Seed 2 is the outlier on energy and it is the same seed that is the outlier on
+depth (0.817 eV from the CBM against 0.15–0.29 for the rest) and on Δc.
 
 ### 4.3 Arm A
 
-*(pending)*
+The gate table is §5. The three results that matter:
+
+**The size slopes converged.** `d(δ_sr)/dd` is −0.1212 ± 0.0268 at 79 atoms and
+−0.1083 ± 0.0174 at 159 — a **0.013 eV/Å** gap, against 0.051 in Stage B and 0.105 in the
+forces-only cohort. This is the closest the programme has come to a head whose size
+dependence does not itself depend on size, and it is what §0's rule 2 and §1.1's grouped
+batches were for.
+
+**The on-site channel came alive and took the level with it.** `tanh h` is saturated on 100%
+of Cl atoms, exactly as in Stage B, and the corrections are nonetheless ±0.13–0.51 eV because
+the corrected form reads the difference of the arguments. Knockouts at fixed weights put the
+level at 0.41 eV below the CBM as trained, 0.12 with the correction disabled, and **0.046
+with both learned on-site channels disabled — Stage B's own value.** Stage B's shallow donor
+was a dead channel, not good physics.
+
+**The hub coupling got worse, not better.** Gate 7 fires on all four integral types
+(5/6, 3/6, 2/6, 4/6 against Stage B's 3/6, 1/6, 2/6, 5/6). F22 forecast the pp stops would
+halve; pp-σ's rate was unchanged and ss-σ's nearly doubled.
 
 ### 4.4 Arm B
 
-*(pending)*
+*(pending — relaunched 13:13 after the ordering defect in §8.1b; wave 1 due ~14:10)*
 
 ### 4.5 Arm C
 
-*(pending — runs only if gate 7 fires on arm A, under the trigger pre-registered in
-`CYCLE_SPEED_ARMS_RESULTS.md` before arm A's numbers existed: any integral type at its stop,
-|tanh g| > 0.98, in more than 1/6 seeds)*
+Confirmed by gate 7 on arm A's six seeds under the trigger pre-registered before those
+numbers existed (any integral type at its stop, |tanh g| > 0.98, in more than 1/6 seeds).
+Runs after arm B in the same chain, at β = ln 2 with every other constant unchanged.
+
+*(pending)*
 
 ---
 
 ## 5. The gates
 
-*(pending)*
+Assembled by `c12_gate_table.py` from the scorers' JSON rather than retyped from logs;
+the script was validated by reproducing Stage A′'s published table line for line.
+
+### Gates — arma
+
+| gate | condition | measured | verdict |
+|---|---|---|---|
+| 1 regression | no criterion that held in Stage B now fails | c1_leakage 6/6; c1_not_shrunk 6/6; c2_neutral_toward_zero 0/6; c3_not_degraded 0/6; c4_f4_in_band 5/6; c6_shallow 5/6; c5_gap 6/6 | (read) |
+| 2 F4 | slope in [-0.142, -0.063] in ≥ 4/6 | -0.0874 ± 0.0142; 5/6 in band (-0.0595, -0.1014, -0.0974, -0.0863, -0.0980, -0.0818) | **PASS** |
+| 3 c consistency | report only | c(79) +9.7464 ± 0.1971, c(159) +10.7886 ± 0.3940, **Δc +1.0422 ± 0.1968**, predicted +0.0457 ± 0.0059 | (report) |
+| 4 F10 | ligand-Cl − bulk-Cl > 50 meV and > 2σ, ≥ 4/6 | 1/6 seeds; difference +0.6514 ± 0.2660 eV | **FAIL** |
+| 5 gap | pristine gap 2.4 ± 0.1 eV | +2.3788 ± 0.0190; 6/6 in window | **PASS** (pinned continuum and bandwidth: see the init-gate line) |
+| 6 dilution | R inside [0.66, 1.34] | R +0.9249 ± 0.1442, 6/6 inside; bound fraction +0.6354 ± 0.0233; depth +0.0667 ± 0.0094 eV; δ_L +0.0172 ± 0.0010 eV | **PASS** |
+| 7 stops / L_b | no type at its stop in more than 1/6 of seeds (1 of these 6) | ss_sigma 5/6; sp_sigma 3/6; pp_sigma 2/6; pp_pi 4/6; L_b ss_sigma 1.129±0.091, sp_sigma 1.272±0.028, pp_sigma 1.365±0.077, pp_pi 1.299±0.088 | **FAIL — arm C fires** (ss_sigma, sp_sigma, pp_sigma, pp_pi) |
+| 8 participation | report; spread against the comparison cohorts | this arm +0.7538 ± 0.1874; head-only +0.4915 ± 0.0275; E_LR-off +0.4777 ± 0.0711 | (read) |
+| 9 head slope | 79-atom d(δ_sr)/dd < 0, within 2× of -0.17, never near +0.37 | -0.1212 ± 0.0268; 5/6 seeds individually in [-0.340, -0.085] (-0.0792, -0.1553, -0.0961, -0.1319, -0.1183, -0.1466) | **PASS** (on the cohort mean) |
+| 10 tiling (arm B) | ideal and thermal drift ≤ 0.3·D0; log the s distribution | **arma_tiling.json did not run** — `c3_tiling_drift.py --thermal 3` is launched by hand, the chain parsed the older gates() body | — |
+
+**§2.2 per-site charge deviation** (report): max +0.5853 ± 0.0678 e, rms +0.0515 ± 0.0081 e, sites at the ζ stop +0.0000 ± 0.0000, worst |per-graph sum| 1.8e-15 e.
+
+**Gate 1** is a read, not a boolean: criteria 2 and 3 are properties of the frozen base — the
+neutral 159 slope and the neutral-79 window are the same numbers Stage B reported and fail
+for the same reason — so they are not evidence about the arm. Of the criteria that are,
+`c4_f4_in_band` fell from 6/6 to 5/6 and `c6_shallow` from 6/6 to 5/6.
+
+**Gate 5**'s pinned continuum is a unit test rather than a run output, and the bandwidth comes
+from each run's init-gate line: 0.233/0.009 eV edges and 33.73 eV on every seed, under the
+covalent anchors that replaced `d_ref`.
+
+**Arm B and arm C tables follow.**
 
 ---
 
