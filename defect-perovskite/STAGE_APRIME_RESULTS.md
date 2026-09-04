@@ -335,3 +335,29 @@ three-and-three split: with E_LR on from epoch 0, detached and frozen, the branc
 turned the joint cohort's participation around at epoch 12 does not act. F18's first
 clause (spread halves relative to the joint cohort) is met on this measure: 2.0 against
 5.7; the registered measure is the charged/pristine ratio from b13, scored with the gates.
+
+## 5.5 — gates 3 and 7 on all six seeds (c4_stage_b_extras)
+
+| seed | c(79) | c(159) | Δc | predicted Δc | L_ss | L_sp | L_ppσ | L_ppπ | at stop: ss / sp / ppσ / ppπ |
+|---|---|---|---|---|---|---|---|---|---|
+| s1 | +10.321 | +11.046 | +0.725 | +0.045 | 1.082 | 1.343 | 1.381 | 1.410 | 0 / 0 / 0 / 4% |
+| s2 | +9.932 | +10.717 | +0.786 | +0.051 | 1.063 | 1.215 | 1.330 | 1.336 | 98 / 25 / 98 / 98% |
+| s3 | +10.186 | +10.966 | +0.780 | +0.048 | 1.056 | 1.187 | 1.289 | 1.373 | 54 / 0 / 0 / 88% |
+| s4 | +9.890 | +10.641 | +0.751 | +0.050 | 1.083 | 1.349 | 1.327 | 1.317 | 0 / 0 / 98 / 98% |
+| s5 | +10.321 | +11.094 | +0.773 | +0.049 | 1.084 | 1.278 | 1.385 | 1.399 | 98 / 0 / 0 / 98% |
+| s6 | +9.920 | +10.738 | +0.818 | +0.053 | 1.064 | 1.309 | 1.281 | 1.409 | 0 / 0 / 0 / 0% |
+
+**Gate 3 (report):** c(79) +10.09 ± 0.19, c(159) +10.87 ± 0.17, Δc = +0.772 ± 0.029 eV;
+predicted (E_LR difference + Ewald G = 0 difference) +0.049 ± 0.003. The per-size constant
+absorbs sixteen times the electrostatic size difference. Not a gate this cycle; the
+tolerance a future gate would need is set by this number, and the reading is that the
+constant is carrying the labels' size-dependent referencing (or the base's 79-atom
+residual), not the image interaction.
+
+**Gate 7:** seeds with hub bonds at the stop — ss-σ 3/6, sp-σ 1/6, pp-σ 2/6, pp-π 5/6.
+**Fails** (rule: ≤ 1/6 per type) on three of four types. Learned decay lengths, mean ± sd
+over seeds: ss-σ 1.072 ± 0.011, sp-σ 1.280 ± 0.061, pp-σ 1.332 ± 0.040, pp-π 1.374 ±
+0.036 Å — every type moved up from L0 = 1.0 Å, none near its bound (0.5–2.0 Å), and the
+seed spread is tight. The head wants longer-ranged hopping AND presses against the ×1.5
+modulation stop on the hub bond; the two levers pull the same way. Seed 6 is the one
+interior everywhere (pp-π tanh +0.07); it is also the seed with the largest Δc.
