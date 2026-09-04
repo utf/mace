@@ -1,0 +1,194 @@
+{
+ "accepted": true,
+ "class_table": {
+  "build_seconds": 4.1,
+  "classes": {
+   "17x47,55x16,82x16": {
+    "gap_pristine": 2.391246669078722,
+    "m_vb": [
+     204,
+     204
+    ],
+    "n_e": [
+     1,
+     0
+    ],
+    "n_h": [
+     0,
+     0
+    ],
+    "n_sigma": [
+     205,
+     204
+    ],
+    "nearest_to_cut": -0.051049185136720965,
+    "perm": [
+     0,
+     1,
+     2
+    ],
+    "placement_residual": 0.6609177833523588,
+    "placement_vs_correspondence_A": 8.064029019203135,
+    "present_norm": 1.4395855294730517,
+    "q_core": 1,
+    "reason": "",
+    "residual_at_correspondence_shift": 0.7095727961992425,
+    "residual_at_density_shift": 0.6609177833523588,
+    "shift": -0.08184107183090639,
+    "spread": 0.11925597756910378,
+    "tier": 1,
+    "tier2_forced": {
+     "accepted": true,
+     "agrees_with_table": true,
+     "correspondence": {
+      "added_species": [],
+      "ghost_species": [
+       17
+      ],
+      "max_displacement": 1.4498881836326762,
+      "mean_displacement": 0.6099509561489694,
+      "n_added": 0,
+      "n_ghost": 1,
+      "n_matched": 79,
+      "n_substituted": 0
+     },
+     "m_vb": 204,
+     "min_separation": 0.9990147528181175,
+     "reason": "",
+     "seconds": 3.2
+    },
+    "tiling": [
+     1,
+     1,
+     1
+    ],
+    "vbm_al": -6.791169386367115
+   },
+   "17x48,55x16,82x16": {
+    "gap_pristine": 2.391246669078722,
+    "m_vb": [
+     208,
+     208
+    ],
+    "n_e": [
+     0,
+     0
+    ],
+    "n_h": [
+     0,
+     0
+    ],
+    "n_sigma": [
+     208,
+     208
+    ],
+    "nearest_to_cut": -0.09999999999999964,
+    "perm": [
+     0,
+     1,
+     2
+    ],
+    "placement_residual": 0.0,
+    "q_core": 0,
+    "reason": "",
+    "shift": 0.0,
+    "spread": 0.0,
+    "tier": 1,
+    "tiling": [
+     1,
+     1,
+     1
+    ],
+    "vbm_al": -6.709328314536209
+   },
+   "17x95,55x32,82x32": {
+    "gap_pristine": 2.3912466709005136,
+    "m_vb": [
+     412,
+     412
+    ],
+    "n_e": [
+     1,
+     0
+    ],
+    "n_h": [
+     0,
+     0
+    ],
+    "n_sigma": [
+     413,
+     412
+    ],
+    "nearest_to_cut": -0.40940486951697075,
+    "perm": [
+     0,
+     2,
+     1
+    ],
+    "placement_residual": 0.8076762578337401,
+    "placement_vs_correspondence_A": 7.959253264448056,
+    "present_norm": 2.013179711349466,
+    "q_core": 1,
+    "reason": "",
+    "residual_at_correspondence_shift": 1.0157081929206333,
+    "residual_at_density_shift": 0.8076762578337401,
+    "shift": 0.27983090899917684,
+    "spread": 0.08168518436874006,
+    "tier": 1,
+    "tier2_forced": {
+     "accepted": true,
+     "agrees_with_table": true,
+     "correspondence": {
+      "added_species": [],
+      "ghost_species": [
+       17
+      ],
+      "max_displacement": 1.5794380534263732,
+      "mean_displacement": 0.7182644135693383,
+      "n_added": 0,
+      "n_ghost": 1,
+      "n_matched": 159,
+      "n_substituted": 0
+     },
+     "m_vb": 412,
+     "min_separation": 0.9973443635928424,
+     "reason": "",
+     "seconds": 18.4
+    },
+    "tiling": [
+     1,
+     1,
+     2
+    ],
+    "vbm_al": -6.4294974624733685
+   }
+  },
+  "defect_q_core_identical_across_sizes": true,
+  "delta": 0.1,
+  "e_sink": 45.68191835454251,
+  "r_match": 2.0,
+  "status": "pass",
+  "window": 0.05
+ },
+ "git_sha": "37557f5cfa5165f7127f0744e285f91bf10ee854",
+ "golden": {
+  "ref": "~/runs/golden/v6_arma_s1.pt",
+  "status": "pass"
+ },
+ "harness": {
+  "git_sha": "2c3fd9626e0056b710f3f4b6698db27000c99932",
+  "precision_policy": "uniform float64",
+  "rows": 96,
+  "status": "pass"
+ },
+ "model": "/home/alex/runs/arma_models/arma_s1.model",
+ "regime": "CPU, float64, 1 thread, deterministic, profiling executor off",
+ "sole_policy": {
+  "registered": [
+   "count_fill"
+  ],
+  "status": "pass",
+  "stderr_tail": ""
+ },
+ "torch": "2.13.0+cu129"
+}
