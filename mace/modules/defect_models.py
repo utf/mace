@@ -218,9 +218,30 @@ class MACEDefect(ScaleShiftMACE):
         carrier_self_isolated: bool = False,
         lr_start_epoch: int = 0,
         gauge_counters: Optional[List[List[int]]] = None,
+        # Transition plan v8, section 2.1: the occupation policy and the designated
+        # reference state are config. Only `count_fill` is accepted; `reference_state` is
+        # the serialised `ElectronicStateSpec` of S_ref, None meaning the programme's
+        # count-filled neutral reference.
+        occupation_policy: str = "count_fill",
+        reference_state: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
+        from mace.modules.defect_state import (PRODUCTION_POLICIES, ElectronicStateSpec,
+                                               reference_state as default_reference)
+
+        if str(occupation_policy) not in PRODUCTION_POLICIES:
+            raise ValueError(
+                f"occupation_policy {occupation_policy!r} is not a production policy; "
+                f"Stages 0-6 reach exactly {PRODUCTION_POLICIES}")
+        self.occupation_policy = str(occupation_policy)
+        ref = (default_reference() if reference_state is None
+               else ElectronicStateSpec.from_dict(reference_state))
+        if ref.delta_n != (0, 0) or ref.occupation_policy != self.occupation_policy:
+            raise ValueError(f"reference_state {ref} is not a valid S_ref for policy "
+                             f"{self.occupation_policy!r}: delta_n must be (0, 0) and the "
+                             "policy must match")
+        self.reference_state = ref.to_dict()
         if correction_trunk != "shared":
             raise NotImplementedError(
                 f"correction_trunk='{correction_trunk}' is not implemented; only "
@@ -432,7 +453,9 @@ class MACEDefect(ScaleShiftMACE):
                 hop_log_beta=float(counting_hop_log_beta),
                 decay_learned=bool(counting_decay_learned),
                 decay_log_beta=float(counting_decay_log_beta),
-                t_el=float(counting_t_el))
+                t_el=float(counting_t_el),
+                occupation_policy=self.occupation_policy,
+                reference_state=self.reference_state)
         elif self.spectral_head:
             from mace.modules.defect_spectral import SpectralCarrierHead
 
@@ -730,9 +753,17 @@ class MACEDefect(ScaleShiftMACE):
             ("on_site_centred", False),
             ("_base_cache", None),
             ("_collecting_centre", False),
+            # Plan v8 section 3: legacy checkpoints load with DETERMINISTIC defaults -- the
+            # count fill and the neutral reference, which is what every one of them ran.
+            ("occupation_policy", "count_fill"),
+            ("reference_state", None),
         ):
             if not hasattr(self, name):
                 object.__setattr__(self, name, default)
+        if getattr(self, "reference_state", None) is None:
+            from mace.modules.defect_state import reference_state as default_reference
+
+            object.__setattr__(self, "reference_state", default_reference().to_dict())
         # Buffers need registering, not just setting, or they stay out of the state dict
         # and out of `.to()`. A model pickled before the gauge probe existed has none, and
         # an empty buffer is exactly the "probe disabled" state, so old checkpoints keep
@@ -815,10 +846,10 @@ class MACEDefect(ScaleShiftMACE):
         edge_vector: Optional[torch.Tensor] = None,
         positions: Optional[torch.Tensor] = None,
         cell: Optional[torch.Tensor] = None,
-        occupations: Optional[torch.Tensor] = None,
         force_out: Optional[Dict[str, torch.Tensor]] = None,
-            centre: Optional[torch.Tensor] = None,
+        centre: Optional[torch.Tensor] = None,
         graph_sizes: Optional[torch.Tensor] = None,
+        state=None,
     ):
         """Either carrier head, behind one signature.
 
@@ -894,13 +925,14 @@ class MACEDefect(ScaleShiftMACE):
             clamp_mask=clamp_mask,
             edge_vector=edge_vector,
             madelung=madelung,
-            occupations=occupations,
         )
-        # Only the counting head knows the centred correction and the c table; the older
-        # spectral heads keep their signature.
+        # Only the counting head knows the centred correction, the c table and the state
+        # batch; the older spectral heads keep their signature.
         if getattr(self.spectral, "accepts_centre", False):
             head_kwargs["centre"] = centre
             head_kwargs["graph_sizes"] = graph_sizes
+        if getattr(self.spectral, "accepts_state", False):
+            head_kwargs["state"] = state
         # Section 2.3 of the Stage A' spec: image compensation in H, one shot. A first solve
         # without the term gives the carrier density; its periodic-minus-isolated potential,
         # with the electron sign convention of Edit 1, goes onto the on-site energies for the
@@ -1190,6 +1222,21 @@ class MACEDefect(ScaleShiftMACE):
             counts_ref = data["carrier_counts_ref"].view(num_graphs, -1).to(head_dtype)
         else:
             counts_ref = torch.zeros_like(counts)
+        # PLAN v8 SECTION 2.1: the electronic state is a boundary condition of its own.
+        # Both counters become state batches under the model's policy, and the reference
+        # question below is asked of the state's PHYSICAL KEY against S_ref -- not of the
+        # counter being zero. A stated fill (`occupations`) is an alternate policy and is
+        # refused: `count_fill` is the sole policy reachable from any Stage 0-6 config.
+        if data.get("occupations") is not None:
+            raise ValueError(
+                "data['occupations'] is an occupation override, which is an alternate "
+                "occupation policy; none is reachable in Stages 0-6 (plan v8 section 2.4)")
+        from mace.modules.defect_state import ElectronicStateSpec, StateBatch
+
+        policy_key = getattr(self, "occupation_policy", "count_fill")
+        state = StateBatch.from_counts(counts, policy_key)
+        state_ref = StateBatch.from_counts(counts_ref, policy_key)
+        s_ref = ElectronicStateSpec.from_dict(self.reference_state)
 
         logit_bias: Optional[torch.Tensor] = None
         if self.logit_seed:
@@ -1237,10 +1284,10 @@ class MACEDefect(ScaleShiftMACE):
             logit_bias=logit_bias,
             positions=head_positions,
             cell=head_cell,
-            occupations=data.get("occupations"),
             force_out=force_out,
             centre=centre,
             graph_sizes=graph_sizes,
+            state=state,
         )
         # Intrinsic gap: the same pooling with the seed switched off, so the logged gap
         # separates what MLP_l has learned from what the seed is supplying. The dead
@@ -1316,17 +1363,19 @@ class MACEDefect(ScaleShiftMACE):
         # What it saves is a whole head pass (eigensolve, fills, Madelung), an Ewald
         # evaluation, and the `correction_energy_ref` force gradient -- 18% of the step.
         #
-        # THE GATE IS ON THE VALUE OF `counts_ref`, NOT ON WHETHER THE KEY IS PRESENT.
+        # THE GATE IS ON THE REFERENCE STATE, NOT ON WHETHER THE KEY IS PRESENT.
         # `prepare_defect_configurations` writes `carrier_counts_ref` onto EVERY paired
         # frame -- it records which member of the pair the difference is taken against --
         # so keying the skip on the field's absence never fires on real training data. The
-        # condition the proof above needs is that the reference counter is the neutral one,
-        # which is one reduction and one host synchronisation per forward against the 0.13 s
-        # it saves.
+        # condition the proof above needs is that every graph's reference state IS S_ref,
+        # and under plan v8 that is equality of the physical key (section 2.1): the same
+        # policy, the same payload, `Q_formal = Q_ref` and `delta_n = 0`. For the counter
+        # adapter that is `e_maj = h_maj` and `e_min = h_min`, which the old `counts == 0`
+        # test implied but did not state. One host synchronisation per forward.
         skip_reference = (
             bool(getattr(self, "skip_neutral_reference", True))
             and getattr(getattr(self, "spectral", None), "zero_at_neutral_counts", False)
-            and bool(counts_ref.abs().sum() == 0)
+            and state_ref.all_reference(s_ref)
         )
         counter_emb_ref = self.counter_embedding(counts_ref)
         if skip_reference:
@@ -1347,10 +1396,10 @@ class MACEDefect(ScaleShiftMACE):
                 logit_bias=logit_bias,
                 positions=head_positions,
                 cell=head_cell,
-                occupations=data.get("occupations"),
                 force_out=force_out_ref,
                 centre=centre,
                 graph_sizes=graph_sizes,
+                state=state_ref,
             )
 
         # Long-range branch (plan section 3.4).

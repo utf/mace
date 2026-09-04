@@ -837,6 +837,14 @@ class CountingHead(nn.Module):
     # on the model's outputs AND on every parameter gradient rather than trusting it.
     batch_by_size = True
     zero_at_neutral_counts = True
+    # Transition plan v8, section 2.1. The head's occupation policy and the flag that tells
+    # `_carrier_head` it takes a `StateBatch`. Class attributes for the reason above: every
+    # checkpoint written before the state interface existed ran the count fill, and must
+    # keep running it without a `getattr` fallback deciding that on its behalf.
+    occupation_policy = "count_fill"
+    accepts_state = True
+    # S_ref as a serialised spec; None means the programme's count-filled neutral reference.
+    reference_state = None
 
     def __init__(self, num_elements: int, feature_dim: int, atomic_numbers,
                  elem_dim: int = 8, hidden: int = 64,
@@ -850,7 +858,9 @@ class CountingHead(nn.Module):
                  hop_log_beta: float = HOP_LOG_BETA_DEFAULT,
                  decay_learned: bool = False,
                  decay_log_beta: float = DECAY_LOG_BETA_DEFAULT,
-                 centre_form: str = CENTRE_FORM_DEFAULT) -> None:
+                 centre_form: str = CENTRE_FORM_DEFAULT,
+                 occupation_policy: str = "count_fill",
+                 reference_state: Optional[Dict] = None) -> None:
         """`on_site_range` is gamma, the half-width of the bounded on-site correction.
 
         THE DEFAULT IS 3 eV, NOT 1. At gamma = 1 the audit found every chlorine in every seed
@@ -874,6 +884,17 @@ class CountingHead(nn.Module):
         self.smearing_family = str(smearing_family)
         self.t_el = float(t_el)
         self.num_channels = int(num_channels)
+        # Section 2.1: the policy is config, and only a production key is accepted here.
+        # The dispatch object itself is looked up at call time (see `policy`), so that a
+        # pickled head carries a string and not a module-level singleton.
+        from mace.modules.defect_state import PRODUCTION_POLICIES
+
+        if str(occupation_policy) not in PRODUCTION_POLICIES:
+            raise ValueError(
+                f"occupation_policy {occupation_policy!r} is not a production policy; the "
+                f"Stage 0-6 programme reaches exactly {PRODUCTION_POLICIES}")
+        self.occupation_policy = str(occupation_policy)
+        self.reference_state = None if reference_state is None else dict(reference_state)
         # Valence per SPECIES INDEX, resolved once from the model's own atomic-number table.
         # Looking it up by Z at every forward would put a python dict in the hot path and,
         # worse, would silently accept a species the table does not cover.
@@ -908,24 +929,46 @@ class CountingHead(nn.Module):
         # not import the head module to know what its own head can do.
         self.wants_positions = True
 
+    def s_ref(self):
+        """The designated reference state this head is null on."""
+        from mace.modules.defect_state import ElectronicStateSpec, reference_state
+
+        stored = getattr(self, "reference_state", None)
+        return reference_state() if stored is None else ElectronicStateSpec.from_dict(stored)
+
+    @property
+    def policy(self):
+        """The dispatched occupation policy -- `count_fill`, the legacy fill itself."""
+        from mace.modules.defect_state import dispatch
+
+        return dispatch(getattr(self, "occupation_policy", "count_fill"))
+
     def forward(self, node_feats, counter_emb, counts, batch, num_graphs, edge_index,
                 edge_length, site_bias=None, node_species=None, clamp_mask=None,
                 edge_vector=None, madelung=None, occupations=None, internals=None,
-                positions=None, force_out=None, centre=None, graph_sizes=None):
-        """`occupations`, when given, is [n_graphs, 2] holding (N_maj, N_min) directly.
+                positions=None, force_out=None, centre=None, graph_sizes=None,
+                state=None):
+        """`state` is the batch's `StateBatch` (plan v8 section 2.1); built from `counts`
+        by the production adapter when absent, so a scorer that hands only counters gets
+        the same states the trainer does.
 
         `centre` is the pristine species-mean feature for the centred on-site correction
         (section 2.1); `graph_sizes` is `[n_graphs]` atom counts for the per-(charge, size)
         c table (section 3). Both optional; absent, the head behaves as it always has.
 
-        Stage 4's interface, and it is an INPUT change rather than an architecture one: the
-        counters already map to a fill, and this simply lets a caller state the fill instead.
-        That is what makes excited configurations and non-Aufbau occupations expressible
-        without a second code path -- the thing the four-channel counter scheme could never
-        represent. Ground-state fill remains the default.
+        `occupations` is REFUSED when given. It was Stage 4's "state the fill directly"
+        override, and under plan v8 a stated fill is an alternate occupation policy -- of
+        which none is reachable from a Stage 0-6 configuration. The keyword survives so a
+        caller that still passes it fails here with the reason, rather than being silently
+        ignored by a signature that dropped it.
         """
         from mace.modules.defect_spectral import SpectralOutput
 
+        if occupations is not None:
+            raise ValueError(
+                "the counting head no longer accepts an occupation override: a stated "
+                "fill is an alternate occupation policy, and only count_fill is reachable "
+                "in Stages 0-6 (plan v8 section 2.4)")
         # The head's own smearing family, for the whole of this forward. Restored at exit so
         # two models with different conventions can be evaluated in one process without one
         # of them silently inheriting the other's.
@@ -935,18 +978,26 @@ class CountingHead(nn.Module):
             return self._forward(
                 node_feats, counter_emb, counts, batch, num_graphs, edge_index,
                 edge_length, site_bias, node_species, clamp_mask, edge_vector, madelung,
-                occupations, internals, positions, force_out, centre, graph_sizes)
+                None, internals, positions, force_out, centre, graph_sizes, state)
         finally:
             use_smearing(*previous)
 
     def _forward(self, node_feats, counter_emb, counts, batch, num_graphs, edge_index,
                  edge_length, site_bias=None, node_species=None, clamp_mask=None,
                  edge_vector=None, madelung=None, occupations=None, internals=None,
-                 positions=None, force_out=None, centre=None, graph_sizes=None):
+                 positions=None, force_out=None, centre=None, graph_sizes=None,
+                 state=None):
         from mace.modules.defect_spectral import SpectralOutput
+        from mace.modules.defect_state import StateBatch
 
         if node_species is None or edge_vector is None:
             raise ValueError("the counting head needs node_species and edge_vector")
+        if state is None:
+            state = StateBatch.from_counts(counts, getattr(self, "occupation_policy",
+                                                           "count_fill"))
+        # Section 2.1: which graphs are NOT at the reference state, by physical key. This
+        # is what decides whether a density response exists to be built.
+        off_reference = ~state.is_reference(self.s_ref())
         # Same detach boundary as V3 and Stages 1-2: no head term carries gradient into the
         # trunk under any run configuration. Done once at entry so a term added later cannot
         # reconnect it -- there is no attached descriptor in scope below.
@@ -992,13 +1043,13 @@ class CountingHead(nn.Module):
             with mark("head/loop"):
                 delta, alpha, gaps, spectra, resp_h, resp_d = self._batched_solve(
                     node_feats, node_species, edge_index, edge_vector, levels, batch,
-                    num_graphs, sizes, counts, occupations, force_out, internals)
+                    num_graphs, sizes, counts, off_reference, force_out, internals)
             per_graph_nodes = []
         else:
             delta, alpha, gaps, spectra, resp_h, resp_d = self._loop_solve(
                 node_feats, node_species, edge_index, edge_vector, levels, batch,
-                num_graphs, counts, occupations, force_out, alpha, delta, gaps,
-                spectra, resp_h, resp_d, src, dst, n_nodes, device, dtype)
+                num_graphs, counts, force_out, alpha, delta, gaps,
+                spectra, resp_h, resp_d, src, dst, n_nodes, device, dtype, internals)
 
         if force_out is not None and resp_h:
             if positions is None or not positions.requires_grad:
@@ -1047,9 +1098,12 @@ class CountingHead(nn.Module):
     # ------------------------------------------------------------------ the two solvers
 
     def _batched_solve(self, node_feats, node_species, edge_index, edge_vector, levels,
-                       batch, num_graphs, sizes, counts, occupations, force_out,
+                       batch, num_graphs, sizes, counts, off_reference, force_out,
                        internals):
-        """Section 1.1: one `[B, 4n, 4n]` solve for a size-uniform batch."""
+        """Section 1.1: one `[B, 4n, 4n]` solve for a size-uniform batch.
+
+        `off_reference` is `[B]` bool from the state batch: the graphs whose fill differs
+        from the reference fill, which is where a density response exists."""
         device, dtype = node_feats.device, node_feats.dtype
         n_nodes = int(node_feats.shape[0])
         n_g = int(sizes[0])
@@ -1077,13 +1131,17 @@ class CountingHead(nn.Module):
         valence = self.valence[node_species.long()].to(torch.float64)
         n_total = torch.zeros(num_graphs, dtype=torch.float64,
                               device=device).index_add_(0, batch, valence)
-        # The response is built only when some graph in the batch carries a carrier, which
-        # is the batch-level form of the per-graph "the fill differs from the reference".
-        charged = bool(counts.reshape(num_graphs, -1).abs().sum() > 0)
+        # The response is built only when some graph in the batch is off the reference
+        # state -- the batch-level form of the per-graph "the fill differs from the
+        # reference", decided on the physical key (section 2.1) rather than on the counter.
+        charged = bool(off_reference.any())
         resp_bucket = {} if (force_out is not None and charged) else None
-        e_head, lam, D, (n_maj_ref, _) = batched_head_energy_hf(
-            H, n_total, counts, self.t_el, occupation=occupations,
-            response_out=resp_bucket)
+        fill_internals = {} if internals is not None else None
+        e_head, lam, D, (n_maj_ref, _) = self.policy.solve_batched(
+            H, n_total, counts, self.t_el, response_out=resp_bucket,
+            internals=fill_internals)
+        if internals is not None:
+            internals.setdefault("fills", []).append(fill_internals)
 
         resp_h, resp_d = [], []
         if resp_bucket:
@@ -1105,8 +1163,9 @@ class CountingHead(nn.Module):
         return e_head, alpha, gaps, list(lam.detach().unbind(0)), resp_h, resp_d
 
     def _loop_solve(self, node_feats, node_species, edge_index, edge_vector, levels,
-                    batch, num_graphs, counts, occupations, force_out, alpha, delta,
-                    gaps, spectra, resp_h, resp_d, src, dst, n_nodes, device, dtype):
+                    batch, num_graphs, counts, force_out, alpha, delta,
+                    gaps, spectra, resp_h, resp_d, src, dst, n_nodes, device, dtype,
+                    internals=None):
         """The per-graph reference path. Unchanged; see `_batched_solve` for when it runs."""
         per_graph_nodes: List[torch.Tensor] = []
         loop = mark("head/loop")
@@ -1137,10 +1196,13 @@ class CountingHead(nn.Module):
 
               n_total = int(self.valence[node_species[node_sel]].sum())
               c = counts[g].tolist() if counts.dim() > 1 else counts.tolist()
-              occ = None if occupations is None else occupations[g]
               resp_bucket = {} if force_out is not None else None
-              e_head, lam, psi, p_now, p_ref = head_energy_hf(
-                  H, n_total, c, self.t_el, occupation=occ, response_out=resp_bucket)
+              fill_internals = {} if internals is not None else None
+              e_head, lam, psi, p_now, p_ref = self.policy.solve(
+                  H, n_total, c, self.t_el, response_out=resp_bucket,
+                  internals=fill_internals)
+              if internals is not None:
+                  internals.setdefault("fills", []).append(fill_internals)
               delta[g] = e_head
 
               # SECTION 1, THE DENSITY RESPONSE IN THE FORCE GRADIENT.
@@ -1201,8 +1263,14 @@ class CountingHead(nn.Module):
 
 
 def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
-                   t_el: float = T_EL, occupation=None, response_out=None):
+                   t_el: float = T_EL, occupation=None, response_out=None,
+                   internals=None):
     """`E_head` by the Hellmann-Feynman route. Same value as `head_energy`, usable gradient.
+
+    `internals`, when a dict is given, receives the fills' own `mu` and occupations
+    (`[4]` and `[4, n]`, in the order maj, min, maj_ref, min_ref) -- the quantities the
+    plan's bit-identity acceptance names and that this function otherwise consumes and
+    drops. Writing them out changes no number.
 
     WHY THIS EXISTS. Fitting FORCES means backpropagating through a quantity that is itself
     `dE/dR`, so the loss needs the SECOND derivative of the eigenvalues. `torch.linalg.eigh`'s
@@ -1248,10 +1316,13 @@ def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
     # override happens to equal it.
     (n_maj, n_min), (n_maj_ref, n_min_ref) = resolve_fills(n_total, counts, occupation)
 
+    mus = []
+
     def piece(n_electrons):
         # ONE bisection per fill. `fermi_fill` ran one and the entropy ran a second on the
         # same spectrum at the same electron count -- half of `head/bisect`, for nothing.
         mu = find_mu(lam_d, n_electrons, t_el, _FAMILY)
+        mus.append(mu)
         f = fermi_fill(lam_d, n_electrons, t_el, mu=mu)
         p = density_matrix(psi_d, f)
         entropy = entropy_of((lam_d - _col(mu)) / t_el, _FAMILY).sum()
@@ -1263,6 +1334,10 @@ def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
         e_maj_ref, p_maj_ref, f_maj_ref = piece(n_maj_ref)
         e_min_ref, p_min_ref, f_min_ref = piece(n_min_ref)
     energy = ((e_maj - e_maj_ref) + (e_min - e_min_ref)).to(in_dtype)
+    if internals is not None:
+        internals["mu"] = torch.stack(mus)
+        internals["occupations"] = torch.stack([f_maj, f_min, f_maj_ref, f_min_ref])
+        internals["fills"] = (n_maj, n_min, n_maj_ref, n_min_ref)
 
     # SECTION 1. The same `P - P_ref`, built as a DIFFERENTIABLE function of `H` for the
     # force response. Here rather than in the head because the spectrum and the four fills
@@ -1310,8 +1385,12 @@ def resolve_fills_batched(n_total: torch.Tensor, counts: torch.Tensor, occupatio
 
 
 def batched_head_energy_hf(H: torch.Tensor, n_total: torch.Tensor, counts: torch.Tensor,
-                           t_el: float = T_EL, occupation=None, response_out=None):
+                           t_el: float = T_EL, occupation=None, response_out=None,
+                           internals=None):
     """`head_energy_hf` for a batch of equal-sized graphs. Returns `(E[B], lam[B,m], D[B,m,m])`.
+
+    `internals`, when given, receives `mu` `[B, 4]` and the occupations `[B, 4, m]` exactly
+    as the fills used them; see `head_energy_hf`.
 
     THE FOUR FILLS COLLAPSE TO ONE DENSITY MATRIX, and that is an identity rather than an
     approximation. The per-graph route builds `P` at each of the four fills, forms four
@@ -1352,6 +1431,10 @@ def batched_head_energy_hf(H: torch.Tensor, n_total: torch.Tensor, counts: torch
                              _FAMILY).sum(dim=-1)                          # [B, 4]
         energy = ((D * H).sum(dim=(-2, -1))
                   - t_el * (entropy * signs.reshape(1, -1)).sum(dim=-1))
+    if internals is not None:
+        internals["mu"] = mu
+        internals["occupations"] = f
+        internals["fills"] = fills
 
     if response_out is not None:
         with mark("head/response"):
