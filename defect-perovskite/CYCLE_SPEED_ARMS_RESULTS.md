@@ -254,8 +254,16 @@ report's table — which is what makes the comparison a comparison:
 | cached step | 3.451 s | **0.783 s** | 4.41× |
 | base cache build (2797 frames) | 338 s | **81 s** | 4.2× |
 
-**F24 (≥ 4× per epoch on top of the cache gain): holds on the step, 4.41×**, from the two
-changes of section 1.1 alone — the batched size-uniform solve and the neutral reference
+**F24, scored both ways.** On the cached step, **4.41×** — holds. On the epoch wall,
+which is what "per epoch" means: the Stage A′ report's cached epoch 0 (c-shift calibration
+through evaluation) was **8.4 min** on this machine; the same measurement here is
+**2 min 28 s**, i.e. **3.4×** — falls short. The gap between the two is the part of the
+epoch section 1 did not touch: the trainer's own train- and validation-set evaluation
+passes, which are forward-only and were never the eigensolve loop's problem. Recorded as
+**F24 fails on its own terms (3.4× against 4×) while the step it named is 4.4× faster**,
+because scoring it on the step alone would be scoring it on the half that was optimised.
+
+Both come from the two changes of section 1.1 — the batched size-uniform solve and the neutral reference
 branch that was being computed and thrown away. Neither is an approximation; both are
 asserted equal to the paths they replace, one to 1e-8 and one to 1e-12 including every
 parameter gradient. The epoch wall follows the step.
@@ -263,3 +271,11 @@ parameter gradient. The epoch wall follows the step.
 The 79/80/159 groups give 321 batches per epoch against 360 unsorted, so the epoch is
 slightly shorter for a second, uninteresting reason (the tail batches of three groups
 instead of one).
+
+**One regression the smoke caught, and it is section 1.1's doing.** The initialisation gate
+is scored on a PRISTINE spectrum, and the trainer took its spectrum from the first training
+batch. Under the size-grouped sampler the first batch is one size group, and 1985 of 2560
+training frames are charged 79-atom cells — so the gate logged UNSCORED. A speed change had
+silently removed a gate. The batch is now built from stoichiometric frames rather than hoped
+for; the warning that survives says "no batch in the training loader carries a
+stoichiometric cell", which is a different and much louder condition.

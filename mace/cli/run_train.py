@@ -1803,12 +1803,30 @@ def run(args) -> None:
         e_gap = float(getattr(args, "defect_e_gap", 0.0) or 0.0)
         composition = getattr(args, "defect_gap_composition", None)
         if e_gap > 0 and composition is not None:
-            mask = loss_fn.stoichiometric_mask(init_batch) \
+            # THE GATE NEEDS A PRISTINE CELL, AND THE FIRST BATCH NEED NOT HOLD ONE.
+            # Under the size-grouped sampler of section 1.1 the first batch is one size
+            # group, and 1985 of 2560 training frames are charged 79-atom cells -- so the
+            # gate went UNSCORED, which is a silent regression from a speed change. The
+            # batch is therefore BUILT from stoichiometric frames rather than hoped for.
+            gate_batch = init_batch
+            mask = loss_fn.stoichiometric_mask(gate_batch) \
                 if hasattr(loss_fn, "stoichiometric_mask") else None
+            if (mask is None or not bool(mask.any())) and hasattr(
+                    loss_fn, "stoichiometric_mask"):
+                for candidate in train_loader:
+                    candidate = candidate.to(device)
+                    m = loss_fn.stoichiometric_mask(candidate)
+                    if m is not None and bool(m.any()):
+                        gate_batch, mask = candidate, m
+                        logging.info(
+                            "Stage-3 protocol: the first batch carries no stoichiometric "
+                            "cell (size-grouped sampler); the gate is scored on the first "
+                            "batch that does.")
+                        break
             gate = None
             if mask is not None and bool(mask.any()):
                 which = int(torch.nonzero(mask.reshape(-1))[0])
-                nodes = init_batch.batch == which
+                nodes = gate_batch.batch == which
                 internals: Dict[str, Any] = {}
                 head = model.spectral
                 original = head.forward
@@ -1820,7 +1838,7 @@ def run(args) -> None:
                 head.forward = _capture
                 try:
                     with torch.no_grad():
-                        model(init_batch.to_dict(), training=False, compute_force=False)
+                        model(gate_batch.to_dict(), training=False, compute_force=False)
                 finally:
                     head.forward = original
                 lam = internals.get("lam")
@@ -1831,13 +1849,14 @@ def run(args) -> None:
                     # from the one-hot species through the model's own atomic-number table
                     # rather than from a constant.
                     zs = model.atomic_numbers[
-                        init_batch.node_attrs[nodes].argmax(dim=-1)].tolist()
+                        gate_batch.node_attrs[nodes].argmax(dim=-1)].tolist()
                     n_el = sum(VALENCE[int(z)] for z in zs) / 2.0
                     gate = defect_protocol.initialisation_report(v, n_el, e_gap)
             if gate is None:
                 logging.warning(
-                    "Stage-3 protocol: initialisation gate UNSCORED -- the first batch "
-                    "carries no stoichiometric cell. Do not read that as a pass.")
+                    "Stage-3 protocol: initialisation gate UNSCORED -- no batch in "
+                    "the training loader carries a stoichiometric cell. Do not read that "
+                    "as a pass.")
             else:
                 logging.info(
                     f"Stage-3 protocol: init gate edges "
