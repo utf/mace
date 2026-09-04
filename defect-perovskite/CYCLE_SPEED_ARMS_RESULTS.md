@@ -1178,3 +1178,26 @@ did not.**
 | 2 | on-site centre `x̄_s` | 80-atom stoichiometric | 79- and 159-atom defective | 0.4–0.6 eV bulk Cl shift |
 | 3 | participation reference | 80-atom pristine | 159-atom charged | every ratio inflated 1.98× |
 | 4 | `δ_L` | 80-atom stoichiometric | 159-atom charged | 0.72× error, invisible while `s` saturates |
+
+### What the image term costs, measured
+
+Seed 1 of each arm, same four-GPU wave, epochs 0 → 20 from the run logs:
+
+| arm | wall per epoch |
+|---|---|
+| A (image compensation off) | **2.21 min** |
+| B (image compensation on) | **3.89 min** |
+
+**§2.5 costs +76% per epoch.** The term adds a second head solve — the `probe` forward that
+produces `alpha` and `gap` before the compensation can be built — plus an Ewald image
+potential carrying a live position derivative. Both are per step, both are on the critical
+path, and neither is affected by §1.1's batching, which is why the cycle's 3.4× speed-up
+does not show here.
+
+Recorded now because it is an **adoption input, not a footnote**: gate 10 asks whether the
+term reduces tiling drift, and the answer has to be worth 76% of the training budget. A term
+that halves the drift is worth it; one that shaves 10% is not, and the number to weigh that
+against is above rather than discovered afterwards.
+
+It also revises this cycle's schedule: arm B's two waves cost about 1.8× what arm A's did,
+which is most of the slip in the completion estimate.
