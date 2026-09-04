@@ -507,6 +507,14 @@ def build_class_table(model, frames: Sequence, device="cpu", formula=None,
     pristine_frame = firsts[pristine_key]
     _, _, pristine_cell = _frame_geometry(pristine_frame, model)
     tiled: Dict[Tuple[int, int, int], Dict[str, Any]] = {}
+    # The sink is a number in the table whether or not any class needs Tier 2: section 2.7's
+    # default is 50 eV above the pristine conduction edge, read off the reference frame.
+    tiled[(1, 1, 1)] = head_spectra(
+        model, tiled_pristine_dict(pristine_frame, model, (1, 1, 1), device))[0]
+    if cfg["e_sink"] is None:
+        n_ref = max(reference_fill(tiled[(1, 1, 1)]["n_total"]))
+        cfg["e_sink"] = float(tiled[(1, 1, 1)]["spectrum"][n_ref]) + 50.0
+    table["e_sink"] = float(cfg["e_sink"])
     for key, fr in firsts.items():
         numbers, _, cell = _frame_geometry(fr, model)
         mapping = tiling_map(cell, pristine_cell, len(numbers), pristine_frame.num_nodes)
@@ -541,14 +549,9 @@ def build_class_table(model, frames: Sequence, device="cpu", formula=None,
             tier, reason = None, (f"pristine gap {aligned.gap_pristine:.3f} eV < 4 x smearing "
                                   f"{4 * width:.3f} eV")
         elif ambiguous:
-            # Tier 2: the valence-subspace continuation from the tiled pristine. The sink
-            # sits 50 eV above the pristine conduction edge unless config says otherwise.
-            t2_cfg = dict(cfg)
-            if t2_cfg["e_sink"] is None:
-                t2_cfg["e_sink"] = float(pri["spectrum"][n_pri]) + 50.0
-            table["e_sink"] = float(t2_cfg["e_sink"])
+            # Tier 2: the valence-subspace continuation from the tiled pristine.
             t2 = tier2(model, fr, pristine_frame, factors, perm, n_pri, pri["H"], spec["H"],
-                       t2_cfg, device=device)
+                       cfg, device=device)
             extra = dict(path_agreement=t2["path_agreement"],
                          schedule_agreement=t2["schedule_agreement"],
                          gamma=tuple(t2["gamma"]), correspondence=t2["correspondence"],

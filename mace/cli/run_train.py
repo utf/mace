@@ -1740,6 +1740,8 @@ def run(args) -> None:
         _attach_keys(class_frames, z_table=z_table)
         model.composition_classes = defect_composition.build_class_table(
             model, class_frames, device=device)
+        # Every non-parameter float is a number in the saved config: the resolved sink too.
+        model.class_constructor["e_sink"] = model.composition_classes["e_sink"]
         n_counted = sum(1 for r in model.composition_classes["classes"].values()
                         if r["tier"] is not None)
         logging.info("Composition classes: %d classes, %d counted at Tier 1, %d uncounted",
