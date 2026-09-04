@@ -42,6 +42,12 @@ gates () {   # tag
     CUDA_VISIBLE_DEVICES=4 python -u "$HERE/c7_centred_f10.py" \
         --models "${models[@]}" \
         --device cuda --out "$R/${tag}_f10.json" 2>&1 | tail -40 || true
+    if [ "$tag" = "armb" ]; then
+        echo "=== gate 10: tiling drift, ideal and thermal, with the bound switch ==="
+        CUDA_VISIBLE_DEVICES=6 python -u "$HERE/c3_tiling_drift.py" \
+            --models "${models[@]}" --thermal 3 \
+            --device cuda --out "$R/${tag}_tiling.json" 2>&1 | tail -60 || true
+    fi
     echo "=== 79-atom head slope (gate 9), $tag ==="
     CUDA_VISIBLE_DEVICES=5 python -u "$HERE/b2_size_slopes.py" \
         --models "${models[@]}" \
