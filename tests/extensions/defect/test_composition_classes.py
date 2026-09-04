@@ -279,7 +279,10 @@ class TestOnTheHarrisonHead:
     def test_the_table_records_the_constructor_parameters(self, table):
         for key in dc.DEFAULT_CONSTRUCTOR:
             assert key in table
-        assert table["eta"] == 0.05 and table["dlambda"] == 0.02 and table["r_match"] == 2.0
+        assert table["eta"] == 1.0e-3 and table["dlambda"] == 0.02 and table["r_match"] == 2.0
+        # The sink was resolved for the class Tier 2 counted: 50 eV above the pristine CBM.
+        pristine = dc.lookup_class(table, [17] * 24 + [55] * 8 + [82] * 8)
+        assert table["e_sink"] == pytest.approx(pristine.cbm_al + 50.0)
 
     def test_a_composition_outside_the_table_is_refused(self, table):
         with pytest.raises(KeyError, match="no class record"):

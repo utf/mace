@@ -86,11 +86,15 @@ DEFAULT_CONSTRUCTOR: Dict[str, Any] = {
     "delta": None,        # eV, the counting margin above VBM_al (None: 2 x smearing width)
     "window": None,       # eV, half-width of the Tier 1 ambiguity window about the cut
                           # (None: one smearing width)
-    "r_match": 2.0,       # A, the largest displacement a site correspondence may carry
-                          # (half the Cl-Cl distance; thermal Cl swing up to 1.6 A between
-                          # snapshots of the perovskite)
-    "e_sink": 100.0,      # eV, where decoupled orbitals are parked
-    "eta": 0.05,          # endpoint classification threshold on gamma
+    "r_match": 2.0,       # A, the largest displacement a site correspondence may carry.
+                          # Plan section 2.7 says "half the pristine nearest-neighbour
+                          # distance" (1.4 A for Pb-Cl); on the data in hand thermal Cl swing
+                          # up to 1.6 A between snapshots, and 1.4 A turned a swung Cl into
+                          # a spurious ghost + addition. Half the Cl-Cl distance instead.
+    "e_sink": None,       # eV, where decoupled orbitals are parked (None: 50 eV above the
+                          # pristine conduction edge, section 2.7); the transport never
+                          # depends on it (see `interpolated_hamiltonian`)
+    "eta": 1.0e-3,        # endpoint classification threshold on gamma (section 2.7)
     "dlambda": 0.02,      # transport step; the second schedule uses dlambda / 2
 }
 
@@ -483,7 +487,7 @@ def build_class_table(model, frames: Sequence, device="cpu", formula=None,
     table: Dict[str, Any] = {
         "version": CLASS_TABLE_VERSION, "formula": {str(z): n for z, n in formula.items()},
         "delta": delta, "window": window, "smearing_width": width,
-        "r_match": float(cfg["r_match"]), "e_sink": float(cfg["e_sink"]),
+        "r_match": float(cfg["r_match"]), "e_sink": cfg["e_sink"],
         "eta": float(cfg["eta"]), "dlambda": float(cfg["dlambda"]),
         "quantiles": [float(q) for q in quantiles],
         "reference_geometry": "first_frame", "pristine_key": pristine_key, "classes": {}}
@@ -534,9 +538,14 @@ def build_class_table(model, frames: Sequence, device="cpu", formula=None,
             tier, reason = None, (f"pristine gap {aligned.gap_pristine:.3f} eV < 4 x smearing "
                                   f"{4 * width:.3f} eV")
         elif ambiguous:
-            # Tier 2: the valence-subspace continuation from the tiled pristine.
+            # Tier 2: the valence-subspace continuation from the tiled pristine. The sink
+            # sits 50 eV above the pristine conduction edge unless config says otherwise.
+            t2_cfg = dict(cfg)
+            if t2_cfg["e_sink"] is None:
+                t2_cfg["e_sink"] = float(pri["spectrum"][n_pri]) + 50.0
+            table["e_sink"] = float(t2_cfg["e_sink"])
             t2 = tier2(model, fr, pristine_frame, factors, perm, n_pri, pri["H"], spec["H"],
-                       cfg, device=device)
+                       t2_cfg, device=device)
             extra = dict(path_agreement=t2["path_agreement"],
                          schedule_agreement=t2["schedule_agreement"],
                          gamma=tuple(t2["gamma"]), correspondence=t2["correspondence"],
@@ -921,7 +930,7 @@ def _contiguity(psi_physical: np.ndarray, H1_final: np.ndarray, ghost_orbitals, 
 
 
 def tier2_continuation(H0_u: np.ndarray, H1_u: np.ndarray, groups: Dict[str, np.ndarray],
-                       rank: int, e_sink: float = 100.0, eta: float = 0.05,
+                       rank: int, e_sink: float = 100.0, eta: float = 1.0e-3,
                        dlambda: float = 0.02) -> Dict[str, Any]:
     """Both paths, both schedules, the endpoint classification and the acceptance rule, on
     Hamiltonians already in the union basis. `rank` is M_V^(0). Returns the decision with
@@ -975,8 +984,13 @@ def tier2(model, class_frame, pristine_frame, factors, perm, rank: int, H0, H1,
     corr = site_correspondence(numbers1, pos1, cell1, numbers0, pos0, cell0, perm=perm,
                                r_match=float(cfg["r_match"]))
     H0_u, H1_u, groups = union_basis(_numpy(H0), _numpy(H1), corr)
-    out = tier2_continuation(H0_u, H1_u, groups, rank, e_sink=float(cfg["e_sink"]),
+    e_sink = cfg["e_sink"]
+    if e_sink is None:
+        # Section 2.7's default: 50 eV above the pristine conduction edge.
+        e_sink = float(np.linalg.eigvalsh(_numpy(H0))[rank]) + 50.0
+    out = tier2_continuation(H0_u, H1_u, groups, rank, e_sink=float(e_sink),
                              eta=float(cfg["eta"]), dlambda=float(cfg["dlambda"]))
+    out["e_sink"] = float(e_sink)
     out["correspondence"] = {k: corr[k] for k in ("n_ghost", "n_added", "n_substituted",
                                                     "n_matched", "max_displacement",
                                                     "mean_displacement")}
