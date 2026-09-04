@@ -478,9 +478,6 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
             getattr(model, "counting_decay_learned", False))
         config["counting_decay_log_beta"] = float(
             getattr(model, "counting_decay_log_beta", 0.6931471805599453))
-        config["lr_detach_density"] = bool(getattr(model, "lr_detach_density", False))
-        config["lr_freeze"] = bool(getattr(model, "lr_freeze", False))
-        config["image_compensation"] = bool(getattr(model, "image_compensation", False))
         config["precision_policy"] = str(getattr(model, "precision_policy", "uniform"))
         config["on_site_centred"] = bool(getattr(model, "on_site_centred", False))
         # Speed-cycle spec sections 2.1 and 2.2.

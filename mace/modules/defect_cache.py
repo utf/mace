@@ -15,14 +15,14 @@ WHAT IS CACHED, per frame, keyed by a content hash of the geometry:
                   epoch gate `lr_start_epoch` and its position gradient keep working);
   * `forces`      the trunk's base forces, `-d(inter_e)/dR`;
   * `feats_rest`  the invariant readouts of every block after the first, which only the
-                  long-range charge MLPs consume -- and under `lr_detach_density` they carry
-                  no gradient, so a cached value is exact.
+                  long-range charge MLPs consume -- frozen at their eps_inf-only values
+                  under plan v8, so a cached value is exact.
 
 WHAT MAKES A CACHED RUN REFUSE TO START. The head must read the first block only
-(`spectral_first_shell`), the base must be frozen, and with the long-range branch on both
-`lr_detach_density` and `lr_freeze` must hold; otherwise something the cache treats as a
-constant would be training, and the run would be training against stale values with no
-error anywhere. Every one of these is checked by `require_cacheable`.
+(`spectral_first_shell`) and the base must be frozen; otherwise something the cache treats
+as a constant would be training, and the run would be training against stale values with
+no error anywhere. Both are checked by `require_cacheable`. (The long-range branch is
+always frozen under plan v8, so the two flags the check used to demand are gone.)
 
 THE CHECKSUM. SHA-256 over the base branch's tensors, the trunk normalisation constants and
 the frozen long-range parameters, written into `model.base_cache_checksum` so a checkpoint
@@ -267,13 +267,6 @@ def require_cacheable(model) -> None:
     if any(p.requires_grad for p in base):
         problems.append("the base branch has trainable parameters; cache only a frozen base "
                         "(--base_lr_factor 0.0 and the head-only mask)")
-    if getattr(model, "use_long_range", False):
-        if not getattr(model, "lr_detach_density", False):
-            problems.append("use_long_range without lr_detach_density: the charge MLPs "
-                            "would need gradients through features that are cached")
-        if not getattr(model, "lr_freeze", False):
-            problems.append("use_long_range without lr_freeze: the host charges are cached "
-                            "as constants but their MLP would be training")
     readouts = getattr(model, "defect_feature_readouts", None)
     if readouts is not None:
         for i, ro in enumerate(readouts):

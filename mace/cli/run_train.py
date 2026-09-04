@@ -1011,13 +1011,12 @@ def run(args) -> None:
                 if name.startswith("madelung."):
                     param.requires_grad_(False)
             logging.info("Stage-3 protocol: Z pinned at its initialisation")
-        # Section 2.2 of the Stage A' spec: the head-only mask above marks the long-range
-        # charge MLPs trainable (they are correction parameters); `lr_freeze` re-pins them
-        # here, AFTER the mask, or the flag would be silently undone by it.
-        if getattr(model, "lr_freeze", False):
+        # Plan v8 section 3: the long-range branch is always frozen at its eps_inf-only
+        # values. The head-only mask above marks its MLPs trainable (they are correction
+        # parameters), so it is re-pinned here, AFTER the mask.
+        if getattr(model, "use_long_range", False):
             model._apply_long_range_policy()
-            logging.info("Long-range branch frozen at its physical initialisation "
-                         "(--defect_lr_freeze)")
+            logging.info("Long-range branch frozen at its eps_inf-only values (plan v8)")
 
     if model.__class__.__name__ == "MACEDefect":
         # Ship the band edges that referenced the labels with the model, so inference

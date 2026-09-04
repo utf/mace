@@ -1327,29 +1327,6 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=0.6931471805599453,
     )
     parser.add_argument(
-        "--defect_lr_detach_density",
-        help="detach the carrier density before the Ewald energy, so E_LR's forces are "
-        "dE_LR/dR at fixed charge and no gradient reaches the head through the "
-        "long-range branch",
-        type=str2bool,
-        default=False,
-    )
-    parser.add_argument(
-        "--defect_lr_freeze",
-        help="freeze every long-range parameter at its physical initialisation (screening "
-        "amplitude from eps_inf, host and polarisation charges)",
-        type=str2bool,
-        default=False,
-    )
-    parser.add_argument(
-        "--defect_image_compensation",
-        help="one-shot image-compensation potential on the on-site energies: a first solve "
-        "of H gives the carrier density, whose periodic-minus-isolated potential is added "
-        "to eps_i before the second solve. Zero on any neutral cell by construction",
-        type=str2bool,
-        default=False,
-    )
-    parser.add_argument(
         "--defect_null_reference",
         help="JSON establishing which cell sizes have a NEUTRAL NULL -- "
         '{"nulls": {"<atoms>": {"slope": ..., "ci": [lo, hi]}}} -- a size qualifying when '

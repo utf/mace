@@ -102,7 +102,7 @@ def _outputs_and_grads(model, batch, skip: bool):
 
 
 CONFIGS = {
-    "frozen (Stage B)": dict(lr_detach_density=True, lr_freeze=True),
+    "frozen (Stage B, the plan v8 default)": dict(),
     "live host charges": dict(use_polarisation=False),
     "polarisation on": dict(use_polarisation=True),
     "isolated carrier self": dict(use_polarisation=True, carrier_self_isolated=True),
@@ -147,7 +147,7 @@ def test_skipping_the_neutral_reference_changes_nothing(name):
 def test_a_supplied_reference_counter_disables_the_skip():
     """A caller that states its own reference is not the neutral case, and must get the
     full branch even when the flag is on."""
-    model = _model(lr_detach_density=True, lr_freeze=True)
+    model = _model()
     frames = [_perovskite(seed=7)]
     batch = _batch(frames, [[0.0, 0.0, 1.0, 0.0]])
     d = batch.to_dict()

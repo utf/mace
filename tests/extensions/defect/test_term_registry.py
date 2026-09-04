@@ -19,7 +19,7 @@ torch.set_default_dtype(torch.float64)
 
 class TestRegistry:
     def test_every_registered_term_is_reported_by_the_forward_and_sums_to_the_energy(self):
-        model = _model(lr_detach_density=True, lr_freeze=True)
+        model = _model()
         batch = _batch([_perovskite(seed=1), _perovskite(seed=2)],
                        [[0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]])
         with torch.no_grad():
@@ -37,14 +37,14 @@ class TestRegistry:
     def test_the_band_term_is_the_one_with_a_potential_and_lr_carrier_has_none(self):
         """The v6 fact the harness must report: E_LR of the carrier depends on P and puts
         nothing into H. Stage 5 changes this entry; nothing else may."""
-        model = _model(lr_detach_density=True, lr_freeze=True)
+        model = _model()
         by_name = {t.name: t for t in model.terms()}
         assert by_name["band"].depends_on_P and by_name["band"].potential == "band"
         assert by_name["lr_carrier"].depends_on_P and by_name["lr_carrier"].potential == "absent"
         assert not by_name["base"].depends_on_P and by_name["base"].potential == "none"
 
     def test_gauge_dependence_is_a_column(self):
-        model = _model(lr_detach_density=True, lr_freeze=True)
+        model = _model()
         by_name = {t.name: t for t in model.terms()}
         assert not by_name["base"].gauge_dependent
         assert by_name["lr_host"].gauge_dependent and by_name["lr_carrier"].gauge_dependent
@@ -87,7 +87,7 @@ class TestTwoKernels:
         periodic one: one functional, the kernel chosen by a flag."""
         from mace.tools.scripts_utils import extract_config_mace_model
 
-        periodic = _model(lr_detach_density=True, lr_freeze=True)
+        periodic = _model()
         assert periodic.gauge == "periodic"
         config = extract_config_mace_model(periodic)
         assert config["gauge"] == "periodic"

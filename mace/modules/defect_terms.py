@@ -111,12 +111,13 @@ def registry(model) -> List[TermSpec]:
             section="2.2 (F_band; V_static^B inside H before Stage 4 as the Madelung term)"))
     if getattr(model, "use_long_range", False):
         # E_LR of the carrier: P-dependent through the carrier density, and its potential
-        # is ABSENT from H in v6 -- the detached density made it a bolt-on. Stage 5 makes it
-        # Phi_FF with V_FF = dPhi/dP.
-        detached = bool(getattr(model, "lr_detach_density", False))
+        # is ABSENT from H -- a bolt-on, the class the plan retires. Stage 5 makes it
+        # Phi_FF with V_FF = dPhi/dP. Its feature dependence is through the frozen
+        # amplitude and host-charge readouts, which are constants at the eps_inf-only
+        # values, so at fixed P it is a function of R alone.
         terms.append(TermSpec(
             name="lr_carrier", output_key="delta_lr_energy", depends_on_P=True,
-            potential="absent", depends_on_R=True, depends_on_features=not detached,
+            potential="absent", depends_on_R=True, depends_on_features=False,
             kernel=getattr(model, "gauge", Kernel.PBC.value),
             section="E_LR (-> Phi_FF, Stage 5)"))
     return terms

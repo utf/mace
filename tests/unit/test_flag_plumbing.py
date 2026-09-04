@@ -105,7 +105,6 @@ def test_every_spectral_setting_survives_config_extraction():
                    # the centred on-site channel all travel from the day they exist.
                    counting_decay_learned=True, counting_decay_log_beta=0.5,
                    counting_hop_form="log", counting_hop_log_beta=0.4054651081081644,
-                   lr_detach_density=True, lr_freeze=True, image_compensation=True,
                    precision_policy="mixed", on_site_centred=True,
                    # Speed-cycle spec sections 2.1 and 2.2: the corrected centred form and
                    # the per-site charge bound. Same rule -- a knob travels from the day it
@@ -172,8 +171,7 @@ def test_the_stage_aprime_flags_reach_the_model_kwargs():
     from mace.tools.model_script_utils import _defect_madelung_kwargs
 
     flags = dict(defect_counting_decay_learned=True, defect_counting_decay_beta=0.5,
-                 defect_lr_detach_density=True, defect_lr_freeze=True,
-                 defect_image_compensation=True, defect_precision_policy="mixed",
+                 defect_precision_policy="mixed",
                  defect_on_site_centred=True, defect_counting_centre_form="output",
                  defect_madelung_site_zeta=0.75)
     assert set(flags) <= cli_flags(), sorted(set(flags) - cli_flags())
@@ -182,7 +180,6 @@ def test_the_stage_aprime_flags_reach_the_model_kwargs():
                            defect_spectral_head=True, **flags)
     kwargs = _defect_madelung_kwargs(args)
     expected = dict(counting_decay_learned=True, counting_decay_log_beta=0.5,
-                    lr_detach_density=True, lr_freeze=True, image_compensation=True,
                     precision_policy="mixed", on_site_centred=True,
                     counting_centre_form="output", madelung_site_zeta=0.75)
     for key, value in expected.items():

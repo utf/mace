@@ -182,7 +182,7 @@ class TestTheFillsAreReported:
         assert torch.equal(D[1], torch.zeros_like(D[1]))
 
     def test_the_head_collects_them_under_internals(self):
-        model = _model(lr_detach_density=True, lr_freeze=True)
+        model = _model()
         batch = _batch([_perovskite(seed=1), _perovskite(seed=2)],
                        [[0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]])
         grabbed = {}
@@ -214,7 +214,7 @@ class TestTheOverrideIsGone:
                  edge_vector=torch.zeros(0, 3), occupations=torch.tensor([[10.0, 10.0]]))
 
     def test_the_model_refuses_it_in_the_data_dict(self):
-        model = _model(lr_detach_density=True, lr_freeze=True)
+        model = _model()
         batch = _batch([_perovskite(seed=3)], [[0.0, 0.0, 1.0, 0.0]])
         d = batch.to_dict()
         d["occupations"] = torch.tensor([[200.0, 200.0]])
@@ -226,7 +226,7 @@ class TestModelSemantics:
     def test_the_reference_is_config_and_survives_extraction_and_pickling(self):
         from mace.tools.scripts_utils import extract_config_mace_model
 
-        model = _model(lr_detach_density=True, lr_freeze=True)
+        model = _model()
         assert model.occupation_policy == ds.COUNT_FILL
         assert ds.ElectronicStateSpec.from_dict(model.reference_state) == ds.reference_state()
         config = extract_config_mace_model(model)
@@ -237,7 +237,7 @@ class TestModelSemantics:
         assert rebuilt.spectral.reference_state == model.reference_state
 
     def test_a_legacy_pickle_without_the_attributes_loads_with_the_defaults(self):
-        model = _model(lr_detach_density=True, lr_freeze=True)
+        model = _model()
         del model.__dict__["occupation_policy"]
         del model.__dict__["reference_state"]
         del model.spectral.__dict__["occupation_policy"]
@@ -259,7 +259,7 @@ class TestModelSemantics:
         """(1, 0, 1, 0) is S_ref by key. The correction is exactly zero there, and the
         reference skip fires for it, so the forward equals the zero-counter forward in
         every head quantity."""
-        model = _model(lr_detach_density=True, lr_freeze=True)
+        model = _model()
         frames = [_perovskite(seed=5)]
         d0 = _batch(frames, [[0.0, 0.0, 0.0, 0.0]]).to_dict()
         d1 = _batch(frames, [[1.0, 0.0, 1.0, 0.0]]).to_dict()
@@ -272,7 +272,7 @@ class TestModelSemantics:
     def test_the_skip_is_decided_on_the_reference_state_key(self):
         """A supplied reference counter that IS S_ref by key -- (1, 0, 1, 0) -- still lets
         the skip fire; one that is not -- (1, 0, 0, 0) -- does not."""
-        model = _model(lr_detach_density=True, lr_freeze=True)
+        model = _model()
         frames = [_perovskite(seed=7)]
         base = _batch(frames, [[0.0, 0.0, 1.0, 0.0]])
         d_same = base.to_dict()

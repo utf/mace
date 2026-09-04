@@ -309,9 +309,6 @@ def _defect_madelung_kwargs(args) -> dict:
         counting_decay_learned=bool(getattr(args, "defect_counting_decay_learned", False)),
         counting_decay_log_beta=float(
             getattr(args, "defect_counting_decay_beta", 0.6931471805599453)),
-        lr_detach_density=bool(getattr(args, "defect_lr_detach_density", False)),
-        lr_freeze=bool(getattr(args, "defect_lr_freeze", False)),
-        image_compensation=bool(getattr(args, "defect_image_compensation", False)),
         precision_policy=str(getattr(args, "defect_precision_policy", "uniform")),
         on_site_centred=bool(getattr(args, "defect_on_site_centred", False)),
         counting_centre_form=str(getattr(args, "defect_counting_centre_form", "argument")),

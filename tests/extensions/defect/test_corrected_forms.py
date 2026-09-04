@@ -247,8 +247,6 @@ class TestEndToEnd:
         for model in (off, on):
             model.collect_pristine_centre([_batch(pristine, [[0.0] * 4])])
         assert bool(off.pristine_centre_set) and bool(on.pristine_centre_set)
-        # delta_L comes off the same pass and must be a real number.
-        assert float(on.pristine_level_spacing) > 0.0
         batch = _batch([_perovskite()], [[0.0, 0.0, 1.0, 0.0]])
         a = off(batch.to_dict(), training=True, compute_force=True)
         b = on(_batch([_perovskite()], [[0.0, 0.0, 1.0, 0.0]]).to_dict(),

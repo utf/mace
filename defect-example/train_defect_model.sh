@@ -277,9 +277,6 @@ DEFECT_COUNTING_HOP_BETA="${DEFECT_COUNTING_HOP_BETA:-1.0986122886681098}"
 # Stage A' spec knobs (sections 2.1-2.5); every one reaches the model constructor.
 DEFECT_COUNTING_DECAY_LEARNED="${DEFECT_COUNTING_DECAY_LEARNED:-False}"
 DEFECT_COUNTING_DECAY_BETA="${DEFECT_COUNTING_DECAY_BETA:-0.6931471805599453}"
-DEFECT_LR_DETACH_DENSITY="${DEFECT_LR_DETACH_DENSITY:-False}"
-DEFECT_LR_FREEZE="${DEFECT_LR_FREEZE:-False}"
-DEFECT_IMAGE_COMPENSATION="${DEFECT_IMAGE_COMPENSATION:-False}"
 DEFECT_PRECISION_POLICY="${DEFECT_PRECISION_POLICY:-uniform}"
 # Speed-cycle spec section 1.1: one atom count per batch, so the head solves
 # [B, 4n, 4n] at once. Off by default; the arms turn it on.
@@ -462,9 +459,6 @@ python -m mace.cli.run_train \
     --defect_counting_hop_beta="${DEFECT_COUNTING_HOP_BETA}" \
     --defect_counting_decay_learned="${DEFECT_COUNTING_DECAY_LEARNED}" \
     --defect_counting_decay_beta="${DEFECT_COUNTING_DECAY_BETA}" \
-    --defect_lr_detach_density="${DEFECT_LR_DETACH_DENSITY}" \
-    --defect_lr_freeze="${DEFECT_LR_FREEZE}" \
-    --defect_image_compensation="${DEFECT_IMAGE_COMPENSATION}" \
     --defect_precision_policy="${DEFECT_PRECISION_POLICY}" \
     --defect_size_grouped_batches="${DEFECT_SIZE_GROUPED_BATCHES}" \
     --defect_on_site_centred="${DEFECT_ON_SITE_CENTRED}" \
