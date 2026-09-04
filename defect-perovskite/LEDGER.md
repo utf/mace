@@ -534,3 +534,56 @@ about forty minutes and were stopped and restarted.
 "A weight is realised when the loss term that scores the population reads the column it was
 written to. A share computed by the function that set the weight is a statement of intent
 until a test has moved the loss with it."
+
+---
+
+## Entry 13 — Stage A′ and Stage B: the reference moved, F4 passes on six seeds, and the head is at its stop again
+
+**Closure of the cycle's question.** With the base trained on neutral data only and the
+neutral 159-atom cells weighted in its own loss (on the columns the base terms read — entry
+12), the reference that gate 2 is scored against moved from −0.134 to −0.0948 [−0.108,
+−0.081] eV/Å, with the out-of-fold null at 159 atoms falling from +0.080 to +0.024: a third
+of the old reference was the base extrapolating at large d. Against that reference the
+head-only Stage B cohort (six seeds, head only, base frozen and cached, learned decay
+lengths, log modulation at ln 1.5, centred on-site correction, E_LR detached and frozen at
+physical values, charged energies at a 0.25 large-cell share, c per size) puts F4 at
+−0.1004 ± 0.0166 with every seed inside the 1.5× band — **gate 2 passes 6/6**, the first
+time F4 has passed at all — while gate 1 holds as an identity (the base does not move, so
+the residual slope cannot).
+
+**What did not pass, and why each is a finding.** Gate 7: the hub-bond modulation sits at
+its stop in ss-σ (3/6), pp-σ (2/6) and pp-π (5/6) under the log form at ln 1.5 — the same
+stop b9 found under the linear form, on more seeds — while the learned decay lengths all
+moved up (1.07–1.37 Å from 1.0) with tight seed spread; the head asks for more hub coupling
+by both levers at once. Gate 4 / F10 on the centred correction: 0/6. Centring made the
+channel alive (ligand-Cl 0.17–0.44 eV above bulk-Cl on four seeds) but not resolved, and
+on the other two the raw MLP output ran to saturation on every chlorine, where the centred
+difference is identically zero: the constant-mode gauge did not leave, it moved from the
+output to the argument. Gate 3's Δc = c(159) − c(79) = +0.77 ± 0.03 eV against an
+electrostatic prediction of +0.05: the per-size constant carries the labels' size
+referencing, not the image interaction.
+
+**Forecasts.** F15 fails (1/4, one clause unmeasurable by the aligned depth; the tiling
+adoption test passes 6/6 and the term is not adopted). F16 fails on both fold sets — the
+fold-disagreement indicator does not distinguish the charged 79-atom frames, and on the A′
+folds w_E is 1.000 everywhere. F17 2/3. F18 fails: the participation-ratio spread fell
+from 0.143 to 0.089 (not halved) and the stop is hit. F19 holds (0.0002 meV/Å; the head
+already detached its density from the eigenvectors, so the flag was implicit). F20:
+identity holds, ≥ 3× fails (1.5×; the step is CPU-bound in the per-graph eigensolve and
+Ewald loop the spec excludes this cycle).
+
+**Statement of record (assert, never implement around):**
+"A gate scored against a reference is scored against the reference measured on the base
+the model was trained against, re-derived when the base changes. The A′ base moved the
+reference by a third; a gate scored against the old number would have been a gate on a
+different experiment."
+
+### The operational lessons of this cycle
+
+A weight is realised when the loss term that scores the population reads the column it
+was written to (entry 12). A float32 scoring batch through a mixed-precision model must
+keep the data's positions as the derivative's leaf, or the trunk drops out of the forces
+with the energies intact — caught by an impossible criterion-3 number, fixed, and covered
+by a test. The one-epoch Stage B smoke on the old base found two crashes the chain would
+have hit unattended. And a file-wait loop failed to wake for ten minutes after the file
+landed; relaunching it is cheaper than explaining it.

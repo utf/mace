@@ -388,3 +388,39 @@ shift of h, so h is free to drift to saturation where the deviation vanishes and
 the loss pulls it back — the constant-mode gauge b4 found did not go away, it moved from
 the output to the argument. The remedy is a bounded argument (a penalty or a cap on h
 itself), which the spec does not include and this cycle does not add.
+
+## 5.5 — the eight gates on six seeds (spec section 4)
+
+| gate | rule | result |
+|---|---|---|
+| 1 regression | charged 159 residual slopes (E, F) against A′ equal the §1 reference | **holds 6/6**, an identity: −0.0948 / −0.2665 on every seed to four decimals |
+| 2 F4 | head d(δ_sr)/dd on the 16 charged 159-atom frames, correct sign, within 1.5× of −0.0948, ≥ 4/6 | **passes 6/6**: −0.081, −0.124, −0.088, −0.111, −0.114, −0.084; pooled −0.1004 ± 0.0166; every interval inside [−0.142, −0.063] |
+| 3 c-consistency (report) | c(79), c(159), predicted difference | c(79) +10.09 ± 0.19, c(159) +10.87 ± 0.17, Δc +0.772 ± 0.029; predicted +0.049 ± 0.003 |
+| 4 F10 | ligand-Cl − bulk-Cl correction > 50 meV in ≥ 4/6 (amended rule: and > 2σ) | **fails 0/6** on the centred correction: alive but unresolved on four seeds (+0.17 to +0.44 eV against within-shell spreads 0.11–0.36), saturated dead on Cl on two |
+| 5 gap | pristine gap 2.4 ± 0.1; pinned continuum exact; bandwidth logged | **passes 6/6**: gaps 2.381–2.426 eV; pinned-continuum tests pass on the code; init gate on every seed "edges 0.249/0.018 eV (≤ 1.20), bandwidth 32.84 eV (≥ 4.80) → PASS" |
+| 6 dilution / depth (report) | R ≤ 1.3 with bound fraction; depth from CBM with seed spread | R_bound 0.95, 0.69, 0.80, 0.70, 0.78, 0.86 → 0.80 ± 0.09, gate met 6/6; bound fraction 61 ± 7%; depth from CBM (b6, 8 frames) 0.040–0.158, 0.103 ± 0.039 eV against the s7 cohort's 0.103 ± 0.026 — unmoved; (b10, 17 frames) 0.014–0.117 |
+| 7 stops / L_b | no integral type at its stop in more than 1/6 seeds; report L_b | **fails**: ss-σ 3/6, sp-σ 1/6, pp-σ 2/6, pp-π 5/6; L_b 1.072 / 1.280 / 1.332 / 1.374 ± 0.01–0.06 Å |
+| 8 participation (report) | charged/pristine ratio with seed spread | 0.735, 0.585, 0.702, 0.459, 0.625, 0.606 → **0.619 ± 0.089**; N_eff 17.7 ± 2.3; against the head-only s7 cohort 0.492 ± 0.028, the joint E_LR-on arm 0.635 ± 0.143, the joint E_LR-off control 0.478 ± 0.071 |
+
+Adopted by the six-criterion composite: 0/6, and the composite is not the verdict — its
+criteria 2 and 3 read properties of the frozen production base. Depth (b6) against the
+prejoint arm: λ moved −8.26 eV (the c-table gauge), depth from the CBM +0.000 eV; the F9
+form holds a third time.
+
+**Two readings across gates 7 and 8.** The head under the log modulation at ln 1.5 sits at
+the same stop the s7 cohort sat at under the linear form, on more seeds; and the
+participation ratio with E_LR present — detached and frozen, so it cannot push gradient
+into the head directly — lands where the joint E_LR-on arm landed (0.62 against 0.635),
+not where the head-only cohort did (0.49). The long-range branch still shapes the head
+through the force channel: its forces at fixed q enter the total forces the loss compares,
+and the head's own forces are what is left to fit.
+
+## 5.5 — F19 (the detach), measured on the six Stage B seeds
+
+Ten charged frames of each size, forces with `lr_detach_density` on and off on the same
+weights: RMS difference 0.0002 meV/Å (worst over six models), max of the same order.
+**F19 holds** by three orders of magnitude, and the reason is worth more than the number:
+the counting head builds its density from eigenvectors it already detaches (the
+degeneracy-safe backward keeps only the eigenvalue gradient), so `alpha` carried no
+gradient into E_LR before the flag existed. The detach of section 2.2 was implicit; the
+flag makes it a stated property rather than an accident of the eigensolver's backward.
