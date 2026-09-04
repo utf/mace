@@ -279,3 +279,37 @@ training frames are charged 79-atom cells — so the gate logged UNSCORED. A spe
 silently removed a gate. The batch is now built from stoichiometric frames rather than hoped
 for; the warning that survives says "no batch in the training loader carries a
 stoichiometric cell", which is a different and much louder condition.
+
+---
+
+## §5.2 — the feature-space kNN diagnostic (report only)
+
+Regime: `stageb_s1` (Stage B seed 1, head only on the frozen A′ production base), its own
+first-block feature space (32 dimensions, the head's slice of `defect_feature_readouts[0]`).
+350 neutral training frames build the reference cloud (28 159 atoms); **100 disjoint neutral
+frames are held out as the floor** — scoring a frame that is itself in the cloud gives zero
+by construction, and a floor of zero makes every charged number look enormous. Per atom, the
+distance to the nearest reference atom; per frame, the maximum over its atoms.
+
+| population | n | median | p95 |
+|---|---|---|---|
+| neutral, held out | 100 | 0.1768 | 0.2921 |
+| charged, 79 atoms | 400 | **0.2311** | 0.3500 |
+| charged, 159 atoms | 16 | 0.0920 | 0.2207 |
+
+Against d, on the charged 79-atom frames: 0.269 (4.5–5.0 Å), 0.217, 0.242, 0.247, 0.274
+(6.5–7.5 Å); correlation with d **+0.267**.
+
+**This agrees with F16, by a different route, and that is the reading.** `w_E` asked four
+fold bases whether they disagreed and they did not. This asks whether a charged frame's
+atoms have neighbours in the base's own training distribution, with no ensemble in it at
+all — and they do: the charged 79-atom frames sit 1.31× the held-out neutral floor, their
+p95 overlaps the neutral p95, and the trend with d is weak. The 159-atom charged frames are
+*closer* to the cloud than held-out neutral frames, which is what a larger cell of mostly
+bulk-like atoms should give.
+
+So **two independent label-free detectors have now failed to see the +0.37 eV/Å residual
+slope at 79 atoms**: it is not an out-of-distribution signature. That is the argument for
+standing rule 2 being framed as it is — the rule is not a statistic about the input
+distribution but a statement about what a residual MEANS, and it needs a measured neutral
+null rather than a detector. `defect-perovskite/c10_feature_knn.py`, `~/runs/c10_knn.json`.

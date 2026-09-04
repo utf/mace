@@ -96,29 +96,36 @@ def main() -> None:
     charged = select(frames, charged=True)
     pick = lambda pool, n: [pool[i] for i in rng.choice(  # noqa: E731
         len(pool), size=min(n, len(pool)), replace=False)]
-    neutral = pick(neutral, args.n_neutral)
-    print(f"  reference cloud: {len(neutral)} neutral frames", flush=True)
+    # THE NEUTRAL FLOOR MUST BE HELD OUT. Scoring a neutral frame that is itself in the
+    # reference cloud gives zero by construction, and a floor of zero makes every charged
+    # number look enormous. The pool is split: `n_neutral` frames build the cloud and a
+    # DISJOINT hundred are queried against it, so the floor is an honest "how far is a
+    # neutral frame from other neutral frames".
+    order = rng.permutation(len(neutral))
+    ref_frames = [neutral[i] for i in order[: args.n_neutral]]
+    held_out = [neutral[i] for i in order[args.n_neutral: args.n_neutral + 100]]
+    if not held_out:
+        raise SystemExit("not enough neutral frames to hold any out of the cloud")
+    print(f"  reference cloud: {len(ref_frames)} neutral frames; "
+          f"{len(held_out)} held out as the floor", flush=True)
 
-    ref = torch.cat(features(model, neutral, z, cutoff, args.device, ctx))
+    ref = torch.cat(features(model, ref_frames, z, cutoff, args.device, ctx))
     print(f"  {ref.shape[0]} reference atoms, {ref.shape[1]} features", flush=True)
 
     rows = []
-    for label, pool in (("neutral", neutral),
+    for label, pool in (("neutral_held_out", held_out),
                         ("charged_79", [a for a in charged if len(a) == 79]),
                         ("charged_159", [a for a in charged if len(a) == 159])):
-        pool = pick(pool, args.n_charged) if label != "neutral" else pool[:100]
+        pool = pick(pool, args.n_charged) if label.startswith("charged") else pool
         if not pool:
             continue
         feats = features(model, pool, z, cutoff, args.device, ctx)
         for atoms, f in zip(pool, feats):
             d = nearest(f, ref)
-            # A neutral frame is in the cloud, so its own atoms sit at zero; the SECOND
-            # nearest is its honest leave-one-out distance and is what the floor should be.
-            per_atom = d if label != "neutral" else d
             rows.append(dict(population=label, natoms=len(atoms),
                              d=float(hub_separation(atoms)),
-                             knn_max=float(per_atom.max()),
-                             knn_median=float(per_atom.median())))
+                             knn_max=float(d.max()),
+                             knn_median=float(d.median())))
         vals = np.array([r["knn_max"] for r in rows if r["population"] == label])
         print(f"  {label:12s} n={len(vals):4d}  max-over-atoms kNN distance: "
               f"median {np.median(vals):.4f}  p95 {np.percentile(vals, 95):.4f}",
