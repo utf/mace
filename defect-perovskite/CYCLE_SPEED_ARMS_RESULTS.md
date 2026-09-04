@@ -1085,3 +1085,57 @@ current definitions — and together they are the first two items for the next.
 **Caveat.** Three seeds, eight frames per population. The direction is unambiguous
 (|80-atom| < |159-atom| in every seed) but the magnitudes carry the seed spread of a channel
 whose sign is not even consistent across seeds, which is itself the §7.2 finding.
+
+---
+
+## The audit found a third instance, in the participation ratio itself
+
+§7.2b said the next cycle should audit every reference for the population it was computed on.
+Doing that immediately turned up a third case, and it is in the diagnostic this cycle used to
+make its localisation claim.
+
+`b13_participation.py` reports `pristine_ratio = N_eff(charged) / N_eff(pristine)` and its
+docstring says the ratio "does not depend on the cell size". It cannot: the numerator is
+measured on **159-atom** charged cells and the denominator on **80-atom** pristine ones,
+because the dataset holds no defect-free cell larger than 80 and the script took the biggest
+it had. `N_eff` counts atoms, so the reference is extensive and the ratio is inflated.
+
+`c15_participation_reference.py` measures the size dependence rather than assuming it, by
+tiling a pristine 80-atom cell to 160 (defect-free, right size), three arm A seeds:
+
+| | s1 | s3 | s5 | mean |
+|---|---|---|---|---|
+| N_eff, charged 159 | 20.85 | 13.07 | 14.34 | 16.09 ± 3.41 |
+| N_eff, pristine **80** (the old denominator) | 22.00 | 25.82 | 26.64 | 24.82 ± 2.02 |
+| N_eff, pristine **160** (the right one) | 42.28 | 51.59 | 53.28 | **49.05 ± 4.84** |
+| ratio as reported | 0.948 | 0.506 | 0.538 | 0.664 |
+| **ratio, size-matched** | 0.493 | 0.253 | 0.269 | **0.339** |
+
+**The reference grows 1.98× from 80 to 160 atoms**, against 2.00× for a perfectly
+delocalised state — so the pristine frontier state is extensive to within 1%, and the
+80-atom denominator inflates every published ratio by almost exactly a factor of two.
+
+Rescaling the six-seed numbers by the measured 1.98:
+
+| cohort | as reported | **size-matched** |
+|---|---|---|
+| arm A | 0.754 | **0.381** |
+| Stage B | 0.619 | **0.312** |
+| head-only (s7) | 0.491 | **0.248** |
+| E_LR-off baseline | 0.478 | **0.241** |
+
+**What changes and what does not.** Every cohort was divided by the same wrong denominator,
+so the *comparisons* are untouched: arm A's carriers are still 1.53× more spread out than the
+head-only cohort's, and the raw `N_eff` on 159-atom charged frames was size-matched all
+along. The claim "arm A localises worse" stands unaltered.
+
+What changes is the absolute reading. **Arm A's carrier occupies about a third of what a
+delocalised state would, not three quarters**, and an earlier note in this file that seed 1's
+`N_eff` of 25.5 was "indistinguishable from the pristine 25.2" compared a 159-atom cell
+against an 80-atom reference — the right comparison is ≈ 49, and seed 1 sits at about half of
+it. The carriers are localised; they are simply less localised than the cohorts before them.
+
+That is three instances of one error — `c_shift_table`, the on-site centre, and now the
+participation reference — and the third was found inside the diagnostic used to judge the
+first two. The audit is not a tidying task for the next cycle; it is the next cycle's first
+result.
