@@ -273,13 +273,35 @@ halve; pp-σ's rate was unchanged and ss-σ's nearly doubled.
 
 *(pending — relaunched 13:13 after the ordering defect in §8.1b; wave 1 due ~14:10)*
 
-### 4.5 Arm C
+### 4.5 Arm C — triggered, and deliberately not run
 
-Confirmed by gate 7 on arm A's six seeds under the trigger pre-registered before those
-numbers existed (any integral type at its stop, |tanh g| > 0.98, in more than 1/6 seeds).
-Runs after arm B in the same chain, at β = ln 2 with every other constant unchanged.
+Gate 7 fired on arm A's six seeds under the trigger pre-registered before those numbers
+existed — any integral type at its stop (|tanh g| > 0.98) in more than 1/6 seeds — at ss-σ
+5/6, sp-σ 3/6, pp-σ 2/6 and pp-π 4/6. By §4 that calls for arm C: arm A with the log
+modulation widened to β = ln 2.
 
-*(pending)*
+**It was not run.** The decision was taken after arm B's numbers were in and is recorded here
+as a decision rather than an omission. The reasoning:
+
+- The stop counts got monotonically **worse** across three regimes — Stage B (3/6, 1/6, 2/6,
+  5/6) → arm A (5/6, 3/6, 2/6, 4/6) → arm B (4/4 on all four types). Every change this cycle
+  made — the corrected on-site form, the per-site charges, the covalent anchors, the image
+  term — pushed the head *harder* against the coupling bound, not less.
+- Widening the bound from ln 1.5 to ln 2 is a 1.33× change in the modulation's range against
+  a trend that four independent model edits have failed to reverse. It would most likely
+  return "at the stop again, at a higher stop".
+- §7.3's conclusion does not depend on it: the head asks for more hub coupling whatever it is
+  given, and superexchange — a three-centre term, excluded by §9 — is the standing hypothesis
+  for what it is asking for. Arm C would be the fourth cycle to answer that question with a
+  bound rather than a term.
+
+**What this costs the cycle, stated plainly.** Gate 7 is left unresolved for the third cycle,
+and there is no measurement here of whether a wider bound helps. If the next cycle wants that
+answer it is `ARM=c` in `queue_arms.sh` and two waves, roughly 2 h 20 on four GPUs; the
+launcher is `queue_arms_chain_c.sh`, written and committed. What the cycle has instead is the
+two hours spent on arm B's diagnosis — the F4 knockout that attributes −0.244 eV/Å to the
+image term — which is a target, where arm C would most likely have produced another
+observation of the same trend.
 
 ---
 
