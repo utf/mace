@@ -541,3 +541,19 @@ where that file is a two-stage chain (`ARM=c SEEDS="1 2 3 4"`, then `"5 6"`, the
 `TAG=armc` gates), written as a **new file** rather than by editing the chain script — see
 the byte-offset finding above. `ARM=c` differs from arm A in one constant: `HOP_BETA`
 0.4054651 (ln 1.5) → 0.6931472 (ln 2). Every guard is unchanged.
+
+### F23's baseline, fixed before arm B runs
+
+F23 reads "arm B: Δc falls 0.2–0.4 eV; R inside [0.66, 1.34]; thermal tiling drift ≤ 0.3·D0;
+F4 holds". "Falls" needs a baseline and the forecast does not name one. Fixed now: **the
+comparison is arm A, not Stage B**, because arm B is arm A plus the image term and nothing
+else, so anything measured against Stage B would confound the image term with the null gate.
+The clause passes if
+
+    Δc(A) − 0.40 ≤ Δc(B) ≤ Δc(A) − 0.20   (eV, on the six-seed means)
+
+and the other three clauses are the gate-6, gate-10 and gate-2 conditions unchanged. All
+four must hold for F23 to pass; each is scored separately in the table so a partial result
+reads as one.
+
+F21 ("arm A: F10 passes ≥ 4/6") is already gate 4's condition and needs no interpretation.
