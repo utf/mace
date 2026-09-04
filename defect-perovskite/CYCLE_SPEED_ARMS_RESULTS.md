@@ -1000,3 +1000,88 @@ intended, and now for a sharper reason than when that was written.
 errors are `fixture 'benchmark' not found` in `tests/unit/test_compile.py` — `pytest-benchmark`
 is not installed in this environment. Pre-existing, unrelated to any change in this cycle, and
 confined to that one file. Recorded rather than rounded away.
+
+---
+
+## How arm A's models localise, and why the on-site correction is a bulk shift
+
+### The localisation numbers (six seeds, 159-atom charged frames)
+
+| measure | arm A | head-only (s7) | E_LR-off baseline | Stage B |
+|---|---|---|---|---|
+| participation `n_eff` | **18.79 ± 3.62** | 13.17 ± 0.94 | 14.98 ± 1.88 | — |
+| ratio to the pristine frontier state | **0.754 ± 0.187** | 0.492 ± 0.028 | 0.478 ± 0.071 | 0.619 ± 0.089 |
+| dilution R (gate 6) | 0.925 ± 0.144, 6/6 in band | — | — | 0.868 ± 0.076 |
+| bound fraction | 0.635 ± 0.023 | — | — | 0.615 ± 0.067 |
+| depth (dilution's measure) | 0.0667 ± 0.0094 eV | — | — | 0.0516 ± 0.0082 |
+| depth from the CBM | **0.334** (0.150–0.817) | — | — | 0.014–0.093 |
+
+**They localise worse.** `n_eff` rose from 13 to 19 atoms and the ratio to the pristine band
+state from 0.49 to 0.75 — seed 1's 25.5 is indistinguishable from the pristine 25.2. The seed
+spread rose **6.7×**.
+
+**And that is backwards.** The level went 0.28 eV *deeper* while the state got *more*
+delocalised. Energy and extent should move together; a deeper level binds more tightly.
+
+### The correction is spent on the bulk, not on the defect
+
+Per-shell mean correction, six seeds:
+
+| shell | mean correction | atoms | correction × atoms |
+|---|---|---|---|
+| hub Pb | −0.232 ± 0.161 | 16 | −3.7 |
+| ligand Cl | +0.101 ± 0.590 | 80 | +8.1 |
+| **bulk Cl** | **−0.551 ± 0.789** | **680** | **−374** |
+| bulk Pb | −0.080 ± 0.046 | 240 | −19 |
+| Cs | +0.034 ± 1.004 | 256 | +8.6 |
+
+One mechanism explains all three symptoms: a large, near-uniform shift of the Cl sublattice
+moves the frontier eigenvalue down (deeper level), builds no potential well (no extra
+localisation), and does not separate ligand from bulk (F10 1/6, unresolved).
+
+### Where the bulk shift comes from — measured, not inferred
+
+`c14_centre_offset.py` on three arm A seeds, |bulk-Cl correction| per population. Magnitudes,
+because the *sign* differs by seed and a signed mean across seeds is therefore meaningless:
+
+| population | s1 | s3 | s5 | mean | × the centre's own |
+|---|---|---|---|---|---|
+| neutral **80** — the centre's own population | 0.065 | 0.178 | 0.029 | **0.091** | 1.0 |
+| neutral **79** — small cell, a vacancy, no carrier | 0.156 | 0.091 | 0.029 | 0.092 | 2.4, 0.5, 1.0 |
+| neutral **159** — big cell, a vacancy, **no carrier** | 0.208 | 0.791 | 0.213 | **0.404** | **3.2, 4.4, 7.2** |
+| charged **159** — big cell, vacancy and carrier | 0.818 | 0.211 | 0.876 | 0.635 | 12.5, 1.2, 29.8 |
+
+**The centring works where it is defined and fails where it is applied.** On the 80-atom
+cells the centre is built from, the correction is 0.09 eV — near zero, by construction, as
+§2.1 intended. On 79-atom cells, also near zero. On **159-atom cells with no carrier in them
+at all** it is 3.2×, 4.4× and 7.2× larger, in every seed. The charged frames add more on two
+seeds of three, inconsistently.
+
+So the bulk shift is **primarily a size artefact of the centre**: `x̄_s` is the per-species
+mean first-block feature over 80-atom stoichiometric thermal cells, and bulk Cl in a
+159-atom cell does not sit at it. The residual `h(x_i) − h(x̄_s)` then has a non-zero mean
+over 680 atoms, and γ tanh of that is a sublattice-wide constant that no amount of training
+can distinguish from a genuine on-site shift.
+
+### The unifying statement
+
+This is the **same error as §8.5's**, in a second place:
+
+| | the reference | where it is applied | the consequence |
+|---|---|---|---|
+| `c_shift_table` | charged frames only, no same-size neutral | both size classes | +0.75 eV of Δc that is not carrier physics |
+| on-site centre `x̄_s` | 80-atom stoichiometric cells | 79- and 159-atom defective cells | a 0.4–0.6 eV bulk Cl shift that is not defect physics |
+
+**A reference quantity computed on one cell population and applied to another leaks the
+difference between the populations into the physics.** Both instances were invisible to the
+loss, both were found by scoring a control population that carries no carrier, and both have
+the same shape of remedy: build the reference within the population it is subtracted from.
+For c that is the same-size neutral frames; for the centre it is a per-size-class `x̄_s`, or
+a centre taken from the neutral frames of each size.
+
+Neither is in this cycle — §9 excludes label-side work and the arms are trained on the
+current definitions — and together they are the first two items for the next.
+
+**Caveat.** Three seeds, eight frames per population. The direction is unambiguous
+(|80-atom| < |159-atom| in every seed) but the magnitudes carry the seed spread of a channel
+whose sign is not even consistent across seeds, which is itself the §7.2 finding.
