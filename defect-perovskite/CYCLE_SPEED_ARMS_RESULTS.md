@@ -819,3 +819,40 @@ electron on Pb sites while the typical site moves 0.055 e, and no site is at ζ.
 therefore the right order — at ζ = 0.1 this channel would be pinned at its stop on the hub —
 and the neutrality centring is exact to machine precision, which is the check that the site
 term is not quietly reintroducing a per-cell net charge.
+
+### Gates 1, 2 and 5 on wave 1 — F4 survives, the level moves deep
+
+`b10_adoption.py` against the A′ references and the four cross-fit folds.
+
+| criterion | Stage B (6 seeds) | arm A wave 1 (4 seeds) |
+|---|---|---|
+| 1 no carrier leakage into the base | 6/6 | **4/4** |
+| 1b base not shrunk | 6/6 | **4/4** |
+| 2 neutral 159 slope toward zero | 0/6 | 0/4 (base-level, frozen: identical every seed) |
+| 3 neutral-79 window not degraded | 0/6 | 0/4 (likewise) |
+| **4 F4 in [−0.142, −0.063]** | **6/6** | **3/4** |
+| 5 pristine gap 2.4 ± 0.1 | 6/6 | **4/4** |
+| 6 shallow | 6/6 | **3/4** |
+
+**Gate 2 (F4).** −0.0862 ± 0.0163 against Stage B's −0.1004 ± 0.0166; per seed −0.0595
+(out, low), −0.1014, −0.0974, −0.0863. The slope has moved **shallower by 0.014 eV/Å** and
+one seed has crossed the band's lower edge. On four seeds this is 3/4 and the gate needs
+≥ 4/6; it survives on this evidence but with much less margin than Stage B had, and the
+direction of travel is the same one gate 9 reports — arm A's head is uniformly *less*
+size-dependent than Stage B's.
+
+**Gate 5 (gap).** 2.391, 2.368, 2.397, 2.396 eV, all inside 2.4 ± 0.1, with the init gate
+passed on the covalent anchors (edges 0.233/0.009 eV, bandwidth 33.73 eV). Passes.
+
+**The level moved deep, and this is new.** Depth from the CBM: **+0.289, +0.817, +0.228,
++0.281 eV**, against Stage B's +0.014 to +0.093 eV. One seed is no longer classifiable as a
+shallow donor at all. V_Cl⁺ in CsPbCl₃ is expected to be a shallow donor, so this is a move
+*away* from the expected physics, and it is the first arm-A number that is worse rather than
+merely different. It is not any single gate's business — criterion 6 catches it at 3/4 — but
+it is the thing to watch when arm B's image term and arm C's wider modulation land, and it
+belongs in the report whatever the six-seed numbers say.
+
+Criteria 2 and 3 read identically on every seed because they are properties of the **frozen
+base**, not of the head: the neutral 159 slope and the neutral-79 window are the same
+numbers Stage B reported, and they fail for the same reason they failed then. They are not
+evidence about the arms.
