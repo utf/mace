@@ -641,3 +641,73 @@ And a weighting formula solved for a target share divides by the small populatio
 once the null gate zeroes that population the formula returns a factor of **zero**, which
 would have multiplied the surviving weights by nothing and deleted every charged energy
 from the loss without a word.
+
+## 15. A reference computed on one cell population and applied to another
+
+Four quantities in this model work by subtraction: you average something over a set of
+frames and subtract the average from something else. Three of the four turned out to be
+averaged over a different set of frames than they were subtracted from, and in each case the
+difference between the two sets became a number that reads as physics.
+
+| # | reference | built on | applied to | what leaked in |
+|---|---|---|---|---|
+| 1 | `c_shift_table` | charged frames, no same-size neutral | both size classes | **+0.75 eV of Δc** |
+| 2 | on-site centre `x̄_s` | 80-atom stoichiometric cells | 79- and 159-atom defective cells | a **0.4–0.6 eV** shift on 680 bulk Cl |
+| 3 | participation reference | 80-atom pristine cells | 159-atom charged cells | **every ratio inflated 1.98×** |
+| 4 | `δ_L` | 80-atom stoichiometric cells | 159-atom charged cells | 0.72×; nothing, while `s` saturates |
+
+Item 1 is the one that mattered most and it had been open for two cycles. Δc = +0.77 eV
+against a predicted +0.05 was read as a fifteen-fold failure of the electrostatics. It was
+not: `c` is the median residual per carrier over charged frames only, and the frozen base's
+residual steps by **+0.745 eV** between the 79- and 159-atom cells on **neutral** frames,
+which have no carrier in them at all. Referenced to same-size neutral frames the remainder
+is +0.044 [−0.042, +0.115] eV and the prediction of +0.049 sits inside it. **The prediction
+was right for two cycles while the measurement it was compared against was measuring
+something else.**
+
+Item 2 explains three unrelated-looking arm A results at once. Weighted by atom count the
+on-site channel spends −374 eV·atom on 680 bulk Cl against −3.7 on 16 hub Pb: a sublattice
+shift, not a defect correction. A uniform shift moves the frontier eigenvalue (the level
+went 0.29 eV deeper), builds no potential well (the carrier *delocalised*, `N_eff` 13 → 19),
+and separates no shells (F10 1/6, unresolved). On the 80-atom cells `x̄_s` is built from the
+correction is 0.09 eV; on 159-atom cells **with no carrier in them** it is 3.2×, 4.4× and
+7.2× larger, in every seed.
+
+Item 3 was found by running the audit rather than filing it, and it is in the diagnostic
+used to judge items 1 and 2. Item 4 is the same pattern with no consequence at all.
+
+**Statement of record (assert, never implement around):**
+"Every reference in this model must name the population it was computed on, and be refused
+when applied to another. A reference averaged over one population and subtracted from
+another leaks the difference between the populations into the physics, and the loss cannot
+see it: the fit absorbs the offset and reports the same RMSE either way. Find these by
+scoring a control population that lacks the thing being measured — a frame with no carrier
+in it — and asking whether the quantity survives."
+
+### The operational lessons of this cycle
+
+**Never edit a shell script while a copy of it is running.** `bash` reads a script by byte
+offset and seeks back to the end of the last parsed command before running it. A 327-byte
+insertion *above* the driver's resume point shifted every later offset; the chain would have
+resumed inside a function body with an unset variable and `set -u` would have killed it
+after wave 1 — four models, no error, nobody watching. Caught by comparing two file sizes,
+not by anything failing. Every later change went into a new file.
+
+**A fixture that makes the code under test convenient to call can delete the failure mode it
+was written to expose.** Arm B died on every seed because `collect_pristine_centre` — the
+pristine pass that *measures* δ_L — ran the bound switch that *consumes* it. Eight tests
+covered that switch and none caught it, because every one called a `_with_spacing` helper
+that set δ_L by hand. The helper existed precisely because the switch needs δ_L, and in
+supplying it the tests removed the ordering the trainer actually uses. The regression test
+now asserts the *order*, and a second one asserts the guard does not latch — a latched guard
+would let arm B train, report no error, and silently be arm A, which is worse than the crash.
+
+**A per-seed list retyped from a log is not evidence; the JSON is.** One such list in this
+cycle's results did not match its own JSON. Every aggregate quoted against a gate had been
+read from the file and was unaffected, but the fix is structural rather than a resolution to
+be careful: `c12_gate_table.py` now assembles the whole gate table from the scorers' JSON,
+and was validated by reproducing the previous cycle's published table line for line.
+
+**A signed mean over seeds whose signs differ is not a statistic.** Reading one aggregate
+that way, this cycle briefly recorded the centring hypothesis as falsified when the
+within-seed magnitudes confirm it, unanimously.
