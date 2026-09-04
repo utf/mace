@@ -313,3 +313,22 @@ slope at 79 atoms**: it is not an out-of-distribution signature. That is the arg
 standing rule 2 being framed as it is — the rule is not a statistic about the input
 distribution but a statement about what a residual MEANS, and it needs a measured neutral
 null rather than a detector. `defect-perovskite/c10_feature_knn.py`, `~/runs/c10_knn.json`.
+
+---
+
+## §2.3 — the init gate under the covalent-radius anchor
+
+Regime: arm A seed 1 at initialisation, on a stoichiometric 80-atom training cell,
+`E_gap = 2.4 eV`.
+
+| | Stage B (anchor 2.861 Å) | arm A (covalent anchors) |
+|---|---|---|
+| edge spacing below / above | 0.249 / 0.018 eV | **0.233 / 0.009 eV** |
+| bandwidth | 32.84 eV | **33.73 eV** |
+| verdict (edges ≤ 1.20, bandwidth ≥ 4.80) | PASS | **PASS** |
+
+The anchors are Cl–Cl 2.04, Cl–Pb 2.48, Cl–Cs 3.46, Pb–Pb 2.92, Cs–Pb 3.90, Cs–Cs 4.88 Å
+against the retired single 2.861, so Harrison's 1/d² rescales the pair initialisations by
+1.97, 1.33, 0.68, 0.96, 0.54 and 0.34. The gate is unmoved: the initialisation is still
+band-like, with a slightly wider band and slightly tighter frontier edges. §2.3's
+"init gate unchanged" holds as measured rather than as assumed.
