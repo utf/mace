@@ -401,9 +401,53 @@ Three of this cycle's results are consequences of that revival, and none of them
 - **It is seed-unstable**: 0.26 to 0.80 eV of level shift across four seeds, and the
   alignment IQR roughly doubles when it is switched on.
 
-Nothing in this cycle's spec constrains the channel's magnitude or its shell-to-shell
-spread. A prior or a penalty on that spread is the obvious next lever and it is **not** among
-§9's exclusions.
+A fourth result explains the other three. Weighted by atom count the channel spends
+**−374 eV·atom on the 680 bulk Cl** against −3.7 on the 16 hub Pb: it is a near-uniform shift
+of the Cl sublattice, not a defect correction. A uniform shift moves the frontier eigenvalue
+down, builds no potential well, and does not separate ligand from bulk — the deep level, the
+delocalisation and the unresolved F10 are one thing seen three ways.
+
+**And the shift is a size artefact of the correction's own centre**, measured on populations
+chosen so that one of them contains no carrier at all (`c14_centre_offset.py`, three seeds,
+|bulk-Cl correction| in eV):
+
+| population | mean | × the centre's own population |
+|---|---|---|
+| neutral **80** — the cells `x̄_s` is built from | **0.091** | 1.0 |
+| neutral **79** — small cell, a vacancy, no carrier | 0.092 | ≈ 1 |
+| neutral **159** — big cell, a vacancy, **no carrier** | **0.404** | **3.2, 4.4, 7.2** |
+| charged **159** | 0.635 | 12.5, 1.2, 29.8 |
+
+The centring works where it is defined and fails where it is applied. `x̄_s` is the
+per-species mean first-block feature over 80-atom stoichiometric thermal cells; bulk Cl in a
+159-atom cell does not sit at it, so `h(x_i) − h(x̄_s)` carries a non-zero mean over 680
+atoms and γ tanh of it is a sublattice-wide constant. Nothing in training can tell that from
+a genuine on-site shift, and it is present on frames with no carrier in them.
+
+Two levers follow, and neither is among §9's exclusions: a **per-size-class centre** (or one
+taken from the neutral frames of each size), and a prior or penalty on the correction's
+shell-to-shell spread, which nothing in this cycle's spec constrains.
+
+### 7.2b One error, in two places
+
+§7.1 and §7.2 are the same mistake:
+
+| | the reference | where it is applied | what leaks in |
+|---|---|---|---|
+| `c_shift_table` | charged frames only, with no same-size neutral | both size classes | +0.75 eV of Δc that is not carrier physics |
+| on-site centre `x̄_s` | 80-atom stoichiometric cells | 79- and 159-atom defective cells | a 0.4–0.6 eV bulk Cl shift that is not defect physics |
+
+**A reference quantity computed on one cell population and applied to another leaks the
+difference between the populations into the physics.** Both instances were invisible to the
+loss — the fit absorbs them and reports a good RMSE either way. Both were found the same way,
+by scoring a control population that carries no carrier and asking whether the quantity
+survives. Both have the same shape of remedy: build the reference inside the population it is
+subtracted from.
+
+That is a stronger statement than either finding alone, and it is the one to carry into the
+next cycle: **every reference in this model should name the population it was computed on,
+and be refused when applied to another.** The two known instances are the first two items;
+the audit is the third.
 
 ### 7.3 The hub coupling, for the third cycle running
 
