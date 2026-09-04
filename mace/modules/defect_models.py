@@ -28,6 +28,7 @@ from mace.modules.defect_blocks import (
     CounterEmbedding,
     StructuredLatentCharges,
 )
+from mace.modules.defect_profile import mark
 from mace.modules.latent_ewald import LatentEwald
 from mace.modules.models import ScaleShiftMACE
 from mace.modules.utils import get_atomic_virials_stresses, get_outputs, prepare_graph
@@ -757,9 +758,10 @@ class MACEDefect(ScaleShiftMACE):
             # `cell`, never `cell_les`. H carries the periodic ion-lattice potential in
             # every mode -- the isolated switch belongs to E_LR alone, and there is no
             # branch here to reach it. Full lattice sum: no self-image subtraction.
-            madelung = self.madelung.on_site_shift(
-                self.latent_ewald, node_species, positions, cell, batch,
-                eps_inf=self.madelung_eps_inf)
+            with mark("ewald/madelung"):
+                madelung = self.madelung.on_site_shift(
+                    self.latent_ewald, node_species, positions, cell, batch,
+                    eps_inf=self.madelung_eps_inf)
 
         head_kwargs = dict(
             node_feats=head_feats,
@@ -797,8 +799,9 @@ class MACEDefect(ScaleShiftMACE):
                 probe = self.spectral(**head_kwargs)
             rho = probe.alpha[:, 0].detach().to(positions.dtype)          # sums to 1 per carrier
             q_c = -rho                                                    # electron: sum = -1
-            phi_img = image_potential(self.latent_ewald, q_c, positions, cell, batch,
-                                      num_graphs)
+            with mark("ewald/image"):
+                phi_img = image_potential(self.latent_ewald, q_c, positions, cell, batch,
+                                          num_graphs)
             comp = -phi_img / float(self.madelung_eps_inf)
             head_kwargs["madelung"] = comp if madelung is None else madelung + comp
             image_comp = comp
@@ -960,6 +963,8 @@ class MACEDefect(ScaleShiftMACE):
         node_es_list = [pair_node_energy]
         node_feats_list: List[torch.Tensor] = []
 
+        _trunk_mark = mark("trunk")
+        _trunk_mark.__enter__()
         for i, (interaction, product) in enumerate(
             zip(self.interactions, self.products)
         ):
@@ -987,6 +992,7 @@ class MACEDefect(ScaleShiftMACE):
                 node_feats=node_feats, sc=sc, node_attrs=node_attrs_slice
             )
             node_feats_list.append(node_feats)
+        _trunk_mark.__exit__(None, None, None)
 
         # Base branch readouts, and the invariant features the correction heads see.
         defect_feats_list: List[torch.Tensor] = []
@@ -1186,6 +1192,8 @@ class MACEDefect(ScaleShiftMACE):
         energy_lr_host = torch.zeros_like(base_energy)
 
         if self.use_long_range and int(self.current_epoch) >= self.lr_start_epoch:
+            _lr_mark = mark("ewald/lr")
+            _lr_mark.__enter__()
             # A null cell selects the isolated evaluator inside LES, which is how
             # non-periodic configurations are handled.
             cell_les = head_cell.clone()
@@ -1317,6 +1325,7 @@ class MACEDefect(ScaleShiftMACE):
                     q_carrier, head_positions, cell_les, data["batch"], num_graphs
                 )
                 delta_lr = delta_lr + dilute_correction
+            _lr_mark.__exit__(None, None, None)
 
         # The correction at this frame's own counter is what the total energy carries;
         # the paired difference is what the delta labels supervise. They coincide only
@@ -1349,16 +1358,21 @@ class MACEDefect(ScaleShiftMACE):
         response_ref = (None if force_out_ref is None
                         else force_out_ref.get("force_response"))
         if compute_force:
-            correction_forces = _energy_gradient(correction_energy, positions, training)
-            correction_forces_ref = _energy_gradient(
-                correction_energy_ref, positions, training
-            )
+            with mark("model/grad_corr"):
+                correction_forces = _energy_gradient(correction_energy, positions,
+                                                     training)
+            with mark("model/grad_corr_ref"):
+                correction_forces_ref = _energy_gradient(
+                    correction_energy_ref, positions, training
+                )
             if response is not None:
                 correction_forces = correction_forces + response
             if response_ref is not None:
                 correction_forces_ref = correction_forces_ref + response_ref
             delta_forces = correction_forces - correction_forces_ref
 
+        _out_mark = mark("model/outputs")
+        _out_mark.__enter__()
         forces, virials, stress, hessian, edge_forces, _ = get_outputs(
             energy=inter_e + energy_lr_host + correction_energy,
             positions=positions,
@@ -1372,6 +1386,7 @@ class MACEDefect(ScaleShiftMACE):
             compute_hessian=compute_hessian,
             compute_edge_forces=compute_edge_forces,
         )
+        _out_mark.__exit__(None, None, None)
 
         # The base-branch forces are what L_base is trained against. They come for free
         # as the difference: the total energy is the sum of the two branches, and the

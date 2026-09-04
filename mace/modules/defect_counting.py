@@ -53,6 +53,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import torch
 from torch import nn
 
+from mace.modules.defect_profile import mark
+
 __all__ = ["VALENCE", "ORBITALS_PER_ATOM", "sk_block", "fermi_fill", "free_energy",
            "neutral_electrons", "spin_targets", "SlaterKosterH"]
 
@@ -203,27 +205,58 @@ def entropy_of(x: torch.Tensor, family: str = SMEARING_FAMILY) -> torch.Tensor:
     raise ValueError(f"unknown smearing family {family!r}")
 
 
-def find_mu(eps: torch.Tensor, n_electrons: float, width: float,
+def _col(mu):
+    """`mu` shaped to broadcast against a spectrum's last axis.
+
+    `mu` is one number per spectrum, so it is `[...]` where the spectrum is `[..., n]`.
+    `unsqueeze(-1)` is right in both the scalar case (a 0-dim tensor becomes `[1]`, which
+    broadcasts against `[n]`) and the batched one (`[B]` becomes `[B, 1]`).
+    """
+    return mu.unsqueeze(-1) if torch.is_tensor(mu) else mu
+
+
+def find_mu(eps: torch.Tensor, n_electrons, width: float,
             family: str = SMEARING_FAMILY, tol: float = 1e-10,
-            max_iter: int = 200) -> float:
+            max_iter: int = 200) -> torch.Tensor:
     """The `mu` that puts exactly `n_electrons` in the spectrum, by bisection under no_grad.
 
     Detaching is exact rather than approximate: at fixed N the free energy is stationary in
     the fill, so `mu` does not appear in `dF/deps`.
+
+    BATCHED, AND WITHOUT A HOST SYNCHRONISATION IN THE LOOP -- which is section 1.3's whole
+    finding. The previous version tested `float(total) > n_electrons` and `hi - lo < tol` on
+    the host every iteration, so one bisection cost ~40 GPU->CPU synchronisations; the head
+    runs ten of them per graph per pass, and the component profile put `head/bisect` at 28%
+    of the step's CPU time and ~6900 `_local_scalar_dense` calls -- more than every other
+    region together, and none of it arithmetic. Bisection halves its bracket by a fixed
+    factor, so the iteration count that reaches `tol` is known in advance from the initial
+    bracket alone: it is computed once, from ONE synchronisation, and the loop then runs on
+    tensors with no host traffic at all. The result is bit-identical to a run of the old
+    loop that exits on the same bracket width.
+
+    `eps` is `[..., n_states]` and `n_electrons` a float or a tensor broadcastable to
+    `eps.shape[:-1]`; the return is a tensor of shape `eps.shape[:-1]`, so a 1-D spectrum
+    gives a 0-dim tensor that broadcasts exactly where the old float did.
     """
-    with torch.no_grad():
+    with torch.no_grad(), mark("head/bisect"):
         e = eps.detach()
-        lo = float(e.min()) - 50.0 * width - 1.0
-        hi = float(e.max()) + 50.0 * width + 1.0
-        for _ in range(max_iter):
+        n = torch.as_tensor(n_electrons, dtype=e.dtype, device=e.device)
+        if n.dim() == 0:
+            n = n.expand(e.shape[:-1])
+        lo = e.amin(dim=-1) - 50.0 * width - 1.0
+        hi = e.amax(dim=-1) + 50.0 * width + 1.0
+        # ONE synchronisation, outside the loop. After k halvings the bracket is
+        # `span / 2^k`, so `ceil(log2(span / tol))` iterations reach `tol` -- the same
+        # stopping point the old loop's `hi - lo < tol` test found, decided in advance.
+        span = float((hi - lo).max())
+        iters = min(int(max_iter),
+                    int(math.ceil(math.log2(max(span, tol) / tol))) + 1)
+        for _ in range(iters):
             mid = 0.5 * (lo + hi)
-            total = occupation_of((e - mid) / width, family).sum()
-            if float(total) > n_electrons:
-                hi = mid
-            else:
-                lo = mid
-            if hi - lo < tol:
-                break
+            total = occupation_of((e - mid.unsqueeze(-1)) / width, family).sum(dim=-1)
+            too_many = total > n
+            hi = torch.where(too_many, mid, hi)
+            lo = torch.where(too_many, lo, mid)
         return 0.5 * (lo + hi)
 
 
@@ -280,8 +313,8 @@ def changed_level_index(n_total: int, counts: Sequence[int], occupation=None) ->
     return int(round(max(n_maj, n_maj_ref))) - 1
 
 
-def fermi_fill(eps: torch.Tensor, n_electrons: float, t_el: float = T_EL,
-               tol: float = 1e-10, max_iter: int = 200) -> torch.Tensor:
+def fermi_fill(eps: torch.Tensor, n_electrons, t_el: float = T_EL,
+               tol: float = 1e-10, max_iter: int = 200, mu=None) -> torch.Tensor:
     """Fermi-Dirac occupations at the `mu` that puts exactly `n_electrons` in the spectrum.
 
     Bisection, under `no_grad`. `mu` is a function of the eigenvalues, but the free energy's
@@ -289,8 +322,9 @@ def fermi_fill(eps: torch.Tensor, n_electrons: float, t_el: float = T_EL,
     than approximate -- see the module docstring.
     """
     family = _FAMILY
-    mu = find_mu(eps, n_electrons, t_el, family, tol=tol, max_iter=max_iter)
-    return occupation_of((eps - mu) / t_el, family)
+    if mu is None:
+        mu = find_mu(eps, n_electrons, t_el, family, tol=tol, max_iter=max_iter)
+    return occupation_of((eps - _col(mu)) / t_el, family)
 
 
 def free_energy(eps: torch.Tensor, n_electrons: float, t_el: float = T_EL) -> torch.Tensor:
@@ -307,12 +341,14 @@ def free_energy(eps: torch.Tensor, n_electrons: float, t_el: float = T_EL) -> to
     spectrum symmetric about `mu = 0` -- which the first version of the gradient test used,
     so that test passed while the identity was wrong for every real spectrum.
     """
-    f = fermi_fill(eps, n_electrons, t_el).detach()
+    # ONE bisection, not two: `fermi_fill` used to run its own, and the entropy below ran
+    # another on the same spectrum for the same fill. Identical answers, twice the cost.
     mu = find_mu(eps, n_electrons, t_el, _FAMILY)
+    f = fermi_fill(eps, n_electrons, t_el, mu=mu).detach()
     # The LIVE family's entropy: Methfessel-Paxton exp(-x^2)/(2 sqrt(pi)) under Gaussian
     # smearing, Shannon under Fermi-Dirac. Both make F variational in the occupations, which
     # is what the Hellmann-Feynman force argument needs.
-    entropy = entropy_of((eps.detach() - mu) / t_el, _FAMILY).sum()
+    entropy = entropy_of((eps.detach() - _col(mu)) / t_el, _FAMILY).sum()
     return (f * eps).sum() - t_el * entropy
 
 
@@ -580,6 +616,43 @@ class SlaterKosterH(nn.Module):
         return 0.5 * (H + H.transpose(0, 1))
 
 
+    def batched(self, node_feats, node_species, edge_index, edge_vector,
+                local: torch.Tensor, edge_graph: torch.Tensor, n_nodes: int,
+                num_graphs: int) -> torch.Tensor:
+        """Dense `H` for a whole batch of EQUAL-SIZED graphs at once: `[B, 4n, 4n]`.
+
+        Section 1.1. The per-graph `forward` above is the reference and stays the reference:
+        this returns the same matrices, stacked, and `test_batched_head.py` asserts it to
+        1e-8 on eigenvalues and on `P`. What it removes is the python loop -- one call to the
+        hopping MLP for every edge in the batch instead of one per graph, one `index_put`
+        instead of B of them -- which the section 1.3 profile identified as the step's cost:
+        the head's arithmetic is small and its OPERATION COUNT is not.
+
+        `local` is each node's index within its own graph and `edge_graph` each edge's graph.
+        Both are the caller's, because the caller already knows the batch is size-uniform;
+        recomputing them here would hide the precondition that makes this legal.
+        """
+        src, dst = edge_index[0], edge_index[1]
+        r = edge_vector.norm(dim=-1).clamp_min(1e-9)
+        direction = edge_vector / r.unsqueeze(-1)
+        v = self.integrals(node_feats[src], node_feats[dst], r,
+                           node_species[src], node_species[dst])
+        blocks = sk_block(direction, v)                        # [n_edges, 4, 4]
+
+        dim = int(n_nodes) * ORBITALS_PER_ATOM
+        o = torch.arange(ORBITALS_PER_ATOM, device=src.device)
+        rows = local[src].reshape(-1, 1, 1) * ORBITALS_PER_ATOM + o.reshape(1, -1, 1)
+        cols = local[dst].reshape(-1, 1, 1) * ORBITALS_PER_ATOM + o.reshape(1, 1, -1)
+        flat = (edge_graph.reshape(-1, 1, 1) * (dim * dim) + rows * dim + cols)
+        H = torch.zeros(num_graphs * dim * dim, device=node_feats.device,
+                        dtype=node_feats.dtype)
+        H = H.index_put((flat.expand(-1, ORBITALS_PER_ATOM,
+                                     ORBITALS_PER_ATOM).reshape(-1),),
+                        blocks.reshape(-1), accumulate=True)
+        H = H.reshape(num_graphs, dim, dim)
+        return 0.5 * (H + H.transpose(-1, -2))
+
+
 def head_energy(eps_maj: torch.Tensor, eps_min: torch.Tensor, n_total: int,
                 counts: Sequence[int], t_el: float = T_EL) -> torch.Tensor:
     """`E_head = sum_sigma [F_sigma(N_sigma) - F_sigma(N_sigma,neutral)]`.
@@ -690,6 +763,11 @@ class CountingHead(nn.Module):
         # C_SHIFT_SIZE_THRESHOLD atoms). Added to the scalar `c_shift`, which stays the
         # global offset so a model calibrated the old way is the all-zero table.
         self.c_shift_table = nn.Parameter(torch.zeros(3, 2))
+        # Section 1.1: use the batched `[B, 4n, 4n]` solver whenever the batch is
+        # size-uniform. A plain attribute rather than a buffer -- it selects between two
+        # paths that are asserted equal, so it is not model state and a checkpoint written
+        # with it off must not restore a model that computes something different.
+        self.batch_by_size = True
         # `_carrier_head` hands `centre` and `graph_sizes` only to a head that declares it.
         self.accepts_centre = True
         # Read by `_carrier_head` to decide whether to hand this head `positions` and a
@@ -765,87 +843,28 @@ class CountingHead(nn.Module):
         resp_d: List[torch.Tensor] = []
 
         src, dst = edge_index[0], edge_index[1]
-        for g in range(num_graphs):
-            node_sel = (batch == g).nonzero(as_tuple=True)[0]
-            n_g = int(node_sel.numel())
-            if n_g == 0:
-                spectra.append(torch.zeros(1, device=device, dtype=dtype))
-                per_graph_nodes.append(node_sel)
-                continue
-            remap = torch.full((n_nodes,), -1, dtype=torch.long, device=device)
-            remap[node_sel] = torch.arange(n_g, device=device)
-            edge_sel = (batch[src] == g).nonzero(as_tuple=True)[0]
 
-            H = self.h(node_feats[node_sel], node_species[node_sel],
-                       torch.stack([remap[src[edge_sel]], remap[dst[edge_sel]]]),
-                       edge_vector[edge_sel],
-                       madelung=None, n_nodes=n_g)
-            # The on-site term is applied here rather than inside `self.h` so the clamp above
-            # -- which is diagnostic and must never reach the Hamiltonian builder -- has a
-            # single place to act.
-            diag = torch.cat([levels[node_sel][:, :1],
-                              levels[node_sel][:, 1:].expand(-1, 3)], dim=-1).reshape(-1)
-            H = H - torch.diag(torch.diagonal(H)) + torch.diag(diag)
-
-            n_total = int(self.valence[node_species[node_sel]].sum())
-            c = counts[g].tolist() if counts.dim() > 1 else counts.tolist()
-            occ = None if occupations is None else occupations[g]
-            resp_bucket = {} if force_out is not None else None
-            e_head, lam, psi, p_now, p_ref = head_energy_hf(
-                H, n_total, c, self.t_el, occupation=occ, response_out=resp_bucket)
-            delta[g] = e_head
-
-            # SECTION 1, THE DENSITY RESPONSE IN THE FORCE GRADIENT.
-            #
-            # The energy above is built on DETACHED occupations, which is exact: at fixed N
-            # the free energy is stationary in the fill, so `dE/dR = Tr((P - P_ref) dH/dR)`
-            # with P held fixed. What that route drops is `dP/dtheta` in the force loss's
-            # PARAMETER gradient -- the optimiser searches as if the density could not respond
-            # to a change in the elements. That is what zeroes the hopping gradient at an
-            # atomic-limit initialisation, and what would stop E_LR from ever teaching the
-            # head where to put the carrier.
-            #
-            # The force is LINEAR in its cotangent, so
-            #
-            #     F(D) - F(D.detach()) = F(D - D.detach())
-            #
-            # and `D - D.detach()` is EXACTLY zero in value while carrying dD/dtheta. Adding
-            # its contraction to the forces therefore cannot move a single force component --
-            # that is an identity, not a tolerance -- while contributing precisely the missing
-            # `-Tr(dD/dtheta . dH/dR)` to the gradient. The already-present autograd route
-            # supplies the other half, `-Tr(D d2H/dR dtheta)`.
-            #
-            # Deleting this as a no-op is the obvious future mistake. The test that it is not
-            # one is `test_wiring_changes_gradient_not_forces`.
-            if resp_bucket:
-                dens = resp_bucket["density_difference"]
-                resp_h.append(H)
-                resp_d.append(dens - dens.detach())
-
-            # EIGENVALUES CARRY THE GRADIENT, EIGENVECTORS DO NOT. `eigh`'s backward builds
-            # the eigenvector term with 1/(lam_i - lam_j) factors, which is NaN at exact
-            # degeneracy -- and a 316-state spectrum in a ~17 eV span has degeneracies for
-            # certain. It produced NaN on the first real batch.
-            #
-            # The energy needs only eigenvalues (Hellmann-Feynman), and the density matrix is
-            # a DIAGNOSTIC readout here, so detaching psi removes the divergent path entirely
-            # rather than regularising it. This is the concrete form of "never backprop
-            # through individual eigenvectors".
-            #
-            # NOTE for the joint run: with E_LR enabled, `alpha` feeds q_carrier, and a
-            # detached alpha cuts that gradient. Decide there whether q_carrier needs a
-            # differentiable density -- if so it needs a matrix-function route, not eigh.
-            spectra.append(lam.detach())
-            per_graph_nodes.append(node_sel)
-            n_maj_ref = float((n_total + 1) // 2)
-            q = site_charges(p_now, p_ref, n_g)   # sums to -Delta n exactly
-            mass = q.abs()
-            total = mass.sum()
-            alpha[node_sel] = (mass / total).unsqueeze(-1).expand(-1, self.num_channels) \
-                if float(total) > 0 else 0.0
-
-            k = min(max(int(round(n_maj_ref)) - 1, 0), lam.numel() - 2)
-            gaps[g] = lam[k + 1] - lam[k]
+        # SECTION 1.1. When every graph in the batch has the same atom count -- which the
+        # size-grouped sampler arranges for every training batch -- the whole loop below runs
+        # once on `[B, 4n, 4n]` tensors instead of B times on `[4n, 4n]` ones. The loop is
+        # kept, is the reference, and still runs for any batch the sampler did not group
+        # (evaluation, the scorers, a mixed-size probe): the two paths are asserted equal to
+        # 1e-8 in eigenvalues and in P, and a divergence is a failing test rather than a
+        # silently different model.
+        sizes = torch.bincount(batch, minlength=num_graphs)
+        uniform = (bool(getattr(self, "batch_by_size", True)) and num_graphs > 1
+                   and int(sizes.min()) > 0 and bool((sizes == sizes[0]).all()))
+        if uniform:
+            with mark("head/loop"):
+                delta, alpha, gaps, spectra, resp_h, resp_d = self._batched_solve(
+                    node_feats, node_species, edge_index, edge_vector, levels, batch,
+                    num_graphs, sizes, counts, occupations, force_out, internals)
+            per_graph_nodes = []
+        else:
+            delta, alpha, gaps, spectra, resp_h, resp_d = self._loop_solve(
+                node_feats, node_species, edge_index, edge_vector, levels, batch,
+                num_graphs, counts, occupations, force_out, alpha, delta, gaps,
+                spectra, resp_h, resp_d, src, dst, n_nodes, device, dtype)
 
         if force_out is not None and resp_h:
             if positions is None or not positions.requires_grad:
@@ -853,9 +872,10 @@ class CountingHead(nn.Module):
                     "the counting head was asked for a force response but positions are "
                     "absent or detached; returning nothing here would silently train the "
                     "frozen-density gradient while the configuration says otherwise")
-            grad = torch.autograd.grad(
-                resp_h, [positions], grad_outputs=resp_d, create_graph=True,
-                retain_graph=True, allow_unused=True)[0]
+            with mark("head/forces"):
+                grad = torch.autograd.grad(
+                    resp_h, [positions], grad_outputs=resp_d, create_graph=True,
+                    retain_graph=True, allow_unused=True)[0]
             if grad is None:
                 raise RuntimeError(
                     "the head Hamiltonian does not depend on positions; the force response "
@@ -863,11 +883,11 @@ class CountingHead(nn.Module):
                     "zero, so this fails rather than returning a plausible zero")
             force_out["force_response"] = -grad
 
-        m = max(int(s.numel()) for s in spectra)
+        m = max(int(x.numel()) for x in spectra)
         lam_pad = torch.full((num_graphs, self.num_channels, m), 1.0e3,
                              device=device, dtype=dtype)
-        for g, s in enumerate(spectra):
-            lam_pad[g, :, : s.numel()] = s.unsqueeze(0)
+        for g, x in enumerate(spectra):
+            lam_pad[g, :, : x.numel()] = x.unsqueeze(0)
 
         site = levels[:, :1].expand(-1, self.num_channels)
         counts_per_graph = torch.bincount(batch, minlength=num_graphs).clamp_min(1)
@@ -889,6 +909,161 @@ class CountingHead(nn.Module):
             gap=gaps.unsqueeze(-1).expand(-1, self.num_channels),
             eps_mean=eps_mean, eigenvalues=lam_pad,
             weights=torch.zeros_like(lam_pad))
+
+    # ------------------------------------------------------------------ the two solvers
+
+    def _batched_solve(self, node_feats, node_species, edge_index, edge_vector, levels,
+                       batch, num_graphs, sizes, counts, occupations, force_out,
+                       internals):
+        """Section 1.1: one `[B, 4n, 4n]` solve for a size-uniform batch."""
+        device, dtype = node_feats.device, node_feats.dtype
+        n_nodes = int(node_feats.shape[0])
+        n_g = int(sizes[0])
+        dim = n_g * ORBITALS_PER_ATOM
+        src = edge_index[0]
+        offsets = torch.cumsum(sizes, 0) - sizes
+        local = torch.arange(n_nodes, device=device) - offsets[batch]
+        edge_graph = batch[src]
+
+        with mark("head/assemble"):
+            H = self.h.batched(node_feats, node_species, edge_index, edge_vector,
+                               local, edge_graph, n_g, num_graphs)
+            # The on-site term REPLACES the assembled diagonal, exactly as the per-graph
+            # path does: a periodic image of atom i is a neighbour of i, so the SK
+            # assembly writes onto the diagonal and adding the levels would double it.
+            o = torch.arange(ORBITALS_PER_ATOM, device=device)
+            diag_nodes = torch.cat([levels[:, :1], levels[:, 1:].expand(-1, 3)], dim=-1)
+            idx = (batch.reshape(-1, 1) * dim
+                   + local.reshape(-1, 1) * ORBITALS_PER_ATOM + o.reshape(1, -1))
+            diag = torch.zeros(num_graphs * dim, device=device, dtype=dtype).index_put(
+                (idx.reshape(-1),), diag_nodes.reshape(-1)).reshape(num_graphs, dim)
+            H = (H - torch.diag_embed(torch.diagonal(H, dim1=-2, dim2=-1))
+                 + torch.diag_embed(diag))
+
+        valence = self.valence[node_species.long()].to(torch.float64)
+        n_total = torch.zeros(num_graphs, dtype=torch.float64,
+                              device=device).index_add_(0, batch, valence)
+        # The response is built only when some graph in the batch carries a carrier, which
+        # is the batch-level form of the per-graph "the fill differs from the reference".
+        charged = bool(counts.reshape(num_graphs, -1).abs().sum() > 0)
+        resp_bucket = {} if (force_out is not None and charged) else None
+        e_head, lam, D, (n_maj_ref, _) = batched_head_energy_hf(
+            H, n_total, counts, self.t_el, occupation=occupations,
+            response_out=resp_bucket)
+
+        resp_h, resp_d = [], []
+        if resp_bucket:
+            dens = resp_bucket["density_difference"]
+            resp_h, resp_d = [H], [dens - dens.detach()]
+
+        # `q_i = -sum_{mu in i} (P - P_ref)_{mu mu}`, the batched `site_charges`.
+        q = -torch.diagonal(D, dim1=-2, dim2=-1).reshape(
+            num_graphs, n_g, ORBITALS_PER_ATOM).sum(dim=-1)
+        mass = q.abs()
+        total = mass.sum(dim=-1, keepdim=True)
+        frac = torch.where(total > 0, mass / total.clamp_min(1e-30),
+                           torch.zeros_like(mass))
+        alpha = frac[batch, local].unsqueeze(-1).expand(-1, self.num_channels)
+
+        k = (n_maj_ref.round().long() - 1).clamp(0, int(lam.shape[-1]) - 2)
+        gaps = (lam.gather(1, (k + 1).unsqueeze(-1)) - lam.gather(1, k.unsqueeze(-1))
+                ).squeeze(-1)
+        return e_head, alpha, gaps, list(lam.detach().unbind(0)), resp_h, resp_d
+
+    def _loop_solve(self, node_feats, node_species, edge_index, edge_vector, levels,
+                    batch, num_graphs, counts, occupations, force_out, alpha, delta,
+                    gaps, spectra, resp_h, resp_d, src, dst, n_nodes, device, dtype):
+        """The per-graph reference path. Unchanged; see `_batched_solve` for when it runs."""
+        per_graph_nodes: List[torch.Tensor] = []
+        loop = mark("head/loop")
+        loop.__enter__()
+        try:
+          for g in range(num_graphs):
+              node_sel = (batch == g).nonzero(as_tuple=True)[0]
+              n_g = int(node_sel.numel())
+              if n_g == 0:
+                  spectra.append(torch.zeros(1, device=device, dtype=dtype))
+                  per_graph_nodes.append(node_sel)
+                  continue
+              remap = torch.full((n_nodes,), -1, dtype=torch.long, device=device)
+              remap[node_sel] = torch.arange(n_g, device=device)
+              edge_sel = (batch[src] == g).nonzero(as_tuple=True)[0]
+
+              with mark("head/assemble"):
+                  H = self.h(node_feats[node_sel], node_species[node_sel],
+                             torch.stack([remap[src[edge_sel]], remap[dst[edge_sel]]]),
+                             edge_vector[edge_sel],
+                             madelung=None, n_nodes=n_g)
+              # The on-site term is applied here rather than inside `self.h` so the clamp above
+              # -- which is diagnostic and must never reach the Hamiltonian builder -- has a
+              # single place to act.
+              diag = torch.cat([levels[node_sel][:, :1],
+                                levels[node_sel][:, 1:].expand(-1, 3)], dim=-1).reshape(-1)
+              H = H - torch.diag(torch.diagonal(H)) + torch.diag(diag)
+
+              n_total = int(self.valence[node_species[node_sel]].sum())
+              c = counts[g].tolist() if counts.dim() > 1 else counts.tolist()
+              occ = None if occupations is None else occupations[g]
+              resp_bucket = {} if force_out is not None else None
+              e_head, lam, psi, p_now, p_ref = head_energy_hf(
+                  H, n_total, c, self.t_el, occupation=occ, response_out=resp_bucket)
+              delta[g] = e_head
+
+              # SECTION 1, THE DENSITY RESPONSE IN THE FORCE GRADIENT.
+              #
+              # The energy above is built on DETACHED occupations, which is exact: at fixed N
+              # the free energy is stationary in the fill, so `dE/dR = Tr((P - P_ref) dH/dR)`
+              # with P held fixed. What that route drops is `dP/dtheta` in the force loss's
+              # PARAMETER gradient -- the optimiser searches as if the density could not respond
+              # to a change in the elements. That is what zeroes the hopping gradient at an
+              # atomic-limit initialisation, and what would stop E_LR from ever teaching the
+              # head where to put the carrier.
+              #
+              # The force is LINEAR in its cotangent, so
+              #
+              #     F(D) - F(D.detach()) = F(D - D.detach())
+              #
+              # and `D - D.detach()` is EXACTLY zero in value while carrying dD/dtheta. Adding
+              # its contraction to the forces therefore cannot move a single force component --
+              # that is an identity, not a tolerance -- while contributing precisely the missing
+              # `-Tr(dD/dtheta . dH/dR)` to the gradient. The already-present autograd route
+              # supplies the other half, `-Tr(D d2H/dR dtheta)`.
+              #
+              # Deleting this as a no-op is the obvious future mistake. The test that it is not
+              # one is `test_wiring_changes_gradient_not_forces`.
+              if resp_bucket:
+                  dens = resp_bucket["density_difference"]
+                  resp_h.append(H)
+                  resp_d.append(dens - dens.detach())
+
+              # EIGENVALUES CARRY THE GRADIENT, EIGENVECTORS DO NOT. `eigh`'s backward builds
+              # the eigenvector term with 1/(lam_i - lam_j) factors, which is NaN at exact
+              # degeneracy -- and a 316-state spectrum in a ~17 eV span has degeneracies for
+              # certain. It produced NaN on the first real batch.
+              #
+              # The energy needs only eigenvalues (Hellmann-Feynman), and the density matrix is
+              # a DIAGNOSTIC readout here, so detaching psi removes the divergent path entirely
+              # rather than regularising it. This is the concrete form of "never backprop
+              # through individual eigenvectors".
+              #
+              # NOTE for the joint run: with E_LR enabled, `alpha` feeds q_carrier, and a
+              # detached alpha cuts that gradient. Decide there whether q_carrier needs a
+              # differentiable density -- if so it needs a matrix-function route, not eigh.
+              spectra.append(lam.detach())
+              per_graph_nodes.append(node_sel)
+              n_maj_ref = float((n_total + 1) // 2)
+              q = site_charges(p_now, p_ref, n_g)   # sums to -Delta n exactly
+              mass = q.abs()
+              total = mass.sum()
+              alpha[node_sel] = (mass / total).unsqueeze(-1).expand(-1, self.num_channels) \
+                  if float(total) > 0 else 0.0
+
+              k = min(max(int(round(n_maj_ref)) - 1, 0), lam.numel() - 2)
+              gaps[g] = lam[k + 1] - lam[k]
+
+        finally:
+            loop.__exit__(None, None, None)
+        return delta, alpha, gaps, spectra, resp_h, resp_d
 
 
 def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
@@ -930,7 +1105,8 @@ def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
     in_dtype = H.dtype
     h_in = H
     H = H.double()
-    lam, psi = torch.linalg.eigh(H)
+    with mark("head/eigh"):
+        lam, psi = torch.linalg.eigh(H)
     lam_d, psi_d = lam.detach(), psi.detach()
 
     # Stage 4 lets the caller state the fill. The REFERENCE stays the neutral ground state,
@@ -939,16 +1115,19 @@ def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
     (n_maj, n_min), (n_maj_ref, n_min_ref) = resolve_fills(n_total, counts, occupation)
 
     def piece(n_electrons):
-        f = fermi_fill(lam_d, n_electrons, t_el)
-        p = density_matrix(psi_d, f)
+        # ONE bisection per fill. `fermi_fill` ran one and the entropy ran a second on the
+        # same spectrum at the same electron count -- half of `head/bisect`, for nothing.
         mu = find_mu(lam_d, n_electrons, t_el, _FAMILY)
-        entropy = entropy_of((lam_d - mu) / t_el, _FAMILY).sum()
+        f = fermi_fill(lam_d, n_electrons, t_el, mu=mu)
+        p = density_matrix(psi_d, f)
+        entropy = entropy_of((lam_d - _col(mu)) / t_el, _FAMILY).sum()
         return (p * H).sum() - t_el * entropy, p, f
 
-    e_maj, p_maj, f_maj = piece(n_maj)
-    e_min, p_min, f_min = piece(n_min)
-    e_maj_ref, p_maj_ref, f_maj_ref = piece(n_maj_ref)
-    e_min_ref, p_min_ref, f_min_ref = piece(n_min_ref)
+    with mark("head/fills"):
+        e_maj, p_maj, f_maj = piece(n_maj)
+        e_min, p_min, f_min = piece(n_min)
+        e_maj_ref, p_maj_ref, f_maj_ref = piece(n_maj_ref)
+        e_min_ref, p_min_ref, f_min_ref = piece(n_min_ref)
     energy = ((e_maj - e_maj_ref) + (e_min - e_min_ref)).to(in_dtype)
 
     # SECTION 1. The same `P - P_ref`, built as a DIFFERENTIABLE function of `H` for the
@@ -957,6 +1136,7 @@ def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
     # Absent when the fill equals the reference -- a neutral frame has no response, and the
     # difference would be an identity zero in the gradient as well as the value.
     if response_out is not None and (n_maj, n_min) != (n_maj_ref, n_min_ref):
+      with mark("head/response"):
         response_out["density_difference"] = fermi_density_difference(
             h_in, (n_maj, n_min, n_maj_ref, n_min_ref), (1.0, 1.0, -1.0, -1.0), t_el,
             spectrum=(lam_d, psi_d),
@@ -965,6 +1145,89 @@ def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
     # is over all electrons, and averaging halves it. Caught by the validation test.
     return (energy, lam.to(in_dtype), psi_d.to(in_dtype),
             (p_maj + p_min).to(in_dtype), (p_maj_ref + p_min_ref).to(in_dtype))
+
+
+def spin_targets_batched(n_total: torch.Tensor, counts: torch.Tensor):
+    """`(N_maj, N_min)` per graph, `[B]` each. The batched twin of `spin_targets`.
+
+    Integer division on a tensor, so the ceil/floor split of an odd electron count is the
+    same one the scalar version makes -- not a float `n/2` that would put 204.5 in both
+    channels and silently smear the doublet.
+    """
+    n = n_total.long()
+    maj = torch.div(n + 1, 2, rounding_mode="floor")
+    minor = torch.div(n, 2, rounding_mode="floor")
+    c = counts.reshape(counts.shape[0], -1).long()
+    return ((maj + c[:, 0] - c[:, 2]).to(torch.float64),
+            (minor + c[:, 1] - c[:, 3]).to(torch.float64))
+
+
+def resolve_fills_batched(n_total: torch.Tensor, counts: torch.Tensor, occupation=None):
+    """`((N_maj, N_min), (N_maj_ref, N_min_ref))`, each `[B]`. Batched `resolve_fills`."""
+    n = n_total.long()
+    ref = (torch.div(n + 1, 2, rounding_mode="floor").to(torch.float64),
+           torch.div(n, 2, rounding_mode="floor").to(torch.float64))
+    if occupation is None:
+        now = spin_targets_batched(n_total, counts)
+    else:
+        occ = occupation.reshape(-1, 2).to(torch.float64)
+        now = (occ[:, 0], occ[:, 1])
+    return now, ref
+
+
+def batched_head_energy_hf(H: torch.Tensor, n_total: torch.Tensor, counts: torch.Tensor,
+                           t_el: float = T_EL, occupation=None, response_out=None):
+    """`head_energy_hf` for a batch of equal-sized graphs. Returns `(E[B], lam[B,m], D[B,m,m])`.
+
+    THE FOUR FILLS COLLAPSE TO ONE DENSITY MATRIX, and that is an identity rather than an
+    approximation. The per-graph route builds `P` at each of the four fills, forms four
+    `(P * H).sum()` energies and four entropies, and combines them as
+    `(E_maj - E_maj_ref) + (E_min - E_min_ref)`. Because the trace is linear in `P`, that
+    equals `(D * H).sum()` with
+
+        D = P(N_maj) + P(N_min) - P(N_maj_ref) - P(N_min_ref)
+          = U diag(f_maj + f_min - f_maj_ref - f_min_ref) U^T
+
+    one GEMM instead of four, and `D`'s diagonal is exactly what `site_charges` wanted from
+    `p_now - p_ref`. The entropies stay separate: they are not linear in the occupations.
+    The gradient is unchanged -- `D` is detached and `H` is live, so `dE/dH = D` either way.
+
+    ONE BISECTION FOR THE WHOLE BATCH. `find_mu` takes `[B, 4]` electron counts against a
+    `[B, 1, m]` spectrum, so the four fills of every graph are solved together: 40 tensor
+    iterations per step instead of 40 per fill per graph per pass.
+    """
+    in_dtype = H.dtype
+    h_in = H
+    H = H.double()
+    with mark("head/eigh"):
+        lam, psi = torch.linalg.eigh(H)
+    lam_d, psi_d = lam.detach(), psi.detach()
+
+    (n_maj, n_min), (n_maj_ref, n_min_ref) = resolve_fills_batched(
+        n_total, counts, occupation)
+    fills = torch.stack([n_maj, n_min, n_maj_ref, n_min_ref], dim=-1)      # [B, 4]
+    signs = torch.tensor([1.0, 1.0, -1.0, -1.0], dtype=lam_d.dtype, device=lam_d.device)
+
+    with mark("head/fills"):
+        # [B, 4]: one mu per (graph, fill), from one bisection over the batch.
+        mu = find_mu(lam_d.unsqueeze(-2), fills, t_el, _FAMILY)
+        f = occupation_of((lam_d.unsqueeze(-2) - mu.unsqueeze(-1)) / t_el, _FAMILY)
+        weighted = (f * signs.reshape(1, -1, 1)).sum(dim=-2)               # [B, m]
+        D = (psi_d * weighted.unsqueeze(-2)) @ psi_d.transpose(-1, -2)
+        entropy = entropy_of((lam_d.unsqueeze(-2) - mu.unsqueeze(-1)) / t_el,
+                             _FAMILY).sum(dim=-1)                          # [B, 4]
+        energy = ((D * H).sum(dim=(-2, -1))
+                  - t_el * (entropy * signs.reshape(1, -1)).sum(dim=-1))
+
+    if response_out is not None:
+        with mark("head/response"):
+            response_out["density_difference"] = fermi_density_difference(
+                h_in, tuple(fills.unbind(-1)), (1.0, 1.0, -1.0, -1.0), t_el,
+                spectrum=(lam_d, psi_d),
+                occupations=f.transpose(0, 1).contiguous(),
+                mus=tuple(mu.unbind(-1)))
+    return (energy.to(in_dtype), lam.to(in_dtype), D.to(in_dtype),
+            (n_maj_ref, n_min_ref))
 
 
 def scc_energy(gamma: torch.Tensor, delta_q: torch.Tensor) -> torch.Tensor:
@@ -1029,7 +1292,7 @@ class _FermiDensityMatrix(torch.autograd.Function):
         lam, U = torch.linalg.eigh(H.double())
         f = fermi_fill(lam, float(n_electrons), float(t_el))
         P = (U * f.unsqueeze(0)) @ U.transpose(-1, -2)
-        ctx.mu = find_mu(lam, float(n_electrons), float(t_el), _FAMILY)
+        ctx.mu = find_mu(lam, n_electrons, float(t_el), _FAMILY)
         ctx.save_for_backward(lam, U, f)
         ctx.t_el = float(t_el)
         ctx.tol = float(degeneracy_tol)
@@ -1060,7 +1323,7 @@ def _dk_eigenbasis(lam: torch.Tensor, f: torch.Tensor, t_el: float, tol: float,
     # check failed by a factor of 16.
     if mu is None:
         mu = _mu_from(lam, f, t_el)
-    fp = occupation_slope((lam - mu) / t_el, t_el, _FAMILY)   # f'(lam); bounded
+    fp = occupation_slope((lam - _col(mu)) / t_el, t_el, _FAMILY)   # f'(lam); bounded
     dl = lam.unsqueeze(-1) - lam.unsqueeze(-2)
     df = f.unsqueeze(-1) - f.unsqueeze(-2)
     near = dl.abs() <= tol
@@ -1071,7 +1334,8 @@ def _dk_eigenbasis(lam: torch.Tensor, f: torch.Tensor, t_el: float, tol: float,
     # under both.
     safe = torch.where(near, torch.ones_like(dl), dl)
     mid = 0.5 * (lam.unsqueeze(-1) + lam.unsqueeze(-2))
-    L = torch.where(near, occupation_slope((mid - mu) / t_el, t_el, _FAMILY), df / safe)
+    L = torch.where(near, occupation_slope((mid - _col(_col(mu))) / t_el, t_el, _FAMILY),
+                    df / safe)
 
     M = L * Ghat
     denom = fp.sum(-1)
@@ -1111,8 +1375,12 @@ class _FermiDensitySum(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, H, lam, U, occ, signs, t_el, degeneracy_tol, mus=None):
+        # `occ` is [n_fills, ..., n_states]: [4, n] per graph, [4, B, n] batched. The sign
+        # is per FILL, so it broadcasts over every axis but the first -- `unsqueeze(-1)`
+        # was right only for the un-batched shape and would have paired sign a with graph a.
         sgn = torch.tensor(signs, dtype=occ.dtype, device=occ.device)
-        weighted = (occ * sgn.unsqueeze(-1)).sum(0)
+        sgn = sgn.reshape((-1,) + (1,) * (occ.dim() - 1))
+        weighted = (occ * sgn).sum(0)
         acc = (U * weighted.unsqueeze(-2)) @ U.transpose(-1, -2)
         ctx.save_for_backward(lam, U, occ)
         ctx.mus = tuple(mus) if mus is not None else (None,) * len(signs)
@@ -1163,7 +1431,7 @@ def fermi_density_matrix(H: torch.Tensor, n_electrons: float, t_el: float = T_EL
 def fermi_density_difference(H: torch.Tensor, fills: Sequence[float],
                              signs: Sequence[float], t_el: float = T_EL,
                              degeneracy_tol: float = 1e-7, spectrum=None,
-                             occupations=None) -> torch.Tensor:
+                             occupations=None, mus=None) -> torch.Tensor:
     """`sum_a s_a P(N_a)` for several fills of one `H`, differentiable in `H`.
 
     `spectrum` is `(lam, U)` in float64 and `occupations` is `[n_fills, n]`, both of THIS `H`.
@@ -1176,7 +1444,8 @@ def fermi_density_difference(H: torch.Tensor, fills: Sequence[float],
     # the backward never has to invert `f` -- which is impossible when every state is fully
     # occupied or fully empty, the ordinary case for a gapped spectrum under Gaussian
     # smearing.
-    mus = tuple(find_mu(lam, float(n), float(t_el), _FAMILY) for n in fills)
+    if mus is None:
+        mus = tuple(find_mu(lam, n, float(t_el), _FAMILY) for n in fills)
     return _FermiDensitySum.apply(H, lam, u, occupations, tuple(signs), t_el,
                                   degeneracy_tol, mus)
 
