@@ -528,3 +528,16 @@ no arm is affected and no number in this cycle changes.
 It is **not** fixed now for the reason immediately above — four copies of that script are
 mid-execution. It is fixed after `=== chain complete ===`, and it is written here so the
 delay is a decision rather than an oversight.
+
+### The arm-C launch, ready to paste
+
+Arm C runs only **after** `=== chain complete ===`. GPUs 4–7 are fully committed until then
+and the gate stages use all four, so overlapping arm C on 6–7 during arm B's two-seed wave
+would break the four-GPU rule for the duration of a gate stage. On b3:
+
+    bash ~/src/mace/.claude/worktrees/size-extensivity/defect-perovskite/queue_arms_chain_c.sh
+
+where that file is a two-stage chain (`ARM=c SEEDS="1 2 3 4"`, then `"5 6"`, then
+`TAG=armc` gates), written as a **new file** rather than by editing the chain script — see
+the byte-offset finding above. `ARM=c` differs from arm A in one constant: `HOP_BETA`
+0.4054651 (ln 1.5) → 0.6931472 (ln 2). Every guard is unchanged.
