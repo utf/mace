@@ -361,3 +361,30 @@ over seeds: ss-σ 1.072 ± 0.011, sp-σ 1.280 ± 0.061, pp-σ 1.332 ± 0.040, pp
 seed spread is tight. The head wants longer-ranged hopping AND presses against the ×1.5
 modulation stop on the hub bond; the two levers pull the same way. Seed 6 is the one
 interior everywhere (pp-π tanh +0.07); it is also the seed with the largest Δc.
+
+## 5.5 — gate 4 / F10 on the CENTRED correction (c7, what the model applies)
+
+corr_i = γ [tanh h(x_i) − tanh h(x̄_s)] per atom on eight charged 159-atom frames; b4's
+probe reads the raw, uncentred `γ tanh h(x_i)` and is not the applied correction here.
+
+| seed | hub Pb | ligand Cl | bulk Cl | bulk Pb | Cs | ligand − bulk Cl | 2 sd (bulk Cl) | F10 |
+|---|---|---|---|---|---|---|---|---|
+| s1 | −0.307 ± 0.255 | +0.337 ± 0.767 | −0.103 ± 0.331 | −0.122 ± 0.040 | 0 (Cs saturated) | +0.440 | 0.661 | fails |
+| s2 | +0.028 ± 0.114 | +0.138 ± 0.340 | −0.036 ± 0.110 | −0.121 ± 0.032 | −0.365 ± 0.103 | +0.174 | 0.219 | fails |
+| s3 | −0.454 ± 0.122 | −0.008 ± 0.752 | −0.296 ± 0.361 | −0.046 ± 0.016 | 0 (Cs saturated) | +0.288 | 0.723 | fails |
+| s4 | +0.047 ± 0.079 | 0 (Cl saturated) | 0 (Cl saturated) | −0.164 ± 0.025 | −0.796 ± 0.239 | 0.000 | 0.000 | fails |
+| s5 | −0.520 ± 0.159 | +0.242 ± 0.582 | +0.014 ± 0.325 | −0.118 ± 0.033 | 0 (Cs saturated) | +0.228 | 0.649 | fails |
+| s6 | +0.059 ± 0.028 | 0 (Cl saturated) | 0 (Cl saturated) | −0.210 ± 0.053 | −0.987 ± 0.284 | 0.000 | 0.000 | fails |
+
+**Gate 4 / F10 fails, 0 of 6**, and for a different reason from b4's inert channel. Two
+regimes coexist. On s1, s2, s3, s5 the chlorine channel is ALIVE: ligand-Cl sits 0.17–0.44
+eV above bulk-Cl on average, so the 50 meV floor is cleared on every one of them, but the
+atom-to-atom spread within bulk Cl is 0.11–0.36 eV, so the separation is never two sigma.
+The channel carries structure now — just not the ligand/bulk structure, or not only it. On
+s4 and s6 the raw output on every chlorine, ligand and bulk alike, has run past |tanh| =
+0.98, where the centred difference is identically zero: the channel is dead on Cl. Caesium
+is dead the same way on s1, s3, s5. Centring makes the correction invariant to a constant
+shift of h, so h is free to drift to saturation where the deviation vanishes and nothing in
+the loss pulls it back — the constant-mode gauge b4 found did not go away, it moved from
+the output to the argument. The remedy is a bounded argument (a penalty or a cap on h
+itself), which the spec does not include and this cycle does not add.
