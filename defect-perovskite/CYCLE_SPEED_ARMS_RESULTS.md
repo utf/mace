@@ -775,3 +775,47 @@ and leaving the 159 one to absorb whatever else the energy loss could not place.
 is electrostatic. The remedy for the first is the same-size neutral reference; the second is
 an argument for referencing c to the neutral frames *per size class* rather than leaving one
 column untrained, and it belongs to the next cycle with the rest of the label-side work.
+
+### Gate 4 / F10 on wave 1 — fails, but not the way Stage B failed
+
+**0 of 4 seeds**, so F21 fails on this evidence (Stage B: 0 of 6). The interesting part is
+the mechanism, which has changed completely:
+
+| shell | Stage B, corr (eV) | arm A wave 1, corr (eV) | raw `tanh h` saturated, arm A |
+|---|---|---|---|
+| hub Pb | −0.307 ± 0.255 | −0.313 ± 0.134 | 0% |
+| ligand Cl | +0.336 ± 0.767 | +0.361 ± 0.475 | **100%** |
+| bulk Cl | −0.103 ± 0.331 | −0.127 ± 0.506 | **100%** |
+| bulk Pb | −0.122 ± … | −0.079 ± 0.054 | 0% |
+| Cs | — | +0.368 ± 1.061 | 50% |
+| **ligand − bulk Cl** | **+0.188 ± 0.156** | **+0.494** | |
+
+Stage B failed because the channel was **dead**: `tanh h` saturated and the output-centred
+form `γ[tanh h(x) − tanh h(x̄)]` is identically flat once both terms sit at ±1. Arm A's
+`γ tanh[h(x) − h(x̄)]` is **saturated in exactly the same place and alive anyway** — 100% of
+Cl atoms have |tanh h| > 0.98, and the corrections are nonetheless ±0.13–0.51 eV, because
+the difference of the arguments is what the form reads. **§2.1's correction does the thing it
+was introduced to do.**
+
+What it now fails on is *resolution*, not magnitude. The ligand-Cl − bulk-Cl separation is
++0.494 eV, ten times the 50 meV threshold and 2.6× Stage B's, but its 2σ is 1.43 eV: the
+channel is loud and inconsistent rather than quiet and dead. That is a different problem with
+a different remedy, and it is the first time in this programme that F10 has failed on the
+spread rather than on the signal.
+
+### §2.2 — the per-site charge deviation, arm A wave 1
+
+| statistic | value over four seeds |
+|---|---|
+| max \|Z_i − Z0\| | **0.627 ± 0.041 e** (largest single site 0.670 e, always a Pb) |
+| rms \|Z_i − Z0\| | 0.055 ± 0.007 e |
+| per-species max, seed 4 (Cl / Cs / Pb) | 0.118 / 0.077 / 0.656 e |
+| sites at the ζ stop (\|dev\| > 0.98 ζ) | **0.0%**, 0 of 4 seeds |
+| dead channels (max \|dev\| < 1e-6 e) | 0 of 4 seeds |
+| \|per-graph sum after centring\| | ≤ 1.1e-15 e |
+
+The channel is working hard and is not at its bound: excursions reach two thirds of an
+electron on Pb sites while the typical site moves 0.055 e, and no site is at ζ. ζ = 1.0 e is
+therefore the right order — at ζ = 0.1 this channel would be pinned at its stop on the hub —
+and the neutrality centring is exact to machine precision, which is the check that the site
+term is not quietly reintroducing a per-cell net charge.
