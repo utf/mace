@@ -1254,3 +1254,45 @@ which is what §2.5 said in the first place, and now for a third reason.
 
 *(F23's other three clauses — R in band, thermal drift ≤ 0.3·D0, F4 holds — are scored on the
 six-seed set.)*
+
+### Gate 10 — the image term's real adoption test, and it passes decisively
+
+Four arm B seeds × four tiles (one ideal, three thermal) × three tilings, `c3_tiling_drift`:
+
+| | value |
+|---|---|
+| drift **without** the term, D0 | 0.4179 ± 0.0462 eV (0.341–0.481) |
+| drift **with** the term | **0.0560 ± 0.0213 eV** (0.007–0.085) |
+| ratio | **0.132 ± 0.048** — the gate allows ≤ 0.30 |
+| drift removed | **86.8%** |
+| pairs inside the gate | **16 / 16** |
+| ideal tiles / thermal tiles | 0.122 / 0.135 |
+
+**PASS**, at less than half the allowance, and the thermal tiles are as good as the ideal one
+— which is the clause the spec added this cycle precisely because an ideal-tile-only result
+would have been easy.
+
+**The pre-registered prediction held exactly.** `s` = 1.000 at min, p25, median, p75 and max
+over all 48 tiled frames. The switch never engaged, so gate 10 measured the compensation and
+not the gating, as recorded before arm B existed.
+
+### So the image term's verdict is split, and the split is informative
+
+| evidence | result |
+|---|---|
+| **gate 10, tiling drift** | **removes 86.8% of a 0.42 eV size error, 16/16, ideal and thermal** |
+| F23's Δc clause | fails — but Δc is blind to the term while c(79) is frozen |
+| gate 7, hub stops | worse: 4/4 on every type against arm A's 5/6, 3/6, 2/6, 4/6 |
+| cost | **+76% per epoch** |
+
+The term does the one thing it was introduced to do, and does it well: tiling drift is the
+size-extensivity error this whole programme exists to remove, and 0.42 → 0.056 eV on
+thermal tiles is the largest single reduction in it that any cycle has produced. Against
+that, it costs 76% more per epoch and it tightened the hub coupling.
+
+**The recommendation this supports** — for the report, not a decision taken here: adopt the
+term on gate 10's evidence, and stop using Δc to score it. Δc was the wrong instrument for
+two independent reasons now, §8.5's (it is 97% carrier-independent) and this one (the null
+gate freezes the column that would have moved). Both were discovered inside this cycle,
+which is an argument for gate 10 being promoted from "the term's adoption test" to the
+*only* test the term is scored on.
