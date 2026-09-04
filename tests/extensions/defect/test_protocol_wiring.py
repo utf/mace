@@ -436,7 +436,10 @@ def test_the_neutral_upweight_touches_neutral_frames_only():
             self.positions = torch.zeros(n, 3)
             self.carrier_counts = (torch.tensor([1.0, 0, 0, 0]) if charged
                                    else torch.zeros(4))
+            # Both columns a real AtomicData carries: the base terms read the base column
+            # for an n = 0 frame (LEDGER.md entry 12), the totals terms the generic one.
             self.forces_weight = 1.0
+            self.base_forces_weight = 1.0
 
     small = [_D(79, False) for _ in range(40)]
     large = [_D(159, False) for _ in range(2)]
@@ -444,7 +447,10 @@ def test_the_neutral_upweight_touches_neutral_frames_only():
     factor, share = apply_neutral_size_upweight(small + large + charged_large,
                                                 target_share=0.25)
     assert factor > 1.0 and share == pytest.approx(0.25, abs=1e-6)
-    assert all(d.forces_weight == 1.0 for d in charged_large), (
+    assert all(d.forces_weight == 1.0 and d.base_forces_weight == 1.0
+               for d in charged_large), (
         "the neutral upweight must not touch charged frames -- the two shares are computed "
         "within their own populations so they do not compete for one budget")
-    assert all(d.forces_weight == 1.0 for d in small)
+    assert all(d.base_forces_weight == 1.0 for d in small)
+    assert all(d.base_forces_weight == factor for d in large), (
+        "the neutral upweight scales the BASE force column, the one the loss reads")

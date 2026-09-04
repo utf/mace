@@ -791,7 +791,7 @@ class MACEDefect(ScaleShiftMACE):
         if (getattr(self, "image_compensation", False)
                 and positions is not None and cell is not None
                 and getattr(self, "latent_ewald", None) is not None):
-            from mace.modules.defect_madelung import image_potential
+            from mace.modules.defect_image import image_potential
 
             with torch.no_grad():
                 probe = self.spectral(**head_kwargs)

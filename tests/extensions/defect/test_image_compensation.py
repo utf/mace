@@ -15,7 +15,7 @@ from ase.build import bulk
 from e3nn import o3
 
 from mace import data, modules, tools
-from mace.modules.defect_madelung import image_potential
+from mace.modules.defect_image import image_potential
 from mace.modules.defect_models import MACEDefect
 from mace.modules.latent_ewald import LatentEwald
 
