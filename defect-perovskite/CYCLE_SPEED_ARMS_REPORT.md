@@ -328,14 +328,15 @@ itself left a threshold or a baseline unstated, the reading was pre-registered i
 |---|---|---|
 | **F21** | arm A: F10 passes ≥ 4/6 | **fails**: 1/6. Better than Stage B's 0/6 and for a different reason — the channel is alive, and the ligand-Cl − bulk-Cl separation is +0.651 ± 0.266 eV against Stage B's +0.188 ± 0.156 — but its 2σ is larger still, so it does not resolve. |
 | **F22** | arm A: seeds at a pp stop fall by half relative to Stage B | **fails**: pre-registered as pp-σ ≤ 1/6 and pp-π ≤ 2/6 against Stage B's 2/6 and 5/6. Measured 2/6 and 4/6 — pp-σ unchanged, pp-π down by one seed. Gate 7 fires on all four types, and ss-σ nearly doubled (3/6 → 5/6). |
-| **F23** | arm B: Δc falls 0.2–0.4 eV; R inside [0.66, 1.34]; thermal tiling drift ≤ 0.3·D0; F4 holds | *pending arm B.* Baseline pre-registered as arm A rather than Stage B, so the clause reads Δc(A) − 0.40 ≤ Δc(B) ≤ Δc(A) − 0.20; all four clauses must hold. Early evidence at the c calibration, before training: Δc₀ falls from +0.766 to +0.417, a drop of 0.349 eV, inside the band. |
+| **F23** | arm B: Δc falls 0.2–0.4 eV; R inside [0.66, 1.34]; thermal tiling drift ≤ 0.3·D0; F4 holds | **clause 1 fails, clause 3 passes emphatically** (four seeds; the rest on six). Δc(B) +0.994 ± 0.320 against Δc(A) +1.042 ± 0.197 — a fall of **0.048 eV** against a pre-registered band of [+0.64, +0.84]. Thermal tiling drift **0.135 of D0** against a gate of 0.30, 16/16 pairs. The Δc clause is not evidence about the term: see below. |
 | **F24** | ≥ 4× per epoch from section 1 | **fails at 3.4× per epoch**; the step it named is 4.41× faster. The gap is the uncached epoch's fixed costs, which section 1 did not touch. |
 | **F25** | the Stage B cohort's 79-atom head slope has moved toward +0.37; arm A restores it | **clause 1 fails**: −0.1804 ± 0.0244 against the forces-only cohort's −0.1675 ± 0.0231 — *further* from +0.37, not nearer. Clause 2 is therefore moot and holds trivially: arm A is −0.1212 ± 0.0268, negative on every seed and nowhere near the artefact. The forecast's premise — that full-weight 79-atom charged energies drag the head toward the base's small-cell artefact — was not observed, so the null gate that removes them is a precaution against an unmeasured harm rather than a repair of a measured one. |
 
-**Two of five scored, both failed; one is moot because its premise did not hold; one waits on
-arm B.** F21 and F22 were the two forecasts that said this cycle's model edits would fix
+**Three of five scored, all three failed; one is moot because its premise did not hold; F23
+split.** F21 and F22 were the two forecasts that said this cycle's model edits would fix
 something, and neither did. What the edits demonstrably did do — revive a dead channel,
-converge the size slopes — was not forecast by anyone.
+converge the size slopes, remove 87% of the tiling drift — was forecast by no one, and F23
+asked about the one term that worked using an instrument that could not see it.
 
 ---
 
@@ -379,6 +380,34 @@ reports is dominated by something that is not the quantity it names.
 **Caveat.** The large-cell populations are 15 neutral and 16 charged frames; the
 carrier-dependent remainder's interval is ±0.08 eV, so the agreement with +0.049 is
 "consistent with" rather than "confirms". The carrier-independent claim is the robust half.
+
+### 7.1b Δc should not be used to score a model term again
+
+Two independent reasons, both found inside this cycle:
+
+1. **It is 97% carrier-independent** (§7.1). Of the +0.766 eV present at initialisation,
+   +0.746 is a size offset of the frozen base against these labels, measurable on frames with
+   no carrier in them. A model term that changed the carrier physics perfectly would move the
+   remaining 4%.
+2. **The null gate freezes the column that would have moved.** Under §0's rule 2, c(79) gets
+   no gradient and sits at its epoch-0 calibration; c(159) is the only energy-referenced
+   constant left, and it drifts to wherever the energy loss needs it. So trained Δc measures
+   that drift, not the term.
+
+The second is visible in the arm B numbers and is the sharpest evidence this cycle produced
+that a diagnostic can be confidently wrong. **Before training**, the image compensation cut
+Δc from +0.766 to +0.417 — a 0.349 eV fall, inside F23's band, and a correct signal that the
+term does something size-dependent and large. **After 24 epochs** the fall is 0.048 eV.
+Training erased 86% of a real effect, because the constant that absorbs it was free to move
+and the constant that would have opposed it was frozen.
+
+F23 asked whether the image term reduces Δc. The term reduces the tiling drift by 87%
+(gate 10, 16/16, thermal tiles included) and Δc by nothing, and both statements are true at
+once. **The forecast was aimed at the right term through the wrong instrument.**
+
+Recommendation for the next cycle, and it is cheap: score model terms on gate 10's tiling
+drift, keep Δc as a *label-quality* diagnostic where it belongs, and fix its referencing
+(§7.1's one-function remedy) before quoting it again.
 
 ### 7.2 The on-site channel is alive, and that is now the problem
 
