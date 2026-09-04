@@ -176,3 +176,43 @@ def test_the_term_is_zero_on_a_neutral_frame_and_present_on_a_charged_one():
     assert float((charged["delta_sr_energy"] - charged_off["delta_sr_energy"]).abs()) > 0.0
     neutral_off = off(_batch(atoms, [0.0] * 4).to_dict(), compute_force=False)
     assert torch.allclose(neutral["energy"], neutral_off["energy"])
+
+
+def test_the_pristine_pass_that_records_delta_L_does_not_also_consume_it():
+    """The regression this file was missing, and arm B died of.
+
+    Every other test here calls `_with_spacing` first, which sets `delta_L` by hand. The
+    TRAINER cannot: it calls `collect_pristine_centre`, and that method's own forward is
+    where `delta_L` is measured. With the image term on, that forward reached the bound
+    switch, which raises when `delta_L` is unset -- so `collect_pristine_centre` raised
+    inside itself and arm B failed on every seed within a minute of launch, while arm A
+    (term off) ran to completion.
+
+    The fix is a guard on `_collecting_centre`, and the reason it costs nothing is physical:
+    the collection pass is a stoichiometric, carrier-free cell, where `alpha` is zero and
+    the compensation is the image potential of a carrier that is not there.
+    """
+    model = _model(image_compensation=True)
+    assert not bool(model.pristine_spacing_set), "the fixture must start without delta_L"
+    pristine = _perovskite()
+    n = model.collect_pristine_centre([_batch(pristine, [[0.0] * 4])])
+    assert n > 0
+    assert bool(model.pristine_spacing_set), "the pass must RECORD delta_L"
+    assert float(model.pristine_level_spacing) > 0.0
+    # And the term works immediately afterwards, on the same model, with no manual setup.
+    charged = model(_batch(pristine, [[1.0, 0.0, 0.0, 0.0]]).to_dict(), compute_force=False)
+    assert charged["energy"].isfinite().all()
+
+
+def test_the_guard_is_scoped_to_the_collection_and_released_afterwards():
+    """`_collecting_centre` must not latch. If it did, the image term would be silently off
+    for the whole run -- arm B would train, report no error, and be arm A."""
+    model = _with_spacing(_model(image_compensation=True))
+    atoms = _perovskite()
+    assert not getattr(model, "_collecting_centre", False)
+    model.collect_pristine_centre([_batch(atoms, [[0.0] * 4])])
+    assert not getattr(model, "_collecting_centre", False)
+    out = model(_batch(atoms, [[1.0, 0.0, 0.0, 0.0]]).to_dict(), compute_force=False)
+    comp = out.get("image_compensation")
+    assert comp is not None, "the term must be live again after the collection"
+    assert float(comp.abs().max()) > 0.0, "a charged frame must carry a non-zero term"

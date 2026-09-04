@@ -909,7 +909,14 @@ class MACEDefect(ScaleShiftMACE):
         # neutral cell: alpha is zero where no carrier is.
         image_comp: Optional[torch.Tensor] = None
         bound_flag: Optional[torch.Tensor] = None
+        # `_collecting_centre`: the pristine pass that RECORDS delta_L cannot also consume
+        # it. That pass is a stoichiometric, carrier-free cell, where the compensation is
+        # the image potential of a carrier that is not there and `alpha` is zero anyway --
+        # so skipping it changes no number, and running it raises before delta_L exists.
+        # Arm A never hit this because the term is off there; arm B failed on every seed
+        # inside `collect_pristine_centre` itself.
         if (getattr(self, "image_compensation", False)
+                and not getattr(self, "_collecting_centre", False)
                 and positions is not None and cell is not None
                 and getattr(self, "latent_ewald", None) is not None):
             from mace.modules.defect_image import image_potential

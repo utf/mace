@@ -927,3 +927,69 @@ The useful consequence is negative and worth stating: **gate 10 is a test of the
 not of the switch**, and any difference between arms A and B is attributable to the
 compensation itself. If instead some frames come back with s < 1, that is news and the
 distribution says which frames.
+
+---
+
+## Arm B failed on every seed at launch, and what fixing it revealed
+
+### The defect
+
+At 13:09 the chain started arm B. Every seed died within a minute:
+
+    RuntimeError: the image compensation's bound switch needs delta_L; call
+    collect_pristine_centre (which records it) before the first forward
+
+raised from **inside `collect_pristine_centre` itself** (`defect_models.py:667` → `forward`
+→ `_carrier_head` → `bound_switch`). The pristine pass that *measures* δ_L was running the
+switch that *consumes* it. Arm A never touched this path because the image term is off
+there, and every test in `test_image_compensation.py` called a `_with_spacing` helper that
+sets δ_L by hand — so nothing in the suite exercised the order the trainer actually uses.
+
+**The fix** is one clause: skip the image block while `_collecting_centre` is set. It costs
+nothing physically — the collection pass is a stoichiometric, carrier-free cell where `alpha`
+is zero, so the compensation is the image potential of a carrier that is not there.
+
+**Two regression tests**, and both were checked to fail without the guard:
+
+- `test_the_pristine_pass_that_records_delta_L_does_not_also_consume_it` — reproduces the
+  exact failure and asserts the pass records δ_L and the term works straight afterwards.
+- `test_the_guard_is_scoped_to_the_collection_and_released_afterwards` — the guard must not
+  latch. If it did, arm B would train, report no error, and silently *be arm A*, which is a
+  worse outcome than the crash.
+
+**The chain was stopped rather than left running.** `queue_stage_b_gates.sh` waits for six
+model files in a `while true` loop, so `gates armb` would have hung for ever on an arm that
+produced none. Arm A was complete and scored, so nothing was lost. The remaining schedule is
+`queue_arms_chain_bc.sh` — a **new file**, per this morning's byte-offset lesson — which also
+refuses to score an arm with fewer than six models instead of waiting.
+
+### What the relaunch immediately showed: the image term is large, and size-dependent
+
+Same seed, same data, same frozen base; the only difference is the term. At the c
+calibration, **before any training**:
+
+| | c(79) | c(159) | Δc₀ |
+|---|---|---|---|
+| arm A | +9.4655 | +10.2314 | **+0.7659** |
+| arm B | +9.8731 | +10.2904 | **+0.4173** |
+| difference | **+0.4076** | **+0.0590** | **−0.3486** |
+
+The compensation moves the small cell nearly seven times as far as the large one and cuts Δc
+by 0.349 eV — the right sign, the right size scaling, and inside F23's forecast band of a
+0.2–0.4 eV fall. (F23 is scored on the *trained* six-seed numbers, not on this; recorded here
+because it is the first direct evidence the term does anything.)
+
+**But it raises a question §8.5 cannot answer from Δc alone.** §8.5 measured a +0.745 eV
+carrier-*independent* size step in the frozen base's residual, on neutral frames with no
+carrier in them. The image term cannot have changed that — it enters the head's correction,
+not the base. So the term is removing 0.35 eV of a 0.77 eV gap of which 0.75 eV is a
+base/label artefact. An image interaction scales as 1/L and so does a great deal else,
+including whatever produces that artefact, and **Δc cannot tell them apart.** If the
+compensation is being rewarded for cancelling a labelling offset, it will look right on Δc
+and wrong on everything referenced to a fixed size.
+
+This is a second, independent argument for the same-size neutral reference in
+`c_shift_table_terms`: with the base's offset cancelled, Δc would isolate whatever image
+physics is actually there, and the term could be scored on it rather than credited for it.
+Gate 10's tiling drift stays the term's real adoption test for this cycle, exactly as §2.5
+intended, and now for a sharper reason than when that was written.
