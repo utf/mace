@@ -809,6 +809,15 @@ def run(args) -> None:
     # solve the whole batch as one [B, 4n, 4n] eigenproblem. Refused under `--distributed`
     # rather than silently ignored -- a DistributedSampler and a batch sampler are two ways
     # to decide the same thing, and combining them would drop or duplicate frames.
+    # Standing rule 1: eps_inf is a per-host INPUT and has no default. The Madelung term
+    # divides by it, so a missing value would silently become 4.0 -- this host's number --
+    # on any other host.
+    if bool(getattr(args, "defect_madelung_on_site", False)) and float(
+            getattr(args, "defect_madelung_eps_inf", 0.0) or 0.0) <= 0.0:
+        raise ValueError(
+            "--defect_madelung_on_site divides the site potential by eps_inf and has no "
+            "default for it: pass --defect_madelung_eps_inf. 4.0 is CsPbCl3's value and "
+            "standing rule 1 forbids a per-host constant living in a default.")
     grouped = bool(getattr(args, "defect_size_grouped_batches", False))
     if grouped and args.distributed:
         raise ValueError(

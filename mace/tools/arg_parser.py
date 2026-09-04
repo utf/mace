@@ -1495,11 +1495,11 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--defect_madelung_eps_inf",
-        help="High-frequency dielectric constant screening phi_LR in the on-site shift. The "
+        help="High-frequency dielectric constant screening phi_LR in the on-site shift. A PER-HOST INPUT with no default: 4.0 is CsPbCl3's number and standing rule 1 forbids a per-host constant in a default, so --defect_madelung_on_site refuses to run without it. The "
         "carrier's own field, which the lattice has not had time to respond to. Distinct "
         "from --eps_inf, which initialises the long-range branch",
         type=float,
-        default=4.0,
+        default=0.0,
     )
     parser.add_argument(
         "--defect_madelung_composition",

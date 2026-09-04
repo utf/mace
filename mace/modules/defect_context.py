@@ -50,6 +50,12 @@ __all__ = ["ForwardContext", "EPS_INF_DEFAULT"]
 # High-frequency dielectric constant of CsPbCl3. The ONE place it is written down.
 # Not the static constant: `a = 1/sqrt(eps_inf)` screens the carrier's own field, which the
 # lattice has not had time to respond to. Nothing in this repository reads a static value.
+# STANDING RULE 1 (speed cycle): 4.0 is CsPbCl3's high-frequency dielectric constant, and a
+# per-host constant may not live in a default. It survives here as the LAST resort for a
+# model that carries no Madelung term to read it off -- `_from_model` prefers the model's own
+# `madelung_eps_inf`, which is the value the model was trained with, so a scorer run against
+# a different host uses that host's number rather than this one. Passing `eps_inf` explicitly
+# still wins over both.
 EPS_INF_DEFAULT = 4.0
 
 
@@ -83,7 +89,8 @@ class ForwardContext:
 
     @classmethod
     def production(cls, model, *, device="cpu", cutoff: Optional[float] = None,
-                   eps_inf: float = EPS_INF_DEFAULT, clamp=None, probe_loss_mask=None,
+                   eps_inf: Optional[float] = None, clamp=None,
+                   probe_loss_mask=None,
                    **extra) -> "ForwardContext":
         """The only context a training run may use. Refuses both defect-derived masks."""
         if clamp is not None or probe_loss_mask is not None:
@@ -96,7 +103,7 @@ class ForwardContext:
 
     @classmethod
     def diagnostic(cls, model, *, device="cpu", cutoff: Optional[float] = None,
-                   eps_inf: float = EPS_INF_DEFAULT, clamp: Optional[str] = None,
+                   eps_inf: Optional[float] = None, clamp: Optional[str] = None,
                    probe_loss_mask: Optional[str] = None,
                    frame_masks: Optional[Dict[int, Any]] = None,
                    stack_fn: Optional[Callable] = None, **extra) -> "ForwardContext":
@@ -117,6 +124,14 @@ class ForwardContext:
         r_max = float(model.r_max)
         r_couple = float(getattr(model, "spectral_r_cut", 0.0) or 0.0)
         resolved = float(cutoff) if cutoff else max(r_max, r_couple)
+        # Standing rule 1. `eps_inf` is a per-host INPUT, so it comes from the model that
+        # was trained with it, not from a module constant. An explicit argument still wins
+        # -- a sensitivity sweep is entitled to ask what a different value would do -- and
+        # the constant is the last resort for a model with no Madelung term at all.
+        if eps_inf is None:
+            eps_inf = getattr(model, "madelung_eps_inf", None)
+        if eps_inf is None or float(eps_inf) <= 0.0:
+            eps_inf = EPS_INF_DEFAULT
         return cls(cutoff=resolved, r_max=r_max, r_couple=r_couple or resolved,
                    eps_inf=float(eps_inf), device=device, is_diagnostic=is_diagnostic,
                    extra=dict(extra), **masks)
