@@ -224,11 +224,19 @@ class MACEDefect(ScaleShiftMACE):
         # count-filled neutral reference.
         occupation_policy: str = "count_fill",
         reference_state: Optional[Dict[str, Any]] = None,
+        # Section 2.6: which kernel the gauge-dependent terms run under. "periodic" is
+        # G_PBC, the training gauge; "isolated" is G_inf, the inference gauge.
+        gauge: str = "periodic",
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
         from mace.modules.defect_state import (PRODUCTION_POLICIES, ElectronicStateSpec,
                                                reference_state as default_reference)
+        from mace.modules.defect_terms import GAUGES
+
+        if str(gauge) not in GAUGES:
+            raise ValueError(f"gauge {gauge!r} is not one of {GAUGES}")
+        self.gauge = str(gauge)
 
         if str(occupation_policy) not in PRODUCTION_POLICIES:
             raise ValueError(
@@ -599,6 +607,12 @@ class MACEDefect(ScaleShiftMACE):
         """Attach (or detach, with None) the per-frame base cache of section 2.5."""
         self._base_cache = cache
 
+    def terms(self):
+        """Plan v8 section 2.5: the registered terms of this model's functional."""
+        from mace.modules.defect_terms import registry
+
+        return registry(self)
+
     @torch.no_grad()
     def set_pristine_centre(self, block0_feats: torch.Tensor, species: torch.Tensor) -> None:
         """Section 2.1: record the per-species mean of the first block's features over a
@@ -757,6 +771,7 @@ class MACEDefect(ScaleShiftMACE):
             # count fill and the neutral reference, which is what every one of them ran.
             ("occupation_policy", "count_fill"),
             ("reference_state", None),
+            ("gauge", "periodic"),
         ):
             if not hasattr(self, name):
                 object.__setattr__(self, name, default)
@@ -1419,6 +1434,12 @@ class MACEDefect(ScaleShiftMACE):
         # The host long-range term is part of the base branch but does depend on the
         # positions, so it must reach the force/stress derivative.
         energy_lr_host = torch.zeros_like(base_energy)
+        # Section 2.5's registry reads the trunk's own energy as the `base` term, before
+        # the host long-range term is folded into `base_energy` below.
+        base_trunk_energy = base_energy
+        # Section 2.6: the model's gauge selects the kernel; `dilute=True` is the call-site
+        # form of the isolated gauge and is kept for the scorers that pass it.
+        dilute = bool(dilute) or getattr(self, "gauge", "periodic") == "isolated"
 
         if self.use_long_range and int(self.current_epoch) >= self.lr_start_epoch:
             _lr_mark = mark("ewald/lr")
@@ -1674,6 +1695,13 @@ class MACEDefect(ScaleShiftMACE):
             "counter_input_l2": self.carrier_pooling.counter_input_l2(),
             "delta_sr_energy": delta_sr,
             "delta_lr_ref_energy": delta_lr_ref,
+            # Section 2.5: the registered terms, each under its own key. `base_trunk_energy`
+            # is E_base without the host long-range term; `energy_lr_host` is that term;
+            # `delta_lr_energy` is the carrier's long-range energy. The band term is
+            # `delta_sr_energy` above.
+            "base_trunk_energy": base_trunk_energy,
+            "energy_lr_host": energy_lr_host,
+            "delta_lr_energy": delta_lr,
             "node_energy": node_energy,
             "forces": forces,
             "base_forces": base_forces,

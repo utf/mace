@@ -495,6 +495,8 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         config["occupation_policy"] = str(getattr(model, "occupation_policy", "count_fill"))
         ref = getattr(model, "reference_state", None)
         config["reference_state"] = None if ref is None else dict(ref)
+        # Section 2.6: the gauge flag.
+        config["gauge"] = str(getattr(model, "gauge", "periodic"))
         if getattr(model, "madelung", None) is not None:
             config["madelung_composition"] = [
                 float(x) for x in model.madelung.composition]

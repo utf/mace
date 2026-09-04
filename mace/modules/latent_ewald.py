@@ -146,6 +146,18 @@ class LatentEwald(torch.nn.Module):
         energy, _, _ = self.ewald(q=charges, r=positions, cell=null_cell, batch=batch)
         return energy
 
+    def evaluate(self, kernel, charges: torch.Tensor, positions: torch.Tensor,
+                 cell: torch.Tensor, batch: torch.Tensor, num_graphs: int) -> torch.Tensor:
+        """Plan v8 section 2.6: the energy under one of the two kernels, by name.
+
+        `"periodic"` is `energy` (G_PBC, with the background); `"isolated"` is
+        `isolated_energy` (G_inf). One entry point, so that "which kernel" is an argument
+        and never a second code path.
+        """
+        from mace.modules.defect_terms import evaluate_kernel
+
+        return evaluate_kernel(self, kernel, charges, positions, cell, batch, num_graphs)
+
     def decompose(
         self,
         q_env: torch.Tensor,
