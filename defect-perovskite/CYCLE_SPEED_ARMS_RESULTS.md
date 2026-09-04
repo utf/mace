@@ -557,3 +557,39 @@ four must hold for F23 to pass; each is scored separately in the table so a part
 reads as one.
 
 F21 ("arm A: F10 passes ≥ 4/6") is already gate 4's condition and needs no interpretation.
+
+---
+
+## §3 as actually run — the objective, read off arm A's own log
+
+Every clause of §3 that could fail silently is logged by the trainer, and all of it reads
+correctly on the live run (`~/runs/arma_s1.log`, 4 Sep 10:32–10:36):
+
+    Null-gated charged energies: sizes with a neutral null [159]; kept 16 charged frames'
+      energies, dropped 928. Per size: {"79": {dropped 928, kept 0},
+                                        "159": {dropped 0, kept 16}}
+    Size upweight (charged, energy): the small cells carry no mass (the null gate zeroed
+      them); the large cells are 100% of this channel and no factor is applied.
+    Two-size upweight: factor 9.61, realised charged-force-loss share 25.0% (target 25%)
+    Charged energy share: factor 1.00 -> realised 100.0% (target 25%)
+    Realised large-cell shares: {"charged_large": 0.25, "charged_large_E": 1.0}
+    Stage-3 protocol: the first batch carries no stoichiometric cell (size-grouped sampler);
+      the gate is scored on the first batch that does.
+    Stage-3 protocol: init gate edges 0.233/0.009 eV (need <= 1.20), bandwidth 33.73 eV
+      (need >= 4.80) -> PASS
+
+Five things are confirmed by those seven lines, none of which the loss curve would have shown:
+
+1. **The null gate bites in the right direction and only there** — 928 small-cell charged
+   energies dropped, all 16 large-cell ones kept, forces untouched.
+2. **The degenerate upweight is caught.** With the small cells' energy mass at zero the old
+   formula returns a factor of *zero*, which deletes every charged energy. The guard fires,
+   says why, and applies no factor.
+3. **The realised energy share reads 1.000 against a 0.25 target**, which is correct rather
+   than a miss: with one size class contributing, its share is one by construction. §3's
+   0.25–0.5 clause has no content under rule 2, and this is the line that says so.
+4. **The charged-force share is on target at 0.250**, which is the number that *is*
+   comparable across arms.
+5. **The init gate found a stoichiometric batch.** The size-grouped sampler makes the first
+   batch a single size group, which need not contain an 80-atom cell; the search fires,
+   announces itself, and the gate passes on the covalent anchors (0.233/0.009 eV, 33.73 eV).
