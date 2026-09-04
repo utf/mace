@@ -1,10 +1,6 @@
 # Transition plan v8: single-functional charge architecture
 
-Received 4 Sep 2026, verbatim, as the plan of record. Supersedes the cycle spec
-(`CYCLE_SPEED_ARMS_SPEC.md`), whose report is `CYCLE_SPEED_ARMS_REPORT.md` on
-`size-extensivity` at 4ad038f. The occupation/SiC design that spec's §8.5 asked for is
-absorbed by §2.1 below (`ElectronicStateSpec`, occupation-policy dispatch) and is not written
-separately.
+Received 4 Sep 2026, verbatim, as the plan of record.
 
 Applies to the existing codebase. The current Stage 0–6 order is fixed; no stage starts until
 the previous stage's acceptance tests pass. Every trained number carries its regime tag.
