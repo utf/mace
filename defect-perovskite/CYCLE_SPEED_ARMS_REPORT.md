@@ -320,13 +320,22 @@ covalent anchors that replaced `d_ref`.
 
 ## 6. The forecasts, scored
 
+Every pass condition below was written down before its numbers existed; where the forecast
+itself left a threshold or a baseline unstated, the reading was pre-registered in
+`CYCLE_SPEED_ARMS_RESULTS.md` and is quoted here.
+
 | | forecast | outcome |
 |---|---|---|
-| **F21** | arm A: F10 passes ≥ 4/6 | *pending* |
-| **F22** | arm A: seeds at a pp stop fall by half relative to Stage B | *pending* |
-| **F23** | arm B: Δc falls 0.2–0.4 eV; R inside [0.66, 1.34]; thermal tiling drift ≤ 0.3·D0; F4 holds | *pending* |
-| **F24** | ≥ 4× per epoch from section 1 | **fails at 3.4× per epoch; the step it named is 4.41× faster** |
-| **F25** | the Stage B cohort's 79-atom head slope has moved toward +0.37; arm A restores it | **clause 1 fails**: −0.1804 ± 0.0244 against s7's −0.1675 ± 0.0231, i.e. further from +0.37. Clause 2 is scored on arm A. |
+| **F21** | arm A: F10 passes ≥ 4/6 | **fails**: 1/6. Better than Stage B's 0/6 and for a different reason — the channel is alive, and the ligand-Cl − bulk-Cl separation is +0.651 ± 0.266 eV against Stage B's +0.188 ± 0.156 — but its 2σ is larger still, so it does not resolve. |
+| **F22** | arm A: seeds at a pp stop fall by half relative to Stage B | **fails**: pre-registered as pp-σ ≤ 1/6 and pp-π ≤ 2/6 against Stage B's 2/6 and 5/6. Measured 2/6 and 4/6 — pp-σ unchanged, pp-π down by one seed. Gate 7 fires on all four types, and ss-σ nearly doubled (3/6 → 5/6). |
+| **F23** | arm B: Δc falls 0.2–0.4 eV; R inside [0.66, 1.34]; thermal tiling drift ≤ 0.3·D0; F4 holds | *pending arm B.* Baseline pre-registered as arm A rather than Stage B, so the clause reads Δc(A) − 0.40 ≤ Δc(B) ≤ Δc(A) − 0.20; all four clauses must hold. Early evidence at the c calibration, before training: Δc₀ falls from +0.766 to +0.417, a drop of 0.349 eV, inside the band. |
+| **F24** | ≥ 4× per epoch from section 1 | **fails at 3.4× per epoch**; the step it named is 4.41× faster. The gap is the uncached epoch's fixed costs, which section 1 did not touch. |
+| **F25** | the Stage B cohort's 79-atom head slope has moved toward +0.37; arm A restores it | **clause 1 fails**: −0.1804 ± 0.0244 against the forces-only cohort's −0.1675 ± 0.0231 — *further* from +0.37, not nearer. Clause 2 is therefore moot and holds trivially: arm A is −0.1212 ± 0.0268, negative on every seed and nowhere near the artefact. The forecast's premise — that full-weight 79-atom charged energies drag the head toward the base's small-cell artefact — was not observed, so the null gate that removes them is a precaution against an unmeasured harm rather than a repair of a measured one. |
+
+**Two of five scored, both failed; one is moot because its premise did not hold; one waits on
+arm B.** F21 and F22 were the two forecasts that said this cycle's model edits would fix
+something, and neither did. What the edits demonstrably did do — revive a dead channel,
+converge the size slopes — was not forecast by anyone.
 
 ---
 
