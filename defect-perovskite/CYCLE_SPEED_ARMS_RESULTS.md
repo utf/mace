@@ -1139,3 +1139,42 @@ That is three instances of one error — `c_shift_table`, the on-site centre, an
 participation reference — and the third was found inside the diagnostic used to judge the
 first two. The audit is not a tidying task for the next cycle; it is the next cycle's first
 result.
+
+### Audit item four: δ_L — the same error, and this time it is harmless
+
+`bound_switch(depth) = sigmoid((depth/δ_L − 2)/0.5)` divides by the pristine frontier level
+spacing, which `collect_pristine_centre` records from the **80-atom** stoichiometric cells and
+which is then applied to 159-atom frames. Same pattern as the other three.
+
+I expected a band's level spacing to go as 1/N, making the 80-atom value roughly twice the
+160-atom one. **Measured, it does the opposite**, on the same tiled cells as above:
+
+| | s1 | s3 | s5 | mean |
+|---|---|---|---|---|
+| δ_L, 80 atoms | 0.02077 | 0.01795 | 0.01759 | **0.01877 ± 0.00142** eV |
+| δ_L, 160 atoms (tiled) | 0.02658 | 0.02518 | 0.02694 | **0.02623 ± 0.00076** eV |
+| ratio 80/160 | 0.78 | 0.71 | 0.65 | **0.72×** |
+
+So the 80-atom spacing is 0.72× the 160-atom one, not 2×; the mean spacing of a folded band
+is not what `_frontier_spacings` measures. The mismatch is therefore mild and it makes
+`depth/δ_L` **larger** than it should be, pushing `s` toward 1.
+
+**And it changes nothing here.** `s` is already 1.000 to six decimal places on every model
+this programme has produced, because the levels sit 10–50× above the switch's 33 meV
+threshold. A 1.4× error in the denominator of a saturated sigmoid is invisible.
+
+That is worth recording as the audit's first *benign* finding: the pattern is present, the
+mechanism is confirmed, and the consequence is nil on this host. An audit that only ever
+finds disasters is not being run honestly. The entry that matters is that δ_L would become
+harmful the moment a level came within ~50 meV of the continuum — which is exactly the
+regime the switch exists for.
+
+**The audit so far: four instances of one pattern, three that changed a number and one that
+did not.**
+
+| # | reference | built on | applied to | consequence |
+|---|---|---|---|---|
+| 1 | `c_shift_table` | charged frames, no same-size neutral | both size classes | +0.75 eV of Δc |
+| 2 | on-site centre `x̄_s` | 80-atom stoichiometric | 79- and 159-atom defective | 0.4–0.6 eV bulk Cl shift |
+| 3 | participation reference | 80-atom pristine | 159-atom charged | every ratio inflated 1.98× |
+| 4 | `δ_L` | 80-atom stoichiometric | 159-atom charged | 0.72× error, invisible while `s` saturates |
