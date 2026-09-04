@@ -856,3 +856,40 @@ Criteria 2 and 3 read identically on every seed because they are properties of t
 base**, not of the head: the neutral 159 slope and the neutral-79 window are the same
 numbers Stage B reported, and they fail for the same reason they failed then. They are not
 evidence about the arms.
+
+### Why arm A's level is deep — knocked out term by term
+
+`b6_depth_edges.py` on the same four wave-1 models, with terms disabled at **fixed weights**
+(`probe_depth.py`, `probe_depth2.py`; b3 `~/runs/arma_depth_probe*.log`).
+
+| configuration | depth from CBM, seeds 1–4 (eV) | mean |
+|---|---|---|
+| **as trained** | 0.287, 0.804, 0.263, 0.298 | **0.413** |
+| §2.2 per-site charges off | 0.212, 0.720, 0.194, 0.203 | 0.332 |
+| §2.1 on-site correction off (`on_site_range → 0`) | 0.130, 0.111, 0.116, 0.127 | 0.121 |
+| **both off** | 0.063, 0.036, 0.043, 0.042 | **0.046** |
+| Stage B, as trained | 0.014 – 0.093 | ≈ 0.05 |
+
+**With both learned on-site channels removed, arm A's level lands exactly on Stage B's.**
+The whole 0.37 eV of extra depth is those two channels: **0.29 eV from the on-site
+correction and 0.08 eV from the per-site charges.** Seed 2's outlier is the same story —
+0.804 eV as trained, 0.111 eV with the correction off, in line with its siblings.
+
+**This reframes Stage B's shallow level.** Stage B's on-site channel was *dead* — `tanh h`
+saturated and the output-centred form is flat there — so it moved the level by nothing, and
+the shallow donor Stage B reported was the *absence of a correction*, not the presence of
+good physics. §2.1 revived the channel, exactly as intended and as F10's saturation numbers
+confirm, and the first thing the revived channel did was push the level 0.29 eV deeper,
+away from the shallow donor V_Cl⁺ is expected to be.
+
+So the honest summary of arm A's on-site channel is: **alive, large, and unregularised.**
+It is unresolved between shells (F10's separation is +0.494 eV with a 2σ of 1.43), it is
+seed-unstable (0.26 to 0.80 eV of level shift), and it moves the one observable with an
+external expectation in the wrong direction. That is a better problem than a dead channel —
+it is at least a channel — but it is not yet a working one, and nothing in this cycle's spec
+constrains it. A prior or a penalty on the correction's shell-to-shell spread is the obvious
+next lever, and it is not among §9's exclusions.
+
+*Caveat, stated: these are knockouts at fixed weights. They measure how much of the level's
+present position each term contributes, not where the level would have settled had the model
+been trained without that term. The second question needs an arm, not a probe.*
