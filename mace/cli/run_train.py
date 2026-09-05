@@ -2082,6 +2082,19 @@ def run(args) -> None:
             else:
                 model_path = Path(args.checkpoints_dir) / (tag + ".model")
             logging.info(f"Saving model to {model_path}")
+            # Decision 21: the table's alignment was last refreshed at the start of the final
+            # epoch; the model that is saved gets one more refresh on the head as trained,
+            # so its projector edges are the ones an evaluation of this model needs.
+            if class_table_frames.get("frames") and getattr(model, "composition_classes", None):
+                from mace.modules import defect_composition as _dcomp
+
+                _final = _dcomp.refresh_class_table(model, class_table_frames["frames"],
+                                                    device=device)
+                model.class_constructor["e_sink"] = model.composition_classes["e_sink"]
+                if _final.get("still_uncounted"):
+                    logging.warning("Composition classes still uncounted on the trained head: "
+                                    "%s -- the saved model refuses their charged frames",
+                                    _final["still_uncounted"])
             model_to_save = deepcopy(model)
             if hasattr(model_to_save, "uncounted_class_policy"):
                 model_to_save.uncounted_class_policy = "refuse"
