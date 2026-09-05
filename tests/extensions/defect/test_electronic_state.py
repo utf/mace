@@ -22,7 +22,7 @@ from mace.modules.defect_counting import (ORBITALS_PER_ATOM, CountingHead,
                                           density_matrix, head_energy_hf,
                                           batched_head_energy_hf)
 from mace.modules.defect_models import MACEDefect
-from tests.extensions.defect.test_neutral_reference_skip import (_batch, _model,
+from tests.extensions.defect.test_neutral_reference_skip import (_batch, _gapped, _model,
                                                                   _perovskite)
 
 torch.set_default_dtype(torch.float64)
@@ -182,9 +182,9 @@ class TestTheFillsAreReported:
         assert torch.equal(D[1], torch.zeros_like(D[1]))
 
     def test_the_head_collects_them_under_internals(self):
-        model = _model()
-        batch = _batch([_perovskite(seed=1), _perovskite(seed=2)],
-                       [[0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]])
+        frames = [_perovskite(seed=1), _perovskite(seed=2)]
+        model = _gapped(frames[:1])       # a charged graph needs the class table (1.2)
+        batch = _batch(frames, [[0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]])
         grabbed = {}
         head = model.spectral
         original = head.forward
@@ -272,8 +272,8 @@ class TestModelSemantics:
     def test_the_skip_is_decided_on_the_reference_state_key(self):
         """A supplied reference counter that IS S_ref by key -- (1, 0, 1, 0) -- still lets
         the skip fire; one that is not -- (1, 0, 0, 0) -- does not."""
-        model = _model()
         frames = [_perovskite(seed=7)]
+        model = _gapped(frames)
         base = _batch(frames, [[0.0, 0.0, 1.0, 0.0]])
         d_same = base.to_dict()
         d_same["carrier_counts_ref"] = torch.tensor([[1.0, 0.0, 1.0, 0.0]])

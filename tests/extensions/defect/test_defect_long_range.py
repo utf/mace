@@ -259,59 +259,6 @@ def run(model, atoms_list, **kwargs):
     return model(make_batch(atoms_list).to_dict(), **kwargs)
 
 
-class TestStructuredCharges:
-    def test_host_and_polarisation_channels_are_exactly_neutral(self):
-        model = build_model()
-        batch = make_batch(
-            [make_atoms((1, 0, 0, 0), seed=0), make_atoms((0, 0, 1, 1), seed=1)]
-        )
-        out = model(batch.to_dict())
-        for key in ("latent_charges_host", "polarisation"):
-            totals = torch.zeros(2, dtype=torch.float64)
-            totals.index_add_(0, batch.batch, out[key].double())
-            assert torch.allclose(totals, torch.zeros_like(totals), atol=1e-12), key
-
-    @pytest.mark.parametrize(
-        "counts,charge",
-        [((0, 0, 0, 0), 0), ((1, 0, 0, 0), -1), ((0, 0, 0, 1), 1), ((0, 0, 1, 1), 2)],
-    )
-    def test_net_latent_charge_is_the_screened_monopole(self, counts, charge):
-        """sum_i q_i == a q, *not* q: asserting the latter would force a = 1, destroy the
-        screening and make every dilute-limit number wrong by a factor of epsilon_inf."""
-        model = build_model()
-        batch = make_batch([make_atoms(counts)])
-        out = model(batch.to_dict())
-        total = float(out["latent_charges"].sum())
-        amplitude = float(out["screening_amplitude"][0])
-        assert total == pytest.approx(amplitude * charge, abs=1e-10)
-
-    def test_amplitude_is_one_per_graph_and_independent_of_the_counters(self):
-        """``a`` is a host property: it must not inherit the defect's local environment
-        or depend on n."""
-        model = build_model()
-        atoms = make_atoms((0, 0, 0, 0), seed=2)
-        amplitudes = []
-        for counts in [(0, 0, 0, 0), (1, 0, 0, 0), (0, 0, 0, 2), (1, 0, 1, 0)]:
-            charged = atoms.copy()
-            charged.info = dict(atoms.info)
-            charged.info["carrier_counts"] = np.asarray(counts, dtype=int)
-            # Multiplicity travels WITH the counts. Copying it from the neutral frame and
-            # overriding only the counts is the labelling error the guard exists to catch,
-            # reproduced in a test fixture.
-            m_s = int((counts[0] - counts[2]) - (counts[1] - counts[3]))
-            charged.info["multiplicity"] = abs(m_s) + 1
-            charged.arrays["REF_forces"] = np.zeros((len(charged), 3))
-            out = run(model, [charged])
-            assert out["screening_amplitude"].shape == (1,)
-            amplitudes.append(float(out["screening_amplitude"][0]))
-        assert all(a == pytest.approx(amplitudes[0], abs=1e-12) for a in amplitudes)
-
-    def test_amplitude_starts_at_the_requested_dielectric_gauge(self):
-        model = build_model(eps_inf_init=4.0)
-        out = run(model, [make_atoms((1, 0, 0, 0))])
-        assert float(out["screening_amplitude"][0]) == pytest.approx(0.5, abs=1e-9)
-
-
 class TestReferenceStateIdentityWithLongRange:
     @pytest.mark.parametrize("seed", [0, 1])
     def test_total_equals_base_at_the_reference_state(self, seed):
@@ -324,61 +271,24 @@ class TestReferenceStateIdentityWithLongRange:
         model = build_model()
         out = run(model, [make_atoms((0, 0, 0, 0))], dilute=True)
         assert torch.allclose(out["energy"], out["base_energy"], atol=0.0, rtol=0.0)
-        assert float(out["dilute_correction"].abs().max()) == 0.0
 
-    def test_base_energy_includes_the_host_long_range_term(self):
-        """E_LR[q_host] belongs to the base branch: it is geometry-only and present at
-        n = 0. If it were left out, L_tot's detached base would be wrong."""
+    def test_the_learned_charge_module_is_constructed_but_never_evaluated(self):
+        """Stage 1.2 retired the carrier branch (`E_LR` of a learned cloud with its host,
+        polarisation and amplitude readouts) in favour of `Phi_FF` on the frontier density.
+        The module survives for checkpoint compatibility; the forward does not call it, and
+        reports none of its outputs."""
         model = build_model()
-        atoms = make_atoms((0, 0, 0, 0))
-        with_lr = run(model, [atoms])
-        short_range_only = build_model(use_long_range=False)
-        # Copy the shared parameters so only the long-range term differs.
-        short_range_only.load_state_dict(
-            {
-                key: value
-                for key, value in model.state_dict().items()
-                if key in short_range_only.state_dict()
-            },
-            strict=False,
-        )
-        assert not torch.allclose(
-            with_lr["base_energy"], run(short_range_only, [atoms])["base_energy"]
-        )
-
-
-class TestDiluteLimit:
-    def test_dilute_differs_from_total_only_by_the_carrier_self_term(self):
-        model = build_model()
-        atoms = make_atoms((0, 0, 0, 1), seed=3)
-        periodic = run(model, [atoms])
-        dilute = run(model, [atoms], dilute=True)
-
-        batch = make_batch([atoms])
-        evaluator = model.latent_ewald
-        q_carrier = periodic["latent_charges_carrier"].detach()
-        cell = batch.cell
-        expected = float(
-            evaluator.isolated_energy(q_carrier, batch.positions, batch.batch, 1)
-            - evaluator.energy(q_carrier, batch.positions, cell, batch.batch)
-        )
-        assert float(dilute["energy"] - periodic["energy"]) == pytest.approx(
-            expected, abs=1e-9
-        )
-
-    def test_dilute_correction_scales_as_the_amplitude_squared(self):
-        """E_total - E_dilute is proportional to a^2, which is why a 20% error in a is a
-        44% error in the image energy removed."""
-        model = build_model()
-        atoms = make_atoms((0, 0, 0, 1), seed=4)
-        first = float(run(model, [atoms], dilute=True)["dilute_correction"][0])
-
-        amplitude = float(run(model, [atoms])["screening_amplitude"][0])
-        with torch.no_grad():
-            bias = list(model.latent_charges.amplitude.modules())[-1].bias
-            bias.fill_(math.log(math.expm1(2 * amplitude)))
-        second = float(run(model, [atoms], dilute=True)["dilute_correction"][0])
-        assert second == pytest.approx(4 * first, rel=1e-6)
+        calls = []
+        original = model.latent_charges.forward
+        model.latent_charges.forward = lambda *a, **k: calls.append(1) or original(*a, **k)
+        out = run(model, [make_atoms((1, 0, 0, 0), seed=5)])
+        assert not calls
+        for key in ("latent_charges", "latent_charges_host", "screening_amplitude",
+                    "delta_lr_energy", "energy_lr_host", "dilute_correction"):
+            assert key not in out
+        # an attention-head model has no counting head, hence no frontier term either
+        assert [t.name for t in model.terms()] == ["base"]
+        assert torch.equal(out["frontier_energy"], torch.zeros(1))
 
 
 class TestGradientsWithLongRange:
@@ -441,7 +351,10 @@ class TestCalculatorDiluteLimit:
 
         return MACECalculator(models=model or build_model(), device="cpu", **kwargs)
 
-    def test_dilute_changes_the_energy_but_not_at_the_reference_state(self):
+    def test_dilute_is_a_gauge_switch_of_the_same_model(self):
+        """On an attention-head model no term is gauge-dependent (the frontier term needs
+        the counting head; `test_frontier_term` covers the energy changing), so the two
+        calculators agree everywhere; the neutral identity holds regardless."""
         model = build_model()
         periodic = self.calculator(model)
         dilute = self.calculator(model, dilute=True)
@@ -451,7 +364,7 @@ class TestCalculatorDiluteLimit:
         periodic_energy = charged.get_potential_energy()
         charged = make_atoms((0, 0, 0, 1), seed=8)
         charged.calc = dilute
-        assert charged.get_potential_energy() != periodic_energy
+        assert charged.get_potential_energy() == pytest.approx(periodic_energy, abs=1e-12)
 
         neutral = make_atoms((0, 0, 0, 0), seed=8)
         neutral.calc = periodic

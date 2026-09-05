@@ -79,12 +79,22 @@ GOLDEN_FORMAT = 1
 # hessian, ...) are recorded as absent and must stay absent.
 OUTPUT_KEYS = (
     "energy", "base_energy", "delta_energy", "correction_energy", "delta_sr_energy",
-    "delta_lr_ref_energy", "node_energy", "forces", "base_forces", "delta_forces",
+    "node_energy", "forces", "base_forces", "delta_forces",
     "virials", "stress", "carrier_alpha", "carrier_eps_mean", "logit_gap", "delta_u",
-    "carrier_readouts", "carrier_logits", "latent_charges", "latent_charges_host",
-    "latent_charges_carrier", "screening_amplitude", "defect_features", "trunk_block0",
+    "carrier_readouts", "carrier_logits", "defect_features", "trunk_block0",
     "image_compensation", "bound_switch",
+    # Stage 1.2: the frontier term and its per-graph diagnostics.
+    "base_trunk_energy", "frontier_energy", "frontier_ref_energy", "frontier_w",
+    "frontier_p", "frontier_q_F", "frontier_w_ref", "frontier_min_weight",
 )
+# Stage 1.2 retired the carrier branch: these v6 fields no longer exist on the forward.
+RETIRED_KEYS = ("out.delta_lr_ref_energy", "out.latent_charges", "out.latent_charges_host",
+                "out.latent_charges_carrier", "out.screening_amplitude")
+STAGE12_KEYS = tuple(f"out.{k}" for k in OUTPUT_KEYS[-8:])
+# Fields the frontier term changes BY DESIGN on a record with a charged graph: the totals
+# and their derivatives. Everything the head computes -- the spectrum, the fills, the
+# Madelung shift, the band term, the trunk -- must still be bit-identical.
+STAGE12_VALUE_FIELDS = ("out.energy", "out.correction_energy", "out.delta_energy")
 
 
 # ------------------------------------------------------------------------------ frames
@@ -139,14 +149,36 @@ def batch_plan(frames):
     }
 
 
-def make_batch(atoms_list, cutoff):
+def atomic_data(atoms_list, cutoff):
     configs = [mace_data.config_from_atoms(a, key_specification=KEYSPEC) for a in atoms_list]
     prepare_defect_configurations(configs)
-    atomic = [mace_data.AtomicData.from_config(c, z_table=Z_TABLE, cutoff=cutoff)
-              for c in configs]
+    return [mace_data.AtomicData.from_config(c, z_table=Z_TABLE, cutoff=cutoff)
+            for c in configs]
+
+
+def make_batch(atoms_list, cutoff):
+    atomic = atomic_data(atoms_list, cutoff)
     loader = torch_geometric.dataloader.DataLoader(atomic, batch_size=len(atomic),
                                                    shuffle=False)
     return next(iter(loader))
+
+
+def class_table_frames(frames, cutoff):
+    """The golden frames as keyed `AtomicData`, PRISTINE FIRST, then the neutral vacancies:
+    the order `ensure_class_table` reads the reference geometry of each class from. Every
+    driver on arma_s1 builds its table from this list, so their tables agree."""
+    from mace.modules.defect_cache import attach_frame_keys
+
+    order = [frames["pristine"][0][2], frames["vcl0_79"][0][2], frames["vcl0_159"][0][2]]
+    atomic = atomic_data(order, cutoff)
+    attach_frame_keys(atomic, z_table=Z_TABLE)
+    return atomic
+
+
+def ensure_table(model, ctx, frames, log=True):
+    from mace.modules.defect_composition import ensure_class_table
+
+    return ensure_class_table(model, class_table_frames(frames, ctx.cutoff), log=log)
 
 
 # ------------------------------------------------------------------------------ hooks
@@ -302,6 +334,10 @@ def setup(args):
     model = torch.load(args.model, map_location="cpu", weights_only=False).to("cpu").eval()
     ctx = ForwardContext.production(model, device="cpu")
     frames = frame_selection()
+    # Stage 1.2: the frontier term needs the class table on every charged graph; a model
+    # pickled before the table existed gets it here, from the golden frames.
+    if getattr(args, "class_table", True):
+        ensure_table(model, ctx, frames, log=False)
     batches = {name: make_batch(atoms, ctx.cutoff) for name, atoms in batch_plan(frames).items()}
     return model, ctx, frames, batches
 
@@ -352,9 +388,21 @@ DERIVATIVE_FIELDS = ("out.forces", "out.base_forces", "out.delta_forces", "out.v
                      "out.stress")
 
 
+def _allowed_stage12(name, bad):
+    """Stage 1.2's allow-list: retired and new fields may be present on one side only on
+    every record; the totals and the derivatives may differ on a record with a charged
+    graph; NOTHING may differ on a neutral record."""
+    presence = [b for b in bad if b[0] in RETIRED_KEYS or b[0] in STAGE12_KEYS]
+    if name.startswith("pristine_pair"):
+        return presence
+    values = [b for b in bad if b[0] in STAGE12_VALUE_FIELDS or b[0] in DERIVATIVE_FIELDS]
+    return presence + values
+
+
 def compare(args):
     ref = torch.load(Path(args.ref).expanduser(), map_location="cpu", weights_only=False)
     energies_only = bool(getattr(args, "energies_only", False))
+    stage12 = bool(getattr(args, "stage12", False))
     meta = ref["meta"]
     model, ctx, frames, batches = setup(args)
     if model_digest(model) != meta["model_sha256"]:
@@ -370,10 +418,12 @@ def compare(args):
         now = run_once(model, ctx, batches[bname], mode)
         bad = records_equal(golden, now)
         allowed = [b for b in bad if b[0] in DERIVATIVE_FIELDS] if energies_only else []
+        if stage12:
+            allowed = _allowed_stage12(name, bad)
         bad = [b for b in bad if b not in allowed]
         status = "identical" if not bad else f"{len(bad)} field(s) differ"
         if allowed:
-            status += f" ({len(allowed)} derivative field(s) differ, allowed)"
+            status += f" ({len(allowed)} field(s) differ, allowed)"
         print(f"  {name:36s} {status}")
         for k, why in bad + allowed:
             print(f"      {k}: {why}")
@@ -381,7 +431,9 @@ def compare(args):
             failures[name] = bad
     print(f"golden {meta['git_sha'][:10]} vs HEAD {git_sha()[:10]}: "
           f"{len(ref['records']) - len(failures)}/{len(ref['records'])} records identical"
-          + (" (energies only)" if energies_only else ""))
+          + (" (energies only)" if energies_only else "")
+          + (" (Stage 1.2 allow-list: head fields and neutral records exact)" if stage12
+             else ""))
     return 0 if not failures else 1
 
 
@@ -398,6 +450,9 @@ def main(argv=None):
         else:
             s.add_argument("--energies-only", action="store_true",
                            help="derivative fields may differ (Stage 1 derivative fixes)")
+            s.add_argument("--stage12", action="store_true",
+                           help="Stage 1.2 allow-list: the frontier term changes the totals "
+                                "of charged records; head fields and neutral records exact")
     args = p.parse_args(argv)
     _assert_repo()
     return capture(args) if args.cmd == "capture" else compare(args)

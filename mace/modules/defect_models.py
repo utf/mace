@@ -565,6 +565,7 @@ class MACEDefect(ScaleShiftMACE):
         self._base_cache = None
         self._apply_precision_policy()
         self._apply_long_range_policy()
+        self._ensure_frontier_ewald()
 
     # ------------------------------------------------------------ Stage A' policies
 
@@ -786,6 +787,13 @@ class MACEDefect(ScaleShiftMACE):
             from mace.modules.defect_state import reference_state as default_reference
 
             object.__setattr__(self, "reference_state", default_reference().to_dict())
+        # STAGE 1.2: a checkpoint written before the frontier term gets its evaluator (no
+        # parameters; built from the model's own Ewald arguments and `r_res`).
+        if "frontier_ewald" not in getattr(self, "_modules", {}):
+            try:
+                self._ensure_frontier_ewald()
+            except (AttributeError, KeyError, TypeError):
+                pass
         # Buffers need registering, not just setting, or they stay out of the state dict
         # and out of `.to()`. A model pickled before the gauge probe existed has none, and
         # an empty buffer is exactly the "probe disabled" state, so old checkpoints keep
@@ -817,41 +825,28 @@ class MACEDefect(ScaleShiftMACE):
                     object.__setattr__(charges, name, default)
 
 
-    def _isolated_carrier_self(
-        self,
-        alpha: torch.Tensor,  # [n_nodes, 4]
-        counts: torch.Tensor,  # [n_graphs, 4]
-        amplitude: torch.Tensor,  # [n_graphs]
-        positions: torch.Tensor,
-        batch: torch.Tensor,
-        num_graphs: int,
-    ) -> torch.Tensor:
-        """``sum_c E_isolated[Q^c]`` -- the in-cell electrostatics of each carrier channel
-        with itself, evaluated with no images.
+    @property
+    def frontier_active(self) -> bool:
+        """Plan v8 section 2.8: `Phi_FF` exists when the model has a periodic evaluator and
+        the counting head (the channel objects are built from its Hamiltonian)."""
+        return (getattr(self, "frontier_ewald", None) is not None
+                and hasattr(getattr(self, "spectral", None), "valence"))
 
-        Subtracting this from the periodic energy leaves the finite-size correction and
-        nothing else. The in-cell part is spurious: a single hole has no Hartree
-        self-repulsion, so the whole in-cell electrostatic energy of ONE channel is
-        self-interaction error. Measured at the training cell it pays +0.104 eV to spread
-        the attention out, and removing it is what let two of three control seeds reach the
-        correct vacancy-shell solution.
-
-        Per channel, not on the summed charge: the CROSS-channel terms are real physics
-        (the electron-hole interaction on 4H-SiC) and must survive. Only the within-channel
-        self-energy is removed.
-
-        The i = j cancellation is exact regardless of the minimum-image convention, because
-        both evaluators build the same on-site term from the same smeared charge -- which is
-        the robust part of this construction.
-        """
-        signed = self.latent_charges.carrier_signs.unsqueeze(0) * counts
-        total = torch.zeros(num_graphs, dtype=positions.dtype, device=positions.device)
-        for channel in range(NUM_CARRIER_CHANNELS):
-            charge = amplitude[batch] * alpha[:, channel] * signed[batch, channel]
-            total = total + self.latent_ewald.isolated_energy(
-                charge, positions, batch, num_graphs
-            )
-        return total
+    def _ensure_frontier_ewald(self) -> None:
+        """The evaluator of `B_img` at `sigma = r_res` (section 2.7): the model's own Ewald
+        arguments with the density-difference width in place of the numerical one, so the
+        image term is a property of the physical density and invariant under `ewald_sigma`
+        by construction (section 7.3)."""
+        if getattr(self, "frontier_ewald", None) is not None:
+            return
+        ewald = getattr(self, "latent_ewald", None)
+        if ewald is None or not getattr(self, "use_long_range", False):
+            return
+        arguments = dict(getattr(ewald, "les_arguments", {}) or {})
+        arguments["sigma"] = float(self.functional["r_res"])
+        self.frontier_ewald = LatentEwald(arguments)
+        for p_ in self.frontier_ewald.parameters():
+            p_.requires_grad_(False)
 
     def _carrier_head(
         self,
@@ -981,8 +976,12 @@ class MACEDefect(ScaleShiftMACE):
         mean_eps = scatter_sum(out.site_energy, batch, dim=0,
                                dim_size=num_graphs) / node_count
         delta_u = weighted - mean_eps
+        # STAGE 1.2: the counting head's per-graph records (attached H, detached spectrum
+        # and fills) travel back in the extras for the frontier term -- never on the
+        # module (a graph-connected tensor in __dict__ breaks deepcopy).
         return (out.delta_sr, out.alpha, out.site_energy, out.gap, delta_u,
-                out.site_energy, {"eps_mean": out.eps_mean})
+                out.site_energy, {"eps_mean": out.eps_mean,
+                                  "frontier": getattr(out, "frontier", None)})
 
     def forward(  # pylint: disable=too-many-branches
         self,
@@ -1390,11 +1389,12 @@ class MACEDefect(ScaleShiftMACE):
             and state_ref.all_reference(s_ref)
         )
         counter_emb_ref = self.counter_embedding(counts_ref)
+        head_extras_ref: Dict[str, Any] = {}
         if skip_reference:
             delta_sr_ref = torch.zeros_like(delta_sr)
             alpha_ref = torch.zeros_like(alpha)
         else:
-            delta_sr_ref, alpha_ref, _, _, _, _, _ = self._carrier_head(
+            delta_sr_ref, alpha_ref, _, _, _, _, head_extras_ref = self._carrier_head(
                 node_feats=defect_feats,
                 counter_emb=counter_emb_ref,
                 counts=counts_ref,
@@ -1414,173 +1414,35 @@ class MACEDefect(ScaleShiftMACE):
                 state=state_ref,
             )
 
-        # Long-range branch (plan section 3.4).
-        latent_charge: Optional[torch.Tensor] = None
-        q_host: Optional[torch.Tensor] = None
-        q_carrier: Optional[torch.Tensor] = None
-        polarisation: Optional[torch.Tensor] = None
-        amplitude: Optional[torch.Tensor] = None
-        dilute_correction: Optional[torch.Tensor] = None
-        delta_lr = torch.zeros_like(base_energy)
-        delta_lr_ref = torch.zeros_like(base_energy)
-        # The host long-range term is part of the base branch but does depend on the
-        # positions, so it must reach the force/stress derivative.
-        energy_lr_host = torch.zeros_like(base_energy)
-        # Section 2.5's registry reads the trunk's own energy as the `base` term, before
-        # the host long-range term is folded into `base_energy` below.
+        # STAGE 1.2 (plan v8 sections 2.2 and 2.8): the frontier-frontier image term
+        # `Phi_FF(S) - Phi_FF(S_ref)` on the channel-normalised frontier density, replacing
+        # the retired carrier branch (`E_LR` of a learned carrier cloud with its host,
+        # polarisation and amplitude readouts, and the host term `E_LR[q_host]` -- whose
+        # readout has been frozen at exactly zero on every model in hand). The learned
+        # charge module is still constructed for checkpoint compatibility and is not
+        # called. `dilute=True` is the call-site form of the isolated gauge (section 2.6).
         base_trunk_energy = base_energy
-        # Section 2.6: the model's gauge selects the kernel; `dilute=True` is the call-site
-        # form of the isolated gauge and is kept for the scorers that pass it.
         dilute = bool(dilute) or getattr(self, "gauge", "periodic") == "isolated"
+        frontier_gauge = "isolated" if dilute else "periodic"
+        frontier = torch.zeros_like(base_energy)
+        frontier_ref = torch.zeros_like(base_energy)
+        frontier_diag: Dict[str, Any] = {}
+        if self.frontier_active:
+            from mace.modules.defect_frontier import entries_from_head, frontier_energy
 
-        if self.use_long_range and int(self.current_epoch) >= self.lr_start_epoch:
-            _lr_mark = mark("ewald/lr")
-            _lr_mark.__enter__()
-            # A null cell selects the isolated evaluator inside LES, which is how
-            # non-periodic configurations are handled.
-            cell_les = head_cell.clone()
-            pbc_tensor = data["pbc"].to(device=cell.device)
-            no_pbc_rows = (~pbc_tensor.any(dim=-1)).repeat_interleave(3)
-            cell_les[no_pbc_rows] = torch.zeros(
-                (int(no_pbc_rows.sum()), 3),
-                dtype=cell_les.dtype,
-                device=cell_les.device,
-            )
-
-            (
-                latent_charge,
-                q_host,
-                q_carrier,
-                polarisation,
-                amplitude,
-            ) = self.latent_charges(
-                node_feats=defect_feats,
-                counter_emb=counter_emb,
-                counts=counts,
-                alpha=alpha,
-                batch=data["batch"],
-                num_graphs=num_graphs,
-                edge_index=data["edge_index"],
-                edge_lengths=lengths.to(head_dtype),
-            )
-            # PLAN v8 SECTION 3: NOTHING HERE IS DETACHED. The v6 branch detached the
-            # charges under `lr_detach_density` so that E_LR's forces were dE_LR/dR at
-            # fixed q; the plan retires detached densities outright (section 2.5, "no
-            # detached quantity anywhere"). What still cuts the density's gradient is the
-            # head's own detached D, which Stage 1's response-density forces replace.
-            #
-            # The neutrality check is a CHECK, not a term, and runs on detached copies:
-            # the density-matrix difference sums to -Delta_n exactly, so the carrier charge
-            # sums to -a * Delta_n; the spec's own `|sum q + Delta_n|` holds only at a = 1
-            # and is kept as `lr_neutrality_residual` for the run log.
-            delta_n = (counts[:, 0] + counts[:, 1] - counts[:, 2] - counts[:, 3])
-            q_sum = scatter_sum(latent_charge.detach(), data["batch"], dim=0,
-                                dim_size=num_graphs)
-            self._lr_neutrality_residual = (q_sum + delta_n).abs().max().detach()
-            if amplitude is not None:
-                dens_sum = scatter_sum(q_carrier.detach(), data["batch"], dim=0,
-                                       dim_size=num_graphs) / amplitude.detach().clamp_min(1e-12)
-                bad = (dens_sum + delta_n).abs() > 1e-6
-                if bool(bad.any()):
-                    raise RuntimeError(
-                        "the carrier density does not sum to -Delta_n: "
-                        f"max |sum q_carrier/a + Delta_n| = "
-                        f"{float((dens_sum + delta_n).abs().max()):.3e}")
-            energy_lr_host = self.latent_ewald.energy(
-                q_host, head_positions, cell_les, data["batch"]
-            )
-            # At n = 0 the polarisation and carrier channels vanish identically, so the
-            # two evaluations see the same charges and this difference is exactly zero.
-            base_energy = base_energy + energy_lr_host
-            if self.host_carrier_coupling:
-                delta_lr = (
-                    self.latent_ewald.energy(
-                        latent_charge, head_positions, cell_les, data["batch"]
-                    )
-                    - energy_lr_host
-                )
-            else:
-                # Drop the cross term between q^host and the carrier cloud. Since E_LR is
-                # quadratic, E(host + d) - E(host) = E(d) + 2B(host, d), so keeping only
-                # E(d) removes exactly that coupling. Both branches cost two Ewald
-                # evaluations; the total-charge one is raised inside the coupled branch so
-                # the uncoupled path does not pay for a result it discards.
-                #
-                # The measurement behind this: pooling both energies under a hand-set
-                # attention gives d(host.carrier) = -1.25 eV in favour of the Cs
-                # sublattice against 0.18 eV of short-range difference, size-independent
-                # to 18 meV over a 2.25x range. The cross term has the same pooling form
-                # as Delta E_SR = sum_c n_c <u>_alpha -- same alpha, one field learned and
-                # one fixed-shape -- so the two are degenerate and the electrostatic one
-                # wins by 7x. Worse, a classical point-charge potential is deepest at
-                # CATION sites, so it drags the hole onto Cs; no rescaling of q^host or a
-                # can fix a term that points the wrong way.
-                #
-                # The carrier's interaction with the host's own short-ranged Madelung
-                # field belongs in u_i, which is a learned per-site energy on the same
-                # sites and can represent it. The long-range branch keeps only what
-                # Delta E_SR structurally cannot do: the monopole self-interaction and
-                # interactions between separated carriers.
-                delta_lr = self.latent_ewald.energy(
-                    latent_charge - q_host, head_positions, cell_les, data["batch"]
-                )
-
-            # The same at the reference counter. This branch is *not* inert at q = 0:
-            # q^carrier is a compensated but pointwise non-zero charge whose self-term is
-            # the electron-hole interaction, and q^pol carries a factor sum_c n_c. Both
-            # are live whenever the reference state itself carries carriers -- which is
-            # exactly what `skip_reference` above tests for, and why the skip is gated on
-            # the caller NOT having supplied a reference counter of its own.
-            if skip_reference:
-                # `latent_charge_ref = q_host` exactly (see above), so both branches below
-                # evaluate the Ewald energy of an identically zero charge. Written as the
-                # zero it is, rather than paying an Ewald call to arrive at it.
-                latent_charge_ref = q_host
-                delta_lr_ref = torch.zeros_like(base_energy)
-            else:
-                latent_charge_ref, _, _, _, _ = self.latent_charges(
-                    node_feats=defect_feats,
-                    counter_emb=counter_emb_ref,
-                    counts=counts_ref,
-                    alpha=alpha_ref,
-                    batch=data["batch"],
-                    num_graphs=num_graphs,
-                    edge_index=data["edge_index"],
-                    edge_lengths=lengths,
-                )
-            if skip_reference:
-                pass
-            elif self.host_carrier_coupling:
-                delta_lr_ref = (
-                    self.latent_ewald.energy(
-                        latent_charge_ref, head_positions, cell_les, data["batch"]
-                    )
-                    - energy_lr_host
-                )
-            else:
-                delta_lr_ref = self.latent_ewald.energy(
-                    latent_charge_ref - q_host, head_positions, cell_les, data["batch"]
-                )
-
-            if self.carrier_self_isolated:
-                # E_LR = E_periodic[Q] - sum_c E_isolated[Q^c]: only the image interaction
-                # survives, with 1/L monopole scaling by construction.
-                delta_lr = delta_lr - self._isolated_carrier_self(
-                    alpha, counts, amplitude, head_positions, data["batch"], num_graphs
-                )
+            with mark("ewald/frontier"):
+                fr = frontier_energy(
+                    self, entries_from_head(head_extras.get("frontier")), state,
+                    s_ref, head_species, head_positions, head_cell, data["batch"],
+                    num_graphs, frontier_gauge, label="state")
+                frontier = fr["energy"]
+                frontier_diag = fr
                 if not skip_reference:
-                    # Zero at zero counts by the same `carrier_signs * counts` factor.
-                    delta_lr_ref = delta_lr_ref - self._isolated_carrier_self(
-                        alpha_ref, counts_ref, amplitude, head_positions,
-                        data["batch"], num_graphs
-                    )
-
-            if dilute:
-                dilute_correction = self.latent_ewald.dilute_correction(
-                    q_carrier, head_positions, cell_les, data["batch"], num_graphs
-                )
-                delta_lr = delta_lr + dilute_correction
-            _lr_mark.__exit__(None, None, None)
+                    fr_ref = frontier_energy(
+                        self, entries_from_head(head_extras_ref.get("frontier")),
+                        state_ref, s_ref, head_species, head_positions, head_cell,
+                        data["batch"], num_graphs, frontier_gauge, label="reference")
+                    frontier_ref = fr_ref["energy"]
 
         # The correction at this frame's own counter is what the total energy carries;
         # the paired difference is what the delta labels supervise. They coincide only
@@ -1595,8 +1457,8 @@ class MACEDefect(ScaleShiftMACE):
         # energy readout, so V could change the energy but never H, and a term that cannot
         # change the Hamiltonian cannot change where the carrier goes. Edit 1 puts the same
         # potential on the on-site energies, where the eigenproblem sees it.
-        correction_energy = delta_sr + delta_lr
-        correction_energy_ref = delta_sr_ref + delta_lr_ref
+        correction_energy = delta_sr + frontier
+        correction_energy_ref = delta_sr_ref + frontier_ref
         delta_energy = correction_energy - correction_energy_ref
         total_energy = base_energy + correction_energy
 
@@ -1632,7 +1494,7 @@ class MACEDefect(ScaleShiftMACE):
         _out_mark = mark("model/outputs")
         _out_mark.__enter__()
         forces, virials, stress, hessian, edge_forces, _ = get_outputs(
-            energy=inter_e + energy_lr_host + correction_energy,
+            energy=inter_e + correction_energy,
             positions=positions,
             displacement=displacement,
             vectors=vectors,
@@ -1660,8 +1522,7 @@ class MACEDefect(ScaleShiftMACE):
             base_forces = forces - correction_forces
         if cache_hit and forces is not None:
             # `inter_e` was a constant above, so the derivative pass carried only the
-            # long-range host term and the correction; the trunk's own forces are the
-            # cached ones.
+            # correction; the trunk's own forces are the cached ones.
             forces = forces + cached_forces
             if base_forces is not None:
                 base_forces = base_forces + cached_forces
@@ -1685,14 +1546,19 @@ class MACEDefect(ScaleShiftMACE):
             "correction_energy": correction_energy,
             "counter_input_l2": self.carrier_pooling.counter_input_l2(),
             "delta_sr_energy": delta_sr,
-            "delta_lr_ref_energy": delta_lr_ref,
             # Section 2.5: the registered terms, each under its own key. `base_trunk_energy`
-            # is E_base without the host long-range term; `energy_lr_host` is that term;
-            # `delta_lr_energy` is the carrier's long-range energy. The band term is
-            # `delta_sr_energy` above.
+            # is E_base (the trunk); the band term is `delta_sr_energy` above; the frontier
+            # image term is `frontier_energy` (`Phi_FF(S) - Phi_FF(S_ref)`), with its
+            # reference-branch twin and the per-graph diagnostics of section 2.1
+            # (`-1` where a graph was at its reference state and nothing was evaluated).
             "base_trunk_energy": base_trunk_energy,
-            "energy_lr_host": energy_lr_host,
-            "delta_lr_energy": delta_lr,
+            "frontier_energy": frontier,
+            "frontier_ref_energy": frontier_ref,
+            "frontier_w": frontier_diag.get("w"),
+            "frontier_p": frontier_diag.get("p"),
+            "frontier_q_F": frontier_diag.get("q_F"),
+            "frontier_w_ref": frontier_diag.get("w_ref"),
+            "frontier_min_weight": frontier_diag.get("min_weight"),
             "node_energy": node_energy,
             "forces": forces,
             "base_forces": base_forces,
@@ -1730,10 +1596,4 @@ class MACEDefect(ScaleShiftMACE):
             # Needed to gate the seed anneal on SITE structure rather than on
             # gap magnitude, which cannot tell a species gap from a site gap.
             "carrier_logits_intrinsic": logits_intrinsic,
-            "latent_charges": latent_charge,
-            "latent_charges_host": q_host,
-            "latent_charges_carrier": q_carrier,
-            "polarisation": polarisation,
-            "screening_amplitude": amplitude,
-            "dilute_correction": dilute_correction,
         }

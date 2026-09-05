@@ -70,9 +70,17 @@ class TermSpec:
     #: How `dE/dP` reaches `H` as an orbital-space potential. "band" for the band term
     #: itself (`dF/dH = P`); "in_H" for a potential added to the on-site energies before the
     #: solve; "none" for a P-independent term; "absent" for a P-dependent term that
-    #: contributes no potential -- the class the plan retires, listed so the harness can
-    #: report it rather than the omission being invisible.
+    #: contributes no potential to H (the frontier term before Stage 5).
     potential: str
+    #: How `dE/dP` reaches the FORCES (section 2.5) -- a different question from `potential`,
+    #: which the registry used to conflate. "band" for the band term (Hellmann-Feynman plus
+    #: the head's own response); "divided_difference" for a term whose P-dependence is
+    #: built from matrix functions of H and differentiated by the Daleckii-Krein route
+    #: (`Tr(P~ dH/dR)` by autograd through `channel_matrix`); "none" for a P-independent
+    #: term; "absent" for a P-dependent term whose response is NOT in the forces -- the
+    #: class the plan retires, listed so the harness reports it rather than it being
+    #: invisible. No term of the Stage 1.2 functional is in that class.
+    response: str
     #: `dE/dR` at fixed `P` is non-zero.
     depends_on_R: bool
     #: `dE/dh` at fixed `P` (through the trunk features) is non-zero.
@@ -91,35 +99,31 @@ def registry(model) -> List[TermSpec]:
     """The terms live on THIS model configuration, in the order the energy sums them."""
     terms = [
         TermSpec(name="base", output_key="base_trunk_energy", depends_on_P=False,
-                 potential="none", depends_on_R=True, depends_on_features=True,
-                 kernel=None, section="E_base"),
+                 potential="none", response="none", depends_on_R=True,
+                 depends_on_features=True, kernel=None, section="E_base"),
     ]
-    if getattr(model, "use_long_range", False):
-        terms.append(TermSpec(
-            name="lr_host", output_key="energy_lr_host", depends_on_P=False,
-            potential="none", depends_on_R=True, depends_on_features=True,
-            kernel=getattr(model, "gauge", Kernel.PBC.value), section="E_LR[q_host]"))
     if getattr(model, "spectral", None) is not None:
         # The band term: F_band(H_Q) - F_band(H_0). Everything that enters H -- the SK
         # hoppings, the on-site levels, the Madelung shift, the c table -- is inside this
         # one term, and its potential IS the density matrix.
         terms.append(TermSpec(
             name="band", output_key="delta_sr_energy", depends_on_P=True, potential="band",
-            depends_on_R=True, depends_on_features=True,
+            response="band", depends_on_R=True, depends_on_features=True,
             kernel=(Kernel.PBC.value if getattr(model, "madelung", None) is not None
                     else None),
             section="2.2 (F_band; V_static^B inside H before Stage 4 as the Madelung term)"))
-    if getattr(model, "use_long_range", False):
-        # E_LR of the carrier: P-dependent through the carrier density, and its potential
-        # is ABSENT from H -- a bolt-on, the class the plan retires. Stage 5 makes it
-        # Phi_FF with V_FF = dPhi/dP. Its feature dependence is through the frozen
-        # amplitude and host-charge readouts, which are constants at the eps_inf-only
-        # values, so at fixed P it is a function of R alone.
+    if getattr(model, "frontier_active", False):
+        # STAGE 1.2. Phi_FF = 1/2 B_img[w rho_loc, w rho_loc] on the channel-normalised
+        # frontier density (section 2.8), as `Phi_FF(S) - Phi_FF(S_ref)`. P-dependent
+        # through the channel projectors, the normalisations and w; its response reaches
+        # the forces by the divided-difference route; its POTENTIAL is absent from H until
+        # Stage 5 (V_FF = dPhi_FF/dP). Feature-dependent through H. Zero under the
+        # isolated gauge.
         terms.append(TermSpec(
-            name="lr_carrier", output_key="delta_lr_energy", depends_on_P=True,
-            potential="absent", depends_on_R=True, depends_on_features=False,
-            kernel=getattr(model, "gauge", Kernel.PBC.value),
-            section="E_LR (-> Phi_FF, Stage 5)"))
+            name="frontier", output_key="frontier_energy", depends_on_P=True,
+            potential="absent", response="divided_difference", depends_on_R=True,
+            depends_on_features=True, kernel=getattr(model, "gauge", Kernel.PBC.value),
+            section="2.8 (Phi_FF; V_FF = dPhi_FF/dP from Stage 5)"))
     return terms
 
 

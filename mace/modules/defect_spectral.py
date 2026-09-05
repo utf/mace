@@ -104,6 +104,11 @@ class SpectralOutput(NamedTuple):
     eps_mean: torch.Tensor      # [n_graphs, C]  per-frame mean site energy (T5 gauge)
     eigenvalues: torch.Tensor   # [n_graphs, C, m]
     weights: torch.Tensor       # [n_graphs, C, m]
+    # STAGE 1.2 (plan v8 section 2.1): the counting head's per-graph records for the
+    # frontier term -- the ATTACHED Hamiltonian with its detached spectrum and fills --
+    # or None for a head that has none. On the output, not in `internals`: every scorer
+    # that injects its own `internals` dict would otherwise take the records with it.
+    frontier: Optional[list] = None
 
 
 def _mlp(sizes, activation=nn.SiLU, final_scale=None):

@@ -36,7 +36,8 @@ from mace.modules.defect_context import ForwardContext
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from e0_residual_maps import _assert_repo  # noqa: E402
-from stage0_golden import DATA, frame_selection, git_sha, make_batch  # noqa: E402
+from stage0_golden import (DATA, ensure_table, frame_selection, git_sha,  # noqa: E402
+                           make_batch)
 
 
 def load_uniform(path):
@@ -68,6 +69,21 @@ def gaps_of(model, ctx, frames):
                         compute_force=False)
             gaps.append(float(out["logit_gap"][0, 0]))
     return gaps
+
+
+def window_distances(model, ctx, frames):
+    """Per frame, the distance of the level nearest the Tier 1 cut `VBM_al + delta` of
+    its class (section 7.2's "inside a projector window" selection, from the model's own
+    spectrum at S_ref)."""
+    from mace.modules import defect_composition as dc
+
+    out = []
+    for a in frames:
+        rec = dc.lookup_class(model.composition_classes, a.get_atomic_numbers())
+        spec = dc.head_spectra(model, ctx.forward_dict(make_batch([a], ctx.cutoff)))[0]
+        cut = rec.vbm_al + rec.delta
+        out.append(float(np.min(np.abs(spec["spectrum"] - cut))))
+    return out
 
 
 def components_for(model, ctx, batch, n_random: int = 2, n_carrier: int = 2, seed: int = 0):
@@ -140,7 +156,8 @@ def main(argv=None):
     p.add_argument("--force-tol", type=float, default=1e-4)
     p.add_argument("--stress-tol", type=float, default=1e-5)
     p.add_argument("--threads", type=int, default=8)
-    p.add_argument("--frames", default="charged_ordinary,charged_crossing,vcl0_79,pristine_80",
+    p.add_argument("--frames",
+                   default="charged_ordinary,charged_crossing,charged_window,vcl0_79,pristine_80",
                    help="comma-separated subset of the frame labels")
     p.add_argument("--gauges", default="periodic,isolated")
     p.add_argument("--base-cache", action="store_true",
@@ -152,18 +169,25 @@ def main(argv=None):
     model = load_uniform(args.model)
     ctx = ForwardContext.production(model, device="cpu")
     frames = frame_selection()
+    # Stage 1.2: the frontier term needs the class table on every charged frame.
+    ensure_table(model, ctx, frames, log=False)
     pool = charged_pool(args.pool)
     gaps = gaps_of(model, ctx, pool)
-    sel = fd.select_frames(gaps, n_ordinary=1, n_crossing=1)
+    distances = window_distances(model, ctx, pool)
+    sel = fd.select_frames(gaps, n_ordinary=1, n_crossing=1, window_distances=distances)
     chosen = {
         "charged_ordinary": pool[sel["ordinary"][0]],
         "charged_crossing": pool[sel["near_crossing"][0]],
+        "charged_window": pool[sel["in_projector_window"][0]],
         "vcl0_79": frames["vcl0_79"][0][2],
         "pristine_80": frames["pristine"][0][2],
+        # Stage 1.2: the 159-atom charged vacancy (the tiled 1x1x2 class, perm (0, 2, 1)),
+        # the size the tiling ladder leans on; not in the default set (it costs ~8x).
+        "qp1_159": frames["qp1_159"][0][2],
     }
     print(f"frames: ordinary gap {gaps[sel['ordinary'][0]]:.3f} eV, near-crossing gap "
-          f"{gaps[sel['near_crossing'][0]]:.3f} eV; projector-window frame: not applicable "
-          "(Stage 0.9)")
+          f"{gaps[sel['near_crossing'][0]]:.3f} eV, projector-window frame with a level "
+          f"{distances[sel['in_projector_window'][0]]:.3f} eV from the cut")
     summary, detail = [], {}
     wanted = [x for x in args.frames.split(",") if x]
     chosen = {k: v for k, v in chosen.items() if k in wanted}
@@ -177,7 +201,8 @@ def main(argv=None):
         git_sha=git_sha(), model=str(args.model), precision_policy="uniform float64",
         h_values=list(fd.H_VALUES), strains=list(fd.STRAINS), force_tol=args.force_tol,
         stress_tol=args.stress_tol, gaps=gaps, selection=sel,
-        projector_window="not applicable until Stage 0.9",
+        window_distances=distances,
+        projector_window="the pool frame whose level is nearest VBM_al + delta",
         base_cache=bool(getattr(args, "base_cache", False)),
         summary=summary, detail=detail), indent=1))
     print(f"written {out}")

@@ -45,9 +45,13 @@ HERE = Path(__file__).resolve().parent
 def golden_check(args):
     if not Path(args.model).expanduser().exists():
         return {"status": "skipped", "reason": "model file absent"}
-    ns = argparse.Namespace(model=args.model, ref=args.ref)
+    # Stage 1.2: the frontier term changes the totals of charged records by design; the
+    # head's fields and every neutral record are still held bit-identical to the v6 golden
+    # (`--stage12`). The Stage 1 golden at the selected reference replaces this (1.5).
+    ns = argparse.Namespace(model=args.model, ref=args.ref, stage12=True)
     code = sg.compare(ns)
-    return {"status": "pass" if code == 0 else "FAIL", "ref": args.ref}
+    return {"status": "pass" if code == 0 else "FAIL", "ref": args.ref,
+            "mode": "stage12 allow-list"}
 
 
 def class_table_check(args):

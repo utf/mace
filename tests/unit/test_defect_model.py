@@ -1080,54 +1080,12 @@ class TestLogitSeeding:
 
 
 class TestLongRangeBranch:
-    """Plan stage E: the long-range branch, with the screening amplitude frozen."""
+    """Stage 1.2 retired the learned carrier branch; what remains is that a model built with
+    the periodic evaluator still constructs the (unused) charge module for checkpoint
+    compatibility and that the flags arrive."""
 
-    def test_freeze_amplitude_actually_freezes_it(self):
-        """A construction flag that silently fails to arrive is worse than no flag.
-
-        This was real: the CLI parsed `--freeze_amplitude=True`, the value reached
-        `args`, and a no-op edit meant it never reached the constructor -- so stage E
-        trained a *fitted* `a` while every log said it was frozen. The two seeds then
-        disagreed by a factor of 1.7 in `1/a^2`, which is the unidentifiability the freeze
-        exists to prevent, discovered only by reading the saved weights.
-        """
+    def test_freeze_amplitude_flag_arrives(self):
         model = build_model(use_long_range=True, eps_inf_init=6.5, freeze_amplitude=True)
         assert model.freeze_amplitude is True
-        amplitude = model.latent_charges.amplitude
-        assert not any(p.requires_grad for p in amplitude.parameters())
+        assert not any(p.requires_grad for p in model.latent_charges.amplitude.parameters())
 
-        out = run(model, [make_atoms((1, 0, 0, 1), seed=2)])
-        expected = 1.0 / 6.5**0.5
-        assert torch.allclose(
-            out["screening_amplitude"],
-            torch.full_like(out["screening_amplitude"], expected),
-            atol=1e-6,
-        ), "a must sit exactly at 1/sqrt(eps_inf)"
-
-    def test_amplitude_is_trainable_when_not_frozen(self):
-        model = build_model(use_long_range=True, eps_inf_init=6.5, freeze_amplitude=False)
-        assert model.freeze_amplitude is False
-        assert any(p.requires_grad for p in model.latent_charges.amplitude.parameters())
-
-    def test_latent_charge_invariants(self):
-        """sum_i q_host = sum_i q_pol = 0 per cell, and sum_i q_i = a*q."""
-        from mace.tools.scatter import scatter_sum
-
-        model = build_model(use_long_range=True, eps_inf_init=6.5, freeze_amplitude=True)
-        atoms = [make_atoms((1, 0, 0, 1), seed=2), make_atoms((1, 1, 0, 2), seed=3)]
-        batch = make_batch(atoms)
-        out = model(batch.to_dict(), training=True)
-        num_graphs = int(batch.num_graphs)
-
-        host = scatter_sum(
-            out["latent_charges_host"], batch.batch, dim=0, dim_size=num_graphs
-        )
-        assert torch.allclose(host, torch.zeros_like(host), atol=1e-6)
-
-        counts = batch.carrier_counts.view(num_graphs, -1)
-        charge = counts[:, 2] + counts[:, 3] - counts[:, 0] - counts[:, 1]
-        total = scatter_sum(
-            out["latent_charges"], batch.batch, dim=0, dim_size=num_graphs
-        )
-        expected = out["screening_amplitude"] * charge
-        assert torch.allclose(total, expected, atol=1e-6)

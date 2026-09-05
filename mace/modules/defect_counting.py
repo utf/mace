@@ -48,7 +48,7 @@ each shell carries its own bounded correction.
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import torch
 from torch import nn
@@ -1012,11 +1012,18 @@ class CountingHead(nn.Module):
         levels = self.h.on_site(node_feats, node_species, madelung, centre=centre) \
             + self.c_shift
         table = getattr(self, "c_shift_table", None)
+        # STAGE 1.2: the c table is a RIGID shift of every level of a graph by its charge
+        # class -- section 2.2's per-charge-state constant, realised on the levels. The
+        # class table's edges were read at S_ref (charge class 1, Delta_n = 0), so the
+        # frontier term must shift its projector edges by the same amount to see the same
+        # spectrum: recorded per graph and handed back with the frontier entries.
+        level_shift = torch.zeros(num_graphs, device=device, dtype=dtype)
         if table is not None and graph_sizes is not None:
             charge_cls, size_cls = c_shift_classes(
                 counts, graph_sizes, getattr(self, "pristine_atoms", None))
             per_graph = table[charge_cls, size_cls]                     # [n_graphs]
             levels = levels + per_graph[batch].reshape(-1, 1)
+            level_shift = (per_graph - table[torch.ones_like(charge_cls), size_cls]).detach()
         if clamp_mask is not None:
             # DIAGNOSTIC ONLY, same contract as the spectral heads: sites outside the mask are
             # pushed far above the frontier so no occupied state can live on them.
@@ -1030,6 +1037,9 @@ class CountingHead(nn.Module):
         # Section 1: the force response. Collected per graph, contracted once after the loop.
         resp_h: List[torch.Tensor] = []
         resp_d: List[torch.Tensor] = []
+        # STAGE 1.2: per graph, the attached H with its detached spectrum and fills, for the
+        # frontier term. Filled by whichever solver runs; travels on the output.
+        frontier_entries: List[Optional[Dict[str, torch.Tensor]]] = []
 
         src, dst = edge_index[0], edge_index[1]
 
@@ -1047,13 +1057,15 @@ class CountingHead(nn.Module):
             with mark("head/loop"):
                 delta, alpha, gaps, spectra, resp_h, resp_d = self._batched_solve(
                     node_feats, node_species, edge_index, edge_vector, levels, batch,
-                    num_graphs, sizes, counts, off_reference, force_out, internals)
+                    num_graphs, sizes, counts, off_reference, force_out, internals,
+                    frontier_entries, level_shift)
             per_graph_nodes = []
         else:
             delta, alpha, gaps, spectra, resp_h, resp_d = self._loop_solve(
                 node_feats, node_species, edge_index, edge_vector, levels, batch,
                 num_graphs, counts, force_out, alpha, delta, gaps,
-                spectra, resp_h, resp_d, src, dst, n_nodes, device, dtype, internals)
+                spectra, resp_h, resp_d, src, dst, n_nodes, device, dtype, internals,
+                frontier_entries, level_shift)
 
         if force_out is not None and resp_h:
             if positions is None or not positions.requires_grad:
@@ -1100,13 +1112,13 @@ class CountingHead(nn.Module):
             delta_sr=delta, alpha=alpha, site_energy=site,
             gap=gaps.unsqueeze(-1).expand(-1, self.num_channels),
             eps_mean=eps_mean, eigenvalues=lam_pad,
-            weights=torch.zeros_like(lam_pad))
+            weights=torch.zeros_like(lam_pad), frontier=frontier_entries)
 
     # ------------------------------------------------------------------ the two solvers
 
     def _batched_solve(self, node_feats, node_species, edge_index, edge_vector, levels,
                        batch, num_graphs, sizes, counts, off_reference, force_out,
-                       internals):
+                       internals, frontier_entries=None, level_shift=None):
         """Section 1.1: one `[B, 4n, 4n]` solve for a size-uniform batch.
 
         `off_reference` is `[B]` bool from the state batch: the graphs whose fill differs
@@ -1143,7 +1155,9 @@ class CountingHead(nn.Module):
         # reference", decided on the physical key (section 2.1) rather than on the counter.
         charged = bool(off_reference.any())
         resp_bucket = {} if (force_out is not None and charged) else None
-        fill_internals = {} if internals is not None else None
+        # The fills' own mu, occupations and spectrum: a few tensor references, always
+        # taken, because the frontier term reads them on every pass.
+        fill_internals: Dict[str, Any] = {}
         if internals is not None:
             internals["_hamiltonians"] = list(H.detach().unbind(0))
         e_head, lam, D, (n_maj_ref, _) = self.policy.solve_batched(
@@ -1151,6 +1165,16 @@ class CountingHead(nn.Module):
             internals=fill_internals)
         if internals is not None:
             internals.setdefault("fills", []).append(fill_internals)
+        if frontier_entries is not None:
+            # STAGE 1.2 (plan v8 section 2.1): the ATTACHED H per graph with its own detached
+            # spectrum and fills, for the frontier term. A slice of the batched H keeps the
+            # graph; the spectrum and the fills are the ones the energy above used.
+            lam_d, psi_d = fill_internals["spectrum"]
+            frontier_entries.extend(
+                {"H": H[g], "lam": lam_d[g], "U": psi_d[g],
+                 "occupations": fill_internals["occupations"][g],
+                 "mu": fill_internals["mu"][g], "level_shift": level_shift[g]}
+                for g in range(num_graphs))
 
         resp_h, resp_d = [], []
         if resp_bucket:
@@ -1174,7 +1198,7 @@ class CountingHead(nn.Module):
     def _loop_solve(self, node_feats, node_species, edge_index, edge_vector, levels,
                     batch, num_graphs, counts, force_out, alpha, delta,
                     gaps, spectra, resp_h, resp_d, src, dst, n_nodes, device, dtype,
-                    internals=None):
+                    internals=None, frontier_entries=None, level_shift=None):
         """The per-graph reference path. Unchanged; see `_batched_solve` for when it runs."""
         per_graph_nodes: List[torch.Tensor] = []
         loop = mark("head/loop")
@@ -1186,6 +1210,8 @@ class CountingHead(nn.Module):
               if n_g == 0:
                   spectra.append(torch.zeros(1, device=device, dtype=dtype))
                   per_graph_nodes.append(node_sel)
+                  if frontier_entries is not None:
+                      frontier_entries.append(None)
                   continue
               remap = torch.full((n_nodes,), -1, dtype=torch.long, device=device)
               remap[node_sel] = torch.arange(n_g, device=device)
@@ -1206,7 +1232,7 @@ class CountingHead(nn.Module):
               n_total = int(self.valence[node_species[node_sel]].sum())
               c = counts[g].tolist() if counts.dim() > 1 else counts.tolist()
               resp_bucket = {} if force_out is not None else None
-              fill_internals = {} if internals is not None else None
+              fill_internals: Dict[str, Any] = {}
               if internals is not None:
                   internals.setdefault("_hamiltonians", []).append(H.detach())
               e_head, lam, psi, p_now, p_ref = self.policy.solve(
@@ -1214,6 +1240,12 @@ class CountingHead(nn.Module):
                   internals=fill_internals)
               if internals is not None:
                   internals.setdefault("fills", []).append(fill_internals)
+              if frontier_entries is not None:
+                  lam_d, psi_d = fill_internals["spectrum"]
+                  frontier_entries.append(
+                      {"H": H, "lam": lam_d, "U": psi_d,
+                       "occupations": fill_internals["occupations"],
+                       "mu": fill_internals["mu"], "level_shift": level_shift[g]})
               delta[g] = e_head
 
               # SECTION 1, THE DENSITY RESPONSE IN THE FORCE GRADIENT.
@@ -1349,6 +1381,8 @@ def head_energy_hf(H: torch.Tensor, n_total: int, counts: Sequence[int],
         internals["mu"] = torch.stack(mus)
         internals["occupations"] = torch.stack([f_maj, f_min, f_maj_ref, f_min_ref])
         internals["fills"] = (n_maj, n_min, n_maj_ref, n_min_ref)
+        # STAGE 1.2: the detached eigenpairs, for the frontier term's channel objects.
+        internals["spectrum"] = (lam_d, psi_d)
 
     # SECTION 1. The same `P - P_ref`, built as a DIFFERENTIABLE function of `H` for the
     # force response. Here rather than in the head because the spectrum and the four fills
@@ -1446,6 +1480,7 @@ def batched_head_energy_hf(H: torch.Tensor, n_total: torch.Tensor, counts: torch
         internals["mu"] = mu
         internals["occupations"] = f
         internals["fills"] = fills
+        internals["spectrum"] = (lam_d, psi_d)
 
     if response_out is not None:
         with mark("head/response"):
@@ -1630,6 +1665,87 @@ class _FermiDensitySum(torch.autograd.Function):
             M = term if M is None else M + term
         dH = U @ M @ U.transpose(-1, -2)
         return dH.to(ctx.in_dtype), None, None, None, None, None, None, None
+
+
+def _dk_eigenbasis_general(lam: torch.Tensor, g: torch.Tensor, g_slope: torch.Tensor,
+                           fp: torch.Tensor, dg_dmu: torch.Tensor, tol: float,
+                           Ghat: torch.Tensor) -> torch.Tensor:
+    """The Daleckii-Krein map of a GENERAL matrix function `g(H)` at fixed N, in the
+    eigenbasis: `Ghat` (the cotangent on `g(H)`, rotated) in, the cotangent on `H` out.
+
+    `g`, `g_slope` are `g(lam_k)` and `dg/deps(lam_k)`; `fp` is `f'(lam_k)` of the fill
+    whose chemical potential the function depends on, and `dg_dmu` is `dg/dmu(lam_k)`. The
+    off-diagonal factor is the divided difference `(g_k - g_l) / (lam_k - lam_l)`, its
+    limit `g'` at coincidence (bounded: `g'` is a product of bounded functions); the
+    fixed-N correction is `dmu = sum_k f'_k dlam_k / sum_k f'_k` acting through `dg/dmu`,
+    which reduces to `_dk_eigenbasis` at `g = f` (`dg/dmu = -f'`).
+    """
+    dl = lam.unsqueeze(-1) - lam.unsqueeze(-2)
+    dgm = g.unsqueeze(-1) - g.unsqueeze(-2)
+    near = dl.abs() <= tol
+    safe = torch.where(near, torch.ones_like(dl), dl)
+    slope_mid = 0.5 * (g_slope.unsqueeze(-1) + g_slope.unsqueeze(-2))
+    L = torch.where(near, slope_mid, dgm / safe)
+    M = L * Ghat
+    denom = fp.sum(-1)
+    if bool((denom.abs() > 1e-12).all()):
+        num = (dg_dmu * torch.diagonal(Ghat, dim1=-2, dim2=-1)).sum(-1)
+        M = M + torch.diag_embed(fp * (num / denom).unsqueeze(-1))
+    return M
+
+
+class _ChannelMatrix(torch.autograd.Function):
+    """`Q = U diag(g) U^T`, a matrix function of ONE Hamiltonian, differentiable in `H`
+    through the Daleckii-Krein map -- never through the eigenvectors.
+
+    Plan v8 section 2.1's channel projectors: `g = f s^e` (electron) or `(1 - f) s^h`
+    (hole), with `f` the fill's smeared occupation at its own `mu` and `s` the smooth edge
+    membership of the level. `lam`, `U`, `f`, `mu` are DETACHED inputs belonging to `H`
+    (the head's own, from the fill it already made); `s`, `s_slope` are the projector and
+    its derivative at `lam`. The backward is the whole of section 2.5's response force for a
+    term that depends on P through these objects: a cotangent on `Q` becomes one on `H`,
+    which `H`'s own graph carries to the positions and the parameters.
+    """
+
+    @staticmethod
+    def forward(ctx, H, lam, U, f, mu, s, s_slope, hole: bool, t_el: float, tol: float):
+        occ = (1.0 - f) if hole else f
+        g = occ * s
+        Q = (U * g.unsqueeze(-2)) @ U.transpose(-1, -2)
+        ctx.save_for_backward(lam, U, f, s, s_slope)
+        ctx.mu = mu
+        ctx.hole = bool(hole)
+        ctx.t_el = float(t_el)
+        ctx.tol = float(tol)
+        ctx.in_dtype = H.dtype
+        return Q.to(H.dtype)
+
+    @staticmethod
+    def backward(ctx, grad_Q):
+        lam, U, f, s, s_slope = ctx.saved_tensors
+        fp = occupation_slope((lam - _col(ctx.mu)) / ctx.t_el, ctx.t_el, _FAMILY)
+        sign = -1.0 if ctx.hole else 1.0
+        occ = (1.0 - f) if ctx.hole else f
+        g = occ * s
+        g_slope = sign * fp * s + occ * s_slope
+        dg_dmu = -sign * fp * s          # d(occ)/dmu = -sign f'
+        G = grad_Q.double()
+        G = 0.5 * (G + G.transpose(-1, -2))
+        Ghat = U.transpose(-1, -2) @ G @ U
+        M = _dk_eigenbasis_general(lam, g, g_slope, fp, dg_dmu, ctx.tol, Ghat)
+        dH = U @ M @ U.transpose(-1, -2)
+        return (dH.to(ctx.in_dtype), None, None, None, None, None, None, None, None, None)
+
+
+def channel_matrix(H: torch.Tensor, lam: torch.Tensor, U: torch.Tensor, f: torch.Tensor,
+                   mu, s: torch.Tensor, s_slope: torch.Tensor, hole: bool,
+                   t_el: float, degeneracy_tol: float = 1e-7) -> torch.Tensor:
+    """`U diag(f s) U^T` (electron) or `U diag((1 - f) s) U^T` (hole), differentiable in
+    `H` by the Daleckii-Krein route. See `_ChannelMatrix`."""
+    return _ChannelMatrix.apply(H, lam.double(), U.double(), f.double(),
+                                torch.as_tensor(mu, dtype=torch.float64, device=H.device),
+                                s.double(), s_slope.double(), bool(hole), float(t_el),
+                                float(degeneracy_tol))
 
 
 def _mu_from(lam: torch.Tensor, f: torch.Tensor, t_el: float) -> torch.Tensor:

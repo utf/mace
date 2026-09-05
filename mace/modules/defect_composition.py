@@ -579,6 +579,37 @@ def build_class_table(model, frames: Sequence, device="cpu", formula=None,
     return table
 
 
+def ensure_class_table(model, frames: Sequence, device=None, formula=None,
+                       config: Optional[Dict[str, Any]] = None, log: bool = True
+                       ) -> Dict[str, Any]:
+    """The model's class table, built over `frames` if it carries none (Stage 1.2).
+
+    ONE helper for every driver -- the trainer, the FD driver, the golden capture, the
+    scorers -- so they all choose the reference geometry the same way (the first frame of
+    each composition IN THE ORDER GIVEN, principle 9) and log which frame it was. Two drivers
+    that build tables from different pristine snapshots get different `vbm_al` and
+    `placement`, and their frontier energies would not agree. A table already on the model
+    is returned untouched.
+    """
+    table = getattr(model, "composition_classes", None)
+    if table and table.get("classes"):
+        return table
+    if device is None:
+        # The model's own device: a driver that moved the model to a GPU and builds the
+        # table afterwards (the b3 smoke did) must not hand it CPU batches.
+        device = next(model.parameters()).device
+    table = build_class_table(model, frames, device=device, formula=formula, config=config,
+                              log=log)
+    model.composition_classes = table
+    # Every non-parameter float is a number in the saved config: the resolved sink too.
+    model.class_constructor["e_sink"] = table["e_sink"]
+    if log:
+        refs = {k: r["reference_frame_key"] for k, r in table["classes"].items()}
+        logging.info("Composition classes built over %d frames; reference frame keys %s",
+                     len(frames), refs)
+    return table
+
+
 def species_charges(model) -> Optional[torch.Tensor]:
     """`Z0` per species in the model's own order (the Madelung baseline), or None when the
     model carries no static charges -- then no static density exists."""

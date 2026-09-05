@@ -2,16 +2,14 @@
 
 THE CLAIM. When the reference counter is the neutral one, every term of the reference
 branch is exactly zero: the counting head's energy is a difference from that same fill, and
-both long-range reference charges carry a `counts` factor. `MACEDefect.forward` therefore
-skips a whole head pass, an Ewald evaluation and a force gradient.
+the frontier term is `Phi_FF(S_ref) - Phi_FF(S_ref)` (Stage 1.2). `MACEDefect.forward`
+therefore skips a whole head pass, two Ewald evaluations and a force gradient.
 
 WHAT THIS TEST HAS TO CHECK, and why energies are not enough. A removed subgraph changes
 nothing in the value while changing the PARAMETER GRADIENT if any of those terms was not
 actually zero -- and the parameter gradient is what training consumes. So every trainable
-tensor's gradient is compared, not just the outputs. The long-range branch is exercised
-both frozen (host charges zero, polarisation off) and live (host charges and polarisation
-on, and again with the gated polarisation and the isolated carrier self-term), because
-`E[latent_ref - q_host] = E[0]` is only interesting when `q_host` is not itself zero.
+tensor's gradient is compared, not just the outputs. Exercised with the frontier term
+present (a periodic evaluator and a class table) and without one.
 """
 
 import numpy as np
@@ -74,14 +72,27 @@ def _model(**overrides):
         madelung_on_site=True, madelung_composition=[3.0, 1.0, 1.0],
         madelung_z_init=[-1.0, 1.0, 2.0], les_arguments={"sigma": 1.0})
     kwargs.update(overrides)
-    model = MACEDefect(**kwargs)
-    # Give the host-charge readout something to say, so `E[q_host]` is not accidentally
-    # zero and the uncoupled reference's `E[latent_ref - q_host]` is a real cancellation.
-    with torch.no_grad():
-        for module in model.latent_charges.host_charge.modules():
-            if isinstance(module, torch.nn.Linear):
-                module.weight.mul_(1.0)
-                module.bias.add_(0.05)
+    return MACEDefect(**kwargs)
+
+
+def _gapped(frames, **overrides):
+    """A Harrison-initialised head (a real gap, so the class constructor counts) with the
+    class table built over `frames`, the way every driver builds it."""
+    from mace.modules.defect_cache import attach_frame_keys
+    from mace.modules.defect_composition import ensure_class_table
+    from mace.modules.defect_protocol import apply_harrison
+
+    model = _model(**overrides)
+    apply_harrison(model, model.atomic_numbers)
+    ds = []
+    for atoms in frames:
+        config = data.Configuration(
+            atomic_numbers=atoms.get_atomic_numbers(), positions=atoms.get_positions(),
+            cell=np.array(atoms.get_cell()), pbc=(True, True, True),
+            properties={"carrier_counts": [0.0] * 4}, property_weights={})
+        ds.append(data.AtomicData.from_config(config, z_table=Z_TABLE, cutoff=6.0))
+    attach_frame_keys(ds, z_table=Z_TABLE)
+    ensure_class_table(model, ds, log=False)
     return model
 
 
@@ -102,18 +113,15 @@ def _outputs_and_grads(model, batch, skip: bool):
 
 
 CONFIGS = {
-    "frozen (Stage B, the plan v8 default)": dict(),
-    "live host charges": dict(use_polarisation=False),
-    "polarisation on": dict(use_polarisation=True),
-    "isolated carrier self": dict(use_polarisation=True, carrier_self_isolated=True),
-    "host-carrier coupling": dict(use_polarisation=True, host_carrier_coupling=True),
+    "frontier term present": dict(),
+    "no periodic evaluator": dict(use_long_range=False),
 }
 
 
 @pytest.mark.parametrize("name", sorted(CONFIGS))
 def test_skipping_the_neutral_reference_changes_nothing(name):
-    model = _model(**CONFIGS[name])
     frames = [_perovskite(seed=s) for s in (1, 2)]
+    model = _gapped(frames[:1], **CONFIGS[name])
     batch = _batch(frames, [[0.0, 0.0, 1.0, 0.0], [1.0, 0.0, 0.0, 0.0]])
     skipped, grad_skipped = _outputs_and_grads(model, batch, True)
     full, grad_full = _outputs_and_grads(model, batch, False)
@@ -147,8 +155,8 @@ def test_skipping_the_neutral_reference_changes_nothing(name):
 def test_a_supplied_reference_counter_disables_the_skip():
     """A caller that states its own reference is not the neutral case, and must get the
     full branch even when the flag is on."""
-    model = _model()
     frames = [_perovskite(seed=7)]
+    model = _gapped(frames)
     batch = _batch(frames, [[0.0, 0.0, 1.0, 0.0]])
     d = batch.to_dict()
     d["carrier_counts_ref"] = torch.tensor([[1.0, 0.0, 0.0, 0.0]],

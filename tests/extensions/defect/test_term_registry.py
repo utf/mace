@@ -10,7 +10,7 @@ import torch
 from mace.modules import defect_terms as dt
 from mace.modules.defect_models import MACEDefect
 from mace.modules.latent_ewald import LatentEwald
-from tests.extensions.defect.test_neutral_reference_skip import (_batch, _model,
+from tests.extensions.defect.test_neutral_reference_skip import (_batch, _gapped, _model,
                                                                   _perovskite)
 from tests.unit.test_base_cache_precision import _model as _model_no_lr
 
@@ -19,35 +19,41 @@ torch.set_default_dtype(torch.float64)
 
 class TestRegistry:
     def test_every_registered_term_is_reported_by_the_forward_and_sums_to_the_energy(self):
-        model = _model()
-        batch = _batch([_perovskite(seed=1), _perovskite(seed=2)],
-                       [[0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]])
+        frames = [_perovskite(seed=1), _perovskite(seed=2)]
+        model = _gapped(frames[:1])
+        batch = _batch(frames, [[0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 0.0]])
         with torch.no_grad():
             out = model(batch.to_dict(), training=False, compute_force=False)
         energies = dt.term_energies(model, out)
         names = [t.name for t in model.terms()]
-        assert names == ["base", "lr_host", "band", "lr_carrier"]
+        assert names == ["base", "band", "frontier"]
         total = sum(energies[n] for n in names)
         assert torch.allclose(total, energies["assembled"], atol=1e-10)
+        assert float(energies["frontier"][0].abs()) > 0.0 and float(energies["frontier"][1]) == 0.0
 
     def test_a_model_without_the_long_range_branch_registers_two_terms(self):
         model = _model_no_lr()
         assert [t.name for t in model.terms()] == ["base", "band"]
 
-    def test_the_band_term_is_the_one_with_a_potential_and_lr_carrier_has_none(self):
-        """The v6 fact the harness must report: E_LR of the carrier depends on P and puts
-        nothing into H. Stage 5 changes this entry; nothing else may."""
+    def test_the_potential_and_the_response_are_separate_columns(self):
+        """Stage 1.2: the frontier term depends on P, its response reaches the forces by
+        the divided-difference route, and its potential is absent from H until Stage 5 --
+        two statements the registry used to conflate under `potential` alone."""
         model = _model()
         by_name = {t.name: t for t in model.terms()}
         assert by_name["band"].depends_on_P and by_name["band"].potential == "band"
-        assert by_name["lr_carrier"].depends_on_P and by_name["lr_carrier"].potential == "absent"
+        assert by_name["band"].response == "band"
+        assert by_name["frontier"].depends_on_P and by_name["frontier"].potential == "absent"
+        assert by_name["frontier"].response == "divided_difference"
         assert not by_name["base"].depends_on_P and by_name["base"].potential == "none"
+        assert by_name["base"].response == "none"
+        assert all(t.response != "absent" for t in model.terms())
 
     def test_gauge_dependence_is_a_column(self):
         model = _model()
         by_name = {t.name: t for t in model.terms()}
         assert not by_name["base"].gauge_dependent
-        assert by_name["lr_host"].gauge_dependent and by_name["lr_carrier"].gauge_dependent
+        assert by_name["frontier"].gauge_dependent
         assert by_name["band"].gauge_dependent, "the Madelung shift inside H is periodic"
 
     def test_the_registry_refuses_a_forward_that_does_not_report_a_term(self):
@@ -87,14 +93,15 @@ class TestTwoKernels:
         periodic one: one functional, the kernel chosen by a flag."""
         from mace.tools.scripts_utils import extract_config_mace_model
 
-        periodic = _model()
+        frames = [_perovskite(seed=4)]
+        periodic = _gapped(frames)
         assert periodic.gauge == "periodic"
         config = extract_config_mace_model(periodic)
         assert config["gauge"] == "periodic"
         config["gauge"] = "isolated"
         isolated = MACEDefect(**config)
         isolated.load_state_dict(periodic.state_dict())
-        batch = _batch([_perovskite(seed=4)], [[0.0, 0.0, 1.0, 0.0]])
+        batch = _batch(frames, [[0.0, 0.0, 1.0, 0.0]])
         with torch.no_grad():
             a = periodic(batch.to_dict(), training=False, compute_force=False, dilute=True)
             b = isolated(batch.to_dict(), training=False, compute_force=False)

@@ -315,14 +315,21 @@ def strain_check(model, data: dict, strains: Sequence[float] = STRAINS,
 
 # ------------------------------------------------------------------------------ frames
 
-def select_frames(gaps: Sequence[float], n_ordinary: int = 1, n_crossing: int = 1
+def select_frames(gaps: Sequence[float], n_ordinary: int = 1, n_crossing: int = 1,
+                  window_distances: Optional[Sequence[float]] = None, n_window: int = 1
                   ) -> Dict[str, List[int]]:
     """Frame indices by the model's own frontier gap: `ordinary` are the median-gap
-    frames, `near_crossing` the smallest-gap ones. `in_projector_window` is empty until
-    the projectors of section 2.1 exist (Stage 0.9), and is reported as such."""
+    frames, `near_crossing` the smallest-gap ones. `in_projector_window` are the frames
+    whose level sits nearest the Tier 1 cut `VBM_al + delta` (Stage 1.2; `window_distances`
+    is that distance per frame, from the class record and the model's spectrum), empty when
+    no distances are given."""
     order = list(np.argsort(np.asarray(gaps, dtype=np.float64)))
     n = len(order)
     mid = order[n // 2: n // 2 + n_ordinary]
+    window: List[int] = []
+    if window_distances is not None:
+        window = [int(i) for i in np.argsort(np.asarray(window_distances,
+                                                        dtype=np.float64))[:n_window]]
     return dict(ordinary=[int(i) for i in mid],
                 near_crossing=[int(i) for i in order[:n_crossing]],
-                in_projector_window=[])
+                in_projector_window=window)
