@@ -52,6 +52,8 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 
+import math
+
 import torch
 from torch import nn
 
@@ -89,6 +91,39 @@ def self_potential_of(ewald, cell: torch.Tensor) -> torch.Tensor:
         b = torch.zeros(1, dtype=torch.long, device=cell.device)
         out.append(2.0 * ewald.energy(q, r, cell[g: g + 1], b).reshape(()))
     return torch.stack(out)
+
+
+# e^2 / (4 pi eps_0) in eV A; LES stores 2 pi times this as its `norm_factor`.
+COULOMB_CONSTANT = 14.399645
+MADELUNG_RANGES = ("full", "long_range", "off")
+
+
+def short_range_potential(charges: torch.Tensor, edge_index: torch.Tensor,
+                          edge_lengths: torch.Tensor, r_split: float, sigma: float,
+                          n_nodes: int, p: int = 6) -> torch.Tensor:
+    """`V_SR(r_split)_i`: the part of the smeared Coulomb site potential that comes from the
+    ions within `r_split` of site i, switched off smoothly at `r_split` (plan v8 section 7.3,
+    `V_full = V_SR(r_split) + V_LR(r_split)`).
+
+    The kernel is LES's own: a Gaussian charge of width `sigma` (the Ewald `sigma`) has the
+    potential `C q erf(r / (sigma sqrt 2)) / r`, so `V_SR` is exactly the short-range piece
+    of the potential `site_potential` differentiates out of the Ewald energy -- summed over
+    the neighbour list handed in (which carries the periodic images), never over a
+    minimum-image box. The switch is MACE's polynomial cutoff (p = 6: value, first and second
+    derivative zero at `r_split`), so `V_LR = V_full - V_SR` is as smooth as `V_full`.
+
+    Stage 1.3's arm (b) hands the head `V_LR(r_split)` with `r_split` the first-block cutoff:
+    the part of the ion-lattice potential the trunk cannot see.
+    """
+    src, dst = edge_index[0], edge_index[1]
+    r = edge_lengths.reshape(-1)
+    x = r / float(r_split)
+    envelope = (1.0 - ((p + 1.0) * (p + 2.0) / 2.0) * x ** p + p * (p + 2.0) * x ** (p + 1)
+                - (p * (p + 1.0) / 2.0) * x ** (p + 2)) * (x < 1.0)
+    kernel = COULOMB_CONSTANT * torch.erf(r / (float(sigma) * math.sqrt(2.0))) / r.clamp_min(1e-12)
+    contribution = charges[src] * kernel * envelope
+    return torch.zeros(n_nodes, dtype=charges.dtype, device=charges.device).index_add_(
+        0, dst, contribution)
 
 
 def site_potential(ewald, charges: torch.Tensor, positions: torch.Tensor,
@@ -252,15 +287,34 @@ class MadelungOnSite(nn.Module):
 
     def on_site_shift(self, ewald, node_species, positions, cell, batch, eps_inf: float,
                       self_potential: Optional[torch.Tensor] = None,
-                      feats=None, centre=None, num_graphs=None) -> torch.Tensor:
-        """``-phi_LR / eps_inf``, the quantity added to ``eps_local``.
+                      feats=None, centre=None, num_graphs=None,
+                      madelung_range: str = "full", edge_index=None, edge_lengths=None,
+                      r_split: Optional[float] = None) -> torch.Tensor:
+        """``-phi / eps_inf``, the quantity added to ``eps_local``.
 
         Returned as the shift rather than the potential so that the sign lives in one place
-        and every caller inherits it.
+        and every caller inherits it. `madelung_range` is Stage 1.3's diagnostic switch:
+        "full" is the whole lattice potential, "long_range" is `V_full - V_SR(r_split)` over
+        the neighbour list given (the part the trunk cannot see), "off" is an exact zero --
+        the module stays (its composition is the pristine formula, its charges the static
+        ones) and only the term in H is absent.
         """
         if self_potential is not None:
             raise ValueError(
                 "on_site_shift no longer accepts a self-potential; see site_potential for "
                 "why the subtraction was removed")
-        return -self.potential(ewald, node_species, positions, cell, batch,
-                               feats, centre, num_graphs) / float(eps_inf)
+        if madelung_range not in MADELUNG_RANGES:
+            raise ValueError(f"madelung_range must be one of {MADELUNG_RANGES}, got "
+                             f"{madelung_range!r}")
+        charges = self.charges(node_species, feats, centre, batch, num_graphs)
+        if madelung_range == "off":
+            return torch.zeros_like(charges)
+        phi = site_potential(ewald, charges, positions, cell, batch)
+        if madelung_range == "long_range":
+            if edge_index is None or edge_lengths is None or r_split is None:
+                raise ValueError("madelung_range='long_range' needs the head's edge list "
+                                 "and r_split")
+            phi = phi - short_range_potential(charges, edge_index, edge_lengths,
+                                              float(r_split), float(ewald.sigma),
+                                              int(charges.shape[0]))
+        return -phi / float(eps_inf)

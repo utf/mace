@@ -184,6 +184,10 @@ class MACEDefect(ScaleShiftMACE):
         counting_t_el: float = 0.05,
         madelung_on_site: bool = False,
         madelung_eps_inf: float = 4.0,
+        # Stage 1.3 (plan v8 section 4): "full" (as is), "long_range" (the short-range part
+        # removed at r_split = the first-block cutoff), "off" (removed entirely; the module
+        # stays for the formula and the static charges).
+        madelung_range: str = "full",
         madelung_composition: Optional[Sequence[float]] = None,
         madelung_z_init: Optional[Sequence[float]] = None,
         logit_seed_gamma: float = 0.0,
@@ -332,6 +336,12 @@ class MACEDefect(ScaleShiftMACE):
         # The two must never both exist: they are the same physics counted twice.
         self.madelung_on_site = bool(madelung_on_site)
         self.madelung_eps_inf = float(madelung_eps_inf)
+        from mace.modules.defect_madelung import MADELUNG_RANGES
+
+        if str(madelung_range) not in MADELUNG_RANGES:
+            raise ValueError(f"madelung_range must be one of {MADELUNG_RANGES}, got "
+                             f"{madelung_range!r}")
+        self.madelung_range = str(madelung_range)
         self.madelung = None
         if madelung_on_site:
             from mace.modules.defect_madelung import MadelungOnSite
@@ -751,6 +761,7 @@ class MACEDefect(ScaleShiftMACE):
             ("image_compensation", False),
             ("counting_centre_form", "output"),
             ("madelung_site_zeta", 0.0),
+            ("madelung_range", "full"),
             ("skip_neutral_reference", True),
             ("on_site_centred", False),
             ("_base_cache", None),
@@ -923,11 +934,22 @@ class MACEDefect(ScaleShiftMACE):
             # `cell`, never `cell_les`. H carries the periodic ion-lattice potential in
             # every mode -- the isolated switch belongs to E_LR alone, and there is no
             # branch here to reach it. Full lattice sum: no self-image subtraction.
+            madelung_range = getattr(self, "madelung_range", "full")
+            r_split = None
+            if madelung_range == "long_range":
+                r_split = float(self.functional["r_split"])
+                if r_split > float(self.spectral_r_cut) + 1e-9:
+                    raise ValueError(
+                        f"madelung_range='long_range' removes the potential of the ions "
+                        f"within r_split = {r_split} A over the head's neighbour list, whose "
+                        f"cutoff is {self.spectral_r_cut} A; the list is too short")
             with mark("ewald/madelung"):
                     madelung = self.madelung.on_site_shift(
                     self.latent_ewald, node_species, positions, cell, batch,
                     eps_inf=self.madelung_eps_inf,
-                    feats=head_feats, centre=centre, num_graphs=num_graphs)
+                    feats=head_feats, centre=centre, num_graphs=num_graphs,
+                    madelung_range=madelung_range, edge_index=edge_index,
+                    edge_lengths=edge_length, r_split=r_split)
 
         head_kwargs = dict(
             node_feats=head_feats,

@@ -1479,6 +1479,17 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=0.0,
     )
     parser.add_argument(
+        "--defect_madelung_range",
+        help="Plan v8 Stage 1.3, the SR/LR diagnostic: 'full' puts the whole lattice "
+        "potential on the on-site energies (as is); 'long_range' removes its short-range "
+        "part within r_split (the first-block cutoff, functional['r_split']) -- the part the "
+        "trunk can see -- and hands the head the remainder; 'off' removes the term entirely "
+        "while keeping the module (the pristine formula and the static charges)",
+        type=str,
+        choices=["full", "long_range", "off"],
+        default="full",
+    )
+    parser.add_argument(
         "--defect_madelung_composition",
         help="Pristine stoichiometry in the model's own species order, comma-separated "
         "(CsPbCl3 with Z-table [17, 55, 82] is '3,1,1'). A property of the training set's "

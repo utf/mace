@@ -316,6 +316,7 @@ def _defect_madelung_kwargs(args) -> dict:
         counting_t_el=float(getattr(args, "defect_counting_t_el", 0.05)),
         madelung_on_site=on_site,
         madelung_eps_inf=float(getattr(args, "defect_madelung_eps_inf", 4.0)),
+        madelung_range=str(getattr(args, "defect_madelung_range", "full")),
         madelung_composition=composition,
         madelung_z_init=z_init,
     )

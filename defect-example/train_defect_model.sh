@@ -297,6 +297,7 @@ DEFECT_COUNTING_ENVELOPE="${DEFECT_COUNTING_ENVELOPE:-exp}"
 DEFECT_COUNTING_DECAY_LENGTH="${DEFECT_COUNTING_DECAY_LENGTH:-1.0}"
 DEFECT_MADELUNG_ON_SITE="${DEFECT_MADELUNG_ON_SITE:-false}"
 DEFECT_MADELUNG_EPS_INF="${DEFECT_MADELUNG_EPS_INF:-4.0}"
+DEFECT_MADELUNG_RANGE="${DEFECT_MADELUNG_RANGE:-full}"
 # Pristine stoichiometry and nominal charges in the model's own species order. Empty unless
 # the Madelung term is on, and the parser refuses the term without a composition.
 DEFECT_MADELUNG_COMPOSITION="${DEFECT_MADELUNG_COMPOSITION:-}"
@@ -476,6 +477,7 @@ python -m mace.cli.run_train \
     --defect_counting_decay_length="${DEFECT_COUNTING_DECAY_LENGTH}" \
     --defect_madelung_on_site="${DEFECT_MADELUNG_ON_SITE}" \
     --defect_madelung_eps_inf="${DEFECT_MADELUNG_EPS_INF}" \
+    --defect_madelung_range="${DEFECT_MADELUNG_RANGE}" \
     --defect_madelung_composition="${DEFECT_MADELUNG_COMPOSITION}" \
     --defect_madelung_z_init="${DEFECT_MADELUNG_Z_INIT}" \
     --defect_spectral_r_cut="${DEFECT_SPECTRAL_R_CUT}" \
