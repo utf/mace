@@ -222,7 +222,48 @@ the charged class, and with it the band term would carry a size-dependent consta
 tiling is its own class, counted against the ideal pristine cell tiled (Tier 1, `n_e = (1, 0)`,
 `Q_core = +1` at 1× and 2×).
 
-STAGE14_PENDING
+### The ladder on arma_s1 (`golden/stage14_ladder_arma_s1.json`; CPU, 32 threads; 3× class table 349 s, 3× forward with forces 40 s)
+
+| size | N | L (Å) | E_base (eV) | band term | Φ_FF (w_ref) | E_PBC − E_∞ | correction under G_∞ | Σ F | N_eff |
+|---|---|---|---|---|---|---|---|---|---|
+| 1× | 79 | 14.2 | −275.673 | −4.5203 | +0.5908 (0.983) | +0.5908 | −4.5203 | 9e-16 | 3.7 |
+| 2× | 639 | 28.5 | −2243.715 | −4.7204 | +0.2798 (0.992) | +0.2798 | −4.7204 | 2e-15 | 3.2 |
+| 3× | 2159 | 42.7 | −7585.537 | −4.7779 | +0.1505 (0.993) | +0.1505 | −4.7779 | 4e-15 | 3.2 |
+
+V_Cl⁺ (counter (0, 0, 1, 0)) in every row; the neutral vacancy (S = S_ref) has band term and
+Φ_FF exactly zero at every size, as it must. Each tiling is its own Tier 1 class
+(`n_e = (1, 0)`, `Q_core = +1`; the 3× class's spectrum shift +0.006, spread 0.005 eV).
+
+- **Exponent of E_PBC − E_∞ (= Φ_FF before Stage 4):** log-log slope −1.23 over the three
+  sizes; the `a/L + b` fit gives a = 9.27 eV·Å, b = −0.058 eV, residual 0.009 eV. A monopole
+  (the reference electron cloud, q = −1, w_ref → 0.99) going as 1/L with a small offset — the
+  bare image attraction of one localised electron, 0.59 eV at the training cell.
+- **The band term moves with L**: −4.52 → −4.72 → −4.78 eV, fitted −4.91 + 5.54/L (residual
+  0.003 eV). This is the correction under G_∞ too (Φ_FF is the only gauge-dependent term
+  before Stage 4), so §7.5's "the correction converges after switching to G_∞" is **not yet
+  met**: the Madelung shift inside H is the periodic potential of a lattice that is net
+  charged once a Cl⁻ is removed, and its image part is what Stage 4's `V_static^B` in the
+  isolated gauge removes (`− G_img ⋆ ρ_static^def`). Recorded as the Stage 1 baseline.
+- **Forces within 6 Å of the vacancy** (21 atoms), against 3×: charged, periodic 0.50 (1×) →
+  0.19 eV/Å (2×) → 0; isolated 0.32 → 0.12 → 0; neutral 0.035 (1×) → 1e-14 (2×): the neutral
+  cell's forces converge at 2× (the trunk's and the head's neighbourhoods fit the box), the
+  charged cell's carry the same slowly converging image terms as its energy. Total force
+  ≤ 4e-15 eV/Å at every size.
+- **Volume-scaled defect stress** (vacancy cell's virial minus the tiled pristine's, trace):
+  neutral +1.52 / +1.54 / +1.54 eV — converged at 2×; charged −1.48 / −5.68 / −6.94 eV — the
+  charged − neutral difference (−3.0, −7.2, −8.5 eV) converges geometrically towards ≈ −9 eV,
+  the strain derivative of the frontier electron's on-site energy through the Madelung
+  potential of the charged lattice (|c| ≈ 10 eV). Same Stage 4 item.
+- **Thermal frame embedded** (train frame 793, matched to the ideal cell at 0.67 Å mean):
+  Φ_FF +0.633 / +0.222 / +0.121 eV; the thermal-displacement image contribution
+  (E_PBC − E_∞ thermal minus ideal) +0.042 / −0.058 / −0.030 eV — small, not monotone, of
+  the order §2.1 expects (O(1/L³), random-signed); w_ref 0.988 / 0.969 / 0.977.
+- **Switches** (Φ_FF over δ_p ∈ {½, 1, 2}×0.05 and Δ_s ∈ {½, 1, 2}×0.05, per size): 1×
+  0.455–0.613, 2× 0.202–0.303, 3× 0.117–0.182 eV. Continuous in both (no jump between
+  neighbouring settings larger than the change of w_ref it implies: doubling δ_p moves w_ref
+  from 0.98 to 0.88 at 1×, halving Δ_s moves Φ by 3 %); a factor of two in either switch
+  moves Φ_FF by up to 25 %, so §7.6's sensitivity is real and the defaults are model choices,
+  as the plan says.
 
 ---
 
