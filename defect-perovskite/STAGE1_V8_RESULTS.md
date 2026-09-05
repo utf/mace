@@ -204,6 +204,7 @@ class table under each arm and scored with the Stage B scorers on b3 GPUs 4–7 
 | N_eff, charged 79 / 159 | 6.9 ± 0.8 / 17.7 ± 2.3 | 32.6 ± 2.9 / 95.5 ± 9.2 | 12.3 ± 2.2 / 33.7 ± 4.4 |
 | participation ratio (charged/pristine) | 0.62 ± 0.09 | 2.48 ± 0.30 | 1.09 ± 0.29 |
 | R_bound (s3, [0.66, 1.34]) | 0.87 ± 0.07, 6/6; bound fraction 0.61 | 1.98 ± 0.52, 0/6; bound fraction 0 | 1.66 ± 0.60, 4/6; 0.38 |
+| F10 on the centred channel (c7; ≥ 4/6) | 0/6 (as in Stage B) | 0/6 | 0/6 |
 | force RMSE, charged valid 79 / 159 (meV/Å) | 62.5 ± 10.2 / 62.6 ± 4.3 | 62.0 ± 2.7 / 15.1 ± 1.5 | 102.3 ± 38.7 / 10.3 ± 1.6 |
 | Φ_FF, charged 79 / 159 (eV) | +0.494 ± 0.015 / +0.281 ± 0.036 | +0.000 / +0.000 | +0.307 ± 0.078 / +0.085 ± 0.008 |
 | learned Z (Cl, Cs, Pb) | −0.886 ± 0.028, +0.794 ± 0.055, +1.864 ± 0.038 (the same numbers in every arm: no retrain) | | |
