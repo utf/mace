@@ -192,7 +192,32 @@ config round trip; a head list shorter than `r_split` refused.
 
 ### Forward-only, on the Stage B cohort (six seeds, re-saved per arm with the class table)
 
-STAGE13_FORWARD_PENDING
+The six Stage B seeds (trained with the full Madelung term, `E_LR` detached) re-saved with the
+class table under each arm and scored with the Stage B scorers on b3 GPUs 4–7 (`s13a`, `s13b`,
+`s13c`; `~/runs/stage13_forward_table.md`). Mean ± sd over six seeds:
+
+| quantity | (a) full | (b) long_range | (c) off |
+|---|---|---|---|
+| F4 (head d δ_sr/dd, 159, band [−0.142, −0.063]) | −0.1004 ± 0.0166, **6/6** | −0.0115 ± 0.0092, 0/6 | −0.0430 ± 0.0137, 0/6 |
+| pristine gap (eV) | 2.393 ± 0.016 | **0.033 ± 0.018** | 0.882 ± 0.048 |
+| depth from CBM (b6, eV) | +0.103 ± 0.039 | −0.028 ± 0.071 | +0.023 ± 0.033 |
+| N_eff, charged 79 / 159 | 6.9 ± 0.8 / 17.7 ± 2.3 | 32.6 ± 2.9 / 95.5 ± 9.2 | 12.3 ± 2.2 / 33.7 ± 4.4 |
+| participation ratio (charged/pristine) | 0.62 ± 0.09 | 2.48 ± 0.30 | 1.09 ± 0.29 |
+| R_bound (s3, [0.66, 1.34]) | 0.87 ± 0.07, 6/6; bound fraction 0.61 | 1.98 ± 0.52, 0/6; bound fraction 0 | 1.66 ± 0.60, 4/6; 0.38 |
+| force RMSE, charged valid 79 / 159 (meV/Å) | 62.5 ± 10.2 / 62.6 ± 4.3 | 62.0 ± 2.7 / 15.1 ± 1.5 | 102.3 ± 38.7 / 10.3 ± 1.6 |
+| Φ_FF, charged 79 / 159 (eV) | +0.494 ± 0.015 / +0.281 ± 0.036 | +0.000 / +0.000 | +0.307 ± 0.078 / +0.085 ± 0.008 |
+| learned Z (Cl, Cs, Pb) | −0.886 ± 0.028, +0.794 ± 0.055, +1.864 ± 0.038 (the same numbers in every arm: no retrain) | | |
+
+Forward-only, the switch is not a model: removing the short-range part of a term the head was
+trained with (b) closes the pristine gap to 0.03 eV — the on-site Madelung shift (|c| ≈ 10 eV)
+is what separates the Cl-p and Pb-p manifolds on this head — and delocalises the carrier
+(N_eff 33 / 96, no bound state at all); removing it entirely (c) leaves a 0.9 eV gap and a
+half-bound carrier. The lower 159-atom force RMSE of (b) and (c) is the head correction
+collapsing towards zero on those frames, not a better model. Under (b) and (c) the frontier
+term of `V_Cl⁺` at 159 atoms is 0 / 0.085 eV because the reference electron cloud is spread
+over the cell (w_ref → 0). What the retrains decide is whether a head trained from the start
+with the long-range remainder, or with no Madelung term, recovers the gap, the bound state
+and F4.
 
 ### Retrained, six seeds per arm (the Stage B recipe with `DEFECT_MADELUNG_RANGE`)
 
