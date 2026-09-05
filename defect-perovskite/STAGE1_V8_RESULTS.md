@@ -329,6 +329,65 @@ V_Cl⁺ (counter (0, 0, 1, 0)) in every row; the neutral vacancy (S = S_ref) has
 
 ---
 
+### The ladder on the Stage B cohort (arm (a), six seeds; `golden/stage14_ladder_s13a_s{1..6}.json`; `stage14_cohort.py`)
+
+The same ladder (1×, 2×, 3×; CPU, no switch sweep) on the six `s13a` models. The six share
+the frozen Stage B trunk, so every neutral quantity is bit-identical across seeds and the
+spread below is the head's alone.
+
+| quantity | s13a_s1 | s13a_s2 | s13a_s3 | s13a_s4 | s13a_s5 | s13a_s6 | mean ± sd |
+|---|---|---|---|---|---|---|---|
+| Φ_FF, charged, 1× (L 14.2 Å) [eV] | +0.575 | +0.586 | +0.580 | +0.573 | +0.585 | +0.566 | +0.577 ± 0.008 |
+| Φ_FF, charged, 2× (L 28.5 Å) [eV] | +0.278 | +0.285 | +0.283 | +0.278 | +0.284 | +0.272 | +0.280 ± 0.005 |
+| Φ_FF, charged, 3× (L 42.7 Å) [eV] | +0.167 | +0.175 | +0.173 | +0.168 | +0.173 | +0.164 | +0.170 ± 0.004 |
+| Φ_FF fit a (eV·Å) | +8.638 | +8.737 | +8.632 | +8.590 | +8.756 | +8.524 | +8.646 ± 0.088 |
+| Φ_FF fit b (eV) | -0.031 | -0.027 | -0.026 | -0.029 | -0.029 | -0.032 | -0.029 ± 0.002 |
+| Φ_FF log-log exponent | -1.115 | -1.096 | -1.095 | -1.109 | -1.104 | -1.120 | -1.107 ± 0.010 |
+| band term, charged, 1× [eV] | -4.635 | -4.578 | -4.617 | -4.730 | -4.557 | -4.697 | -4.636 ± 0.067 |
+| band term, charged, 2× [eV] | -4.451 | -4.376 | -4.418 | -4.565 | -4.384 | -4.545 | -4.457 ± 0.081 |
+| band term, charged, 3× [eV] | -4.352 | -4.274 | -4.316 | -4.471 | -4.286 | -4.453 | -4.358 ± 0.085 |
+| band fit: L→∞ offset (eV) | -4.228 | -4.137 | -4.182 | -4.360 | -4.169 | -4.350 | -4.238 ± 0.095 |
+| band fit: 1/L coefficient (eV·Å) | -5.854 | -6.335 | -6.241 | -5.327 | -5.598 | -5.013 | -5.728 ± 0.517 |
+| max |ΔF| within radius vs 3×, charged periodic, 1× [eV/Å] | 0.102 | 0.078 | 0.086 | 0.072 | 0.118 | 0.073 | 0.088 ± 0.018 |
+| same, charged isolated, 1× [eV/Å] | 0.256 | 0.154 | 0.178 | 0.070 | 0.251 | 0.110 | 0.170 ± 0.075 |
+| same, neutral, 1× [eV/Å] | 3.46e-02 | 3.46e-02 | 3.46e-02 | 3.46e-02 | 3.46e-02 | 3.46e-02 | 3.46e-02 ± 2.66e-16 |
+| max |ΔF| within radius vs 3×, charged periodic, 2× [eV/Å] | 0.018 | 0.008 | 0.010 | 0.007 | 0.011 | 0.009 | 0.011 ± 0.004 |
+| same, charged isolated, 2× [eV/Å] | 0.008 | 0.006 | 0.007 | 0.006 | 0.009 | 0.007 | 0.007 ± 0.001 |
+| same, neutral, 2× [eV/Å] | 6.72e-15 | 6.29e-15 | 7.69e-15 | 5.80e-15 | 7.01e-15 | 6.43e-15 | 6.65e-15 ± 6.51e-16 |
+| defect virial trace, charged periodic, 1× [eV] | +3.446 | +2.952 | +1.286 | +0.323 | +3.516 | -0.558 | +1.828 ± 1.731 |
+| defect virial trace, charged periodic, 2× [eV] | +4.156 | +3.405 | +1.914 | +0.440 | +4.772 | -0.816 | +2.312 ± 2.195 |
+| defect virial trace, charged periodic, 3× [eV] | +4.246 | +3.406 | +1.945 | +0.336 | +4.670 | -0.840 | +2.294 ± 2.212 |
+| defect virial trace, neutral, 1× [eV] | +1.517 | +1.517 | +1.517 | +1.517 | +1.517 | +1.517 | +1.517 ± 0.000 |
+| defect virial trace, neutral, 2× [eV] | +1.540 | +1.540 | +1.540 | +1.540 | +1.540 | +1.540 | +1.540 ± 0.000 |
+| defect virial trace, neutral, 3× [eV] | +1.540 | +1.540 | +1.540 | +1.540 | +1.540 | +1.540 | +1.540 ± 0.000 |
+| thermal image contribution, 1× [eV] | +0.033 | +0.037 | +0.020 | +0.025 | -0.018 | +0.026 | +0.021 ± 0.020 |
+| thermal image contribution, 2× [eV] | +0.026 | +0.026 | +0.020 | +0.026 | +0.025 | +0.033 | +0.026 ± 0.004 |
+| thermal image contribution, 3× [eV] | +0.017 | +0.017 | +0.017 | +0.019 | +0.020 | +0.028 | +0.020 ± 0.004 |
+| N_eff, charged 1× | 3.9 | 3.5 | 3.7 | 3.9 | 3.6 | 4.0 | 3.8 ± 0.2 |
+| w_ref, charged 1× | 0.980 | 0.983 | 0.981 | 0.980 | 0.982 | 0.980 | 0.981 ± 0.001 |
+
+- **Φ_FF is seed-stable**: +0.577 ± 0.008 eV at the training cell, a = 8.65 ± 0.09 eV·Å,
+  b = −0.029 ± 0.002 eV, exponent −1.107 ± 0.010; w_ref 0.981 ± 0.001 and N_eff 3.8 ± 0.2
+  on the ideal cell (arma_s1: 0.591 eV, a = 9.27, exponent −1.23). One localised electron's
+  image energy, the same on every head that binds it.
+- **The band term's 1/L drift changes sign between heads**: on the cohort it RISES with L,
+  −4.64 → −4.46 → −4.36 eV (fit −4.24 − 5.73/L, coefficient −5.7 ± 0.5 eV·Å), where arma_s1
+  fell (−4.91 + 5.54/L). The magnitude, ≈ 0.3 eV between 1× and 3×, is the same; its sign is
+  the head's. The correction under G_∞ is therefore not converged on any Stage 1 head, and the
+  size of the unconverged part is ≈ 0.3–0.4 eV at the training cell — the number Stage 4's
+  static term has to remove.
+- **Near-vacancy forces converge at 2×** on every seed: charged periodic 0.088 ± 0.018 (1×) →
+  0.011 ± 0.004 eV/Å (2×) against 3×; isolated 0.17 ± 0.08 → 0.007 ± 0.001; neutral
+  3.5e-2 → 7e-15. The isolated-gauge 1× residual varies 0.07–0.26 eV/Å over seeds — the
+  frontier-force part of the image interaction, which the isolated gauge removes and the head's
+  charge cloud sets.
+- **The charged defect virial trace is not seed-stable**: +1.8 ± 1.7 eV at 1× (range −0.56 to
+  +3.5), and it converges with L on each seed (2× ≈ 3× within 0.1 eV) to a seed-specific value;
+  the neutral trace is +1.52/+1.54/+1.54 on all six. The head's charged stress at the vacancy
+  is a Stage 1 seed property, not a training-set one; noted for Stage 3's stress gates.
+- **Thermal image contribution** +0.02 ± 0.02 eV at 1× (one seed −0.018), +0.026 ± 0.004 at
+  2×, +0.020 ± 0.004 at 3×: ≤ 0.04 eV on every seed and rung, as on arma_s1.
+
 ## Decisions of record (continuing Stage 0's numbering)
 
 11. **Training can use the base cache** (Stage 1.1). The cached forward's head force is the
@@ -430,8 +489,8 @@ V_Cl⁺ (counter (0, 0, 1, 0)) in every row; the neutral vacancy (S = S_ref) has
 
 ## Not done / carried forward
 
-- Stage 1.3 (the SR/LR diagnostic and its six-seed retrains), 1.4 (the tiling ladder) and 1.5
-  (the reference selection by the §7.7 gates; the Stage 1 golden) follow.
+- Stage 1.3's six-seed retrains (running on b3; the section above carries the finishing
+  commands) and 1.5 (the reference selection by the §7.7 gates; the Stage 1 golden) follow.
 - The golden of record is still the v6 capture (`--stage12` allow-list); the Stage 1 golden is
   captured at the selected reference (1.5).
 - V_FF = δΦ_FF/δP does not enter H (Stage 5); the registry says `potential="absent"`.
