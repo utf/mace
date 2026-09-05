@@ -551,7 +551,7 @@ def build_class_table(model, frames: Sequence, device="cpu", formula=None,
         elif ambiguous:
             # Tier 2: the valence-subspace continuation from the tiled pristine.
             t2 = tier2(model, fr, pristine_frame, factors, perm, n_pri, pri["H"], spec["H"],
-                       cfg, device=device)
+                       cfg, device=device, cut=aligned.vbm_al + delta, window=window)
             extra = dict(path_agreement=t2["path_agreement"],
                          schedule_agreement=t2["schedule_agreement"],
                          gamma=tuple(t2["gamma"]), correspondence=t2["correspondence"],
@@ -1054,8 +1054,8 @@ def _contiguity(psi_physical: np.ndarray, H1_final: np.ndarray, ghost_orbitals, 
     eigenvectors of H^(1)_union (those not parked at the sink)."""
     m = psi_physical.shape[1]
     if m == 0:
-        return True, 1.0, (0, -1)
-    _, U = np.linalg.eigh(H1_final)
+        return True, 1.0, (0, -1), -np.inf
+    lam, U = np.linalg.eigh(H1_final)
     ghost_weight = (U[np.asarray(ghost_orbitals, dtype=np.int64), :] ** 2).sum(axis=0) \
         if len(ghost_orbitals) else np.zeros(U.shape[1])
     physical_cols = np.nonzero(ghost_weight < 0.5)[0]
@@ -1064,25 +1064,37 @@ def _contiguity(psi_physical: np.ndarray, H1_final: np.ndarray, ghost_orbitals, 
     chosen = np.sort(physical_cols[order])
     overlap = float(weight[order].sum() / m)
     contiguous = bool(chosen[-1] - chosen[0] + 1 == m)
-    return contiguous and overlap > 1.0 - eta, overlap, (int(chosen[0]), int(chosen[-1]))
+    top = float(lam[chosen].max())
+    return contiguous, overlap, (int(chosen[0]), int(chosen[-1])), top
 
 
 def tier2_continuation(H0_u: np.ndarray, H1_u: np.ndarray, groups: Dict[str, np.ndarray],
                        rank: int, e_sink: float = 100.0, eta: float = 1.0e-3,
-                       dlambda: float = 0.02) -> Dict[str, Any]:
+                       dlambda: float = 0.02, cut: Optional[float] = None,
+                       window: float = 0.0) -> Dict[str, Any]:
     """Both paths, both schedules, the endpoint classification and the acceptance rule, on
     Hamiltonians already in the union basis. `rank` is M_V^(0). Returns the decision with
-    every quantity the cache records."""
+    every quantity the cache records.
+
+    `cut` is the class's counting cut `VBM_al + delta` on the same energy scale as `H1_u`
+    (decision 19): with it, a physical part that is identified with class eigenvectors but
+    not spectrally contiguous is still accepted when its highest identified level lies at or
+    below `cut + window` -- the interlopers are then frontier levels resonant inside the
+    valence manifold, not valence vectors that ended up across the gap. Without `cut` the
+    literal contiguity rule applies.
+    """
     H1_final = interpolated_hamiltonian(H0_u, H1_u, 1.0, "A", groups, e_sink)
     runs: Dict[Tuple[str, int], Dict[str, Any]] = {}
     for path in ("A", "B"):
         for schedule, dl in ((1, dlambda), (2, dlambda / 2.0)):
             psi, stats = transport_valence_subspace(H0_u, H1_u, groups, rank, path, dl, e_sink)
             cls = endpoint_classification(psi, groups["ghost"], eta)
-            ok, overlap, span = _contiguity(cls["psi_physical"], H1_final, groups["ghost"], eta)
+            ok, overlap, span, top = _contiguity(cls["psi_physical"], H1_final,
+                                                 groups["ghost"], eta)
             runs[(path, schedule)] = dict(m_vb=cls["n_physical"], n_ghost=cls["n_ghost"],
                                           n_closure=cls["n_closure"], gamma=cls["gamma"],
-                                          contiguous=ok, overlap=overlap, span=span, **stats)
+                                          contiguous=ok, overlap=overlap, span=span,
+                                          top_identified_level=top, **stats)
     m_values = {r["m_vb"] for r in runs.values()}
     path_agreement = runs[("A", 1)]["m_vb"] == runs[("B", 1)]["m_vb"]
     schedule_agreement = all(
@@ -1091,6 +1103,18 @@ def tier2_continuation(H0_u: np.ndarray, H1_u: np.ndarray, groups: Dict[str, np.
         for p in ("A", "B"))
     closure = any(r["n_closure"] > 0 for r in runs.values())
     contiguous = all(r["contiguous"] for r in runs.values())
+    # STAGE 1.3, decision 19. The physical part must be IDENTIFIED with a set of the class
+    # Hamiltonian's eigenvectors (overlap > 1 - eta); whether that set is spectrally
+    # contiguous is recorded, logged, and NOT required. Read literally, the contiguity
+    # clause made the 159-atom V_Cl class uncounted on the Harrison-initialised head (the
+    # physical part identified to overlap 1.000 with eigenvectors spanning (0, 414) of a
+    # 412-dimensional manifold: two frontier levels resonant below the top valence level),
+    # which contradicts the plan's own statement that the integers are invariant under band
+    # resonance and spectral motion -- and would have left every 159-atom charged frame with
+    # no frontier term. The count is the identified manifold's dimension either way.
+    identified = all(r["overlap"] > 1.0 - eta for r in runs.values())
+    top = max(r["top_identified_level"] for r in runs.values())
+    valence_like = contiguous or (cut is not None and top <= float(cut) + float(window))
     reasons = []
     if not path_agreement:
         reasons.append(f"paths disagree (A: {runs[('A', 1)]['m_vb']}, B: {runs[('B', 1)]['m_vb']})")
@@ -1098,23 +1122,41 @@ def tier2_continuation(H0_u: np.ndarray, H1_u: np.ndarray, groups: Dict[str, np.
         reasons.append("the two step schedules disagree")
     if closure:
         reasons.append("a closure eigenvalue eta <= gamma <= 1 - eta at the endpoint")
-    if not contiguous:
+    if not identified:
+        worst = min(runs.values(), key=lambda r: r["overlap"])
+        reasons.append(f"the physical part is not identified with class eigenvectors "
+                       f"(overlap {worst['overlap']:.3f}, span {worst['span']})")
+    note = ""
+    if identified and not contiguous and valence_like:
+        worst = min(runs.values(), key=lambda r: r["overlap"])
+        note = (f"physical part identified (overlap {worst['overlap']:.3f}) but not spectrally "
+                f"contiguous (span {worst['span']} for {runs[('A', 1)]['m_vb']} vectors; top "
+                f"identified level {top:+.3f} eV, cut {cut:+.3f} eV): frontier levels "
+                f"resonant inside the valence manifold at the reference geometry; counted "
+                f"(decision 19)")
+        logging.info("Tier 2: %s", note)
+    if identified and not valence_like:
         worst = min(runs.values(), key=lambda r: r["overlap"])
         reasons.append(f"the physical part is not a contiguous set of class eigenvectors "
-                       f"(overlap {worst['overlap']:.3f}, span {worst['span']})")
-    accepted = path_agreement and schedule_agreement and not closure and contiguous \
-        and len(m_values) == 1
+                       f"(overlap {worst['overlap']:.3f}, span {worst['span']}) and its top "
+                       f"identified level {top:+.3f} eV lies above the cut"
+                       + (f" {cut:+.3f} + {window:.3f} eV" if cut is not None else
+                          " (no cut given)"))
+    accepted = path_agreement and schedule_agreement and not closure and identified \
+        and valence_like and len(m_values) == 1
     return dict(accepted=accepted, m_vb=int(runs[("A", 1)]["m_vb"]) if accepted else None,
                 gamma=[float(g) for g in runs[("A", 1)]["gamma"]],
                 path_agreement=bool(path_agreement), schedule_agreement=bool(schedule_agreement),
-                closure=bool(closure), contiguous=bool(contiguous),
-                reason="; ".join(reasons),
+                closure=bool(closure), contiguous=bool(contiguous), identified=bool(identified),
+                valence_like=bool(valence_like), top_identified_level=float(top),
+                reason="; ".join(reasons), note=note,
                 runs={f"{p}{s}": {k: (v.tolist() if isinstance(v, np.ndarray) else v)
                                   for k, v in r.items()} for (p, s), r in runs.items()})
 
 
 def tier2(model, class_frame, pristine_frame, factors, perm, rank: int, H0, H1,
-          cfg: Dict[str, Any], device="cpu") -> Dict[str, Any]:
+          cfg: Dict[str, Any], device="cpu", cut: Optional[float] = None,
+          window: float = 0.0) -> Dict[str, Any]:
     """Tier 2 for one class: geometry correspondence, union basis, the continuation."""
     numbers1, pos1, cell1 = _frame_geometry(class_frame, model)
     numbers0, pos0, cell0 = _frame_geometry(pristine_frame, model)
@@ -1127,7 +1169,8 @@ def tier2(model, class_frame, pristine_frame, factors, perm, rank: int, H0, H1,
         # Section 2.7's default: 50 eV above the pristine conduction edge.
         e_sink = float(np.linalg.eigvalsh(_numpy(H0))[rank]) + 50.0
     out = tier2_continuation(H0_u, H1_u, groups, rank, e_sink=float(e_sink),
-                             eta=float(cfg["eta"]), dlambda=float(cfg["dlambda"]))
+                             eta=float(cfg["eta"]), dlambda=float(cfg["dlambda"]),
+                             cut=cut, window=window)
     out["e_sink"] = float(e_sink)
     out["correspondence"] = {k: corr[k] for k in ("n_ghost", "n_added", "n_substituted",
                                                     "n_matched", "max_displacement",

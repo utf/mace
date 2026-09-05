@@ -10,6 +10,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 R=$HOME/runs
 export PYTHONPATH="$(cd "$HERE/.." && pwd)" PATH="$HOME/micromamba/envs/py13/bin:$PATH"
 EPOCHS="${EPOCHS:-24}"
+# Standing rule 2: charged energies enter the loss only for a size class with a neutral
+# null; the A' null file establishes which (a guard added to the trainer after Stage B ran).
+export DEFECT_NULL_REFERENCE="${DEFECT_NULL_REFERENCE:-$R/aprime_nulls.json}"
+[ -f "$DEFECT_NULL_REFERENCE" ] || { echo "ABORT: missing null file $DEFECT_NULL_REFERENCE"; exit 1; }
 
 wave () {   # arm mode seeds
     local arm="$1" mode="$2" seeds="$3"
