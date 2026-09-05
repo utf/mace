@@ -141,8 +141,10 @@ def frontier_energy(model, entries: Sequence[FrontierEntry], state, state_ref_sp
 
     `training`: an uncounted class is a transient of the untrained head (decision 21) --
     the class table is refreshed every epoch and the class is counted once the head has a
-    gap -- so in a training forward its graphs contribute an exact zero with a warning; in
-    evaluation an uncounted class is refused, as the plan says.
+    gap -- so in a training forward, or anywhere inside a training session (the trainer
+    sets `model.uncounted_class_policy = "zero"` for the base-cache build and the
+    validation passes and resets it on the model it saves), its graphs contribute an exact
+    zero with a warning; otherwise an uncounted class is refused, as the plan says.
 
     `entries` are the head's per-graph records for THIS pass; `state` the pass's state batch;
     `state_ref_spec` the model's reference state, which decides per graph whether the term
@@ -186,7 +188,8 @@ def frontier_energy(model, entries: Sequence[FrontierEntry], state, state_ref_sp
             charges_ref.append(torch.zeros(n_g, device=device, dtype=dtype))
             continue
         record: ClassRecord = lookup_class(table, _numbers_from_key(keys[g]))
-        if training and not record.counted:
+        tolerate = training or getattr(model, "uncounted_class_policy", "refuse") == "zero"
+        if tolerate and not record.counted:
             _warn_uncounted(record)
             charges_now.append(torch.zeros(n_g, device=device, dtype=dtype))
             charges_ref.append(torch.zeros(n_g, device=device, dtype=dtype))

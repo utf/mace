@@ -89,3 +89,14 @@ class TestTrainingTransient:
         assert any("uncounted" in r.message for r in caplog.records)
         with pytest.raises(ValueError, match="no core/frontier decomposition"):
             model(batch.to_dict(), training=False, compute_force=False)
+        # inside a training session the trainer sets the policy, and evaluation forwards
+        # (the base-cache build, validation) give the same zero
+        model.uncounted_class_policy = "zero"
+        with torch.no_grad():
+            out = model(batch.to_dict(), training=False, compute_force=False)
+        assert torch.equal(out["frontier_energy"], torch.zeros(1))
+        assert model.__class__.__name__ == "MACEDefect"
+        # the policy is not a config key and a fresh construction refuses
+        from mace.tools.scripts_utils import extract_config_mace_model
+
+        assert "uncounted_class_policy" not in extract_config_mace_model(model)

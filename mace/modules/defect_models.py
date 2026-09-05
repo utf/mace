@@ -233,6 +233,9 @@ class MACEDefect(ScaleShiftMACE):
 
         self.composition_classes = (None if composition_classes is None
                                     else dict(composition_classes))
+        # Decision 21: "refuse" (the plan's rule) except inside a training session, where
+        # the trainer sets "zero" and resets it on the model it saves. Not a config key.
+        self.uncounted_class_policy = "refuse"
         self.class_constructor = constructor_config(class_constructor)
         self.functional = functional_config(functional)
         from mace.modules.defect_state import (PRODUCTION_POLICIES, ElectronicStateSpec,
@@ -774,6 +777,7 @@ class MACEDefect(ScaleShiftMACE):
             ("composition_classes", None),
             ("class_constructor", None),
             ("functional", None),
+            ("uncounted_class_policy", "refuse"),
         ):
             if not hasattr(self, name):
                 object.__setattr__(self, name, default)

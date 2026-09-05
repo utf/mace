@@ -1758,6 +1758,10 @@ def run(args) -> None:
         model.composition_classes = defect_composition.build_class_table(
             model, class_frames, device=device)
         class_table_frames["frames"] = class_frames
+        # Decision 21: inside the training session an uncounted class is a transient (the
+        # table is refreshed every epoch); the base-cache build and the validation passes
+        # run evaluation forwards, so the policy is set on the model, not per call.
+        model.uncounted_class_policy = "zero"
         # Every non-parameter float is a number in the saved config: the resolved sink too.
         model.class_constructor["e_sink"] = model.composition_classes["e_sink"]
         n_counted = sum(1 for r in model.composition_classes["classes"].values()
@@ -2079,6 +2083,8 @@ def run(args) -> None:
                 model_path = Path(args.checkpoints_dir) / (tag + ".model")
             logging.info(f"Saving model to {model_path}")
             model_to_save = deepcopy(model)
+            if hasattr(model_to_save, "uncounted_class_policy"):
+                model_to_save.uncounted_class_policy = "refuse"
             if args.lora:
                 logging.info("Merging LoRA weights into base model")
                 merge_lora_weights(model_to_save)

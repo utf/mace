@@ -299,6 +299,21 @@ STAGE14_PENDING
     are several crystals. And the ladder collapses the c table to one constant per charge
     class — §7.5's single C_Q — which the production forward does not do.
 
+21. **The class table's alignment follows the head; the integers do not.** The Stage B
+    recipe's Harrison-initialised head has a 0.2 eV pristine gap (`loss_gap` opens it to
+    2.4 eV over training), so a table built before epoch 0 — where the trainer built it —
+    carried projector edges 2 eV stale for the whole run, and the 159-atom class was uncounted
+    there (a valence-derived level at the conduction edge with two frontier levels below it,
+    genuinely ambiguous on THAT head). `refresh_class_table` rebuilds the table on the current
+    head at the start of every epoch: `VBM_al`, `CBM_al`, shift, spread, nearest level and the
+    placement are taken fresh for every class; a class uncounted so far adopts the fresh count;
+    a counted class keeps its integers, and a fresh count that disagrees is logged as a failed
+    invariance and never adopted. The frontier term, in a TRAINING forward only, gives an exact
+    zero for a graph of a still-uncounted class and warns once per (class, reason); an
+    evaluation forward refuses it, as the plan says. `test_class_table_refresh.py` pins a
+    rigid head shift moving the edges and not the integers, the adoption after the Harrison
+    initialisation, and the training zero / evaluation refusal.
+
 18. **`base_forces` on charged records move by ≤ 1e-6 eV/Å against the v6 golden.** Measured:
     the current `base_forces` equals the autograd of the trunk energy alone to 1.5e-15 eV/Å
     (qp1_159), so the movement is on the v6 side — its `F_total − F_correction` carried the
