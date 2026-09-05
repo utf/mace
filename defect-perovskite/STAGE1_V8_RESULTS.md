@@ -216,7 +216,10 @@ is what separates the Cl-p and Pb-p manifolds on this head — and delocalises t
 half-bound carrier. The lower 159-atom force RMSE of (b) and (c) is the head correction
 collapsing towards zero on those frames, not a better model. Under (b) and (c) the frontier
 term of `V_Cl⁺` at 159 atoms is 0 / 0.085 eV because the reference electron cloud is spread
-over the cell (w_ref → 0). What the retrains decide is whether a head trained from the start
+over the cell (w_ref → 0). Caveat on the (b) and (c) columns: `stage13_prepare` built each
+arm's class table before switching `madelung_range`, so their Φ_FF and w_ref rows are read
+against the full head's projector edges; the gates in the table do not touch the table, and
+the retrains build theirs under their own arm. What the retrains decide is whether a head trained from the start
 with the long-range remainder, or with no Madelung term, recovers the gap, the bound state
 and F4.
 
@@ -226,7 +229,38 @@ Recipe differences from Stage B, both forced by the current trainer: standing ru
 gate (`--defect_null_reference aprime_nulls.json`) admits charged ENERGIES only for the size
 class with a neutral null — the 159-atom class — so the 928 charged 79-atom energies Stage B
 fitted at `w_E` are out of the loss (forces stay); and the class table is built on the
-Harrison-initialised head before epoch 0 (decision 19 below).
+Harrison-initialised head before epoch 0 and refreshed every epoch (decision 21).
+
+Code state of the retrains: the b3 tree is the code of `7e155c9` (a checksum dry-run sync
+from `9a76818` differs only in this file; the two commits after `7e155c9` are records). It
+carries the relaxed Tier 2 rule reverted in decision 19 and not the alignment guard of
+`refresh_class_table` added with it; the tree is not synced until the chain ends, so every
+seed of every arm runs the same code.
+
+Known artefact, to read at Stage 1.5: the c table is calibrated before epoch 0 on the
+initial head, where Φ_FF ≈ 0 on the 79-atom charged frames; the null gate keeps every
+79-atom charged energy out of the loss, so `c(79)` never trains, while the refreshed
+projector edges take Φ_FF on those frames to ≈ +0.5 eV (forward-only arm (a): +0.494). The
+§7.7 gates do not read `c(79)` (F4, depth, participation, R_bound, F10 and the gap are
+c-independent; the neutral-79 window sees charge class 1 = 0), but gate 3's Δc and any
+79-atom charged energy RMSE carry it. Stage 1.5 reads `c(79)`, `c(159)` from
+`<tag>_extras.json` against Φ_79 from `<tag>_forces.json` and decides whether to recalibrate
+c on the saved models, reporting both.
+
+Scheduling: `stage13_chain.sh` starts an arm's gate queue while the next arm's first wave
+trains, so for about an hour per arm four scorers share GPUs 4–7 with four trainers (the
+trainers hold ≈ 1.4 GiB each at the start).
+
+To finish, once `~/runs/stage13_train.log` says the chain is complete:
+
+```
+python defect-perovskite/stage13_collect.py --tags s13ra s13rb s13rc      # on b3
+python defect-perovskite/stage15_select.py --tags s13ra s13rb s13rc \
+       --out defect-perovskite/golden/stage15_selection.md                # on b3
+python defect-perovskite/stage0_golden.py capture --model ~/runs/<sel>_models/<sel>_s1.model \
+       --out ~/runs/golden/stage1_<arm>.pt --manifest defect-perovskite/golden/stage1_<arm>.json
+bash run_ladder_cohort.sh   # with the selected arm's six models
+```
 
 STAGE13_RETRAIN_PENDING
 
@@ -267,9 +301,11 @@ V_Cl⁺ (counter (0, 0, 1, 0)) in every row; the neutral vacancy (S = S_ref) has
 - **The band term moves with L**: −4.52 → −4.72 → −4.78 eV, fitted −4.91 + 5.54/L (residual
   0.003 eV). This is the correction under G_∞ too (Φ_FF is the only gauge-dependent term
   before Stage 4), so §7.5's "the correction converges after switching to G_∞" is **not yet
-  met**: the Madelung shift inside H is the periodic potential of a lattice that is net
-  charged once a Cl⁻ is removed, and its image part is what Stage 4's `V_static^B` in the
-  isolated gauge removes (`− G_img ⋆ ρ_static^def`). Recorded as the Stage 1 baseline.
+  met**. The expected cause, to be confirmed at Stage 4: the Madelung shift inside H is the
+  periodic potential of a lattice that is net charged once a Cl⁻ is removed, and its image
+  part is what Stage 4's `V_static^B` in the isolated gauge removes (`− G_img ⋆ ρ_static^def`).
+  It cannot be isolated here with `madelung_range = off`, which changes the whole spectrum.
+  Recorded as the Stage 1 baseline.
 - **Forces within 6 Å of the vacancy** (21 atoms), against 3×: charged, periodic 0.50 (1×) →
   0.19 eV/Å (2×) → 0; isolated 0.32 → 0.12 → 0; neutral 0.035 (1×) → 1e-14 (2×): the neutral
   cell's forces converge at 2× (the trunk's and the head's neighbourhoods fit the box), the
@@ -344,23 +380,26 @@ V_Cl⁺ (counter (0, 0, 1, 0)) in every row; the neutral vacancy (S = S_ref) has
     real spectrum the projector leakage keeps every needed channel's weight ≥ 1 (the 159-atom
     reference cloud reads exactly 1.000).
 
-19. **Tier 2 requires identification, and spectral contiguity only across the gap.** On the
-    Harrison-initialised head the 159-atom V_Cl class was Tier 1 ambiguous and Tier 2, read
-    literally, refused it: the transported physical part was identified with class
-    eigenvectors to overlap 1.000, but they spanned indices (0, 414) for a 412-dimensional
-    manifold — two frontier levels resonant just below the top valence level. The plan says the
-    integers are invariant under band resonance, and the literal clause would have left every
-    159-atom charged frame with no frontier term (the training smoke crashed on it). The rule
-    now: the physical part must be identified (overlap > 1 − η) and, when the identified set
-    is not contiguous, every identified level must lie below the conduction-side cut
-    `CBM_al − δ` — the valence manifold's vectors may sit in the gap (on the fresh head the
-    159-atom class's top identified level is 0.2 eV above VBM_al, a valence-derived level the
-    vacancy pushes up, with the two frontier levels resonant below it), and the integer is the
-    identified manifold's dimension either way (412: `n_e = (1, 0)`, `Q_core = +1`, the same
-    as the 79-atom class; an energy count would have given `Q_core = +3`); a valence vector
-    that ended ACROSS the gap (the synthetic closure toy, level at +2.5 eV in the conduction
-    manifold) is still refused. The record keeps `contiguous`, `identified`,
-    `top_identified_level` and a note.
+19. **Tier 2's contiguity clause stays; a relaxation was considered and not adopted.** On
+    the Harrison-initialised head the 159-atom V_Cl class was Tier 1 ambiguous and Tier 2
+    refused it: the transported physical part was identified with class eigenvectors to
+    overlap 1.000, but they spanned indices (0, 414) for a 412-dimensional manifold — two
+    frontier levels resonant just below the top valence level. A relaxation was written
+    (accept an identified, non-contiguous manifold when its top identified level lies below
+    the conduction cut `CBM_al − δ`) and never fired: on that head the gap is 0.2 eV, so the
+    cut `CBM_al − δ = −8.585 eV` coincides with the counting cut `VBM_al + δ`, and the top
+    identified level, −8.479 eV, sits above it. The class was refused under both readings, and
+    training proceeded only through decision 21. Reverted to the plan's letter (this commit):
+    the relaxation gave the same integers as the literal rule whenever the rule accepts (the
+    identified manifold's dimension, 412 here: `n_e = (1, 0)`, `Q_core = +1`, as at 79 atoms),
+    so it could only act in the ambiguous regime — and on the motivating case the reference
+    fill had a hole in a valence-derived level and an electron in a frontier level, the
+    pattern the clause exists to flag. `identified`, `top_identified_level` and
+    `below_conduction_cut` stay in the record as diagnostics; the synthetic closure toy is
+    kept. The retrains of Stage 1.3 run the code of 7e155c9, which carries the relaxation:
+    their logs will show whether it ever accepted a class (`counted (decision 19)`) — if it
+    did, the integers are the ones the literal rule gives at a later epoch, and the record of
+    each arm says so.
 
 20. **The ladder's ideal cell is a domain mean, not a population mean** (above): the frames
     are several crystals. And the ladder collapses the c table to one constant per charge

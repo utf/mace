@@ -647,9 +647,16 @@ def refresh_class_table(model, frames: Sequence, device=None, log: bool = True
             old["classes"][key] = new
             summary["adopted"].append(key)
             continue
-        for f in ALIGNMENT_FIELDS:
-            rec[f] = new.get(f)
-        rec["tiling"], rec["perm"], rec["delta"] = new.get("tiling"), new.get("perm"), new.get("delta")
+        fresh_aligned = new.get("vbm_al") is not None and np.isfinite(float(new["vbm_al"]))
+        if fresh_aligned:
+            for f in ALIGNMENT_FIELDS:
+                rec[f] = new.get(f)
+            rec["tiling"], rec["perm"], rec["delta"] = (new.get("tiling"), new.get("perm"),
+                                                        new.get("delta"))
+        else:
+            # the fresh construction could not align this class (no tiling, no pristine
+            # gap): its NaN edges must not replace a counted class's
+            summary.setdefault("not_realigned", []).append(key)
         old_counted = rec.get("tier") is not None and not rec.get("ambiguous", True)
         new_counted = new.get("tier") is not None and not new.get("ambiguous", True)
         if not old_counted and new_counted:
@@ -1146,14 +1153,14 @@ def tier2_continuation(H0_u: np.ndarray, H1_u: np.ndarray, groups: Dict[str, np.
     Hamiltonians already in the union basis. `rank` is M_V^(0). Returns the decision with
     every quantity the cache records.
 
-    `conduction_cut` is the class's conduction-side cut `CBM_al - delta` on the same energy
-    scale as `H1_u` (decision 19): with it, a physical part that is identified with class
-    eigenvectors but not spectrally contiguous is still accepted when every identified level
-    lies below that cut -- the valence manifold's vectors may sit in the gap (a
-    valence-derived level pushed up by the defect) with frontier levels resonant below them,
-    and the integer is the identified manifold's dimension either way; a valence vector that
-    ended ACROSS the gap, in the conduction manifold, is refused. Without the cut the literal
-    contiguity rule applies.
+    The acceptance rule is the plan's: path and schedule agreement, no closure eigenvalue,
+    and the physical part coinciding with a SPECTRALLY CONTIGUOUS set of class eigenvectors
+    (overlap > 1 - eta). `identified` (the overlap alone), `top_identified_level` and
+    `conduction_cut` (`CBM_al - delta`, when given) are recorded as diagnostics: a relaxation
+    accepting an identified but non-contiguous manifold below the conduction cut was
+    considered for the fresh head's 159-atom V_Cl class and NOT adopted (decision 19) -- on
+    that head the gap was 0.2 eV, the cut coincided with the counting cut, and the reference
+    fill had a hole in a valence-derived level, which is the pattern the clause flags.
     """
     H1_final = interpolated_hamiltonian(H0_u, H1_u, 1.0, "A", groups, e_sink)
     runs: Dict[Tuple[str, int], Dict[str, Any]] = {}
@@ -1175,18 +1182,11 @@ def tier2_continuation(H0_u: np.ndarray, H1_u: np.ndarray, groups: Dict[str, np.
         for p in ("A", "B"))
     closure = any(r["n_closure"] > 0 for r in runs.values())
     contiguous = all(r["contiguous"] for r in runs.values())
-    # STAGE 1.3, decision 19. The physical part must be IDENTIFIED with a set of the class
-    # Hamiltonian's eigenvectors (overlap > 1 - eta); whether that set is spectrally
-    # contiguous is recorded, logged, and NOT required. Read literally, the contiguity
-    # clause made the 159-atom V_Cl class uncounted on the Harrison-initialised head (the
-    # physical part identified to overlap 1.000 with eigenvectors spanning (0, 414) of a
-    # 412-dimensional manifold: two frontier levels resonant below the top valence level),
-    # which contradicts the plan's own statement that the integers are invariant under band
-    # resonance and spectral motion -- and would have left every 159-atom charged frame with
-    # no frontier term. The count is the identified manifold's dimension either way.
+    # Decision 19 (considered, not adopted): the contiguity clause is the plan's rule and
+    # stays; `identified` and the conduction-cut comparison are diagnostics.
     identified = all(r["overlap"] > 1.0 - eta for r in runs.values())
     top = max(r["top_identified_level"] for r in runs.values())
-    valence_like = contiguous or (conduction_cut is not None and top <= float(conduction_cut))
+    below_cut = conduction_cut is not None and top <= float(conduction_cut)
     reasons = []
     if not path_agreement:
         reasons.append(f"paths disagree (A: {runs[('A', 1)]['m_vb']}, B: {runs[('B', 1)]['m_vb']})")
@@ -1199,28 +1199,20 @@ def tier2_continuation(H0_u: np.ndarray, H1_u: np.ndarray, groups: Dict[str, np.
         reasons.append(f"the physical part is not identified with class eigenvectors "
                        f"(overlap {worst['overlap']:.3f}, span {worst['span']})")
     note = ""
-    if identified and not contiguous and valence_like:
-        worst = min(runs.values(), key=lambda r: r["overlap"])
-        note = (f"physical part identified (overlap {worst['overlap']:.3f}) but not spectrally "
-                f"contiguous (span {worst['span']} for {runs[('A', 1)]['m_vb']} vectors; top "
-                f"identified level {top:+.3f} eV, below the conduction cut "
-                f"{conduction_cut:+.3f} eV): frontier levels resonant inside the valence "
-                f"manifold at the reference geometry; counted (decision 19)")
-        logging.info("Tier 2: %s", note)
-    if identified and not valence_like:
+    if not contiguous:
         worst = min(runs.values(), key=lambda r: r["overlap"])
         reasons.append(f"the physical part is not a contiguous set of class eigenvectors "
-                       f"(overlap {worst['overlap']:.3f}, span {worst['span']}) and its top "
-                       f"identified level {top:+.3f} eV lies"
-                       + (f" above the conduction cut {conduction_cut:+.3f} eV"
-                          if conduction_cut is not None else " (no conduction cut given)"))
-    accepted = path_agreement and schedule_agreement and not closure and identified \
-        and valence_like and len(m_values) == 1
+                       f"(overlap {worst['overlap']:.3f}, span {worst['span']}; top identified "
+                       f"level {top:+.3f} eV"
+                       + (f", conduction cut {conduction_cut:+.3f} eV" if conduction_cut
+                          is not None else "") + ")")
+    accepted = path_agreement and schedule_agreement and not closure and contiguous \
+        and len(m_values) == 1
     return dict(accepted=accepted, m_vb=int(runs[("A", 1)]["m_vb"]) if accepted else None,
                 gamma=[float(g) for g in runs[("A", 1)]["gamma"]],
                 path_agreement=bool(path_agreement), schedule_agreement=bool(schedule_agreement),
                 closure=bool(closure), contiguous=bool(contiguous), identified=bool(identified),
-                valence_like=bool(valence_like), top_identified_level=float(top),
+                below_conduction_cut=bool(below_cut), top_identified_level=float(top),
                 reason="; ".join(reasons), note=note,
                 runs={f"{p}{s}": {k: (v.tolist() if isinstance(v, np.ndarray) else v)
                                   for k, v in r.items()} for (p, s), r in runs.items()})
