@@ -173,6 +173,59 @@ the windows: the reference cloud's projector weight runs from 1.42 to 2.37 and i
 
 ---
 
+## Stage 1.3 — the SR/LR diagnostic (three Madelung arms)
+
+### The switch
+
+`madelung_range` on the model (`--defect_madelung_range`, checkpoint default `full`):
+
+| arm | mode | what the head's on-site energies see |
+|---|---|---|
+| (a) | `full` | the whole lattice potential `−φ/ε∞` (as is) |
+| (b) | `long_range` | `−(φ − V_SR(r_split))/ε∞`: the short-range part within `r_split = functional["r_split"]` (the first-block cutoff, 5.0 Å) removed — `V_SR` is the smeared Coulomb potential of the ions on the head's own neighbour list, LES's kernel `C q erf(r/σ√2)/r`, switched off by MACE's p = 6 polynomial at `r_split`, so `V_full = V_SR + V_LR` exactly (§7.3) and `V_LR` is as smooth as `V_full` |
+| (c) | `off` | nothing; the module stays (the pristine formula for the class table, the static charges for Stage 4) |
+
+Tests (`test_madelung_range.py`, 7): `V_SR` against a brute-force image sum on a 5-atom cell;
+the identity read off the module with the head's edges; three modes = three Hamiltonians and
+`off` an exact zero; the band and frontier forces pass the harness under `long_range`; the
+config round trip; a head list shorter than `r_split` refused.
+
+### Forward-only, on the Stage B cohort (six seeds, re-saved per arm with the class table)
+
+STAGE13_FORWARD_PENDING
+
+### Retrained, six seeds per arm (the Stage B recipe with `DEFECT_MADELUNG_RANGE`)
+
+Recipe differences from Stage B, both forced by the current trainer: standing rule 2's null
+gate (`--defect_null_reference aprime_nulls.json`) admits charged ENERGIES only for the size
+class with a neutral null — the 159-atom class — so the 928 charged 79-atom energies Stage B
+fitted at `w_E` are out of the loss (forces stay); and the class table is built on the
+Harrison-initialised head before epoch 0 (decision 19 below).
+
+STAGE13_RETRAIN_PENDING
+
+---
+
+## Stage 1.4 — the tiling ladder (§7.5), periodic gauge
+
+`stage14_ladder.py`. The IDEAL pristine cell is the population mean of the stoichiometric
+training frames of ONE domain: matched atom by atom (species, minimum image, one to one), the
+544 pristine frames are not one crystal — matched to any one of them most others sit 1.5–4 Å
+away (different runs, origins and tilt domains) — so the reference is the frame with the most
+neighbours within 0.8 Å (frame 100, 23 members) and the ideal cell their mean cell and mean
+matched fractional positions (residual 0.29 Å mean, 0.80 Å worst; cell 15.68 × 16.18 × 11.36 Å;
+`golden/ideal_pristine_80.xyz`). The vacancy is the Cl the closest thermal 79-atom training
+frame lacks (frame 793, matched to 0.67 Å mean), the same site at every size; 1×/2×/3× =
+79/639/2159 atoms, L = 14.2/28.5/42.7 Å. §7.5's "single C_Q": the head's c table is
+collapsed to its 1× column per charge class for the ladder (the 2× column is 0.81 eV higher for
+the charged class, and with it the band term would carry a size-dependent constant). Each
+tiling is its own class, counted against the ideal pristine cell tiled (Tier 1, `n_e = (1, 0)`,
+`Q_core = +1` at 1× and 2×).
+
+STAGE14_PENDING
+
+---
+
 ## Decisions of record (continuing Stage 0's numbering)
 
 11. **Training can use the base cache** (Stage 1.1). The cached forward's head force is the
@@ -223,6 +276,28 @@ the windows: the reference cloud's projector weight runs from 1.42 to 2.37 and i
     weight in a window is a finite density with a warning rather than a division by zero. On a
     real spectrum the projector leakage keeps every needed channel's weight ≥ 1 (the 159-atom
     reference cloud reads exactly 1.000).
+
+19. **Tier 2 requires identification, and spectral contiguity only across the gap.** On the
+    Harrison-initialised head the 159-atom V_Cl class was Tier 1 ambiguous and Tier 2, read
+    literally, refused it: the transported physical part was identified with class
+    eigenvectors to overlap 1.000, but they spanned indices (0, 414) for a 412-dimensional
+    manifold — two frontier levels resonant just below the top valence level. The plan says the
+    integers are invariant under band resonance, and the literal clause would have left every
+    159-atom charged frame with no frontier term (the training smoke crashed on it). The rule
+    now: the physical part must be identified (overlap > 1 − η) and, when the identified set
+    is not contiguous, every identified level must lie below the conduction-side cut
+    `CBM_al − δ` — the valence manifold's vectors may sit in the gap (on the fresh head the
+    159-atom class's top identified level is 0.2 eV above VBM_al, a valence-derived level the
+    vacancy pushes up, with the two frontier levels resonant below it), and the integer is the
+    identified manifold's dimension either way (412: `n_e = (1, 0)`, `Q_core = +1`, the same
+    as the 79-atom class; an energy count would have given `Q_core = +3`); a valence vector
+    that ended ACROSS the gap (the synthetic closure toy, level at +2.5 eV in the conduction
+    manifold) is still refused. The record keeps `contiguous`, `identified`,
+    `top_identified_level` and a note.
+
+20. **The ladder's ideal cell is a domain mean, not a population mean** (above): the frames
+    are several crystals. And the ladder collapses the c table to one constant per charge
+    class — §7.5's single C_Q — which the production forward does not do.
 
 18. **`base_forces` on charged records move by ≤ 1e-6 eV/Å against the v6 golden.** Measured:
     the current `base_forces` equals the autograd of the trunk energy alone to 1.5e-15 eV/Å

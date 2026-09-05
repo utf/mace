@@ -54,8 +54,13 @@ CUDA_VISIBLE_DEVICES=$g2 python -u defect-perovskite/b13_participation.py \
     --device cuda --out "$R/${TAG}_participation.json" \
     > "$R/${TAG}_participation.log" 2>&1 &
 P6=$!
-wait $P5 $P6
-for f in ${TAG}_adopt ${TAG}_forces ${TAG}_dilution ${TAG}_extras ${TAG}_depth ${TAG}_participation; do
+# F10 (section 7.7): the ligand-Cl minus bulk-Cl correction on the centred channel.
+CUDA_VISIBLE_DEVICES=$g3 python -u defect-perovskite/b4_per_atom_corrections.py \
+    --models "${MODELS[@]}" --device cuda --out "$R/${TAG}_peratom.json" \
+    > "$R/${TAG}_peratom.log" 2>&1 &
+P7=$!
+wait $P5 $P6 $P7
+for f in ${TAG}_adopt ${TAG}_forces ${TAG}_dilution ${TAG}_extras ${TAG}_depth ${TAG}_participation ${TAG}_peratom; do
     echo; echo "--- $f ---"
     grep -avE "Warning|warn|openequivariance|falling back|visitor|shape = |_Jd|np.reshape|UNDER-DET|alternative|detach|^ *$" \
         "$R/$f.log" | tail -45
