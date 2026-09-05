@@ -1323,6 +1323,9 @@ def run(args) -> None:
         calibrate_novelty(model=model, data_loader=train_loader, device=device)
 
     defect_seed_hook = None
+    # Decision 21: the frames the class table is built over, filled below once the loaders
+    # exist; the epoch hook refreshes the table's alignment from them.
+    class_table_frames: Dict[str, Any] = {}
     anneal_seed = (
         model.__class__.__name__ == "MACEDefect"
         and getattr(model, "logit_seed", False)
@@ -1381,6 +1384,20 @@ def run(args) -> None:
                         f"checkpointed lr still carries the previous factor, so the "
                         f"remaining warmup epochs are scaled twice. Audit only.")
 
+
+            # Decision 21: re-align the class table to the head as it is now (the integers
+            # stay), every epoch after the first; a class uncounted at initialisation is
+            # counted here once the head has a gap.
+            if class_table_frames.get("frames") and int(epoch) > int(start_epoch):
+                from mace.modules import defect_composition as _dcomp
+
+                _target = getattr(current_model, "module", current_model)
+                _summary = _dcomp.refresh_class_table(
+                    _target, class_table_frames["frames"], device=device)
+                _target.class_constructor["e_sink"] = _target.composition_classes["e_sink"]
+                if _summary.get("adopted"):
+                    logging.info("Composition classes: newly counted at epoch %d: %s",
+                                 int(epoch), _summary["adopted"])
 
             # The **absolute** epoch, taken from the trainer. A counter local to the loss
             # would restart at zero on every resume and silently re-serve the size-hinge
@@ -1740,6 +1757,7 @@ def run(args) -> None:
         _attach_keys(class_frames, z_table=z_table)
         model.composition_classes = defect_composition.build_class_table(
             model, class_frames, device=device)
+        class_table_frames["frames"] = class_frames
         # Every non-parameter float is a number in the saved config: the resolved sink too.
         model.class_constructor["e_sink"] = model.composition_classes["e_sink"]
         n_counted = sum(1 for r in model.composition_classes["classes"].values()

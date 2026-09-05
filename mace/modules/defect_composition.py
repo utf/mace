@@ -610,6 +610,76 @@ def ensure_class_table(model, frames: Sequence, device=None, formula=None,
     return table
 
 
+# The record fields that are the head's ALIGNMENT and PLACEMENT (refreshed as the head
+# trains) as against the INTEGERS (established once, decision 21).
+ALIGNMENT_FIELDS = ("vbm_al", "cbm_al", "shift", "spread", "gap_pristine", "nearest",
+                    "placement", "reference_frame_key")
+INTEGER_FIELDS = ("n_total", "n_sigma", "tier", "ambiguous", "reason", "m_vb", "n_e", "n_h",
+                  "q_core", "path_agreement", "schedule_agreement", "gamma", "correspondence",
+                  "tier1_reason")
+
+
+def refresh_class_table(model, frames: Sequence, device=None, log: bool = True
+                        ) -> Dict[str, Any]:
+    """Re-align the model's class table to the head AS IT IS NOW (decision 21).
+
+    The integers of a class are established once -- the first time the constructor counts
+    it -- and kept; what the frontier term reads every step, the aligned edges `VBM_al`,
+    `CBM_al` (the projector windows) and the density placement, is a property of the head
+    and moves as the head trains (the Stage B recipe opens the pristine gap from 0.2 eV at
+    the Harrison initialisation to 2.4 eV). So the trainer refreshes the alignment every
+    epoch from a fresh construction over the same frames: alignment fields are taken from
+    the fresh table for every class; a class the old table left uncounted adopts the fresh
+    count when there is one; a class already counted keeps its integers, and a fresh count
+    that disagrees is logged as a failed invariance (never adopted). Returns a summary.
+    """
+    old = getattr(model, "composition_classes", None)
+    if not old or not old.get("classes"):
+        return {"built": True, "table": ensure_class_table(model, frames, device=device, log=log)}
+    if device is None:
+        device = next(model.parameters()).device
+    fresh = build_class_table(model, frames, device=device, log=False)
+    summary: Dict[str, Any] = {"adopted": [], "disagree": [], "still_uncounted": [],
+                               "refreshed": []}
+    for key, new in fresh["classes"].items():
+        rec = old["classes"].get(key)
+        if rec is None:
+            old["classes"][key] = new
+            summary["adopted"].append(key)
+            continue
+        for f in ALIGNMENT_FIELDS:
+            rec[f] = new.get(f)
+        rec["tiling"], rec["perm"], rec["delta"] = new.get("tiling"), new.get("perm"), new.get("delta")
+        old_counted = rec.get("tier") is not None and not rec.get("ambiguous", True)
+        new_counted = new.get("tier") is not None and not new.get("ambiguous", True)
+        if not old_counted and new_counted:
+            for f in INTEGER_FIELDS:
+                rec[f] = new.get(f)
+            summary["adopted"].append(key)
+        elif not old_counted:
+            rec["reason"] = new.get("reason", rec.get("reason"))
+            summary["still_uncounted"].append(key)
+        elif new_counted and (tuple(new["n_e"]), tuple(new["n_h"]), int(new["q_core"])) != (
+                tuple(rec["n_e"]), tuple(rec["n_h"]), int(rec["q_core"])):
+            summary["disagree"].append((key, (rec["n_e"], rec["n_h"], rec["q_core"]),
+                                        (new["n_e"], new["n_h"], new["q_core"])))
+        else:
+            summary["refreshed"].append(key)
+    for k in ("delta", "window", "smearing_width", "pristine_key"):
+        old[k] = fresh[k]
+    if log:
+        edges = {k: (round(r["vbm_al"], 3), round(r["cbm_al"], 3))
+                 for k, r in old["classes"].items()}
+        logging.info("Composition classes refreshed: edges %s; adopted %s; still uncounted %s",
+                     edges, summary["adopted"], summary["still_uncounted"])
+        for key, was, now in summary["disagree"]:
+            logging.warning("Composition class %s: the refreshed head counts %s but the "
+                            "cached integers are %s -- a failed invariance; the cached "
+                            "integers are kept", key, now, was)
+    summary["table"] = old
+    return summary
+
+
 def species_charges(model) -> Optional[torch.Tensor]:
     """`Z0` per species in the model's own order (the Madelung baseline), or None when the
     model carries no static charges -- then no static density exists."""

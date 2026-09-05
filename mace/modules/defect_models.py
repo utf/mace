@@ -1456,14 +1456,15 @@ class MACEDefect(ScaleShiftMACE):
                 fr = frontier_energy(
                     self, entries_from_head(head_extras.get("frontier")), state,
                     s_ref, head_species, head_positions, head_cell, data["batch"],
-                    num_graphs, frontier_gauge, label="state")
+                    num_graphs, frontier_gauge, label="state", training=bool(training))
                 frontier = fr["energy"]
                 frontier_diag = fr
                 if not skip_reference:
                     fr_ref = frontier_energy(
                         self, entries_from_head(head_extras_ref.get("frontier")),
                         state_ref, s_ref, head_species, head_positions, head_cell,
-                        data["batch"], num_graphs, frontier_gauge, label="reference")
+                        data["batch"], num_graphs, frontier_gauge, label="reference",
+                        training=bool(training))
                     frontier_ref = fr_ref["energy"]
 
         # The correction at this frame's own counter is what the total energy carries;

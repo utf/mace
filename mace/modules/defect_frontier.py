@@ -136,8 +136,13 @@ def _composition_keys(node_species: torch.Tensor, batch: torch.Tensor, num_graph
 def frontier_energy(model, entries: Sequence[FrontierEntry], state, state_ref_spec,
                     node_species: torch.Tensor, positions: torch.Tensor, cell: torch.Tensor,
                     batch: torch.Tensor, num_graphs: int, gauge: str,
-                    label: str = "") -> Dict[str, Any]:
+                    label: str = "", training: bool = False) -> Dict[str, Any]:
     """`Phi_FF(S) - Phi_FF(S_ref)` per graph, `[B]`, with the per-graph diagnostics.
+
+    `training`: an uncounted class is a transient of the untrained head (decision 21) --
+    the class table is refreshed every epoch and the class is counted once the head has a
+    gap -- so in a training forward its graphs contribute an exact zero with a warning; in
+    evaluation an uncounted class is refused, as the plan says.
 
     `entries` are the head's per-graph records for THIS pass; `state` the pass's state batch;
     `state_ref_spec` the model's reference state, which decides per graph whether the term
@@ -151,7 +156,7 @@ def frontier_energy(model, entries: Sequence[FrontierEntry], state, state_ref_sp
     out: Dict[str, Any] = {"energy": zeros, "w": sentinel.clone(), "p": sentinel.clone(),
                            "q_F": sentinel.clone(), "w_ref": sentinel.clone(),
                            "min_weight": sentinel.clone(), "evaluated": 0}
-    off_reference = ~state.is_reference(state_ref_spec)
+    off_reference = (~state.is_reference(state_ref_spec)).clone()
     if gauge == "isolated" or not bool(off_reference.any()):
         # Isolated gauge: no image part, identically. All at reference: the difference is
         # an exact zero with no graph, which is what the bit-identity at S_ref needs.
@@ -181,6 +186,12 @@ def frontier_energy(model, entries: Sequence[FrontierEntry], state, state_ref_sp
             charges_ref.append(torch.zeros(n_g, device=device, dtype=dtype))
             continue
         record: ClassRecord = lookup_class(table, _numbers_from_key(keys[g]))
+        if training and not record.counted:
+            _warn_uncounted(record)
+            charges_now.append(torch.zeros(n_g, device=device, dtype=dtype))
+            charges_ref.append(torch.zeros(n_g, device=device, dtype=dtype))
+            off_reference[g] = False
+            continue
         n_e, n_h, q_f = frame_counts(record, state, g)
         edges = (float(record.vbm_al), float(record.cbm_al), delta, delta_s)
         entry = entries[g]
@@ -218,6 +229,20 @@ def frontier_energy(model, entries: Sequence[FrontierEntry], state, state_ref_sp
         weights = list(w_now[g]["weights"].values()) + list(w_ref[g]["weights"].values())
         out["min_weight"][g] = min(weights) if weights else NOT_COMPUTED
     return out
+
+
+_WARNED: set = set()
+
+
+def _warn_uncounted(record: ClassRecord) -> None:
+    """Once per (class, reason): the training-time zero is logged, never silent."""
+    key = (record.key, record.reason)
+    if key in _WARNED:
+        return
+    _WARNED.add(key)
+    logging.warning("frontier term: class %s is uncounted (%s); its graphs contribute ZERO "
+                    "in this training forward until the epoch refresh counts it (decision "
+                    "21). Evaluation refuses the class.", record.key, record.reason)
 
 
 def _numbers_from_key(key: str) -> List[int]:
