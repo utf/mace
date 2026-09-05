@@ -1039,6 +1039,15 @@ class MACEDefect(ScaleShiftMACE):
         policy_key = getattr(self, "occupation_policy", "count_fill")
         state = StateBatch.from_counts(data["carrier_counts"].view(num_graphs, -1),
                                        policy_key)
+        if cache_hit and (compute_stress or compute_virials):
+            # The cache holds the base energy, forces and later-block readouts -- not the
+            # base virial. A cached forward asked for stress would return the head's
+            # contribution alone as if it were the total (measured: the whole base stress,
+            # 1e-2 eV/A^3, missing). Training never requests stress (the loss weight is
+            # zero; the data carry no stress labels); evaluation runs uncached.
+            raise ValueError(
+                "the base cache cannot supply a stress: run the forward uncached (drop "
+                "`frame_key` from the batch) when compute_stress or compute_virials is set")
         if cache_hit:
             # Keyed by the state as well as the geometry (section 3): a frame requested
             # under a state it was not cached with is a miss that raises.
@@ -1201,9 +1210,26 @@ class MACEDefect(ScaleShiftMACE):
         # The head sees the geometry in its own dtype through a DIFFERENTIABLE cast; the
         # gradient leaf stays `positions`, whatever the data dtype. Rebinding the name to the
         # cast copy made every force derivative below blind to the trunk on float32 batches.
-        head_positions = (positions if positions.dtype == head_dtype
-                          else positions.to(head_dtype))
-        head_cell = data["cell"].to(head_dtype)
+        # ... and the DISPLACED positions, not the leaf: `prepare_graph` writes the
+        # displaced copy back into `data["positions"]` (the trunk's edge vectors are built
+        # from it) but returns the undisplaced leaf as `ctx.positions`. Every Ewald sum and
+        # the Madelung shift read this tensor, so with the leaf their stress lost the
+        # positions' strain dependence (the harness's band-stress floor of 6e-4 eV/A^3,
+        # which vanished when the Madelung positions were held fixed on both sides).
+        # Forces are unaffected: the displaced copy is the leaf plus a zero-valued term.
+        head_positions = (data["positions"] if data["positions"].dtype == head_dtype
+                          else data["positions"].to(head_dtype))
+        # STAGE 1 (plan v8 section 4): the cell the electrostatic terms see is the DISPLACED
+        # one. `prepare_graph` applies the symmetric displacement to the positions and the
+        # edge shifts but hands back `data["cell"]` untouched; every Ewald sum and the
+        # Madelung shift then read a cell that does not move under strain, and their stress
+        # is missing exactly that derivative (the harness's `missing_derivative` on the band
+        # and lr_carrier stress). `get_outputs` still divides by the undisplaced volume,
+        # which is the convention its virial expects.
+        sym = 0.5 * (displacement + displacement.transpose(-1, -2))
+        cell_displaced = (cell.view(-1, 3, 3)
+                          + torch.matmul(cell.view(-1, 3, 3), sym)).view(-1, 3)
+        head_cell = cell_displaced.to(head_dtype)
         head_lengths = head_lengths.to(head_dtype)
         head_vectors = head_vectors.to(head_dtype)
 

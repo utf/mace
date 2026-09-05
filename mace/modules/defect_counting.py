@@ -998,10 +998,14 @@ class CountingHead(nn.Module):
         # Section 2.1: which graphs are NOT at the reference state, by physical key. This
         # is what decides whether a density response exists to be built.
         off_reference = ~state.is_reference(self.s_ref())
-        # Same detach boundary as V3 and Stages 1-2: no head term carries gradient into the
-        # trunk under any run configuration. Done once at entry so a term added later cannot
-        # reconnect it -- there is no attached descriptor in scope below.
-        node_feats = node_feats.detach()
+        # STAGE 1 (plan v8 section 4, "no detached quantity anywhere"): the features are
+        # NOT detached. Until Stage 1 the head cut its gradient into the trunk here (the V3
+        # boundary), which also cut the POSITION dependence of the on-site levels and the
+        # feature-modulated hoppings out of the head's forces -- the h-independent floor of
+        # 3.4e-2 / 7.4e-2 eV/A the harness named on the band term of charged frames. What
+        # reaches the trunk's PARAMETERS through this path is decided by the run's trainable
+        # mask (head-only runs freeze the trunk) and by the base cache's cacheability check,
+        # not by a detach in the physics.
         device, dtype = node_feats.device, node_feats.dtype
         n_nodes = int(node_feats.shape[0])
 

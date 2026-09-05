@@ -1,0 +1,1758 @@
+{
+ "base_cache": {
+  "note": "analytic forces from the cached forward (the training forward), numerical derivative of the full energy; per-term 'base' is a constant under the cache (its force is the cached one, seen in assembled_model); no strain under the cache",
+  "summary": [
+   {
+    "fit": {
+     "A": 0.0,
+     "epsilon": 0.0,
+     "floor": 0.0,
+     "h_at_min": 0.01,
+     "max_error": 0.0,
+     "min_error": 0.0
+    },
+    "frame": "charged_ordinary",
+    "gauge": "periodic",
+    "kind": "force",
+    "status": "pass",
+    "term": "lr_host",
+    "tol": 0.0001
+   },
+   {
+    "fit": {
+     "A": 1.150933718089371,
+     "epsilon": 0.0,
+     "floor": 4.6586777594599514e-05,
+     "h_at_min": 0.0003,
+     "max_error": 0.00015646412828243528,
+     "min_error": 1.1658040518953972e-06
+    },
+    "frame": "charged_ordinary",
+    "gauge": "periodic",
+    "kind": "force",
+    "status": "pass",
+    "term": "band",
+    "tol": 0.0001
+   },
+   {
+    "fit": {
+     "A": 0.13938365834170735,
+     "epsilon": 1.5218804366384008e-11,
+     "floor": 0.009445985074466198,
+     "h_at_min": 0.0001,
+     "max_error": 0.009459934097725982,
+     "min_error": 0.009446112051795947
+    },
+    "frame": "charged_ordinary",
+    "gauge": "periodic",
+    "kind": "force",
+    "status": "missing_derivative",
+    "term": "lr_carrier",
+    "tol": 0.0001
+   },
+   {
+    "fit": {
+     "A": 1.4617318228284713,
+     "epsilon": 0.0,
+     "floor": 0.5479843737015367,
+     "h_at_min": 0.0001,
+     "max_error": 0.5481252244585081,
+     "min_error": 0.5479400558477524
+    },
+    "frame": "charged_ordinary",
+    "gauge": "periodic",
+    "kind": "force",
+    "status": "missing_derivative",
+    "term": "assembled",
+    "tol": 0.0001
+   },
+   {
+    "fit": {
+     "A": 0.3179778434010657,
+     "epsilon": 2.514224424233596e-10,
+     "floor": 0.009444511034607956,
+     "h_at_min": 0.001,
+     "max_error": 0.009476462154143342,
+     "min_error": 0.009445875989431265
+    },
+    "frame": "charged_ordinary",
+    "gauge": "periodic",
+    "kind": "force",
+    "status": "missing_derivative",
+    "term": "assembled_model",
+    "tol": 0.0001
+   },
+   {
+    "fit": {
+     "A": 0.0,
+     "epsilon": 0.0,
+     "floor": 0.0,
+     "h_at_min": 0.01,
+     "max_error": 0.0,
+     "min_error": 0.0
+    },
+    "frame": "charged_crossing",
+    "gauge": "periodic",
+    "kind": "force",
+    "status": "pass",
+    "term": "lr_host",
+    "tol": 0.0001
+   },
+   {
+    "fit": {
+     "A": 0.6569316435025443,
+     "epsilon": 1.1176397466953297e-09,
+     "floor": 2.900770592139803e-06,
+     "h_at_min": 0.001,
+     "max_error": 6.82604383081091e-05,
+     "min_error": 1.1695466719044423e-06
+    },
+    "frame": "charged_crossing",
+    "gauge": "periodic",
+    "kind": "force",
+    "status": "pass",
+    "term": "band",
+    "tol": 0.0001
+   },
+   {
+    "fit": {
+     "A": 0.08599168489833006,
+     "epsilon": 0.0,
+     "floor": 0.014949981037437408,
+     "h_at_min": 0.0001,
+     "max_error": 0.014958579809035356,
+     "min_error": 0.014949973022948055
+    },
+    "frame": "charged_crossing",
+    "gauge": "periodic",
+    "kind": "force",
+    "status": "missing_derivative",
+    "term": "lr_carrier",
+    "tol": 0.0001
+   },
+   {
+    "fit": {
+     "A": 1.0378443738639695,
+     "epsilon": 1.1210883665402897e-09,
+     "floor": 0.5478254324195477,
+     "h_at_min": 0.0003,
+     "max_error": 0.5479294867417902,
+     "min_error": 0.5478292428705124
+    },
+    "frame": "charged_crossing",
+    "gauge": "periodic",
+    "kind": "force",
+    "status": "missing_derivative",
+    "term": "assembled",
+    "tol": 0.0001
+   },
+   {
+    "fit": {
+     "A": 1.9288110701470824,
+     "epsilon": 0.0,
+     "floor": 0.014949076959079051,
+     "h_at_min": 0.0001,
+     "max_error": 0.015141900761830834,
+     "min_error": 0.014947068357754029
+    },
+    "frame": "charged_crossing",
+    "gauge": "periodic",
+    "kind": "force",
+    "status": "missing_derivative",
+    "term": "assembled_model",
+    "tol": 0.0001
+   }
+  ]
+ },
+ "force_tol": 0.0001,
+ "gaps": [
+  0.15107309408108893,
+  0.17678729333126775,
+  0.2100230739504214,
+  0.14421713525083568,
+  0.21847893412053132,
+  0.06461292901896076,
+  0.2135335259313882,
+  0.1400261122031834,
+  0.16804173481818996,
+  0.20087202582982666,
+  0.22094326598925118,
+  0.09469179855812371,
+  0.11544369762952478,
+  0.1201361433642596,
+  0.13587710363922945,
+  0.12564887658043133,
+  0.16110729547838254,
+  0.11480147513597849,
+  0.2264840076745518,
+  0.2046485202768631,
+  0.04786671008537269,
+  0.1452025893226363,
+  0.22170758191478868,
+  0.17142148271671243
+ ],
+ "git_sha": "08d4747f25f56e7ab854779eb775d2628a546b5c",
+ "h_values": [
+  0.01,
+  0.003,
+  0.001,
+  0.0003,
+  0.0001
+ ],
+ "model": "/home/alex/runs/arma_models/arma_s1.model",
+ "precision_policy": "uniform float64",
+ "selection": {
+  "in_projector_window": [],
+  "near_crossing": [
+   20
+  ],
+  "ordinary": [
+   16
+  ]
+ },
+ "strains": [
+  0.001,
+  -0.001,
+  0.0003,
+  -0.0003
+ ],
+ "stress_tol": 1e-05,
+ "summary": [
+  {
+   "fit": {
+    "A": 0.30939996212868826,
+    "epsilon": 0.0,
+    "floor": 4.011048690229878e-10,
+    "h_at_min": 0.0001,
+    "max_error": 3.094035734929612e-05,
+    "min_error": 3.2896860790998517e-09
+   },
+   "frame": "charged_ordinary",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "pass",
+   "term": "base",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 0.0,
+    "floor": 0.0,
+    "h_at_min": 0.01,
+    "max_error": 0.0,
+    "min_error": 0.0
+   },
+   "frame": "charged_ordinary",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "pass",
+   "term": "lr_host",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 1.150933718089371,
+    "epsilon": 0.0,
+    "floor": 4.6586777594599514e-05,
+    "h_at_min": 0.0003,
+    "max_error": 0.00015646412828243528,
+    "min_error": 1.1658040518953972e-06
+   },
+   "frame": "charged_ordinary",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "pass",
+   "term": "band",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.13938365834170735,
+    "epsilon": 1.5218804366384008e-11,
+    "floor": 0.009445985074466198,
+    "h_at_min": 0.0001,
+    "max_error": 0.009459934097725982,
+    "min_error": 0.009446112051795947
+   },
+   "frame": "charged_ordinary",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "missing_derivative",
+   "term": "lr_carrier",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.31797784340107826,
+    "epsilon": 2.514224424232661e-10,
+    "floor": 0.009444511034608081,
+    "h_at_min": 0.001,
+    "max_error": 0.009476462154143467,
+    "min_error": 0.00944587598943139
+   },
+   "frame": "charged_ordinary",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "missing_derivative",
+   "term": "assembled",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.31797784340106716,
+    "epsilon": 2.5142244242334886e-10,
+    "floor": 0.00944451103460822,
+    "h_at_min": 0.001,
+    "max_error": 0.009476462154143606,
+    "min_error": 0.00944587598943153
+   },
+   "frame": "charged_ordinary",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "missing_derivative",
+   "term": "assembled_model",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "max_error": 5.716385757907616e-07,
+    "min_error": 5.144716758859191e-08,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_ordinary",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "pass",
+   "term": "base",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 0.0,
+    "min_error": 0.0,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_ordinary",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "pass",
+   "term": "lr_host",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 1.0667992016095583e-05,
+    "min_error": 3.3511416486369005e-06,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_ordinary",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "pass",
+   "term": "band",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 5.021361088337629e-05,
+    "min_error": 4.9612404515914125e-05,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_ordinary",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "missing_derivative",
+   "term": "lr_carrier",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 5.3242396266996866e-05,
+    "min_error": 5.020197584736791e-05,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_ordinary",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "missing_derivative",
+   "term": "assembled",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 5.3242396267000336e-05,
+    "min_error": 5.020197584737138e-05,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_ordinary",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "missing_derivative",
+   "term": "assembled_model",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "A": 0.30939996212868826,
+    "epsilon": 0.0,
+    "floor": 4.011048690229878e-10,
+    "h_at_min": 0.0001,
+    "max_error": 3.094035734929612e-05,
+    "min_error": 3.2896860790998517e-09
+   },
+   "frame": "charged_ordinary",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "pass",
+   "term": "base",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 0.0,
+    "floor": 0.0,
+    "h_at_min": 0.01,
+    "max_error": 0.0,
+    "min_error": 0.0
+   },
+   "frame": "charged_ordinary",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "pass",
+   "term": "lr_host",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 1.150933718089371,
+    "epsilon": 0.0,
+    "floor": 4.6586777594599514e-05,
+    "h_at_min": 0.0003,
+    "max_error": 0.00015646412828243528,
+    "min_error": 1.1658040518953972e-06
+   },
+   "frame": "charged_ordinary",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "pass",
+   "term": "band",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 1.3097342886853386e-10,
+    "floor": 0.0021542307277340154,
+    "h_at_min": 0.003,
+    "max_error": 0.002155288834585781,
+    "min_error": 0.0021527419059733243
+   },
+   "frame": "charged_ordinary",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "missing_derivative",
+   "term": "lr_carrier",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 5.6724561869395015e-09,
+    "floor": 0.0021104837634337804,
+    "h_at_min": 0.01,
+    "max_error": 0.0021564874176888127,
+    "min_error": 0.0019654839522004197
+   },
+   "frame": "charged_ordinary",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "missing_derivative",
+   "term": "assembled",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 5.672456186939516e-09,
+    "floor": 0.0021104837634338914,
+    "h_at_min": 0.01,
+    "max_error": 0.0021564874176889237,
+    "min_error": 0.0019654839522005307
+   },
+   "frame": "charged_ordinary",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "missing_derivative",
+   "term": "assembled_model",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "max_error": 5.716385757907616e-07,
+    "min_error": 5.144716758859191e-08,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_ordinary",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "pass",
+   "term": "base",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 0.0,
+    "min_error": 0.0,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_ordinary",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "pass",
+   "term": "lr_host",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 1.0667992016095583e-05,
+    "min_error": 3.3511416486369005e-06,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_ordinary",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "pass",
+   "term": "band",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 1.6140287636030206e-05,
+    "min_error": 1.6034967313170213e-05,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_ordinary",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "missing_derivative",
+   "term": "lr_carrier",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 2.4609614947991923e-05,
+    "min_error": 1.966495906298958e-05,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_ordinary",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "missing_derivative",
+   "term": "assembled",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 2.4609614947995392e-05,
+    "min_error": 1.966495906298958e-05,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_ordinary",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "missing_derivative",
+   "term": "assembled_model",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "A": 1.5414366286689745,
+    "epsilon": 0.0,
+    "floor": 6.467840824972732e-10,
+    "h_at_min": 0.0001,
+    "max_error": 0.00015414424257642612,
+    "min_error": 1.5233642902678923e-08
+   },
+   "frame": "charged_crossing",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "pass",
+   "term": "base",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 0.0,
+    "floor": 0.0,
+    "h_at_min": 0.01,
+    "max_error": 0.0,
+    "min_error": 0.0
+   },
+   "frame": "charged_crossing",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "pass",
+   "term": "lr_host",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.6569316435025443,
+    "epsilon": 1.1176397466953297e-09,
+    "floor": 2.900770592139803e-06,
+    "h_at_min": 0.001,
+    "max_error": 6.82604383081091e-05,
+    "min_error": 1.1695466719044423e-06
+   },
+   "frame": "charged_crossing",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "pass",
+   "term": "band",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.08599168489833006,
+    "epsilon": 0.0,
+    "floor": 0.014949981037437408,
+    "h_at_min": 0.0001,
+    "max_error": 0.014958579809035356,
+    "min_error": 0.014949973022948055
+   },
+   "frame": "charged_crossing",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "missing_derivative",
+   "term": "lr_carrier",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 1.928811070147019,
+    "epsilon": 0.0,
+    "floor": 0.014949076959079412,
+    "h_at_min": 0.0001,
+    "max_error": 0.015141900761831195,
+    "min_error": 0.01494706835775439
+   },
+   "frame": "charged_crossing",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "missing_derivative",
+   "term": "assembled",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 1.9288110701470909,
+    "epsilon": 0.0,
+    "floor": 0.014949076959079136,
+    "h_at_min": 0.0001,
+    "max_error": 0.015141900761830918,
+    "min_error": 0.014947068357754112
+   },
+   "frame": "charged_crossing",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "missing_derivative",
+   "term": "assembled_model",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "max_error": 6.133458184121032e-07,
+    "min_error": 5.5200717268000243e-08,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_crossing",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "pass",
+   "term": "base",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 0.0,
+    "min_error": 0.0,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_crossing",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "pass",
+   "term": "lr_host",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 3.059326273955293e-05,
+    "min_error": 1.4528305817510401e-07,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_crossing",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "pass",
+   "term": "band",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 2.6642325969092457e-05,
+    "min_error": 2.6563470138500894e-05,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_crossing",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "missing_derivative",
+   "term": "lr_carrier",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 3.4574207358838865e-05,
+    "min_error": 2.662223704458927e-05,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_crossing",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "missing_derivative",
+   "term": "assembled",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 3.457420735884071e-05,
+    "min_error": 2.6622237044594474e-05,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_crossing",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "missing_derivative",
+   "term": "assembled_model",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "A": 1.5414366286689745,
+    "epsilon": 0.0,
+    "floor": 6.467840824972732e-10,
+    "h_at_min": 0.0001,
+    "max_error": 0.00015414424257642612,
+    "min_error": 1.5233642902678923e-08
+   },
+   "frame": "charged_crossing",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "pass",
+   "term": "base",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 0.0,
+    "floor": 0.0,
+    "h_at_min": 0.01,
+    "max_error": 0.0,
+    "min_error": 0.0
+   },
+   "frame": "charged_crossing",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "pass",
+   "term": "lr_host",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.6569316435025443,
+    "epsilon": 1.1176397466953297e-09,
+    "floor": 2.900770592139803e-06,
+    "h_at_min": 0.001,
+    "max_error": 6.82604383081091e-05,
+    "min_error": 1.1695466719044423e-06
+   },
+   "frame": "charged_crossing",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "pass",
+   "term": "band",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.024357243012876506,
+    "epsilon": 0.0,
+    "floor": 0.021024317943717567,
+    "h_at_min": 0.0001,
+    "max_error": 0.0210267536072669,
+    "min_error": 0.021024311473657672
+   },
+   "frame": "charged_crossing",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "missing_derivative",
+   "term": "lr_carrier",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 1.6191990335864731e-09,
+    "floor": 0.02102316856584515,
+    "h_at_min": 0.01,
+    "max_error": 0.021039349924745043,
+    "min_error": 0.020892931631788347
+   },
+   "frame": "charged_crossing",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "missing_derivative",
+   "term": "assembled",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 1.6191990335860825e-09,
+    "floor": 0.021023168565845185,
+    "h_at_min": 0.01,
+    "max_error": 0.02103934992474507,
+    "min_error": 0.020892931631788375
+   },
+   "frame": "charged_crossing",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "missing_derivative",
+   "term": "assembled_model",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "max_error": 6.133458184121032e-07,
+    "min_error": 5.5200717268000243e-08,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_crossing",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "pass",
+   "term": "base",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 0.0,
+    "min_error": 0.0,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_crossing",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "pass",
+   "term": "lr_host",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 3.059326273955293e-05,
+    "min_error": 1.4528305817510401e-07,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_crossing",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "pass",
+   "term": "band",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 1.6363394903015232e-05,
+    "min_error": 1.598319071980041e-05,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_crossing",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "missing_derivative",
+   "term": "lr_carrier",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 4.574054008680455e-05,
+    "min_error": 1.6242005920359334e-05,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_crossing",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "missing_derivative",
+   "term": "assembled",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 4.574054008680856e-05,
+    "min_error": 1.624200592036454e-05,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "charged_crossing",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "missing_derivative",
+   "term": "assembled_model",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "A": 0.5868304654389189,
+    "epsilon": 5.7643875923062524e-15,
+    "floor": 0.0,
+    "h_at_min": 0.0001,
+    "max_error": 5.8682922376207536e-05,
+    "min_error": 5.7376651207974305e-09
+   },
+   "frame": "vcl0_79",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "pass",
+   "term": "base",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 0.0,
+    "floor": 0.0,
+    "h_at_min": 0.01,
+    "max_error": 0.0,
+    "min_error": 0.0
+   },
+   "frame": "vcl0_79",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "pass",
+   "term": "lr_host",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 0.0,
+    "floor": 2.4893405784389784e-16,
+    "h_at_min": 0.01,
+    "max_error": 2.4893405784389784e-16,
+    "min_error": 2.4893405784389784e-16
+   },
+   "frame": "vcl0_79",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "pass",
+   "term": "band",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 0.0,
+    "floor": 0.0,
+    "h_at_min": 0.01,
+    "max_error": 0.0,
+    "min_error": 0.0
+   },
+   "frame": "vcl0_79",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "pass",
+   "term": "lr_carrier",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.5868304654389189,
+    "epsilon": 5.7643875923062524e-15,
+    "floor": 0.0,
+    "h_at_min": 0.0001,
+    "max_error": 5.868292237598549e-05,
+    "min_error": 5.737664898752826e-09
+   },
+   "frame": "vcl0_79",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "pass",
+   "term": "assembled",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.5868304654389189,
+    "epsilon": 5.7643875923062524e-15,
+    "floor": 0.0,
+    "h_at_min": 0.0001,
+    "max_error": 5.868292237626305e-05,
+    "min_error": 5.737665176308582e-09
+   },
+   "frame": "vcl0_79",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "pass",
+   "term": "assembled_model",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "max_error": 5.545623708753944e-07,
+    "min_error": 4.991030772352745e-08,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "vcl0_79",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "pass",
+   "term": "base",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 0.0,
+    "min_error": 0.0,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "vcl0_79",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "pass",
+   "term": "lr_host",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 3.490801348075964e-18,
+    "min_error": 3.490801348075964e-18,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "vcl0_79",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "pass",
+   "term": "band",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 0.0,
+    "min_error": 0.0,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "vcl0_79",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "pass",
+   "term": "lr_carrier",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 5.545623708753944e-07,
+    "min_error": 4.991030772352745e-08,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "vcl0_79",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "pass",
+   "term": "assembled",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 5.545623708788638e-07,
+    "min_error": 4.9910307726996894e-08,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "vcl0_79",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "pass",
+   "term": "assembled_model",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "A": 0.5868304654389189,
+    "epsilon": 5.7643875923062524e-15,
+    "floor": 0.0,
+    "h_at_min": 0.0001,
+    "max_error": 5.8682922376207536e-05,
+    "min_error": 5.7376651207974305e-09
+   },
+   "frame": "vcl0_79",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "pass",
+   "term": "base",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 0.0,
+    "floor": 0.0,
+    "h_at_min": 0.01,
+    "max_error": 0.0,
+    "min_error": 0.0
+   },
+   "frame": "vcl0_79",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "pass",
+   "term": "lr_host",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 0.0,
+    "floor": 2.4893405784389784e-16,
+    "h_at_min": 0.01,
+    "max_error": 2.4893405784389784e-16,
+    "min_error": 2.4893405784389784e-16
+   },
+   "frame": "vcl0_79",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "pass",
+   "term": "band",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 0.0,
+    "floor": 0.0,
+    "h_at_min": 0.01,
+    "max_error": 0.0,
+    "min_error": 0.0
+   },
+   "frame": "vcl0_79",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "pass",
+   "term": "lr_carrier",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.5868304654389189,
+    "epsilon": 5.7643875923062524e-15,
+    "floor": 0.0,
+    "h_at_min": 0.0001,
+    "max_error": 5.868292237598549e-05,
+    "min_error": 5.737664898752826e-09
+   },
+   "frame": "vcl0_79",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "pass",
+   "term": "assembled",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.5868304654389189,
+    "epsilon": 5.7643875923062524e-15,
+    "floor": 0.0,
+    "h_at_min": 0.0001,
+    "max_error": 5.868292237626305e-05,
+    "min_error": 5.737665176308582e-09
+   },
+   "frame": "vcl0_79",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "pass",
+   "term": "assembled_model",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "max_error": 5.545623708753944e-07,
+    "min_error": 4.991030772352745e-08,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "vcl0_79",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "pass",
+   "term": "base",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 0.0,
+    "min_error": 0.0,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "vcl0_79",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "pass",
+   "term": "lr_host",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 3.490801348075964e-18,
+    "min_error": 3.490801348075964e-18,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "vcl0_79",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "pass",
+   "term": "band",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 0.0,
+    "min_error": 0.0,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "vcl0_79",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "pass",
+   "term": "lr_carrier",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 5.545623708753944e-07,
+    "min_error": 4.991030772352745e-08,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "vcl0_79",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "pass",
+   "term": "assembled",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 5.545623708788638e-07,
+    "min_error": 4.9910307726996894e-08,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "vcl0_79",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "pass",
+   "term": "assembled_model",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "A": 1.5487662334482803,
+    "epsilon": 0.0,
+    "floor": 2.7003181515095236e-10,
+    "h_at_min": 0.0001,
+    "max_error": 0.00015487687025284025,
+    "min_error": 1.5431025124357234e-08
+   },
+   "frame": "pristine_80",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "pass",
+   "term": "base",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 0.0,
+    "floor": 0.0,
+    "h_at_min": 0.01,
+    "max_error": 0.0,
+    "min_error": 0.0
+   },
+   "frame": "pristine_80",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "pass",
+   "term": "lr_host",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 0.0,
+    "floor": 0.0,
+    "h_at_min": 0.01,
+    "max_error": 0.0,
+    "min_error": 0.0
+   },
+   "frame": "pristine_80",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "pass",
+   "term": "band",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 0.0,
+    "floor": 0.0,
+    "h_at_min": 0.01,
+    "max_error": 0.0,
+    "min_error": 0.0
+   },
+   "frame": "pristine_80",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "pass",
+   "term": "lr_carrier",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 1.5487662334482803,
+    "epsilon": 0.0,
+    "floor": 2.7003181515095236e-10,
+    "h_at_min": 0.0001,
+    "max_error": 0.00015487687025284025,
+    "min_error": 1.5431025124357234e-08
+   },
+   "frame": "pristine_80",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "pass",
+   "term": "assembled",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 1.5487662334482803,
+    "epsilon": 0.0,
+    "floor": 2.7003148208938117e-10,
+    "h_at_min": 0.0001,
+    "max_error": 0.00015487687025250718,
+    "min_error": 1.5431024791290326e-08
+   },
+   "frame": "pristine_80",
+   "gauge": "periodic",
+   "kind": "force",
+   "status": "pass",
+   "term": "assembled_model",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "max_error": 6.118716180721767e-07,
+    "min_error": 5.506803074997735e-08,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "pristine_80",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "pass",
+   "term": "base",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 0.0,
+    "min_error": 0.0,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "pristine_80",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "pass",
+   "term": "lr_host",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 0.0,
+    "min_error": 0.0,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "pristine_80",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "pass",
+   "term": "band",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 0.0,
+    "min_error": 0.0,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "pristine_80",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "pass",
+   "term": "lr_carrier",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 6.118716180721767e-07,
+    "min_error": 5.506803074997735e-08,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "pristine_80",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "pass",
+   "term": "assembled",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 6.118716180739114e-07,
+    "min_error": 5.506803075171207e-08,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "pristine_80",
+   "gauge": "periodic",
+   "kind": "stress",
+   "status": "pass",
+   "term": "assembled_model",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "A": 1.5487662334482803,
+    "epsilon": 0.0,
+    "floor": 2.7003181515095236e-10,
+    "h_at_min": 0.0001,
+    "max_error": 0.00015487687025284025,
+    "min_error": 1.5431025124357234e-08
+   },
+   "frame": "pristine_80",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "pass",
+   "term": "base",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 0.0,
+    "floor": 0.0,
+    "h_at_min": 0.01,
+    "max_error": 0.0,
+    "min_error": 0.0
+   },
+   "frame": "pristine_80",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "pass",
+   "term": "lr_host",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 0.0,
+    "floor": 0.0,
+    "h_at_min": 0.01,
+    "max_error": 0.0,
+    "min_error": 0.0
+   },
+   "frame": "pristine_80",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "pass",
+   "term": "band",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 0.0,
+    "epsilon": 0.0,
+    "floor": 0.0,
+    "h_at_min": 0.01,
+    "max_error": 0.0,
+    "min_error": 0.0
+   },
+   "frame": "pristine_80",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "pass",
+   "term": "lr_carrier",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 1.5487662334482803,
+    "epsilon": 0.0,
+    "floor": 2.7003181515095236e-10,
+    "h_at_min": 0.0001,
+    "max_error": 0.00015487687025284025,
+    "min_error": 1.5431025124357234e-08
+   },
+   "frame": "pristine_80",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "pass",
+   "term": "assembled",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "A": 1.5487662334482803,
+    "epsilon": 0.0,
+    "floor": 2.7003148208938117e-10,
+    "h_at_min": 0.0001,
+    "max_error": 0.00015487687025250718,
+    "min_error": 1.5431024791290326e-08
+   },
+   "frame": "pristine_80",
+   "gauge": "isolated",
+   "kind": "force",
+   "status": "pass",
+   "term": "assembled_model",
+   "tol": 0.0001
+  },
+  {
+   "fit": {
+    "max_error": 6.118716180721767e-07,
+    "min_error": 5.506803074997735e-08,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "pristine_80",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "pass",
+   "term": "base",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 0.0,
+    "min_error": 0.0,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "pristine_80",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "pass",
+   "term": "lr_host",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 0.0,
+    "min_error": 0.0,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "pristine_80",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "pass",
+   "term": "band",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 0.0,
+    "min_error": 0.0,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "pristine_80",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "pass",
+   "term": "lr_carrier",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 6.118716180721767e-07,
+    "min_error": 5.506803074997735e-08,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "pristine_80",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "pass",
+   "term": "assembled",
+   "tol": 1e-05
+  },
+  {
+   "fit": {
+    "max_error": 6.118716180739114e-07,
+    "min_error": 5.506803075171207e-08,
+    "strains": [
+     0.0003,
+     0.001
+    ]
+   },
+   "frame": "pristine_80",
+   "gauge": "isolated",
+   "kind": "stress",
+   "status": "pass",
+   "term": "assembled_model",
+   "tol": 1e-05
+  }
+ ]
+}

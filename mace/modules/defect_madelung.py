@@ -218,7 +218,13 @@ class MadelungOnSite(nn.Module):
         from mace.tools.scatter import scatter_mean
 
         species = node_species.long()
-        x = feats.detach()
+        # STAGE 1 (plan v8 section 4, "no detached quantity anywhere"): the features are not
+        # detached. With them detached the per-site charges' dependence on the geometry --
+        # through the features -- was cut out of the Madelung potential's analytic force
+        # while the numerical derivative kept it: the h-independent floor of 6e-2 eV/A on
+        # the band term of charged frames, which vanished when either the shift or the
+        # features were held fixed on both sides (the Stage 1.1 decomposition).
+        x = feats
         pre = self.site(x).squeeze(-1)
         pre_centre = self.site(centre.to(x.dtype)[species]).squeeze(-1)
         dev = float(self.site_zeta) * torch.tanh(pre - pre_centre)

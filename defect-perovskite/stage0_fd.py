@@ -83,14 +83,44 @@ def components_for(model, ctx, batch, n_random: int = 2, n_carrier: int = 2, see
     return [(int(i), int(rng.integers(3))) for i in picked]
 
 
+def _uncached(d):
+    d = dict(d)
+    d.pop("frame_key", None)
+    return d
+
+
 def run_frame(model, ctx, atoms, label, gauge, args):
     model.gauge = gauge
     batch = make_batch([atoms], ctx.cutoff)
+    if getattr(args, "base_cache", False):
+        # The cache the training forward would use for this frame, built from this model;
+        # the analytic pass hits it, the numerical pass is stripped of the key (full forward).
+        from mace.modules import defect_cache
+        from mace.tools import torch_geometric
+
+        from stage0_golden import Z_TABLE
+
+        from mace import data as mace_data
+        from mace.data.defects import prepare_defect_configurations
+
+        from stage0_golden import KEYSPEC
+
+        configs = [mace_data.config_from_atoms(atoms, key_specification=KEYSPEC)]
+        prepare_defect_configurations(configs)
+        atomic = [mace_data.AtomicData.from_config(c, z_table=Z_TABLE, cutoff=ctx.cutoff)
+                  for c in configs]
+        defect_cache.attach_frame_keys(atomic, z_table=Z_TABLE)
+        loader = torch_geometric.dataloader.DataLoader(atomic, batch_size=1, shuffle=False)
+        model.set_base_cache(defect_cache.build_base_cache(model, [loader], "cpu"))
+        batch = next(iter(loader))
     data = ctx.forward_dict(batch)
     comps = components_for(model, ctx, batch)
     t0 = time.time()
-    force = fd.force_check(model, data, comps, tol=args.force_tol)
-    strain = fd.strain_check(model, data, tol=args.stress_tol)
+    xf = _uncached if getattr(args, "base_cache", False) else None
+    force = fd.force_check(model, data, comps, tol=args.force_tol, numerical_transform=xf)
+    # No strain check under the cache: the cached forward refuses a stress (the cache holds
+    # no base virial), and training never asks for one.
+    strain = [] if xf is not None else fd.strain_check(model, data, tol=args.stress_tol)
     dt = time.time() - t0
     rows = []
     for r in force + strain:
@@ -110,6 +140,11 @@ def main(argv=None):
     p.add_argument("--force-tol", type=float, default=1e-4)
     p.add_argument("--stress-tol", type=float, default=1e-5)
     p.add_argument("--threads", type=int, default=8)
+    p.add_argument("--frames", default="charged_ordinary,charged_crossing,vcl0_79,pristine_80",
+                   help="comma-separated subset of the frame labels")
+    p.add_argument("--gauges", default="periodic,isolated")
+    p.add_argument("--base-cache", action="store_true",
+                   help="analytic forces from the cached forward, numerical from the full one")
     args = p.parse_args(argv)
     _assert_repo()
     torch.set_num_threads(args.threads)
@@ -130,8 +165,10 @@ def main(argv=None):
           f"{gaps[sel['near_crossing'][0]]:.3f} eV; projector-window frame: not applicable "
           "(Stage 0.9)")
     summary, detail = [], {}
+    wanted = [x for x in args.frames.split(",") if x]
+    chosen = {k: v for k, v in chosen.items() if k in wanted}
     for label, atoms in chosen.items():
-        for gauge in ("periodic", "isolated"):
+        for gauge in [g for g in args.gauges.split(",") if g]:
             rows, records, comps = run_frame(model, ctx, atoms, label, gauge, args)
             summary.extend(rows)
             detail[f"{label}/{gauge}"] = dict(components=comps, reports=records)
@@ -141,6 +178,7 @@ def main(argv=None):
         h_values=list(fd.H_VALUES), strains=list(fd.STRAINS), force_tol=args.force_tol,
         stress_tol=args.stress_tol, gaps=gaps, selection=sel,
         projector_window="not applicable until Stage 0.9",
+        base_cache=bool(getattr(args, "base_cache", False)),
         summary=summary, detail=detail), indent=1))
     print(f"written {out}")
 

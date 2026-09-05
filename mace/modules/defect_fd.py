@@ -136,6 +136,12 @@ def _analytic_forces(model, data: dict) -> Tuple[Dict[str, torch.Tensor], torch.
     energies = term_energies(model, out)
     forces = {}
     for name, e in energies.items():
+        # A term that is a CONSTANT in this forward (a cached base energy) has no graph to
+        # differentiate: its analytic per-term force is zero here, and what the model
+        # actually returns for it is in `assembled_model` (the cached forces).
+        if not e.requires_grad:
+            forces[name] = torch.zeros_like(d["positions"])
+            continue
         g = torch.autograd.grad(e.sum(), d["positions"], retain_graph=True,
                                 allow_unused=True)[0]
         forces[name] = (torch.zeros_like(d["positions"]) if g is None else -g).detach()
@@ -158,22 +164,32 @@ def sample_components(n_atoms: int, n_sample: int, seed: int = 0) -> List[Tuple[
 
 def force_check(model, data: dict, components: Sequence[Tuple[int, int]],
                 h_values: Sequence[float] = H_VALUES, tol: float = 1e-4,
-                terms: Optional[Sequence[str]] = None) -> List[TermReport]:
+                terms: Optional[Sequence[str]] = None,
+                numerical_transform=None) -> List[TermReport]:
     """Per-term and assembled force finite differences on `components` of one batch.
 
     `tol` is in eV/A. The assembled term is compared BOTH as the autograd of the reported
     total energy and as the model's own `forces` output (`assembled_model`), so a force
     the model assembles differently from the energy it reports is caught.
+
+    `numerical_transform`, when given, is applied to every displaced batch before its
+    energy is evaluated and NOT to the analytic pass: with a base cache attached, the
+    analytic forces come from the cached forward (the one training uses) while the numerical
+    derivative is taken of the full, uncached energy (the transform strips `frame_key`), so
+    the check asks whether the cached training force is the derivative of the physical
+    energy -- which a cache of later-block features cannot supply.
     """
     names = [t.name for t in registry(model)] + ["assembled"]
     if terms is not None:
         names = [n for n in names if n in set(terms)]
     analytic, model_forces = _analytic_forces(model, data)
     points: Dict[str, List[FDPoint]] = {n: [] for n in names + ["assembled_model"]}
+    xf = (lambda d: d) if numerical_transform is None else numerical_transform
     with torch.no_grad():
         for atom, comp in components:
-            plus = {h: _energies(model, _displaced(data, atom, comp, h)) for h in h_values}
-            minus = {h: _energies(model, _displaced(data, atom, comp, -h)) for h in h_values}
+            plus = {h: _energies(model, xf(_displaced(data, atom, comp, h))) for h in h_values}
+            minus = {h: _energies(model, xf(_displaced(data, atom, comp, -h)))
+                     for h in h_values}
             for name in names:
                 ana = float(analytic[name][atom, comp])
                 p = FDPoint(atom=atom, component=comp, analytic=ana)
@@ -223,8 +239,8 @@ def _strained(data: dict, strain: torch.Tensor) -> dict:
 
 
 def strain_check(model, data: dict, strains: Sequence[float] = STRAINS,
-                 tol: float = 1e-4, terms: Optional[Sequence[str]] = None
-                 ) -> List[TermReport]:
+                 tol: float = 1e-4, terms: Optional[Sequence[str]] = None,
+                 numerical_transform=None) -> List[TermReport]:
     """The analytic stress against a homogeneous strain of the geometry, per term.
 
     Only the assembled stress is a model output; per-term stresses are taken here as the
@@ -246,6 +262,9 @@ def strain_check(model, data: dict, strains: Sequence[float] = STRAINS,
     volume = torch.linalg.det(d["cell"].reshape(-1, 3, 3)).abs()
     analytic = {}
     for name, e in energies.items():
+        if not e.requires_grad:      # a cached constant; see _analytic_forces
+            analytic[name] = torch.zeros_like(disp)
+            continue
         g = torch.autograd.grad(e.sum(), disp, retain_graph=True, allow_unused=True)[0]
         analytic[name] = (torch.zeros_like(disp) if g is None else g).detach() / volume.reshape(-1, 1, 1)
     analytic["assembled_model"] = out["stress"].detach()
@@ -257,9 +276,10 @@ def strain_check(model, data: dict, strains: Sequence[float] = STRAINS,
             S = torch.zeros(3, 3, dtype=torch.float64)
             S[a, b] = S[b, a] = 1.0
             evals = {}
+            xf = (lambda x: x) if numerical_transform is None else numerical_transform
             for eps in magnitudes:
-                evals[eps] = (_energies(model, _strained(data, eps * S)),
-                              _energies(model, _strained(data, -eps * S)))
+                evals[eps] = (_energies(model, xf(_strained(data, eps * S))),
+                              _energies(model, xf(_strained(data, -eps * S))))
             for name in names + ["assembled_model"]:
                 key = "assembled" if name == "assembled_model" else name
                 p = FDPoint(atom=-1, component=3 * a + b,

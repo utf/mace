@@ -68,16 +68,13 @@ class TestForces:
             terms=["base"])}
         assert reports["base"].status == "pass", reports["base"].fit
 
-    def test_the_v6_band_force_omits_the_feature_path_and_the_harness_says_so(self):
-        """The counting head detaches the trunk features at entry, so `d(delta_sr)/dR`
-        lacks `dH/dh . dh/dR`; the numerical derivative has it. Section 7.2 calls this an
-        h-independent floor and section 2.5 forbids it ("no detached quantity anywhere").
-
-        On the small fixture the on-site channel's feature sensitivity is ~1e-6 eV/A and
-        the omission sits below tolerance -- which is a statement about the fixture, not
-        about the derivative. The channel's last layer is scaled up here so the omitted
-        piece is 5e-3 eV/A, and the verdict is then a floor with A = eps = 0: flat across a
-        factor of a hundred in h. Stage 1 removes the detach; this expectation flips there.
+    def test_the_band_force_carries_the_feature_path(self):
+        """STAGE 1 (plan v8 section 4): the counting head no longer detaches the trunk
+        features at entry, so `d(delta_sr)/dR` carries `dH/dh . dh/dR`, and so does the
+        Madelung per-site charge channel. At Stage 0 this test asserted the OMISSION (an
+        h-independent floor of 5e-3 eV/A once the on-site channel's last layer is scaled up
+        so the omitted piece is visible on the small fixture); the same amplification now
+        has to pass.
         """
         model = _model_no_lr()
         with torch.no_grad():
@@ -91,8 +88,22 @@ class TestForces:
         reports = {r.term: r for r in fd.force_check(
             model, data, components=[(0, 0), (7, 2), (21, 1)], tol=1e-5,
             terms=["band"])}
-        assert reports["band"].status == "missing_derivative", reports["band"].fit
-        assert reports["band"].fit["floor"] > 1e-3
+        assert reports["band"].status == "pass", reports["band"].fit
+        # ... and the feature path is not trivially small on this amplified fixture: with
+        # the features held fixed on the analytic side only, the omission is visible.
+        readouts = model.defect_feature_readouts
+        originals = [r.forward for r in readouts]
+        try:
+            for r, f in zip(readouts, originals):
+                r.forward = (lambda f: (lambda x: f(x).detach()))(f)
+            omitted = {r.term: r for r in fd.force_check(
+                model, data, components=[(0, 0), (7, 2), (21, 1)], tol=1e-5,
+                terms=["band"])}
+        finally:
+            for r, f in zip(readouts, originals):
+                r.forward = f
+        assert omitted["band"].status == "missing_derivative", omitted["band"].fit
+        assert omitted["band"].fit["floor"] > 1e-3
 
     def test_the_model_force_equals_the_autograd_of_its_reported_energy(self, setup):
         """`assembled_model` compares the model's `forces` output to the numerical
@@ -115,14 +126,15 @@ class TestStrain:
                                                       terms=["base"])}
         assert reports["base"].status == "pass", reports["base"].fit
 
-    def test_the_v6_band_stress_misses_the_cell_dependence_of_the_madelung_shift(self, setup):
-        """The forward hands the head `data["cell"]`, which the displacement machinery
-        never displaces, so the Madelung shift's cell derivative is absent from the
-        analytic stress while a strain of the geometry has it. Recorded here; Stage 1."""
+    def test_the_band_stress_carries_the_madelung_cell_and_position_dependence(self, setup):
+        """STAGE 1: the forward hands the head the DISPLACED cell and the DISPLACED
+        positions, so the Madelung shift's strain derivative is in the analytic stress. At
+        Stage 0 this test asserted the omission (`data["cell"]` undisplaced; `ctx.positions`
+        the undisplaced leaf)."""
         model, data = setup
         reports = {r.term: r for r in fd.strain_check(model, data, tol=1e-6,
                                                       terms=["band"])}
-        assert reports["band"].status != "pass", reports["band"].fit
+        assert reports["band"].status == "pass", reports["band"].fit
 
 
 def test_frame_selection_by_the_models_own_gap():
