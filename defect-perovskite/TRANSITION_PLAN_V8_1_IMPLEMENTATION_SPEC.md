@@ -101,7 +101,7 @@ Status: `todo` / `wip` / `done` / `blocked`. Keep this column current.
 
 | id | item | source | status |
 |---|---|---|---|
-| 1.1 | Rename to `H_class` / `H_fix` / `H_{B,S}`; no `state_id`, policy name or formal charge reaches `H_fix` | add §3.1 | todo |
+| 1.1 | Rename to `H_class` / `H_fix` / `H_{B,S}`; no `state_id`, policy name or formal charge reaches `H_fix` | add §3.1 | peer session (defect_counting.py / defect_models.py) |
 | 1.2 | `defect_gauge.py`: `μ_g(θ)` from frozen pristine projector, rank-normalised, spin-summed | add §3.1 | done |
 | 1.3 | Enforce registered orthonormal representation; `H − μ_g S` path for generalised eigenproblem; forbid `μ_g I` in nonorthogonal basis | add §3.1 | done |
 | 1.4 | Subtract same `μ_g` from all aligned spectral edges; assert pristine projector keeps its separating gap | add §3.1 | done |
@@ -111,10 +111,10 @@ Status: `todo` / `wip` / `done` / `blocked`. Keep this column current.
 | 1.8 | Signed-excess counts `d_σ`, `n_e,σ`, `n_h,σ`, `q_F`, `Q_core`; delete additive updates | add §3.3 | done |
 | 1.9 | `m_F(S)` computed and stored in the class/state record | add §3.3 | done |
 | 1.10 | Require `Q_formal(S_ref) = 0` on the production path; nonzero reference retained as algebra-only test | add §3.3 | done (module; production wiring in 1.1) |
-| 1.11 | Split constructor cache: Tier-1 verifier key vs Tier-2 anchor key; invariant vs target field partitions; field-wise cross-size predicate | add §3.5 | todo |
-| 1.12 | Migrate the existing 159-atom Tier-2 record into the anchor cache **only** if it reconstructs every key field and passes every Tier-2 gate | add §3.5 | todo |
-| 1.13 | Fix `q_raw` definition and its tests | add §4.1 | todo |
-| 1.14 | Extend every result cache key with geometry/cell, canonical state, checkpoint, constructor, boundary+potential-zero, occupation/smearing, solver-regime and (when `G_∞` is called) lift/support fingerprints | add §3.5, §6.3 | todo |
+| 1.11 | Split constructor cache: Tier-1 verifier key vs Tier-2 anchor key; invariant vs target field partitions; field-wise cross-size predicate | add §3.5 | done — `defect_constructor_cache.py` |
+| 1.12 | Migrate the existing 159-atom Tier-2 record into the anchor cache **only** if it reconstructs every key field and passes every Tier-2 gate | add §3.5 | blocked — needs the stored 159-atom Tier-2 raw log to reconstruct key fields |
+| 1.13 | Fix `q_raw` definition and its tests | add §4.1 | done — shorthand shown FALSE here, see D4 |
+| 1.14 | Extend every result cache key with geometry/cell, canonical state, checkpoint, constructor, boundary+potential-zero, occupation/smearing, solver-regime and (when `G_∞` is called) lift/support fingerprints | add §3.5, §6.3 | peer session (defect_cache.py) |
 | 1.15 | Tests: electron↔hole crossings; gauge shift invariance (`H → H + aI`); Tier-1 routing test asserting no Tier-2 eigensolve after Tier-1 passes | add §11.1 | wip (gauge shift + crossings done; routing test owed) |
 
 ### WP2 — Stage 1 energy-zero correction (blocking before any Stage-1 result is interpreted)
@@ -274,3 +274,22 @@ positive and negative parts of one signed excess), rather than re-derived from
 chain is consistent end to end; deriving from `(m_vb, n_sigma)` instead would let a record
 whose counts were set independently disagree with itself, and legacy records would restore
 to different integers than they were written with.
+
+### D4 — the v8 `q_raw = sum_i Z_i` shorthand is false in this codebase
+
+The addendum asked only that the pristine integral be *declared* rather than assumed.
+Declaring it showed it is not zero: the tiled pristine baselines integrate to about
+**+0.65 e** on the V_Cl frames. So `sum_i Z_i` and `q_raw` differ by of order one electron,
+and any code reaching for the present-atom sum alone is wrong by that much. The
+implementation already used the difference of integrals, so nothing numerical changed; the
+test now asserts the pristine integral is **non**-zero so the shorthand cannot quietly
+become true and then quietly break again.
+
+### D5 — cross-size cache reuse is field-wise, never a single hash
+
+A single fingerprint over the whole constructor record makes every larger cell a cache
+miss, which defeats the transport equation. `compatible_across_sizes` therefore requires
+the invariant partition to match exactly while the target partition need only satisfy the
+registered *relations* (same composition difference, pristine rank scaling with the tiling
+volume). Exact geometry/cell/composition hashes are expected to differ between sizes and
+are never compared for equality.
