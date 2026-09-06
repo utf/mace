@@ -147,8 +147,21 @@ class TestStatic:
             out = dc.frame_static_densities(harrison_model, rec, frames["pristine"], charges,
                                             pos, cell)
             assert float(out["q_raw"]) == pytest.approx(-z_cl, abs=1e-10)
+            # Both terms of the definition (addendum 4.1), not the `sum_i Z_i` shorthand.
             assert float(out["q_raw"]) == pytest.approx(float(charges.sum()) - float(
                 out["pristine"].charges.sum()), abs=1e-10)
+            # The definition in terms of the two INTEGRALS, which is what the addendum
+            # actually requires and what the code must use.
+            assert float(out["q_raw"]) == pytest.approx(
+                float(dd.static_present(charges, pos, cell, 1.0).integral())
+                - float(out["pristine"].integral()), abs=1e-10)
+            # And the reason the v8 shorthand `q_raw = sum_i Z_i` may NOT be used: the tiled
+            # pristine baselines do not sum to zero on this host, so the present-atom sum is
+            # wrong by of order one electron. If a future baseline table really is neutral
+            # this assertion is what will say so, loudly, rather than the shorthand silently
+            # becoming true and then silently breaking again.
+            assert abs(float(out["pristine"].integral())) > 0.1
+            assert float(out["q_raw"]) != pytest.approx(float(charges.sum()), abs=1e-3)
             assert float(out["g_res"].integral()) == pytest.approx(1.0, abs=1e-12)
             # The heaviest omega is at the vacancy's pristine site: a pristine centre with
             # no present atom within 1 A.

@@ -10,9 +10,18 @@ scaled to zero" is a real continuity test rather than a grid quadrature.
     rho_Z^pristine  = sum_j Z0[s_j] g(r - R_j^0)         the pristine reference tiled to the
                                                         frame's supercell and PLACED in it
     rho_static^raw  = rho_Z^present - rho_Z^pristine     a density difference; no assignment
-    q_raw           = int rho_static^raw                 (0 on any pristine cell)
+    q_raw           = int rho_static^raw
+                    = sum_{i in present} Z_i - sum_{j in pristine} Z0[s_j]
     omega_i         = |dZ_i| / sum_j |dZ_j|,  g_res = sum_i omega_i g(r - R_i; r_res)
     rho_static^def  = rho_static^raw + (Q_core - q_raw) g_res          int = Q_core
+
+BOTH TERMS OF q_raw ARE WRITTEN OUT BECAUSE THE SHORTHAND IS FALSE HERE (addendum 4.1).
+v8 wrote `q_raw = int rho_static^raw = sum_i Z_i`, which holds only if the pristine integral
+vanishes -- that is, only if the tiled pristine baselines `Z0[s_j]` sum to zero. Measured on
+this host they do not: `rho_Z^pristine.integral()` is about +0.65 e on the V_Cl frames, so
+`sum_i Z_i` and `q_raw` differ by that amount. The two-term definition is therefore not
+pedantry, and any code or test that reaches for the present-atom sum alone is wrong by a
+number of order one electron. `test_defect_density.py` pins the difference of integrals.
 
 PLACEMENT. The pristine reference is tiled (`defect_composition.tiling_map`) and put into
 the frame's actual cell through scaled coordinates, then shifted by a rigid translation.
