@@ -1,0 +1,1476 @@
+{
+ "mu_g": -17.28434506388195,
+ "floor": 1e-09,
+ "model": "/home/alex/runs/arma_models/arma_s1.model",
+ "git_sha": "f362a0ca359a137903ce2787637321fe6f730063",
+ "accepted": true,
+ "failures": [],
+ "records": {
+  "qp1_79_pair/eval_force_stress": {
+   "charged": true,
+   "excess": [
+    -1.0,
+    -1.0
+   ],
+   "fields": {
+    "batched.0.D": 1.4779844015322396e-15,
+    "batched.0.energy": {
+     "shift": [
+      -17.284345063,
+      -17.284345064
+     ],
+     "predicted": [
+      -17.284345064,
+      -17.284345064
+     ],
+     "max_err": 6.93290758135845e-10,
+     "max_err_if_sign_flipped": 34.56869012750606
+    },
+    "batched.0.lam": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 2.1316282072803006e-14
+    },
+    "batched.0.n_maj_ref": 0.0,
+    "batched.0.n_min_ref": 0.0,
+    "madelung.0": 0.0,
+    "mu.0": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.base_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.base_forces": 3.3306690738754696e-16,
+    "out.base_trunk_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.carrier_alpha": 1.5265566588595902e-15,
+    "out.carrier_eps_mean": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.carrier_logits": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.carrier_readouts": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.correction_energy": {
+     "shift": [
+      -17.284345063,
+      -17.284345064
+     ],
+     "predicted": [
+      -17.284345064,
+      -17.284345064
+     ],
+     "max_err": 6.933156271315966e-10,
+     "max_err_if_sign_flipped": 34.56869012750603
+    },
+    "out.defect_features": 0.0,
+    "out.delta_energy": {
+     "shift": [
+      -17.284345063,
+      -17.284345064
+     ],
+     "predicted": [
+      -17.284345064,
+      -17.284345064
+     ],
+     "max_err": 6.933156271315966e-10,
+     "max_err_if_sign_flipped": 34.56869012750603
+    },
+    "out.delta_forces": 4.6629367034256575e-14,
+    "out.delta_sr_energy": {
+     "shift": [
+      -17.284345063,
+      -17.284345064
+     ],
+     "predicted": [
+      -17.284345064,
+      -17.284345064
+     ],
+     "max_err": 6.93290758135845e-10,
+     "max_err_if_sign_flipped": 34.56869012750606
+    },
+    "out.delta_u": {
+     "shift_or_zero": -17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.energy": {
+     "shift": [
+      -17.284345063,
+      -17.284345064
+     ],
+     "predicted": [
+      -17.284345064,
+      -17.284345064
+     ],
+     "max_err": 6.932978635632026e-10,
+     "max_err_if_sign_flipped": 34.568690127506024
+    },
+    "out.forces": 4.6629367034256575e-14,
+    "out.frontier_energy": {
+     "invariant": true,
+     "max_err": 2.853273173286652e-14
+    },
+    "out.frontier_min_weight": 1.0857981180834031e-13,
+    "out.frontier_p": 0.0,
+    "out.frontier_q_F": 0.0,
+    "out.frontier_ref_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.frontier_w": 0.0,
+    "out.frontier_w_ref": 2.7644553313166398e-14,
+    "out.logit_gap": 7.105427357601002e-15,
+    "out.node_energy": 0.0,
+    "out.stress": 2.7929047963226594e-16,
+    "out.trunk_block0": 0.0,
+    "out.virials": 7.887024366937112e-13
+   }
+  },
+  "qp1_79_pair/train_force": {
+   "charged": true,
+   "excess": [
+    -1.0,
+    -1.0
+   ],
+   "fields": {
+    "batched.0.D": 1.4779844015322396e-15,
+    "batched.0.energy": {
+     "shift": [
+      -17.284345063,
+      -17.284345064
+     ],
+     "predicted": [
+      -17.284345064,
+      -17.284345064
+     ],
+     "max_err": 6.93290758135845e-10,
+     "max_err_if_sign_flipped": 34.56869012750606
+    },
+    "batched.0.lam": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 2.1316282072803006e-14
+    },
+    "batched.0.n_maj_ref": 0.0,
+    "batched.0.n_min_ref": 0.0,
+    "madelung.0": 0.0,
+    "mu.0": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.base_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.base_forces": 3.885780586188048e-16,
+    "out.base_trunk_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.carrier_alpha": 1.5265566588595902e-15,
+    "out.carrier_eps_mean": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.carrier_logits": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.carrier_readouts": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.correction_energy": {
+     "shift": [
+      -17.284345063,
+      -17.284345064
+     ],
+     "predicted": [
+      -17.284345064,
+      -17.284345064
+     ],
+     "max_err": 6.933156271315966e-10,
+     "max_err_if_sign_flipped": 34.56869012750603
+    },
+    "out.defect_features": 0.0,
+    "out.delta_energy": {
+     "shift": [
+      -17.284345063,
+      -17.284345064
+     ],
+     "predicted": [
+      -17.284345064,
+      -17.284345064
+     ],
+     "max_err": 6.933156271315966e-10,
+     "max_err_if_sign_flipped": 34.56869012750603
+    },
+    "out.delta_forces": 4.6629367034256575e-14,
+    "out.delta_sr_energy": {
+     "shift": [
+      -17.284345063,
+      -17.284345064
+     ],
+     "predicted": [
+      -17.284345064,
+      -17.284345064
+     ],
+     "max_err": 6.93290758135845e-10,
+     "max_err_if_sign_flipped": 34.56869012750606
+    },
+    "out.delta_u": {
+     "shift_or_zero": -17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.energy": {
+     "shift": [
+      -17.284345063,
+      -17.284345064
+     ],
+     "predicted": [
+      -17.284345064,
+      -17.284345064
+     ],
+     "max_err": 6.932978635632026e-10,
+     "max_err_if_sign_flipped": 34.568690127506024
+    },
+    "out.forces": 4.6629367034256575e-14,
+    "out.frontier_energy": {
+     "invariant": true,
+     "max_err": 2.853273173286652e-14
+    },
+    "out.frontier_min_weight": 1.0857981180834031e-13,
+    "out.frontier_p": 0.0,
+    "out.frontier_q_F": 0.0,
+    "out.frontier_ref_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.frontier_w": 0.0,
+    "out.frontier_w_ref": 2.7644553313166398e-14,
+    "out.logit_gap": 7.105427357601002e-15,
+    "out.node_energy": 0.0,
+    "out.trunk_block0": 0.0
+   }
+  },
+  "qp1_159_single/eval_force_stress": {
+   "charged": true,
+   "excess": [
+    -1.0
+   ],
+   "fields": {
+    "loop.0.P": 4.884981308350689e-15,
+    "loop.0.P_ref": 4.884981308350689e-15,
+    "loop.0.energy": {
+     "shift": [
+      -17.284345068
+     ],
+     "predicted": [
+      -17.284345064
+     ],
+     "max_err": 3.9150300779056124e-09,
+     "max_err_if_sign_flipped": 34.568690131678935
+    },
+    "loop.0.lam": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 2.1316282072803006e-14
+    },
+    "madelung.0": 0.0,
+    "mu.0": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "mu.1": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "mu.2": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "mu.3": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.base_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.base_forces": 2.220446049250313e-16,
+    "out.base_trunk_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.carrier_alpha": 1.887379141862766e-15,
+    "out.carrier_eps_mean": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.carrier_logits": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "out.carrier_readouts": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "out.correction_energy": {
+     "shift": [
+      -17.284345068
+     ],
+     "predicted": [
+      -17.284345064
+     ],
+     "max_err": 3.9150300779056124e-09,
+     "max_err_if_sign_flipped": 34.568690131678935
+    },
+    "out.defect_features": 0.0,
+    "out.delta_energy": {
+     "shift": [
+      -17.284345068
+     ],
+     "predicted": [
+      -17.284345064
+     ],
+     "max_err": 3.9150300779056124e-09,
+     "max_err_if_sign_flipped": 34.568690131678935
+    },
+    "out.delta_forces": 4.6629367034256575e-15,
+    "out.delta_sr_energy": {
+     "shift": [
+      -17.284345068
+     ],
+     "predicted": [
+      -17.284345064
+     ],
+     "max_err": 3.9150300779056124e-09,
+     "max_err_if_sign_flipped": 34.568690131678935
+    },
+    "out.delta_u": {
+     "shift_or_zero": -17.28434506388195,
+     "max_err": 1.5987211554602254e-14
+    },
+    "out.energy": {
+     "shift": [
+      -17.284345068
+     ],
+     "predicted": [
+      -17.284345064
+     ],
+     "max_err": 3.914998103482503e-09,
+     "max_err_if_sign_flipped": 34.5686901316789
+    },
+    "out.forces": 4.884981308350689e-15,
+    "out.frontier_energy": {
+     "invariant": true,
+     "max_err": 4.996003610813204e-16
+    },
+    "out.frontier_min_weight": 5.551115123125783e-15,
+    "out.frontier_p": 0.0,
+    "out.frontier_q_F": 0.0,
+    "out.frontier_ref_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.frontier_w": 0.0,
+    "out.frontier_w_ref": 3.3306690738754696e-16,
+    "out.logit_gap": 5.329070518200751e-15,
+    "out.node_energy": 0.0,
+    "out.stress": 5.204170427930421e-18,
+    "out.trunk_block0": 0.0,
+    "out.virials": 2.842170943040401e-14
+   }
+  },
+  "qp1_159_single/train_force": {
+   "charged": true,
+   "excess": [
+    -1.0
+   ],
+   "fields": {
+    "loop.0.P": 4.884981308350689e-15,
+    "loop.0.P_ref": 4.884981308350689e-15,
+    "loop.0.energy": {
+     "shift": [
+      -17.284345068
+     ],
+     "predicted": [
+      -17.284345064
+     ],
+     "max_err": 3.9150300779056124e-09,
+     "max_err_if_sign_flipped": 34.568690131678935
+    },
+    "loop.0.lam": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 2.1316282072803006e-14
+    },
+    "madelung.0": 0.0,
+    "mu.0": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "mu.1": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "mu.2": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "mu.3": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "mu.4": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "mu.5": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "mu.6": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "mu.7": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.base_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.base_forces": 1.240327285323417e-16,
+    "out.base_trunk_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.carrier_alpha": 1.887379141862766e-15,
+    "out.carrier_eps_mean": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.carrier_logits": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "out.carrier_readouts": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "out.correction_energy": {
+     "shift": [
+      -17.284345068
+     ],
+     "predicted": [
+      -17.284345064
+     ],
+     "max_err": 3.9150300779056124e-09,
+     "max_err_if_sign_flipped": 34.568690131678935
+    },
+    "out.defect_features": 0.0,
+    "out.delta_energy": {
+     "shift": [
+      -17.284345068
+     ],
+     "predicted": [
+      -17.284345064
+     ],
+     "max_err": 3.9150300779056124e-09,
+     "max_err_if_sign_flipped": 34.568690131678935
+    },
+    "out.delta_forces": 4.773959005888173e-15,
+    "out.delta_sr_energy": {
+     "shift": [
+      -17.284345068
+     ],
+     "predicted": [
+      -17.284345064
+     ],
+     "max_err": 3.9150300779056124e-09,
+     "max_err_if_sign_flipped": 34.568690131678935
+    },
+    "out.delta_u": {
+     "shift_or_zero": -17.28434506388195,
+     "max_err": 1.5987211554602254e-14
+    },
+    "out.energy": {
+     "shift": [
+      -17.284345068
+     ],
+     "predicted": [
+      -17.284345064
+     ],
+     "max_err": 3.914998103482503e-09,
+     "max_err_if_sign_flipped": 34.5686901316789
+    },
+    "out.forces": 4.884981308350689e-15,
+    "out.frontier_energy": {
+     "invariant": true,
+     "max_err": 4.996003610813204e-16
+    },
+    "out.frontier_min_weight": 5.551115123125783e-15,
+    "out.frontier_p": 0.0,
+    "out.frontier_q_F": 0.0,
+    "out.frontier_ref_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.frontier_w": 0.0,
+    "out.frontier_w_ref": 3.3306690738754696e-16,
+    "out.logit_gap": 5.329070518200751e-15,
+    "out.node_energy": 0.0,
+    "out.trunk_block0": 0.0
+   }
+  },
+  "mixed/eval_force_stress": {
+   "charged": true,
+   "excess": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "fields": {
+    "loop.0.P": 3.774758283725532e-15,
+    "loop.0.P_ref": 3.774758283725532e-15,
+    "loop.0.energy": {
+     "shift": [
+      0.0
+     ],
+     "predicted": [
+      0.0
+     ],
+     "max_err": 0.0,
+     "max_err_if_sign_flipped": 0.0
+    },
+    "loop.0.lam": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 1.7763568394002505e-14
+    },
+    "loop.1.P": 2.886579864025407e-15,
+    "loop.1.P_ref": 2.886579864025407e-15,
+    "loop.1.energy": {
+     "shift": [
+      0.0
+     ],
+     "predicted": [
+      0.0
+     ],
+     "max_err": 0.0,
+     "max_err_if_sign_flipped": 0.0
+    },
+    "loop.1.lam": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 2.4868995751603507e-14
+    },
+    "loop.2.P": 3.1086244689504383e-15,
+    "loop.2.P_ref": 3.1086244689504383e-15,
+    "loop.2.energy": {
+     "shift": [
+      -17.284345063
+     ],
+     "predicted": [
+      -17.284345064
+     ],
+     "max_err": 6.924025797161448e-10,
+     "max_err_if_sign_flipped": 34.5686901270715
+    },
+    "loop.2.lam": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 2.1316282072803006e-14
+    },
+    "madelung.0": 0.0,
+    "mu.0": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 0.0
+    },
+    "mu.1": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 0.0
+    },
+    "mu.10": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "mu.11": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "mu.2": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 0.0
+    },
+    "mu.3": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 0.0
+    },
+    "mu.4": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 0.0
+    },
+    "mu.5": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "mu.6": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 0.0
+    },
+    "mu.7": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "mu.8": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "mu.9": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "out.base_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.base_forces": 1.021405182655144e-14,
+    "out.base_trunk_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.carrier_alpha": 1.942890293094024e-15,
+    "out.carrier_eps_mean": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 1.0658141036401503e-14
+    },
+    "out.carrier_logits": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.carrier_readouts": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.correction_energy": {
+     "shift": [
+      0.0,
+      0.0,
+      -17.284345063
+     ],
+     "predicted": [
+      0.0,
+      0.0,
+      -17.284345064
+     ],
+     "max_err": 6.924274487118964e-10,
+     "max_err_if_sign_flipped": 34.56869012707148
+    },
+    "out.defect_features": 0.0,
+    "out.delta_energy": {
+     "shift": [
+      0.0,
+      0.0,
+      -17.284345063
+     ],
+     "predicted": [
+      0.0,
+      0.0,
+      -17.284345064
+     ],
+     "max_err": 6.924274487118964e-10,
+     "max_err_if_sign_flipped": 34.56869012707148
+    },
+    "out.delta_forces": 4.6407322429331543e-14,
+    "out.delta_sr_energy": {
+     "shift": [
+      0.0,
+      0.0,
+      -17.284345063
+     ],
+     "predicted": [
+      0.0,
+      0.0,
+      -17.284345064
+     ],
+     "max_err": 6.924025797161448e-10,
+     "max_err_if_sign_flipped": 34.5686901270715
+    },
+    "out.delta_u": {
+     "shift_or_zero": -17.28434506388195,
+     "max_err": 2.3092638912203256e-14
+    },
+    "out.energy": {
+     "shift": [
+      0.0,
+      0.0,
+      -17.284345063
+     ],
+     "predicted": [
+      0.0,
+      0.0,
+      -17.284345064
+     ],
+     "max_err": 6.924452122802904e-10,
+     "max_err_if_sign_flipped": 34.568690127071456
+    },
+    "out.forces": 4.651834473179406e-14,
+    "out.frontier_energy": {
+     "invariant": true,
+     "max_err": 2.2648549702353193e-14
+    },
+    "out.frontier_min_weight": 7.283063041541027e-14,
+    "out.frontier_p": 0.0,
+    "out.frontier_q_F": 0.0,
+    "out.frontier_ref_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.frontier_w": 0.0,
+    "out.frontier_w_ref": 2.1760371282653068e-14,
+    "out.logit_gap": 7.105427357601002e-15,
+    "out.node_energy": 0.0,
+    "out.stress": 2.740863092043355e-16,
+    "out.trunk_block0": 0.0,
+    "out.virials": 7.744915819785092e-13
+   }
+  },
+  "mixed/train_force": {
+   "charged": true,
+   "excess": [
+    0.0,
+    0.0,
+    -1.0
+   ],
+   "fields": {
+    "loop.0.P": 3.774758283725532e-15,
+    "loop.0.P_ref": 3.774758283725532e-15,
+    "loop.0.energy": {
+     "shift": [
+      0.0
+     ],
+     "predicted": [
+      0.0
+     ],
+     "max_err": 0.0,
+     "max_err_if_sign_flipped": 0.0
+    },
+    "loop.0.lam": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 1.7763568394002505e-14
+    },
+    "loop.1.P": 2.886579864025407e-15,
+    "loop.1.P_ref": 2.886579864025407e-15,
+    "loop.1.energy": {
+     "shift": [
+      0.0
+     ],
+     "predicted": [
+      0.0
+     ],
+     "max_err": 0.0,
+     "max_err_if_sign_flipped": 0.0
+    },
+    "loop.1.lam": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 2.4868995751603507e-14
+    },
+    "loop.2.P": 3.1086244689504383e-15,
+    "loop.2.P_ref": 3.1086244689504383e-15,
+    "loop.2.energy": {
+     "shift": [
+      -17.284345063
+     ],
+     "predicted": [
+      -17.284345064
+     ],
+     "max_err": 6.924025797161448e-10,
+     "max_err_if_sign_flipped": 34.5686901270715
+    },
+    "loop.2.lam": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 2.1316282072803006e-14
+    },
+    "madelung.0": 0.0,
+    "mu.0": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 0.0
+    },
+    "mu.1": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 0.0
+    },
+    "mu.10": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "mu.11": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "mu.12": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "mu.13": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "mu.14": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "mu.15": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "mu.2": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 0.0
+    },
+    "mu.3": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 0.0
+    },
+    "mu.4": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 0.0
+    },
+    "mu.5": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "mu.6": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 0.0
+    },
+    "mu.7": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "mu.8": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "mu.9": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "out.base_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.base_forces": 9.992007221626409e-15,
+    "out.base_trunk_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.carrier_alpha": 1.942890293094024e-15,
+    "out.carrier_eps_mean": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 1.0658141036401503e-14
+    },
+    "out.carrier_logits": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.carrier_readouts": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.correction_energy": {
+     "shift": [
+      0.0,
+      0.0,
+      -17.284345063
+     ],
+     "predicted": [
+      0.0,
+      0.0,
+      -17.284345064
+     ],
+     "max_err": 6.924274487118964e-10,
+     "max_err_if_sign_flipped": 34.56869012707148
+    },
+    "out.defect_features": 0.0,
+    "out.delta_energy": {
+     "shift": [
+      0.0,
+      0.0,
+      -17.284345063
+     ],
+     "predicted": [
+      0.0,
+      0.0,
+      -17.284345064
+     ],
+     "max_err": 6.924274487118964e-10,
+     "max_err_if_sign_flipped": 34.56869012707148
+    },
+    "out.delta_forces": 4.6407322429331543e-14,
+    "out.delta_sr_energy": {
+     "shift": [
+      0.0,
+      0.0,
+      -17.284345063
+     ],
+     "predicted": [
+      0.0,
+      0.0,
+      -17.284345064
+     ],
+     "max_err": 6.924025797161448e-10,
+     "max_err_if_sign_flipped": 34.5686901270715
+    },
+    "out.delta_u": {
+     "shift_or_zero": -17.28434506388195,
+     "max_err": 2.3092638912203256e-14
+    },
+    "out.energy": {
+     "shift": [
+      0.0,
+      0.0,
+      -17.284345063
+     ],
+     "predicted": [
+      0.0,
+      0.0,
+      -17.284345064
+     ],
+     "max_err": 6.924452122802904e-10,
+     "max_err_if_sign_flipped": 34.568690127071456
+    },
+    "out.forces": 4.651834473179406e-14,
+    "out.frontier_energy": {
+     "invariant": true,
+     "max_err": 2.2648549702353193e-14
+    },
+    "out.frontier_min_weight": 7.283063041541027e-14,
+    "out.frontier_p": 0.0,
+    "out.frontier_q_F": 0.0,
+    "out.frontier_ref_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.frontier_w": 0.0,
+    "out.frontier_w_ref": 2.1760371282653068e-14,
+    "out.logit_gap": 7.105427357601002e-15,
+    "out.node_energy": 0.0,
+    "out.trunk_block0": 0.0
+   }
+  },
+  "pristine_pair/eval_force_stress": {
+   "charged": false,
+   "excess": [
+    0.0,
+    0.0
+   ],
+   "fields": {
+    "batched.0.D": 0.0,
+    "batched.0.energy": {
+     "shift": [
+      0.0,
+      0.0
+     ],
+     "predicted": [
+      0.0,
+      0.0
+     ],
+     "max_err": 0.0,
+     "max_err_if_sign_flipped": 0.0
+    },
+    "batched.0.lam": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 2.1316282072803006e-14
+    },
+    "batched.0.n_maj_ref": 0.0,
+    "batched.0.n_min_ref": 0.0,
+    "madelung.0": 0.0,
+    "mu.0": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 0.0
+    },
+    "out.base_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.base_forces": 0.0,
+    "out.base_trunk_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.carrier_alpha": 0.0,
+    "out.carrier_eps_mean": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 1.0658141036401503e-14
+    },
+    "out.carrier_logits": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "out.carrier_readouts": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "out.correction_energy": {
+     "shift": [
+      0.0,
+      0.0
+     ],
+     "predicted": [
+      0.0,
+      0.0
+     ],
+     "max_err": 0.0,
+     "max_err_if_sign_flipped": 0.0
+    },
+    "out.defect_features": 0.0,
+    "out.delta_energy": {
+     "shift": [
+      0.0,
+      0.0
+     ],
+     "predicted": [
+      0.0,
+      0.0
+     ],
+     "max_err": 0.0,
+     "max_err_if_sign_flipped": 0.0
+    },
+    "out.delta_forces": 0.0,
+    "out.delta_sr_energy": {
+     "shift": [
+      0.0,
+      0.0
+     ],
+     "predicted": [
+      0.0,
+      0.0
+     ],
+     "max_err": 0.0,
+     "max_err_if_sign_flipped": 0.0
+    },
+    "out.delta_u": {
+     "shift_or_zero": -17.28434506388195,
+     "max_err": 1.0658141036401503e-14
+    },
+    "out.energy": {
+     "shift": [
+      0.0,
+      0.0
+     ],
+     "predicted": [
+      0.0,
+      0.0
+     ],
+     "max_err": 0.0,
+     "max_err_if_sign_flipped": 0.0
+    },
+    "out.forces": 0.0,
+    "out.frontier_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.frontier_min_weight": 0.0,
+    "out.frontier_p": 0.0,
+    "out.frontier_q_F": 0.0,
+    "out.frontier_ref_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.frontier_w": 0.0,
+    "out.frontier_w_ref": 0.0,
+    "out.logit_gap": 4.440892098500626e-15,
+    "out.node_energy": 0.0,
+    "out.stress": 0.0,
+    "out.trunk_block0": 0.0,
+    "out.virials": 0.0
+   }
+  },
+  "pristine_pair/train_force": {
+   "charged": false,
+   "excess": [
+    0.0,
+    0.0
+   ],
+   "fields": {
+    "batched.0.D": 0.0,
+    "batched.0.energy": {
+     "shift": [
+      0.0,
+      0.0
+     ],
+     "predicted": [
+      0.0,
+      0.0
+     ],
+     "max_err": 0.0,
+     "max_err_if_sign_flipped": 0.0
+    },
+    "batched.0.lam": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 2.1316282072803006e-14
+    },
+    "batched.0.n_maj_ref": 0.0,
+    "batched.0.n_min_ref": 0.0,
+    "madelung.0": 0.0,
+    "mu.0": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 0.0
+    },
+    "out.base_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.base_forces": 0.0,
+    "out.base_trunk_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.carrier_alpha": 0.0,
+    "out.carrier_eps_mean": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 1.0658141036401503e-14
+    },
+    "out.carrier_logits": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "out.carrier_readouts": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "out.correction_energy": {
+     "shift": [
+      0.0,
+      0.0
+     ],
+     "predicted": [
+      0.0,
+      0.0
+     ],
+     "max_err": 0.0,
+     "max_err_if_sign_flipped": 0.0
+    },
+    "out.defect_features": 0.0,
+    "out.delta_energy": {
+     "shift": [
+      0.0,
+      0.0
+     ],
+     "predicted": [
+      0.0,
+      0.0
+     ],
+     "max_err": 0.0,
+     "max_err_if_sign_flipped": 0.0
+    },
+    "out.delta_forces": 0.0,
+    "out.delta_sr_energy": {
+     "shift": [
+      0.0,
+      0.0
+     ],
+     "predicted": [
+      0.0,
+      0.0
+     ],
+     "max_err": 0.0,
+     "max_err_if_sign_flipped": 0.0
+    },
+    "out.delta_u": {
+     "shift_or_zero": -17.28434506388195,
+     "max_err": 1.0658141036401503e-14
+    },
+    "out.energy": {
+     "shift": [
+      0.0,
+      0.0
+     ],
+     "predicted": [
+      0.0,
+      0.0
+     ],
+     "max_err": 0.0,
+     "max_err_if_sign_flipped": 0.0
+    },
+    "out.forces": 0.0,
+    "out.frontier_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.frontier_min_weight": 0.0,
+    "out.frontier_p": 0.0,
+    "out.frontier_q_F": 0.0,
+    "out.frontier_ref_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.frontier_w": 0.0,
+    "out.frontier_w_ref": 0.0,
+    "out.logit_gap": 4.440892098500626e-15,
+    "out.node_energy": 0.0,
+    "out.trunk_block0": 0.0
+   }
+  },
+  "big_pair/eval_force_stress": {
+   "charged": true,
+   "excess": [
+    0.0,
+    -1.0
+   ],
+   "fields": {
+    "batched.0.D": 1.3530843112619095e-15,
+    "batched.0.energy": {
+     "shift": [
+      0.0,
+      -17.284345068
+     ],
+     "predicted": [
+      0.0,
+      -17.284345064
+     ],
+     "max_err": 3.913680046707668e-09,
+     "max_err_if_sign_flipped": 34.568690131677585
+    },
+    "batched.0.lam": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 2.842170943040401e-14
+    },
+    "batched.0.n_maj_ref": 0.0,
+    "batched.0.n_min_ref": 0.0,
+    "madelung.0": 0.0,
+    "mu.0": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.base_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.base_forces": 2.220446049250313e-16,
+    "out.base_trunk_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.carrier_alpha": 1.4710455076283324e-15,
+    "out.carrier_eps_mean": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.carrier_logits": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "out.carrier_readouts": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "out.correction_energy": {
+     "shift": [
+      0.0,
+      -17.284345068
+     ],
+     "predicted": [
+      0.0,
+      -17.284345064
+     ],
+     "max_err": 3.913680046707668e-09,
+     "max_err_if_sign_flipped": 34.568690131677585
+    },
+    "out.defect_features": 0.0,
+    "out.delta_energy": {
+     "shift": [
+      0.0,
+      -17.284345068
+     ],
+     "predicted": [
+      0.0,
+      -17.284345064
+     ],
+     "max_err": 3.913680046707668e-09,
+     "max_err_if_sign_flipped": 34.568690131677585
+    },
+    "out.delta_forces": 5.218048215738236e-15,
+    "out.delta_sr_energy": {
+     "shift": [
+      0.0,
+      -17.284345068
+     ],
+     "predicted": [
+      0.0,
+      -17.284345064
+     ],
+     "max_err": 3.913680046707668e-09,
+     "max_err_if_sign_flipped": 34.568690131677585
+    },
+    "out.delta_u": {
+     "shift_or_zero": -17.28434506388195,
+     "max_err": 8.881784197001252e-15
+    },
+    "out.energy": {
+     "shift": [
+      0.0,
+      -17.284345068
+     ],
+     "predicted": [
+      0.0,
+      -17.284345064
+     ],
+     "max_err": 3.913633861429844e-09,
+     "max_err_if_sign_flipped": 34.568690131677535
+    },
+    "out.forces": 5.329070518200751e-15,
+    "out.frontier_energy": {
+     "invariant": true,
+     "max_err": 4.996003610813204e-16
+    },
+    "out.frontier_min_weight": 5.551115123125783e-15,
+    "out.frontier_p": 0.0,
+    "out.frontier_q_F": 0.0,
+    "out.frontier_ref_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.frontier_w": 0.0,
+    "out.frontier_w_ref": 3.3306690738754696e-16,
+    "out.logit_gap": 7.105427357601002e-15,
+    "out.node_energy": 0.0,
+    "out.stress": 5.204170427930421e-18,
+    "out.trunk_block0": 0.0,
+    "out.virials": 2.842170943040401e-14
+   }
+  },
+  "big_pair/train_force": {
+   "charged": true,
+   "excess": [
+    0.0,
+    -1.0
+   ],
+   "fields": {
+    "batched.0.D": 1.3530843112619095e-15,
+    "batched.0.energy": {
+     "shift": [
+      0.0,
+      -17.284345068
+     ],
+     "predicted": [
+      0.0,
+      -17.284345064
+     ],
+     "max_err": 3.913680046707668e-09,
+     "max_err_if_sign_flipped": 34.568690131677585
+    },
+    "batched.0.lam": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 2.842170943040401e-14
+    },
+    "batched.0.n_maj_ref": 0.0,
+    "batched.0.n_min_ref": 0.0,
+    "madelung.0": 0.0,
+    "mu.0": {
+     "rigid_shift": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.base_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.base_forces": 2.220446049250313e-16,
+    "out.base_trunk_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.carrier_alpha": 1.4710455076283324e-15,
+    "out.carrier_eps_mean": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 7.105427357601002e-15
+    },
+    "out.carrier_logits": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "out.carrier_readouts": {
+     "rigid_shift_or_zero": 17.28434506388195,
+     "max_err": 3.552713678800501e-15
+    },
+    "out.correction_energy": {
+     "shift": [
+      0.0,
+      -17.284345068
+     ],
+     "predicted": [
+      0.0,
+      -17.284345064
+     ],
+     "max_err": 3.913680046707668e-09,
+     "max_err_if_sign_flipped": 34.568690131677585
+    },
+    "out.defect_features": 0.0,
+    "out.delta_energy": {
+     "shift": [
+      0.0,
+      -17.284345068
+     ],
+     "predicted": [
+      0.0,
+      -17.284345064
+     ],
+     "max_err": 3.913680046707668e-09,
+     "max_err_if_sign_flipped": 34.568690131677585
+    },
+    "out.delta_forces": 4.9960036108132044e-15,
+    "out.delta_sr_energy": {
+     "shift": [
+      0.0,
+      -17.284345068
+     ],
+     "predicted": [
+      0.0,
+      -17.284345064
+     ],
+     "max_err": 3.913680046707668e-09,
+     "max_err_if_sign_flipped": 34.568690131677585
+    },
+    "out.delta_u": {
+     "shift_or_zero": -17.28434506388195,
+     "max_err": 8.881784197001252e-15
+    },
+    "out.energy": {
+     "shift": [
+      0.0,
+      -17.284345068
+     ],
+     "predicted": [
+      0.0,
+      -17.284345064
+     ],
+     "max_err": 3.913633861429844e-09,
+     "max_err_if_sign_flipped": 34.568690131677535
+    },
+    "out.forces": 5.218048215738236e-15,
+    "out.frontier_energy": {
+     "invariant": true,
+     "max_err": 4.996003610813204e-16
+    },
+    "out.frontier_min_weight": 5.551115123125783e-15,
+    "out.frontier_p": 0.0,
+    "out.frontier_q_F": 0.0,
+    "out.frontier_ref_energy": {
+     "invariant": true,
+     "max_err": 0.0
+    },
+    "out.frontier_w": 0.0,
+    "out.frontier_w_ref": 3.3306690738754696e-16,
+    "out.logit_gap": 7.105427357601002e-15,
+    "out.node_energy": 0.0,
+    "out.trunk_block0": 0.0
+   }
+  }
+ }
+}

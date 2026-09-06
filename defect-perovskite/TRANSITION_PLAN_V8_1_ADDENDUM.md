@@ -2284,3 +2284,16 @@ routing, and claim corrections should be adopted immediately.
   per-graph eigensolve path where an 8-graph batch carried 0.14, so the step time of the
   corrected recipe is budgeted at two to three times Stage B's; the packed waves are sized
   for that before any finish time is quoted.
+- Section 3.1 acceptance (2026-09-06, `stage0_gauge_ab.py` -> `golden/stage0_gauge_ab.json`):
+  the same code and model (arm (a) seed 1, uniform float64, one thread) on the ten golden
+  records with and without the gauge. mu_g = -17.284345 eV on the 80-atom pristine
+  reference (ranks (208, 208), the class-table edges re-aligned). Every field of the
+  neutral records agrees to the floor; the spectrum, chemical potentials and carrier levels
+  shift rigidly by -mu_g to 3e-14 eV; occupations, densities, forces, stresses, the base
+  branch and the frontier term agree to 5e-14; the total, correction, delta and band
+  energies of every charged graph move by -mu_g x (electron excess) = mu_g x Q to 4e-9 eV
+  (a 636-level band sum's rounding), by nothing on neutral graphs. `delta_u` on a
+  carrier-free graph is -mean(eps) by definition and moves by +mu_g; it is invariant where
+  alpha sums to one. The gauge changes nothing but the constant, as the addendum requires.
+  The v6 golden of record cannot isolate this change (it also spans Stage 1.3's Madelung
+  range work); the Stage 1 golden is captured at the corrected retrain's selected reference.
