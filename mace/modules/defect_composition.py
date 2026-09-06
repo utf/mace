@@ -55,6 +55,13 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import torch
 
+from mace.modules.defect_carriers import (
+    assert_charge_consistency,
+    carrier_multiplicity,
+    class_counts,
+    counts_from_excess,
+    signed_excess,
+)
 from mace.modules.defect_state import COUNT_FILL, StateBatch
 
 __all__ = ["CLASS_TABLE_VERSION", "QUANTILES", "TIER2_NAMES", "EdgeAlignment",
@@ -208,11 +215,14 @@ def tier1(spectrum: np.ndarray, vbm_al: float, delta: float, window: Optional[fl
 
 def class_integers(m_vb: Sequence[int], n_sigma: Sequence[int]
                    ) -> Tuple[Tuple[int, int], Tuple[int, int], int]:
-    """`((n_e,maj, n_e,min), (n_h,maj, n_h,min), Q_core)` from either tier's `M_VB,sigma`."""
-    n_e = tuple(max(int(n) - int(m), 0) for m, n in zip(m_vb, n_sigma))
-    n_h = tuple(max(int(m) - int(n), 0) for m, n in zip(m_vb, n_sigma))
-    q_core = int(sum(n_e) - sum(n_h))
-    return n_e, n_h, q_core
+    """`((n_e,maj, n_e,min), (n_h,maj, n_h,min), Q_core)` from either tier's `M_VB,sigma`.
+
+    Delegates to the signed-excess algebra of addendum section 3.3, which is the same
+    arithmetic written around one signed `d_sigma = N_sigma - M_VB,sigma` per channel. The
+    production reference is neutral, so `Q_core = -q_F(S_ref) = sum_sigma d_sigma`.
+    """
+    counts = class_counts(m_vb, n_sigma, q_formal_ref=0)
+    return counts["n_e"], counts["n_h"], counts["q_core"]
 
 
 @dataclass(frozen=True)
@@ -245,6 +255,20 @@ class ClassRecord:
     tier1_reason: str = ""                                    # why Tier 1 handed it on
     perm: Tuple[int, int, int] = (0, 1, 2)                    # frame axis i <- tiled axis perm[i]
     placement: Optional[Dict[str, Any]] = None                # density-level pristine placement
+    # Addendum 3.3: the signed excess the counts are read from, and the absolute frontier
+    # multiplicity of the REFERENCE state. Defaulted so records written before v8.1 still
+    # load; `refreshed` recomputes them from m_vb and n_sigma, which is exact.
+    d_sigma: Tuple[int, int] = (0, 0)
+    m_f: int = 0
+
+    def __post_init__(self) -> None:
+        # d_sigma = n_e - n_h is an identity: the two counts are the positive and negative
+        # parts of the same signed excess. Derived from the record's own counts rather than
+        # re-derived from (m_vb, n_sigma), so that the record has a single source of truth
+        # and legacy records restore to the same integers they were written with.
+        excess = tuple(int(e) - int(h) for e, h in zip(self.n_e, self.n_h))
+        object.__setattr__(self, "d_sigma", excess)
+        object.__setattr__(self, "m_f", carrier_multiplicity(self.n_e, self.n_h))
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -256,7 +280,7 @@ class ClassRecord:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "ClassRecord":
         d = dict(d)
-        for k in ("n_sigma", "m_vb", "n_e", "n_h", "gamma", "tiling", "perm"):
+        for k in ("n_sigma", "m_vb", "n_e", "n_h", "gamma", "tiling", "perm", "d_sigma"):
             if k in d and d[k] is not None:
                 d[k] = tuple(d[k])
         return cls(**d)
@@ -279,16 +303,24 @@ def frame_counts(record: ClassRecord, state: StateBatch, g: int
             f"composition class {record.key} carries no core/frontier decomposition "
             f"({record.reason or 'ambiguous'}); no per-frame carrier counts exist for it")
     dn = (int(state.delta_n[g, 0]), int(state.delta_n[g, 1]))
-    net = [record.n_e[s] - record.n_h[s] + dn[s] for s in range(2)]
-    n_e = tuple(max(x, 0) for x in net)
-    n_h = tuple(max(-x, 0) for x in net)
-    q_f = int(sum(n_h) - sum(n_e))
-    q_formal = int(state.q_formal[g])
-    if q_f != q_formal - record.q_core:
-        raise AssertionError(
-            f"q_F = {q_f} but Q_formal - Q_core = {q_formal} - {record.q_core}: the counters "
-            f"and the class integers of {record.key} disagree")
+    # d_sigma(S) = N_sigma(S) - M_VB,sigma = d_sigma(S_ref) + Delta N_sigma(S). Recomputed
+    # from the signed excess rather than by updating separate electron and hole counters,
+    # which would go negative wherever a charge sequence crosses the valence rank.
+    excess = tuple(record.d_sigma[s] + dn[s] for s in range(2))
+    n_e, n_h, q_f = counts_from_excess(excess)
+    assert_charge_consistency(int(state.q_formal[g]), record.q_core, q_f,
+                              context=f"composition class {record.key}")
     return n_e, n_h, q_f
+
+
+def frame_multiplicity(record: ClassRecord, state: StateBatch, g: int) -> int:
+    """`m_F` for one frame: every frontier carrier present, both signs, both spins.
+
+    The Stage 4-6 support guard is applied to this, and to the reference state's value,
+    before any energy, force or stress is built (addendum section 3.4).
+    """
+    n_e, n_h, _ = frame_counts(record, state, g)
+    return carrier_multiplicity(n_e, n_h)
 
 
 # ------------------------------------------------------------------ the spectrum layer
