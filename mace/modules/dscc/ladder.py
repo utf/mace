@@ -96,7 +96,7 @@ def local_neutrality_gate(model, unit_cell, tilings: Sequence[Tuple[int, int, in
             numbers = [model.atomic_numbers[int(x)] for x in species.tolist()]
             q0 = model.reference_charges(H, numbers).detach()
             # The fixed carrier: a unit charge on a flanking Pb (first shell of five Cl).
-            z = torch.tensor(numbers)
+            z = torch.tensor(numbers, device=pos.device)
             r = minimum_image_distances(pos, cell)
             pb = torch.nonzero(z == 82).reshape(-1)
             cl = torch.nonzero(z == 17).reshape(-1)
@@ -104,6 +104,7 @@ def local_neutrality_gate(model, unit_cell, tilings: Sequence[Tuple[int, int, in
             flank = pb[d[:, 5] > 4.0]
             dq = torch.zeros(len(numbers), dtype=pos.dtype, device=pos.device)
             dq[int(flank[0])] = 1.0
+            k_sr = k_lr = None
             k_sr, k_lr = kernel_components(pos, cell, model.kernel)
             gamma = gamma_matrix(k_sr, k_lr, model.lambda_dir(), model.u_eff()[species], model.kernel.eps_inf)
             g_lr = gamma_lr(pos, cell, model.kernel.r_g, model.r_split, model.kernel.eps_inf, tol=model.kernel.tol)

@@ -86,22 +86,29 @@ def main() -> None:
             row.update({"path": "sparse", "dE": float(sp_out["energy"]) - e0, "dq_max": float(sp_out["dq"].abs().max()),
                         "dq_spread": float(sp_out["dq"].std()), "total_force": float(sp_out["forces"].sum(0).abs().max()),
                         "iterations": sp_out["diagnostics"]["iterations"], "sparse_window": sp_out["diagnostics"]["window"]})
-        # K_LR_ii size-dependent part on a Pb site vs -alpha C / L (regime of the model)
+        # K_LR_ii on a Pb site: its size-dependent part against -alpha_cell C / L for THIS cell
+        # shape (regime B: K_LR is the Ewald kernel of the broad Gaussian, self term 2C/(sqrt(pi) r_s)).
         pos = torch.tensor(atoms.get_positions()); k_sr, k_lr = kernel_components(pos, cell, model.kernel)
         z = atoms.get_atomic_numbers(); i_pb = int(np.nonzero(z == 82)[0][0])
         row["k_lr_ii_pb"] = float(k_lr[i_pb, i_pb])
+        if model.kernel.regime == "B":
+            broad_self = 2.0 * ewald.COULOMB / (np.sqrt(np.pi) * model.kernel.r_s)
+            row["k_lr_ii_alpha_measured"] = -(row["k_lr_ii_pb"] - broad_self) * L / ewald.COULOMB
+            row["k_lr_ii_alpha_rel_err"] = abs(row["k_lr_ii_alpha_measured"] - row["alpha_cell"]) / row["alpha_cell"]
         row["seconds"] = time.time() - t0
         rows.append(row)
         print(json.dumps(row), flush=True)
-    lengths = [r["L"] for r in rows]; values = [r["dE"] for r in rows]
-    a, b = fit_one_over_l(lengths, values)
-    alpha_mean = float(np.mean([r["alpha_cell"] for r in rows]))
+    # The 1/L fit of E(+1) - E(0) uses the cells of one shape class only (alpha within 2 % of
+    # the first cell's), since the Madelung coefficient is a property of the cell shape.
+    same = [r for r in rows if abs(r["alpha_cell"] - rows[0]["alpha_cell"]) < 0.02 * rows[0]["alpha_cell"]]
+    a, b = fit_one_over_l([r["L"] for r in same], [r["dE"] for r in same]) if len(same) >= 2 else (float("nan"), float("nan"))
+    alpha_mean = float(np.mean([r["alpha_cell"] for r in same]))
     madelung = -alpha_mean * ewald.COULOMB / (2.0 * model.kernel.eps_inf)
-    # K_LR_ii ladder: its size-dependent part must go as -alpha C / L (shift-free comparison via the slope)
-    _, b_k = fit_one_over_l(lengths, [r["k_lr_ii_pb"] for r in rows])
-    report = {"rows": rows, "dE_intercept": a, "dE_slope": b, "madelung_slope_expected": madelung,
-              "dE_slope_rel_err": abs(b - madelung) / abs(madelung), "k_lr_ii_slope": b_k,
-              "k_lr_ii_slope_expected": -alpha_mean * ewald.COULOMB, "model": args.model}
+    report = {"rows": rows, "fit_cells": [r["tiling"] for r in same], "dE_intercept": a, "dE_slope": b,
+              "madelung_slope_expected": madelung, "dE_slope_rel_err": abs(b - madelung) / abs(madelung),
+              "k_lr_ii_alpha_rel_err_max": max((r.get("k_lr_ii_alpha_rel_err", 0.0) for r in rows), default=None),
+              "coupling": bool(model.coupling), "model": args.model,
+              "note": "with Phi = 0 the head carries no electrostatics; the 1/L test applies to coupled models"}
     print(json.dumps({k: v for k, v in report.items() if k != "rows"}, indent=1))
     json.dump(report, open(args.out, "w"), indent=1)
 
