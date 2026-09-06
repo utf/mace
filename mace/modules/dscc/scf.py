@@ -376,3 +376,145 @@ def continuation_solve(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[int, in
     result.history = history
     return result
 
+
+
+# ------------------------------------------------------------------ batched solve (equal sizes)
+
+@dataclass
+class BatchedScfResult:
+    energy: torch.Tensor            # [B], attached (band form)
+    energy_primary: torch.Tensor    # [B], detached
+    dP: torch.Tensor                # [B, 4n, 4n], attached
+    dq: torch.Tensor                # [B, N], attached
+    V: torch.Tensor                 # [B, N], detached
+    iterations: List[int]
+    converged: List[bool]
+    residual: List[float]
+    commutator: List[float]
+    rho: List[float]
+    fills: Tuple[FillResult, FillResult, FillResult, FillResult]
+
+
+def _batched_fillings(H0: torch.Tensor, gamma: torch.Tensor, W: Optional[torch.Tensor],
+                      dq: torch.Tensor, n_s, n_ref, sigma_s: float) -> TwoFillings:
+    V = torch.einsum("bij,bj->bi", gamma, dq) + (W if W is not None else 0.0)
+    H = H0 - torch.diag_embed(V.repeat_interleave(ORBITALS, dim=-1))
+    return two_fillings(H, n_s, n_ref, sigma_s)
+
+
+def solve_dscc_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[torch.Tensor, torch.Tensor],
+                       n_ref: Tuple[torch.Tensor, torch.Tensor], sigma_s: float = SIGMA_S,
+                       W: Optional[torch.Tensor] = None, dq0: Optional[torch.Tensor] = None,
+                       options: Optional[ScfOptions] = None, implicit: bool = False) -> BatchedScfResult:
+    """`solve_dscc` for a batch of EQUAL-SIZED graphs at once: `H0 [B, 4n, 4n]`, `gamma
+    [B, N, N]`, per-graph counts. One batched `eigh` and fill per iteration; the damped
+    Newton step, its backtracking and the convergence test are per graph (masked), and a
+    graph whose damping fails takes a plain damped fixed-point step (`mixing`) instead of
+    the per-graph Anderson history -- the only difference from the reference solver, which
+    the tests bound. `implicit` attaches the fixed point's parameter derivative per graph."""
+    opt = options or ScfOptions()
+    B, dim = H0.shape[0], H0.shape[-1]
+    n_atoms = dim // ORBITALS
+    dq = (torch.zeros(B, n_atoms, dtype=H0.dtype, device=H0.device) if dq0 is None else dq0.to(H0.dtype))
+    converged = torch.zeros(B, dtype=torch.bool, device=H0.device)
+    iterations = torch.zeros(B, dtype=torch.long, device=H0.device)
+    energy_prev = torch.full((B,), float("nan"), dtype=H0.dtype, device=H0.device)
+    history: List[torch.Tensor] = []
+    with torch.no_grad():
+        for k in range(opt.n_max):
+            sol = _batched_fillings(H0, gamma, W, dq, n_s, n_ref, sigma_s)
+            res = sol.dq - dq                                                     # [B, N]
+            r_norm = res.abs().amax(dim=-1)
+            history.append(r_norm.clone())
+            energy_k = sol.energy - 0.5 * torch.einsum("bi,bij,bj->b", dq, gamma, dq)
+            d_energy = (energy_k - energy_prev).abs()
+            energy_prev = energy_k
+            newly = (~converged) & (r_norm < opt.tol_q) & (d_energy < opt.tol_E)
+            iterations = torch.where(~converged, torch.full_like(iterations, k + 1), iterations)
+            converged = converged | newly
+            if bool(converged.all()):
+                break
+            active = ~converged
+            # Newton step per active graph.
+            step = torch.zeros_like(dq)
+            for b in torch.nonzero(active).reshape(-1).tolist():
+                V_b = gamma[b] @ dq[b] + (W[b] if W is not None else 0.0)
+                H_b = H0[b] - site_potential_matrix(V_b)
+                jac = hole_response(H_b, (int(n_s[0][b]), int(n_s[1][b])), (int(n_ref[0][b]), int(n_ref[1][b])),
+                                    sigma_s, spectrum=(sol.fills[0].eps[b], sol.fills[0].U[b])) @ gamma[b]
+                step[b] = _newton_step(res[b], jac)
+            scale = torch.ones(B, dtype=H0.dtype, device=H0.device)
+            accepted = torch.zeros(B, dtype=torch.bool, device=H0.device)
+            for _ in range(opt.max_backtrack):
+                trial = dq + scale.unsqueeze(-1) * step
+                r_t = (_batched_fillings(H0, gamma, W, trial, n_s, n_ref, sigma_s).dq - trial).abs().amax(dim=-1)
+                ok = active & ~accepted & (r_t < r_norm)
+                accepted = accepted | ok
+                scale = torch.where(active & ~accepted, scale * 0.5, scale)
+                if bool((accepted | ~active).all()):
+                    break
+            newton_dq = dq + scale.unsqueeze(-1) * step
+            fallback_dq = dq + opt.mixing * res
+            dq = torch.where((active & accepted).unsqueeze(-1), newton_dq,
+                             torch.where(active.unsqueeze(-1), fallback_dq, dq))
+    # Attached pass at the fixed point (per graph implicit derivative when asked).
+    if implicit:
+        dq_leaf = dq.detach().clone().requires_grad_(True)
+        sol1 = _batched_fillings(H0, gamma, W, dq_leaf, n_s, n_ref, sigma_s)
+        A_T = torch.zeros(B, n_atoms, n_atoms, dtype=H0.dtype, device=H0.device)
+        for b in range(B):
+            V_b = (gamma[b] @ dq_leaf[b] + (W[b] if W is not None else 0.0)).detach()
+            H_b = (H0[b] - site_potential_matrix(V_b)).detach()
+            jac = hole_response(H_b, (int(n_s[0][b]), int(n_s[1][b])), (int(n_ref[0][b]), int(n_ref[1][b])),
+                                sigma_s, spectrum=(sol1.fills[0].eps[b], sol1.fills[0].U[b])) @ gamma[b].detach()
+            A_T[b] = (torch.eye(n_atoms, dtype=H0.dtype, device=H0.device) - jac).transpose(0, 1)
+        dq_star = sol1.dq
+        dq_star.register_hook(lambda c: torch.linalg.solve(A_T, c.unsqueeze(-1)).squeeze(-1))
+    else:
+        dq_star = dq.detach()
+    V = torch.einsum("bij,bj->bi", gamma, dq_star) + (W if W is not None else 0.0)
+    H = H0 - torch.diag_embed(V.repeat_interleave(ORBITALS, dim=-1))
+    sol = two_fillings(H, n_s, n_ref, sigma_s)
+    residual = (sol.dq.detach() - dq_star.detach()).abs().amax(dim=-1)
+    energy = sol.energy - 0.5 * torch.einsum("bi,bij,bj->b", dq_star, gamma, dq_star)
+    primary = []
+    commutator = []
+    for b in range(B):
+        one = TwoFillings(energy=sol.energy[b], dP=sol.dP[b], dq=sol.dq[b],
+                          fills=tuple(FillResult(P=f.P[b], mu=f.mu[b], eps=f.eps[b], U=f.U[b], f=f.f[b],
+                                                 F_band=f.F_band[b], entropy=f.entropy[b]) for f in sol.fills))
+        primary.append(primary_functional(H0[b], gamma[b], one, None if W is None else W[b]))
+        P_s = sol.fills[0].P[b].detach()
+        H_next = (H0[b] - site_potential_matrix(gamma[b] @ sol.dq[b].detach() + (W[b] if W is not None else 0.0))).detach()
+        commutator.append(float((H_next @ P_s - P_s @ H_next).norm()))
+    hist = torch.stack(history, dim=0)                                            # [K, B]
+    rho = []
+    for b in range(B):
+        tail = [float(x) for x in hist[:, b].tolist() if x > 0][-4:]
+        rho.append(float(tail[-1] / tail[-2]) if len(tail) >= 2 else 0.0)
+    return BatchedScfResult(energy=energy, energy_primary=torch.stack(primary), dP=sol.dP, dq=sol.dq,
+                            V=V.detach(), iterations=iterations.tolist(), converged=converged.tolist(),
+                            residual=residual.tolist(), commutator=commutator, rho=rho, fills=sol.fills)
+
+
+def continuation_solve_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s, n_ref, sigma_s: float = SIGMA_S,
+                               W: Optional[torch.Tensor] = None, options: Optional[ScfOptions] = None,
+                               implicit: bool = False) -> BatchedScfResult:
+    """D11 for a batch: the continuation from Phi = 0 with the last solve carrying the
+    gradient; iteration counts summed over the ramp."""
+    opt = options or ScfOptions()
+    if int(opt.continuation_steps) <= 0:
+        return solve_dscc_batched(H0, gamma, n_s, n_ref, sigma_s, W, None, opt, implicit=implicit)
+    steps = int(opt.continuation_steps)
+    dq = two_fillings(H0, n_s, n_ref, sigma_s).dq.detach()
+    total = None
+    result = None
+    for k in range(1, steps + 1):
+        frac = k / steps
+        result = solve_dscc_batched(H0, frac * gamma, n_s, n_ref, sigma_s, None if W is None else frac * W,
+                                    dq, opt, implicit=implicit and k == steps)
+        dq = result.dq.detach()
+        total = result.iterations if total is None else [a + b for a, b in zip(total, result.iterations)]
+    assert result is not None
+    result.iterations = total
+    return result

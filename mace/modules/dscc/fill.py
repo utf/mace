@@ -54,11 +54,37 @@ def chemical_potential(eps: torch.Tensor, n_electrons, sigma_s: float,
     `sigma_s = 0.05 eV`); detached, which is exact at fixed `N`."""
     eps = eps.detach()
     n = torch.as_tensor(n_electrons, dtype=eps.dtype, device=eps.device)
-    mu = _cnt.find_mu(eps, n, sigma_s, "gaussian", tol=tol)
+    if n.dim() == 0:
+        n = n.expand(eps.shape[:-1])
+    # Safeguarded Newton from the mid-gap of the integer count (the SCF profile put the
+    # ~50-step bisection at a quarter of the forward): the count is monotone in mu, so a
+    # Newton step is accepted when it stays inside the shrinking bracket [lo, hi] and a
+    # bisection step is taken otherwise. Converges in a handful of steps for a gapped
+    # spectrum and never worse than bisection.
+    sorted_eps = torch.sort(eps, dim=-1).values
+    n_int = n.round().long().clamp(1, eps.shape[-1] - 1)
+    e_below = torch.gather(sorted_eps, -1, (n_int - 1).unsqueeze(-1)).squeeze(-1)
+    e_above = torch.gather(sorted_eps, -1, n_int.unsqueeze(-1)).squeeze(-1)
+    mu = 0.5 * (e_below + e_above)
+    lo = eps.amin(dim=-1) - 50.0 * sigma_s - 1.0
+    hi = eps.amax(dim=-1) + 50.0 * sigma_s + 1.0
+    for _ in range(60):
+        x = (eps - mu.unsqueeze(-1)) / sigma_s
+        count = (0.5 * torch.erfc(x)).sum(dim=-1) - n
+        slope = (torch.exp(-x * x) / (sigma_s * _SQRT_PI)).sum(dim=-1)    # d(sum f)/d mu > 0
+        hi = torch.where(count > 0, mu, hi)                                # too many electrons: mu too high
+        lo = torch.where(count > 0, lo, mu)
+        newton = mu - count / slope.clamp_min(1e-300)
+        inside = (newton > lo) & (newton < hi) & (slope > 1e-300)
+        mu_new = torch.where(inside, newton, 0.5 * (lo + hi))
+        done = (count.abs() < 1e-13) | ((hi - lo) < tol)
+        mu = torch.where(done, mu, mu_new)
+        if bool(done.all()):
+            break
     for _ in range(polish):
         x = (eps - mu.unsqueeze(-1)) / sigma_s
         count = (0.5 * torch.erfc(x)).sum(dim=-1) - n
-        slope = (torch.exp(-x * x) / (sigma_s * _SQRT_PI)).sum(dim=-1)   # d(sum f)/d mu > 0
+        slope = (torch.exp(-x * x) / (sigma_s * _SQRT_PI)).sum(dim=-1)
         mu = torch.where(slope > 1e-300, mu - count / slope, mu)
     return mu
 

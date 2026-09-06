@@ -265,17 +265,16 @@ class Trainer:
         if not self.cfg.coupling or not indices:
             return {"checked": 0, "failed": 0, "fraction": 0.0}
         self.model.eval()
-        failed = 0
+        failed = []
         for i in indices:
             batch = to_device(next(iter(torch_geometric.dataloader.DataLoader(self._dataset([i]), batch_size=1))), self.device)
             with torch.no_grad():
-                out = self.model(batch, compute_force=False)
-            # Re-solve from zero and from a perturbed warm start through the model's own path.
-            with torch.no_grad():
-                alt = self.model(batch, compute_force=False, warm_start=[torch.zeros_like(out["dq"])])
-            if float((alt["dq"] - out["dq"]).abs().max()) > self.model.scf_options.tol_root:
-                failed += 1
-        return {"checked": len(indices), "failed": failed, "fraction": failed / len(indices)}
+                out = self.model(batch, compute_force=False)                      # production: continuation
+                alt = self.model(batch, compute_force=False, warm_start=[torch.zeros_like(out["dq"])])   # (i) zero start
+            if float((alt["dq"] - out["dq"]).abs().max()) > self.model.scf_options.tol_root or not out["diagnostics"]["converged"][0]:
+                failed.append(int(i))
+        return {"checked": len(indices), "failed": len(failed), "fraction": len(failed) / len(indices),
+                "failed_frames": failed}
 
     # ------------------------------------------------------------ loop
 
@@ -293,14 +292,25 @@ class Trainer:
             sampler.set_epoch(epoch)
             t0 = time.time()
             stats = {"loss": 0.0, "force": 0.0, "gap": 0.0, "unconverged": 0, "n": 0}
+            # C5 (v4.2): single-valuedness on a registered subsample at the start of the
+            # epoch; frames that fail are dropped from this epoch's steps, the fraction logged.
+            dropped = set()
+            sv_pre = None
+            if cfg.coupling:
+                sample = rng.choice(self.train_idx, size=min(cfg.single_valued_subsample, len(self.train_idx)), replace=False).tolist()
+                sv_pre = self.single_valuedness(sample)
+                dropped = set(sv_pre.get("failed_frames", []))
             for local_batch in sampler:
+                local_batch = [j for j in local_batch if self.train_idx[j] not in dropped]
+                if not local_batch:
+                    continue
                 batch = to_device(torch_geometric.dataloader.Batch.from_data_list([ds[j] for j in local_batch]), self.device)
                 frame_indices = [self.train_idx[j] for j in local_batch]
                 s = self.step(batch, frame_indices, optimizer)
                 for key in ("loss", "force", "unconverged"):
                     stats[key] += s[key]
                 stats["gap"] = s["gap"]; stats["n"] += 1
-            sv = self.single_valuedness(rng.choice(self.train_idx, size=min(cfg.single_valued_subsample, len(self.train_idx)), replace=False).tolist()) if cfg.coupling else None
+            sv = sv_pre
             entry = {"epoch": epoch, "loss": stats["loss"] / max(stats["n"], 1), "force": stats["force"] / max(stats["n"], 1),
                      "gap": stats["gap"], "unconverged": stats["unconverged"], "single_valued": sv,
                      "lambda_dir": float(self.model.lambda_dir()), "u_eff": self.model.u_eff().detach().cpu().tolist(),

@@ -84,3 +84,20 @@ class TestFill:
                 fl.fill(_random_h(4, 6), 2.0)
         finally:
             cnt.use_smearing(*previous) if isinstance(previous, tuple) else cnt.use_smearing("gaussian", 0.05)
+
+
+def test_newton_chemical_potential_matches_bisection_to_the_floor():
+    from mace.modules import defect_counting as cnt
+    for seed, n, scale in ((0, 5.0, 1.0), (1, 4.0, 0.05), (2, 7.0, 3.0)):
+        H = _random_h(12, seed, scale=scale)
+        eps = torch.linalg.eigvalsh(H)
+        mu = fl.chemical_potential(eps, n, fl.SIGMA_S)
+        ref = cnt.find_mu(eps, n, fl.SIGMA_S, "gaussian", tol=1e-13)
+        assert float(fl.occupations(eps, mu, fl.SIGMA_S).sum()) == pytest.approx(n, abs=1e-12)
+        # mu is not unique inside a gap (any value beyond the smearing tails gives the same
+        # occupations): compare the occupations, which are what the fill uses.
+        assert torch.allclose(fl.occupations(eps, mu, fl.SIGMA_S), fl.occupations(eps, ref, fl.SIGMA_S), atol=1e-12)
+    # batched, per-frame counts
+    Hs = torch.stack([_random_h(9, 4), _random_h(9, 5)]); eps = torch.linalg.eigvalsh(Hs)
+    mu = fl.chemical_potential(eps, torch.tensor([3.0, 5.0]), fl.SIGMA_S)
+    assert torch.allclose(fl.occupations(eps, mu, fl.SIGMA_S).sum(-1), torch.tensor([3.0, 5.0]), atol=1e-12)

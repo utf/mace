@@ -428,3 +428,26 @@ class TestCouplingModes:
         m.set_coupling_mode("lambda1")
         fresh.load_state_dict(m.state_dict())
         assert fresh.coupling_mode == "lambda1" and fresh.lambda_fixed == 1.0
+
+
+class TestBatchedCoupled:
+    @pytest.mark.parametrize("route_b", [False, True])
+    def test_batched_scf_path_equals_per_graph(self, route_b):
+        from mace.modules.dscc.scf import ScfOptions
+        m = _coupled(regime="B", route_b=route_b)
+        m.scf_options = ScfOptions(tol_q=1e-11, tol_E=1e-11, continuation_steps=2)
+        vac_b = _frame(_perovskite(remove_cl=3, seed=2), [0, 0, 1, 0], 1)
+        out = m(_batch([VACP, vac_b]), compute_force=True)
+        assert out["diagnostics"].get("batched") is True and out["diagnostics"]["converged"] == [True, True]
+        for k, atoms in enumerate((VACP, vac_b)):
+            single = m(_batch([atoms, VAC0]), compute_force=True)      # a reference graph forces the per-graph path
+            assert single["diagnostics"].get("batched") is None
+            n = len(atoms)
+            assert float((out["energy"][k] - single["energy"][0]).abs()) < 1e-9
+            assert float((out["forces"][k * n:(k + 1) * n] - single["forces"][:n]).abs().max()) < 1e-8
+            assert float((out["dq"][k * n:(k + 1) * n] - single["dq"][:n]).abs().max()) < 1e-9
+        # Training gradient through the batched implicit path is finite and nonzero.
+        m.zero_grad(set_to_none=True)
+        o = m(_batch([VACP, vac_b]), training=True, compute_force=True)
+        (o["forces"] ** 2).sum().backward()
+        assert torch.isfinite(m.lambda_raw.grad) and float(m.lambda_raw.grad.abs()) > 0

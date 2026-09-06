@@ -35,8 +35,8 @@ from mace.modules.dscc.hamiltonian import (A_MAX_DEFAULT, B_MAX_DEFAULT, H0, Q_C
                                            R_CUT_DEFAULT)
 from mace.modules.dscc.kernels import (KernelConfig, gamma_lr, gamma_matrix, host_potential,
                                        kernel_components)
-from mace.modules.dscc.scf import (ScfOptions, ScfResult, continuation_solve, solve_dscc,
-                                   two_fillings)
+from mace.modules.dscc.scf import (ScfOptions, ScfResult, continuation_solve, continuation_solve_batched,
+                                   solve_dscc, two_fillings)
 from mace.modules.dscc.species import (N0, S_REF, State, U_MAX_GFN1, neutral_count,
                                        states_from_batch)
 from mace.modules.dscc.fill import fill
@@ -203,6 +203,15 @@ class MACEDSCC(nn.Module):
     def pattern_scale(self) -> torch.Tensor:
         """Route B': the single global scale `s = s_max sigmoid(s_raw)`, 1 at initialisation."""
         return self.s_max * torch.sigmoid(self.s_raw)
+
+    def reference_charges_batched(self, H: torch.Tensor, n0: torch.Tensor, n_up: torch.Tensor,
+                                  n_dn: torch.Tensor) -> torch.Tensor:
+        """`reference_charges` for `H [B, 4n, 4n]` with per-graph `n0 [B, N]` and counts."""
+        with torch.no_grad():
+            spectrum = torch.linalg.eigh(H)
+        P = fill(H, n_up, self.sigma_s, spectrum).P + fill(H, n_dn, self.sigma_s, spectrum).P
+        occupied = torch.diagonal(P, dim1=-2, dim2=-1).reshape(H.shape[0], -1, 4).sum(-1)
+        return n0 - occupied
 
     def reference_charges(self, H: torch.Tensor, numbers: Sequence[int]) -> torch.Tensor:
         """Route B' (v4.2): `q0_i = n0[Z_i] - sum_sigma Tr(Pi_i P_ref_sigma(H0))` at `H = H0`
@@ -439,26 +448,63 @@ class MACEDSCC(nn.Module):
         dq_all = torch.zeros(positions.shape[0], dtype=torch.float64, device=device)
         diagnostics: Dict[str, List[Any]] = {"dq_sum": [], "n_atoms": []}
         sizes = (ptr[1:] - ptr[:-1])
-        uniform = (not self.coupling and all(not s_.is_reference for s_ in states)
-                   and bool((sizes == sizes[0]).all()))
+        uniform = (all(not s_.is_reference for s_ in states) and bool((sizes == sizes[0]).all())
+                   and warm_start is None)
         if uniform:
-            # Phi = 0, equal sizes: one [B, 4n, 4n] Hamiltonian, one batched fill, one
-            # cotangent -- the per-graph path below is the reference it is tested against.
+            # Equal sizes, no reference graph: one [B, 4n, 4n] Hamiltonian, batched fills
+            # (and the batched solver when the coupling is on), block-diagonal cotangents --
+            # the per-graph path below is the reference it is tested against.
             n_nodes = int(sizes[0])
             H = self.h0.batched(scalars, vectors, species, data["edge_index"], edge_vector, batch,
                                 num_graphs, n_nodes)
-            n_up, n_dn, r_up, r_dn = [], [], [], []
+            n_up, n_dn, r_up, r_dn, n0_rows = [], [], [], [], []
             for g, state in enumerate(states):
                 numbers = [self.atomic_numbers[int(x)] for x in species[int(ptr[g]):int(ptr[g + 1])].tolist()]
                 n_ref = neutral_count(numbers)
                 a, b = state.counts(n_ref); c, d = State(0, 0, 0).counts(n_ref)
                 n_up.append(a); n_dn.append(b); r_up.append(c); r_dn.append(d)
+                n0_rows.append([float(N0[z]) for z in numbers])
             t = lambda v: torch.tensor(v, dtype=torch.float64, device=device)  # noqa: E731
-            sol = two_fillings(H, (t(n_up), t(n_dn)), (t(r_up), t(r_dn)), self.sigma_s)
-            head_energy = sol.energy
-            cotangent_terms.append((H, 0.5 * (sol.dP + sol.dP.transpose(-1, -2))))
-            dq_all = sol.dq.reshape(-1)
-            diagnostics["dq_sum"] = sol.dq.sum(-1).detach().cpu().tolist()
+            counts_s, counts_r = (t(n_up), t(n_dn)), (t(r_up), t(r_dn))
+            if not self.coupling:
+                sol = two_fillings(H, counts_s, counts_r, self.sigma_s)
+                head_energy = sol.energy
+                cotangent_terms.append((H, 0.5 * (sol.dP + sol.dP.transpose(-1, -2))))
+                dq_all = sol.dq.reshape(-1)
+            else:
+                gammas, Ws = [], []
+                pos_b = positions.reshape(num_graphs, n_nodes, 3)
+                sp_b = species.reshape(num_graphs, n_nodes)
+                for g in range(num_graphs):
+                    k_sr, k_lr = kernel_components(pos_b[g], cell[g], self.kernel)
+                    gammas.append(gamma_matrix(k_sr, k_lr, self.lambda_dir(), self.u_eff()[sp_b[g]], self.kernel.eps_inf))
+                    if self.route_b:
+                        Ws.append(gamma_lr(pos_b[g], cell[g], self.kernel.r_g, self.r_split, self.kernel.eps_inf, tol=self.kernel.tol))
+                gamma = torch.stack(gammas)
+                W = None
+                if self.route_b:
+                    q0 = self.reference_charges_batched(H, t(n0_rows), counts_r[0], counts_r[1])
+                    W = torch.einsum("bij,bj->bi", torch.stack(Ws), self.pattern_scale() * q0)
+                    diagnostics["q0_sum"] = q0.detach().sum(-1).cpu().tolist()
+                    diagnostics["compensation_cloud"] = [self.compensation_cloud(q0[g], sp_b[g], pos_b[g], cell[g]) for g in range(num_graphs)]
+                res = continuation_solve_batched(H, gamma, counts_s, counts_r, self.sigma_s, W, self.scf_options,
+                                                 implicit=training and self.scf_options.method == "newton")
+                head_energy = res.energy
+                dq_fixed = res.dq.detach()
+                V_fixed = torch.einsum("bij,bj->bi", gamma, dq_fixed) + (W if W is not None else 0.0)
+                H_sc = H - torch.diag_embed(V_fixed.repeat_interleave(4, dim=-1))
+                cotangent_terms.append((H_sc, 0.5 * (res.dP + res.dP.transpose(-1, -2))))
+                cotangent_terms.append((gamma, -0.5 * res.dq.unsqueeze(-1) * res.dq.unsqueeze(-2)))
+                dq_all = res.dq.reshape(-1)
+                for key, values in (("iterations", res.iterations), ("converged", res.converged),
+                                    ("residual", res.residual), ("commutator", res.commutator), ("rho", res.rho),
+                                    ("band_minus_primary", (res.energy.detach() - res.energy_primary).cpu().tolist())):
+                    diagnostics[key] = list(values)
+                if not all(res.converged):
+                    import logging
+                    logging.warning("D-SCC: %d of %d graphs hit n_max=%d; flagged, not accepted",
+                                    sum(1 for c in res.converged if not c), num_graphs, self.scf_options.n_max)
+            diagnostics["dq_sum"] = dq_all.reshape(num_graphs, n_nodes).sum(-1).detach().cpu().tolist()
             diagnostics["n_atoms"] = [n_nodes] * num_graphs
             diagnostics["batched"] = True
         for g, state in enumerate(states):
