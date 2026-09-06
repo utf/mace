@@ -67,6 +67,81 @@ def state_digests(model, counts) -> Tuple[str, ...]:
     return StateBatch.from_counts(counts.reshape(counts.shape[0], -1), policy).key_digests()
 
 
+# --------------------------------------------------------------- v8.1 result fingerprints
+
+def _stable_json(obj) -> str:
+    import json
+
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str)
+
+
+def model_fingerprint(model) -> Dict[str, str]:
+    """The fields of plan v8.1 section 6.3 that name a charged-energy result's provenance,
+    as short content hashes: model/checkpoint and parameter hash, the frozen-pristine
+    spectral-gauge record, the constructor record (class table), the boundary kernel and
+    potential-zero convention, the occupation/smearing implementation, the functional
+    settings and the solver regime. `result_key` combines them with the geometry and state.
+    Partial keys (geometry-only, charge-only) are not offered."""
+    from mace.modules.defect_state import STATE_SCHEMA_VERSION, policy_version
+
+    params = hashlib.sha256()
+    for name, tensor in sorted(model.named_parameters()):
+        params.update(name.encode())
+        params.update(tensor.detach().cpu().to(torch.float64).contiguous().numpy().tobytes())
+    gauge = getattr(model, "gauge_record", None)
+    if gauge:
+        from mace.modules.defect_gauge import GaugeRecord
+
+        gauge_fp = GaugeRecord.from_dict(gauge).fingerprint
+    else:
+        gauge_fp = "ungauged"
+    table = getattr(model, "composition_classes", None) or {}
+    constructor = hashlib.sha256(_stable_json(
+        {"table": table, "constructor": getattr(model, "class_constructor", None)}).encode()
+    ).hexdigest()[:16]
+    head = getattr(model, "spectral", None)
+    policy = getattr(model, "occupation_policy", "count_fill")
+    occupation = _stable_json({
+        "policy": policy, "policy_version": policy_version(policy),
+        "state_schema": STATE_SCHEMA_VERSION,
+        "smearing": getattr(head, "smearing_family", None),
+        "t_el": getattr(head, "t_el", None)})
+    boundary = _stable_json({
+        "gauge": getattr(model, "gauge", "periodic"),
+        "madelung_range": getattr(model, "madelung_range", "full"),
+        "eps_inf": getattr(model, "madelung_eps_inf", None),
+        "ewald": (repr(getattr(getattr(model, "frontier_ewald", None), "arguments", None))
+                  if getattr(model, "frontier_ewald", None) is not None else None),
+        "potential_zero": "tin-foil, neutralising background, zero reciprocal mode removed"})
+    functional = _stable_json(getattr(model, "functional", None))
+    solver = _stable_json({"dtype": str(torch.get_default_dtype()),
+                           "precision_policy": getattr(model, "precision_policy", "uniform"),
+                           "batch_by_size": getattr(head, "batch_by_size", True)})
+    return {
+        "parameters": params.hexdigest()[:16],
+        "base": base_checksum(model).hex()[:16],
+        "gauge": gauge_fp,
+        "constructor": constructor,
+        "boundary": hashlib.sha256(boundary.encode()).hexdigest()[:16],
+        "occupation": hashlib.sha256(occupation.encode()).hexdigest()[:16],
+        "functional": hashlib.sha256(functional.encode()).hexdigest()[:16],
+        "solver": hashlib.sha256(solver.encode()).hexdigest()[:16],
+    }
+
+
+def result_key(model, atomic_numbers, positions, cell, state_digest: str,
+               extra: Optional[Dict[str, Any]] = None) -> str:
+    """One content hash naming a charged-energy result: exact geometry and cell, the
+    canonical physical state, and every model-side field of `model_fingerprint`. A result
+    computed under a different gauge, table, boundary, occupation implementation,
+    functional setting or solver regime keys differently by construction."""
+    payload = dict(model_fingerprint(model))
+    payload["frame"] = str(frame_key(atomic_numbers, positions, cell))
+    payload["state"] = str(state_digest)
+    payload["extra"] = _stable_json(extra or {})
+    return hashlib.sha256(_stable_json(payload).encode()).hexdigest()
+
+
 # ----------------------------------------------------------------------------- frame keys
 
 def frame_key(atomic_numbers, positions, cell) -> int:
