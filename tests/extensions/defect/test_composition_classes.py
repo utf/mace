@@ -645,3 +645,78 @@ class TestTheFence:
         assert "build_class_table" in _names(REPO / "mace" / "cli" / "run_train.py")
         # The extractor writes the table under a string key, so a text check is the right one.
         assert '"composition_classes"' in (REPO / "mace" / "tools" / "scripts_utils.py").read_text()
+
+
+class TestAnchorReuseAndRouting:
+    """Addendum 3.2/3.5: the continuation is a ONE-OFF per family, then transport.
+
+    A Cl vacancy in CsPbCl3 is not mixed-valence, so Tier 2 -- which exists for genuinely
+    ambiguous classes -- should not run for it once the family has an accepted anchor.
+    """
+
+    def test_the_first_build_establishes_an_anchor(self, table):
+        anchors = table.get("anchors", [])
+        assert anchors, "the build stored no anchors, so the next build must re-continue"
+        by_source = {a["source"] for a in anchors}
+        assert "pristine" in by_source
+        # Only independently established ranks may seed: a Tier-1 acceptance was itself
+        # certified against u_al and would let a family bootstrap from its own verifier.
+        assert by_source <= {"pristine", "tier2"}
+
+    def test_a_rebuild_runs_no_continuation_at_all(self, harrison_model, frames, table):
+        """The instrumented routing test: no Tier-2 continuation after Tier 1's gates pass."""
+        harrison_model.composition_classes = table
+        calls = []
+        original = dc.tier2
+
+        def _forbidden(*args, **kwargs):
+            calls.append(args)
+            raise AssertionError("Tier 2 ran even though a compatible anchor exists")
+
+        dc.tier2 = _forbidden
+        try:
+            rebuilt = dc.build_class_table(harrison_model, list(frames.values()), log=False,
+                                           seed_anchors=table)
+        finally:
+            dc.tier2 = original
+        assert calls == []
+        # ... and every class is still counted, with the same integers.
+        for key, old in table["classes"].items():
+            new = rebuilt["classes"][key]
+            assert new["counted"] if "counted" in new else new["tier"] is not None
+            for f in ("m_vb", "n_e", "n_h", "q_core"):
+                assert new[f] == old[f], f"{key}: {f} moved on rebuild"
+
+    def test_the_defect_class_is_verified_by_transport_on_a_rebuild(self, harrison_model,
+                                                                    frames, table):
+        harrison_model.composition_classes = table
+        rebuilt = dc.build_class_table(harrison_model, list(frames.values()), log=False,
+                                       seed_anchors=table)
+        small = dc.lookup_class(rebuilt, [17] * 23 + [55] * 8 + [82] * 8)
+        assert small.tier == 1, small.tier1_reason
+        assert "anchor" in small.tier1_reason
+
+    def test_an_unacceptable_tier2_record_may_not_seed_a_family(self, table):
+        """Q_core alone is insufficient -- compensating per-spin errors give the same total."""
+        eta = float(table["eta"])
+        for key, raw in table["classes"].items():
+            rec = dc.ClassRecord.from_dict(raw)
+            if rec.tier != 2:
+                continue
+            ok, _ = dc.tier2_record_is_acceptable(rec, eta)
+            assert ok
+            for field in ("path_agreement", "schedule_agreement"):
+                broken = dc.ClassRecord.from_dict({**raw, field: False})
+                bad, reason = dc.tier2_record_is_acceptable(broken, eta)
+                assert not bad and reason
+            # A closure eigenvalue disqualifies it too.
+            closed = dc.ClassRecord.from_dict({**raw, "gamma": [0.5]})
+            bad, reason = dc.tier2_record_is_acceptable(closed, eta)
+            assert not bad and "closure" in reason
+
+    def test_seeded_anchors_survive_a_table_round_trip(self, table):
+        import json
+        again = json.loads(json.dumps(table))
+        seeded = dc.anchors_from_table(again, table["pristine_key"], float(table["eta"]))
+        assert seeded
+        assert all(a.homology and a.m_vb for a in seeded)

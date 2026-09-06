@@ -115,8 +115,8 @@ Status: `todo` / `wip` / `done` / `blocked`. Keep this column current.
 | 1.8 | Signed-excess counts `d_σ`, `n_e,σ`, `n_h,σ`, `q_F`, `Q_core`; delete additive updates | add §3.3 | done |
 | 1.9 | `m_F(S)` computed and stored in the class/state record | add §3.3 | done |
 | 1.10 | Require `Q_formal(S_ref) = 0` on the production path; nonzero reference retained as algebra-only test | add §3.3 | done (module; production wiring in 1.1) |
-| 1.11 | Split constructor cache: Tier-1 verifier key vs Tier-2 anchor key; invariant vs target field partitions; field-wise cross-size predicate | add §3.5 | done — `defect_constructor_cache.py` |
-| 1.12 | Migrate the existing 159-atom Tier-2 record into the anchor cache **only** if it reconstructs every key field and passes every Tier-2 gate | add §3.5 | **declined** — see D9; no anchor enshrined, class takes the ordinary Tier-2 route |
+| 1.11 | Split constructor cache: Tier-1 verifier key vs Tier-2 anchor key; invariant vs target field partitions; field-wise cross-size predicate | add §3.5 | done — keys in `defect_constructor_cache.py`; anchors persisted and re-seeded in `build_class_table` (D12) |
+| 1.12 | Migrate the existing 159-atom Tier-2 record into the anchor cache **only** if it reconstructs every key field and passes every Tier-2 gate | add §3.5 | done — migration implemented and gated on the §3.2 conditions (`anchors_from_table`); supersedes D9 |
 | 1.13 | Fix `q_raw` definition and its tests | add §4.1 | done — shorthand shown FALSE here, see D4 |
 | 1.14 | Extend every result cache key with geometry/cell, canonical state, checkpoint, constructor, boundary+potential-zero, occupation/smearing, solver-regime and (when `G_∞` is called) lift/support fingerprints | add §3.5, §6.3 | done — delivered by the stopped session; owned here |
 | 1.15 | Tests: electron↔hole crossings; gauge shift invariance (`H → H + aI`); Tier-1 routing test asserting no Tier-2 eigensolve after Tier-1 passes | add §11.1 | wip (gauge shift + crossings done; routing test owed) |
@@ -467,3 +467,47 @@ The cost is a per-frame alignment rather than a cached constant, which the adden
 anticipates ("any continuous geometry-dependent alignment is fully differentiated"). The
 wrong-origin diagnostic is not lost: `||rho_static^raw||` is still reported per frame, and
 now measures a genuine mismatch rather than a bookkeeping offset.
+
+### D12 — the anchor registry must be persisted, or the continuation is not a one-off
+
+Found by a question that was exactly right: *why did any CsPbCl3 class enter Tier 2 at all,
+when it is not mixed valence?* Tier 2 exists for genuinely ambiguous classes, and a Cl
+vacancy is not one. Seeing it there meant the routing had failed to find an anchor, not that
+the class was ambiguous.
+
+Three defects, all in what this session wrote:
+
+1. **Anchors were never persisted.** The registry was a local list rebuilt inside
+   `build_class_table`, so every fresh build started with no anchor and the first class of
+   each family re-ran the continuation. §3.5's whole purpose is that the expensive Tier-2
+   record is cached and the cheap verifier reuses it.
+2. **`defect_constructor_cache.py` was imported nowhere.** The keys and the field-wise
+   cross-size predicate were written and tested, and never wired in -- the same error as
+   marking Tier 1 done while `build_class_table` still called the old VBM test. Writing a
+   module and its tests is not the same as the system using it.
+3. **Ordering forced the smallest class to continue.** Classes were sorted by size, so the
+   79-atom class always ran the continuation even when a larger accepted anchor existed.
+   The addendum expects transport to run *backward* from the 159-atom anchor.
+
+Fixed: `anchors_from_table` seeds the registry from a previous build's stored anchors and
+from accepted Tier-2 class records (the §3.5 migration, gated on §3.2's conditions -- both
+paths agreed, both schedules agreed, no closure eigenvalue; `Q_core` alone is explicitly
+insufficient because compensating per-spin rank errors give the same total). Accepted
+anchors are written to `table["anchors"]`. Ordering is by anchor availability, not size.
+Only ranks established independently of a verifier -- exact-by-count or Tier-2-accepted --
+may seed, so a family cannot bootstrap from its own verifier.
+
+`verify_class_table` no longer compares `tier`. It is a routing diagnostic: after the anchor
+exists a rebuild verifies by transport where the first build continued, so `tier` moves
+2 -> 1 while every integer is unchanged. Comparing it reported the cache *working* as a
+failure.
+
+**Measured effect on a cold build** (79/159-atom classes, `arma_s1`):
+
+```
+cold (no anchor): 9.93 s   tiers [1, 1, 2]
+warm (anchored) : 4.61 s   tiers [1, 1, 1]        2.2x, integers identical
+```
+
+The instrumented test the addendum names is now present: `tier2` is monkeypatched to raise,
+and a rebuild with a seeded anchor completes without calling it.

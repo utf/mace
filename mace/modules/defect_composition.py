@@ -544,7 +544,8 @@ def _single_frame_dict(frame, device) -> Dict[str, torch.Tensor]:
 
 def build_class_table(model, frames: Sequence, device="cpu", formula=None,
                       config: Optional[Dict[str, Any]] = None,
-                      quantiles: np.ndarray = QUANTILES, log: bool = True) -> Dict[str, Any]:
+                      quantiles: np.ndarray = QUANTILES, log: bool = True,
+                      seed_anchors: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Establish the integers of every composition class present in `frames`.
 
     `frames` are `AtomicData` (with `frame_key` attached, `defect_cache.attach_frame_keys`).
@@ -600,10 +601,33 @@ def build_class_table(model, frames: Sequence, device="cpu", formula=None,
     # Order matters: the pristine class is exact by electron count and must be ranked first,
     # then defect classes smallest-first so a cheap small cell can anchor a large one. A
     # family whose first size has no anchor routes to Tier 2, which is the intended cost.
-    anchors: List[RankAnchor] = []
+    # Seed from a table already established, so an accepted continuation is reused instead
+    # of repeated. Without this the registry starts empty on every build and the first size
+    # of each family re-runs Tier 2 -- which for a non-mixed-valence class is exactly the
+    # work Tier 2 exists to avoid.
+    anchors: List[RankAnchor] = anchors_from_table(
+        getattr(model, "composition_classes", None) if seed_anchors is None else seed_anchors,
+        pristine_key, float(cfg["eta"]))
+    seeded = {a.homology for a in anchors}
     calibration: List[Tuple[float, str]] = []
-    ordered = sorted(firsts.items(),
-                     key=lambda kv: (kv[0] != pristine_key, kv[1].num_nodes, kv[0]))
+
+    def _homology_of(key: str, fr) -> str:
+        mapping = tiling_map(_frame_geometry(fr, model)[2], pristine_cell, 
+                             len(_numbers_of(fr, model)), pristine_frame.num_nodes)
+        return homology_signature(key, pristine_key,
+                                  mapping[0] if mapping else (1, 1, 1))
+
+    # Order by ANCHOR AVAILABILITY, not by size: the pristine class first (exact by electron
+    # count), then every class whose family already has an anchor and so can be verified by
+    # transport, and only then the rest -- smallest first, because one of those must pay for
+    # a continuation to seed its family. Sorting purely by size, as this did, guaranteed the
+    # SMALLEST class of every family ran the continuation even when a larger accepted anchor
+    # was available to transport backward from (addendum 3.2).
+    ordered = sorted(
+        firsts.items(),
+        key=lambda kv: (kv[0] != pristine_key,
+                        _homology_of(kv[0], kv[1]) not in seeded,
+                        kv[1].num_nodes, kv[0]))
     for key, fr in ordered:
         numbers, _, cell = _frame_geometry(fr, model)
         mapping = tiling_map(cell, pristine_cell, len(numbers), pristine_frame.num_nodes)
@@ -730,12 +754,23 @@ def build_class_table(model, frames: Sequence, device="cpu", formula=None,
             # Tier-2-accepted. A Tier-1 acceptance was itself certified BY u_al, so it is
             # deliberately not added to the calibration -- that would let the envelope
             # grow to justify the acceptances it produced.
-            anchors.append(RankAnchor(
+            anchor = RankAnchor(
                 homology=homology, n_atoms=int(spec["n_atoms"]), m_vb=m_vb,
                 pristine_rank=(n_pri, n_pri),
                 source="pristine" if key == pristine_key else (
                     "tier2" if tier == 2 else "certified"),
-                source_hash=f"{key}@{_frame_key_of(fr)}"))
+                source_hash=f"{key}@{_frame_key_of(fr)}")
+            anchors.append(anchor)
+            # Persisted, so the next build transports instead of continuing. Only ranks
+            # established independently of a verifier -- exact-by-count or Tier-2-accepted --
+            # are stored: a Tier-1 acceptance was itself certified against u_al, and storing
+            # it would let the family bootstrap itself from its own verifier.
+            if anchor.source in ("pristine", "tier2"):
+                table.setdefault("anchors", []).append(
+                    {"homology": anchor.homology, "n_atoms": anchor.n_atoms,
+                     "m_vb": list(anchor.m_vb), "pristine_rank": list(anchor.pristine_rank),
+                     "source": anchor.source, "source_hash": anchor.source_hash,
+                     "invariant_key": anchor.invariant_key})
             if tier == 2 or key == pristine_key:
                 calibration.append((
                     float(np.sort(np.asarray(spec["spectrum"]))[m_vb_one - 1] - aligned.vbm_al),
@@ -878,6 +913,76 @@ def tiled_pristine_scaled(model, pristine_frame, factors, perm
     species = torch.tensor([zs.index(int(z)) for z in numbers], dtype=torch.long)
     return species, torch.tensor(scaled, dtype=torch.get_default_dtype())
 
+
+
+
+# The Tier-2 acceptance conditions a stored record must satisfy before it may seed a family
+# (addendum 3.2). Q_core alone is explicitly insufficient: compensating per-spin rank errors
+# give the same total, so the per-path and per-schedule agreement and the absence of a
+# closure eigenvalue are all required.
+def tier2_record_is_acceptable(record: "ClassRecord", eta: float) -> Tuple[bool, str]:
+    """Whether an accepted Tier-2 class record may be retained as a family anchor."""
+    if record.tier != 2 or not record.counted:
+        return False, "not an accepted Tier-2 record"
+    if not record.path_agreement:
+        return False, "the two continuation paths disagreed"
+    if not record.schedule_agreement:
+        return False, "the two step schedules disagreed"
+    gamma = np.asarray(record.gamma, dtype=np.float64) if record.gamma else np.zeros(0)
+    if gamma.size:
+        closure = ((gamma >= eta) & (gamma <= 1.0 - eta)).sum()
+        if closure:
+            return False, f"{int(closure)} endpoint eigenvalue(s) in the closure band"
+    return True, ""
+
+
+def anchors_from_table(table: Optional[Dict[str, Any]], pristine_key: Optional[str],
+                       eta: float) -> List[RankAnchor]:
+    """Seed the anchor registry from a table already established.
+
+    Two sources, in the addendum's own order of authority: anchors persisted by a previous
+    build, and accepted Tier-2 class records migrated in (3.5). Migration is gated on the
+    3.2 acceptance conditions, and it carries the record's own provenance rather than
+    inventing one.
+
+    This is what keeps the continuation a ONE-OFF per family. Without it the registry starts
+    empty on every build, the first size of each family re-runs the continuation, and a
+    non-mixed-valence class -- which Tier 2 exists to avoid -- pays for it every time.
+    """
+    if not table:
+        return []
+    out: List[RankAnchor] = []
+    for entry in table.get("anchors", []) or []:
+        out.append(RankAnchor(
+            homology=str(entry["homology"]), n_atoms=int(entry["n_atoms"]),
+            m_vb=tuple(int(x) for x in entry["m_vb"]),
+            pristine_rank=tuple(int(x) for x in entry["pristine_rank"]),
+            source=str(entry.get("source", "certified")),
+            source_hash=str(entry.get("source_hash", "")),
+            invariant_key=str(entry.get("invariant_key", ""))))
+    known = {(a.homology, a.n_atoms) for a in out}
+    for key, raw in (table.get("classes") or {}).items():
+        try:
+            record = ClassRecord.from_dict(raw)
+        except Exception:                                    # pragma: no cover - defensive
+            continue
+        if record.tier != 2:
+            continue
+        ok, _ = tier2_record_is_acceptable(record, eta)
+        if not ok:
+            continue
+        homology = homology_signature(key, pristine_key or key, record.tiling)
+        pristine_rank = tuple(int(m) - int(d) for m, d in zip(record.m_vb, record.d_sigma)) \
+            if record.d_sigma else record.m_vb
+        # The pristine rank of the record's own tiling is what the transport equation needs;
+        # it is recomputed at build time, so only the accepted rank is carried across here.
+        if (homology, record.n_atoms) in known:
+            continue
+        out.append(RankAnchor(
+            homology=homology, n_atoms=int(record.n_atoms), m_vb=record.m_vb,
+            pristine_rank=pristine_rank, source="tier2",
+            source_hash=f"{key}@{record.reference_frame_key}"))
+    return out
 
 
 def _alignment_anchor(species: torch.Tensor, pri_species: torch.Tensor,
@@ -1036,6 +1141,8 @@ def lookup_class(table: Dict[str, Any], atomic_numbers: Sequence[int]) -> ClassR
 def verify_class_table(model, frames: Sequence, device="cpu", table=None) -> List[str]:
     """Recompute every class from the SAME reference frames and list the integers that moved.
 
+    Integers, not routing: see the loop below on why `tier` is excluded.
+
     Stage 4's class-count invariance test calls this after training: the integers must be
     unchanged by parameter motion, R, Q and cell tiling. Returns the differences, empty when
     the table is reproduced.
@@ -1051,7 +1158,14 @@ def verify_class_table(model, frames: Sequence, device="cpu", table=None) -> Lis
         if new is None:
             diffs.append(f"{key}: absent from the frames")
             continue
-        for f in ("tier", "m_vb", "n_e", "n_h", "q_core"):
+        # INTEGERS only. `tier` is a routing diagnostic and is deliberately excluded: once a
+        # family has an accepted anchor, a rebuild verifies by transport where the first
+        # build ran the continuation, so tier legitimately moves 2 -> 1 while every integer
+        # is unchanged. Treating that as a moved integer would report the anchor cache
+        # working as a failure, and would hide a real change among the noise.
+        for f in ("m_vb", "n_e", "n_h", "q_core", "d_sigma", "m_f"):
+            if f not in old or f not in new:
+                continue                     # schema addition, not a moved integer
             if old[f] != new[f]:
                 diffs.append(f"{key}: {f} {old[f]} -> {new[f]}")
     return diffs
