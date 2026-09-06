@@ -73,6 +73,7 @@ def stage4_terms(model, entries: Sequence[Optional[FrontierEntry]], state, state
         "phi_img_ref": zeros.clone(), "phi_img_pbc_ref": zeros.clone(),
         "q_img": sentinel.clone(), "q_img_ref": sentinel.clone(),
         "w_min": sentinel.clone(), "clearance_mass": sentinel.clone(),
+        "n_eff_max": sentinel.clone(), "r_eff_max": sentinel.clone(),
         "lift_fingerprint": [None] * num_graphs, "evaluated": 0}
     off_reference = (~state.is_reference(state_ref_spec)).clone()
     if not bool(off_reference.any()):
@@ -88,9 +89,10 @@ def stage4_terms(model, entries: Sequence[Optional[FrontierEntry]], state, state
     if madelung is None:
         raise RuntimeError("the boundary functional needs the static charges "
                            "(madelung_on_site) to build rho_S")
+    from mace.modules.defect_windows import WindowConfig
+
     f = model.functional
-    delta, delta_s = float(f["delta"]), float(f["delta_s"])
-    p_star, delta_p = float(f["p_star"]), float(f["delta_p"])
+    cfg = WindowConfig.from_functional(f)
     r_split, r_res = float(f["r_split"]), float(f["r_res"])
     eps_inf = float(model.madelung_eps_inf)
     t_el = float(model.spectral.t_el)
@@ -127,12 +129,14 @@ def stage4_terms(model, entries: Sequence[Optional[FrontierEntry]], state, state
         dens = frame_static_densities(model, record, None, charges_all[mask], pos_g, cell_g,
                                       r_res=r_res, z0=z0, lift=True)
         static, lift = dens["static"], dens["lift"]
-        edges = (float(record.vbm_al), float(record.cbm_al), delta, delta_s)
+        edges = (float(record.vbm_al), float(record.cbm_al))
         entry = entries[g]
-        now = frontier_channels(entry, FILL_AT_STATE, n_e, n_h, edges, t_el, n_g, p_star,
-                                delta_p, label=f"{label} graph {g}")
-        ref = frontier_channels(entry, FILL_AT_REFERENCE, record.n_e, record.n_h, edges, t_el,
-                                n_g, p_star, delta_p, label=f"{label} graph {g} reference")
+        now, diag_now = frontier_channels(
+            entry, FILL_AT_STATE, n_e, n_h, edges, t_el, n_g, cfg, record.m_vb, pos_g, cell_g,
+            label=f"{label} graph {g}")
+        ref, diag_ref = frontier_channels(
+            entry, FILL_AT_REFERENCE, record.n_e, record.n_h, edges, t_el, n_g, cfg,
+            record.m_vb, pos_g, cell_g, label=f"{label} graph {g} reference")
         rho_now = image_active_density(static, now, pos_g, record.q_core)
         rho_ref = image_active_density(static, ref, pos_g, record.q_core)
         phi_now = boundary_functional(rho_now, lift, ewald, r_split=r_split, eps_inf=eps_inf,
@@ -148,6 +152,9 @@ def stage4_terms(model, entries: Sequence[Optional[FrontierEntry]], state, state
         weights = [float(w) for w in rho_now.weights.values()] + \
                   [float(w) for w in rho_ref.weights.values()]
         out["w_min"][g] = min(weights) if weights else NOT_COMPUTED
+        diags = list(diag_now.values()) + list(diag_ref.values())
+        out["n_eff_max"][g] = max(d.n_eff for d in diags) if diags else NOT_COMPUTED
+        out["r_eff_max"][g] = max(d.r_eff for d in diags) if diags else NOT_COMPUTED
         img = rho_now.img
         report = clearance_report(img.centres.detach() @ torch.linalg.inv(cell_g.detach()),
                                   img.charges.detach(), cell_g.detach(), lift)

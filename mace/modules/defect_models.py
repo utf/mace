@@ -1843,6 +1843,8 @@ class MACEDefect(ScaleShiftMACE):
             "boundary_q_img": boundary_diag.get("q_img"),
             "boundary_q_img_ref": boundary_diag.get("q_img_ref"),
             "boundary_w_min": boundary_diag.get("w_min"),
+            "boundary_n_eff_max": boundary_diag.get("n_eff_max"),
+            "boundary_r_eff_max": boundary_diag.get("r_eff_max"),
             "boundary_clearance_mass": boundary_diag.get("clearance_mass"),
             "boundary_lift_fingerprint": boundary_diag.get("lift_fingerprint"),
             "node_energy": node_energy,

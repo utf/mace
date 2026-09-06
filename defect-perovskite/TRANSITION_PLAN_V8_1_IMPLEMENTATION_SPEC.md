@@ -165,10 +165,10 @@ Status: `todo` / `wip` / `done` / `blocked`. Keep this column current.
 
 | id | item | source | status |
 |---|---|---|---|
-| 5.1 | Compact-support spectral windows `b_e`, `b_h` with exact-zero plateaus and `C²` quintic transitions | add §5.1 | todo |
-| 5.2 | `P_V^fix` projector, `ΔP_σ`, `r_+`, `D_{e/h,σ}[P]`, `ρ̂_{c,σ}[P]` with trace bounds and leakage gate | add §5.1 | todo |
-| 5.3 | Exact-plateau localisation switch `W`; absolute `N_loc/N_ext`, `R_loc/R_ext` thresholds | add §5.1 | todo |
-| 5.4 | `ρ_img`, `q_img`; `Φ_img^PBC` single quadratic form; `Φ_SF^{∞,LR}` | add §5.2, §6.1 | todo |
+| 5.1 | Compact-support spectral windows `b_e`, `b_h` with exact-zero plateaus and `C²` quintic transitions | add §5.1 | done — `defect_windows.plateau_window`/`electron_window`/`hole_window`, matrix functions of `H_fix` with Daleckii–Krein derivatives (`spectral_function`) |
+| 5.2 | `P_V^fix` projector, `ΔP_σ`, `r_+`, `D_{e/h,σ}[P]`, `ρ̂_{c,σ}[P]` with trace bounds and leakage gate | add §5.1 | done — `valence_projector` (gap-gated), `positive_excess_pair`, `channel_density` (α bounds), `background_gates` (carrier-free background trace; excess outside the window); wired as `defect_frontier.frontier_channels` (replaces the sigmoid construction under the unified regime) |
+| 5.3 | Exact-plateau localisation switch `W`; absolute `N_loc/N_ext`, `R_loc/R_ext` thresholds | add §5.1 | done — `localisation` (`N_eff`, centre-free `R_eff` on the minimum-image metric, `w = W(N_eff)·W(R_eff)`); Stage-4 FD (force+strain, both boundaries) passes through the whole chain; see D18 for the registered numbers |
+| 5.4 | `ρ_img`, `q_img`; `Φ_img^PBC` single quadratic form; `Φ_SF^{∞,LR}` | add §5.2, §6.1 | done — `defect_image.py` (pure functions, 23 tests) and the Stage-4 forward-only wiring; the Stage-5 use (as a functional of `P` inside the SCF) is 5.5 |
 | 5.5 | Stationarity on the **unmixed** fixed-point residual; multistart; competing-solution gap guard | add §6.2 | todo |
 | 5.6 | Constrained energy-Hessian guards (`λ_min`, `κ`) in the registered tangent metric | add §6.2 | todo |
 | 5.7 | Fixed-training-boundary anchor `E_B` with exact algebraic nulls in energy, force and stress | add §6.3 | todo |
@@ -610,3 +610,21 @@ contribute a tolerated zero. That is the intended reading of "unsupported".
 4. **Refresh**: `refresh_class_table` keeps `pristine_reference` and `anchors`, and a
    pre-Stage-4 table acquires the reference on its first refresh (test added).
 5. **Charged pristine frames**: D17.
+
+### D18 — the registered numbers of §5.1 are defaults I chose; freeze them before the arm
+
+`window_extent = 4 eV`, `eta_plus = (0.05, 0.2)`, `alpha_bounds = (0.5, 1.5)`,
+`leakage_tol = 1e-3`, `gap_floor = 0.2 eV`, `(N_loc, N_ext) = (4, 16)` sites,
+`(R_loc, R_ext) = (4, 8) Å` — in `DEFAULT_FUNCTIONAL`, serialised with the model, and read
+by `WindowConfig.from_functional` (a pre-Stage-5 model's dict takes these defaults). The
+addendum requires them absolute (none scales with `N_at` or `L`) and `N_ext ≤` the smallest
+supported cell (16 ≤ 39 ✓); it does not fix their values. They pass the toy (the vacancy
+electron's channel is captured with `Tr D ≈ 1`, `N_eff` of a few sites) and are to be
+frozen — with the tolerances of §11 — before the Stage-5 arm is opened, not after.
+
+The leakage gate as first written read per-level occupation tails and refused the toy's
+reference state: its excess electron is smeared over two near-degenerate levels
+(0.94 + 0.06) at the Harrison initialisation, which is not background. The gate the
+addendum describes is on the *background*: a carrier-free channel's trace inside its window,
+and an active channel's excess outside its window — both absolute, both now enforced
+(`background_gates`).

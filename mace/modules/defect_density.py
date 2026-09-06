@@ -96,6 +96,17 @@ DEFAULT_FUNCTIONAL: Dict[str, Any] = {
     "eps_p": 1.0e-8,      # SCF tolerance on ||P_{k+1} - P_k||, Stage 5
     "eps_h": 1.0e-6,      # SCF tolerance on ||[H, P]||, Stage 5
     "c_q_mode": "per_charge",  # C_Q: one constant per charge state, shared across sizes
+    # Addendum 5.1 (the unified regime's compact windows; `defect_windows.WindowConfig`).
+    # Every value is absolute: none scales with N_at or the cell length.
+    "window_extent": 4.0,      # eV past the far band edge that the unit plateau reaches
+    "eta_plus": [0.05, 0.2],   # (eta_0, eta_1) of the positive-excess function r_+
+    "alpha_bounds": [0.5, 1.5],  # Tr D_c within [alpha_min, alpha_max] x carrier count
+    "leakage_tol": 1.0e-3,     # absolute occupation-tail bound outside the counted levels
+    "gap_floor": 0.2,          # eV, the continued-valence projector's separating gap
+    "n_loc": 4.0,              # W(N_eff): compact plateau up to N_loc sites ...
+    "n_ext": 16.0,             # ... extended beyond N_ext (<= the smallest supported cell)
+    "r_loc": 4.0,              # W(R_eff): compact plateau up to R_loc A ...
+    "r_ext": 8.0,              # ... extended beyond R_ext A
 }
 
 

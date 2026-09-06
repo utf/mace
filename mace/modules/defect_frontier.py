@@ -31,10 +31,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import torch
 
+from mace.modules.defect_carriers import UnsupportedStateError
 from mace.modules.defect_composition import (ClassRecord, composition_key, frame_counts,
                                              lookup_class)
 from mace.modules.defect_counting import ORBITALS_PER_ATOM, channel_matrix
@@ -118,39 +119,68 @@ def frontier_site_charges(entry: FrontierEntry, fills: Sequence[int], n_e: Seque
 
 
 def frontier_channels(entry: FrontierEntry, fills: Sequence[int], n_e: Sequence[int],
-                      n_h: Sequence[int], edges, t_el: float, n_sites: int, p_star: float,
-                      delta_p: float, label: str = "") -> List[Any]:
+                      n_h: Sequence[int], edges, t_el: float, n_sites: int, cfg,
+                      m_vb: Sequence[int], positions: torch.Tensor, cell: torch.Tensor,
+                      label: str = "") -> Tuple[List[Any], Dict[str, Any]]:
     """The active channels of one state as `defect_image.Channel`s (addendum 5.1/5.2).
 
-    Each channel carries its own normalised site density `rho^_c,sigma` (integral 1) and its
-    own localisation weight `w_c,sigma` -- the participation switch of THAT channel's
-    density, so that electron and hole participation are evaluated separately and opposite
-    signs cannot cancel in the localisation diagnostic. Under the `m_F <= 1` guard there is
-    at most one active channel, where this coincides with the legacy single switch. The
-    exact-plateau `W(N_eff) W(R_eff)` switch of section 5.1 is Stage 5.3's and replaces the
-    sigmoid here without changing this interface."""
+    Built the explicit way: compact-support windows `B_c = b_c(H_fix)`, the continued-valence
+    projector `P_V^fix = Pi_{M_VB}(H_fix)`, the positive excess `r_+(+-Delta P)` of the
+    state's own density matrix, `D_c = B_c r_+ B_c`, its normalised site density and the
+    exact-plateau localisation weight `w_c = W(N_eff) W(R_eff)` (`defect_windows`). Each
+    channel carries its own weight, so electron and hole participation are evaluated
+    separately and opposite signs cannot cancel. `edges` are the class's aligned
+    `(VBM_al, CBM_al)`; `cfg` is the `WindowConfig`; `m_vb` the per-spin valence rank.
+
+    The gates fire here, before any density is handed on: the projector's gap, the
+    occupation tails, the trace bounds -- each an `UnsupportedStateError`.
+    """
+    from mace.modules import defect_windows as dw
+    from mace.modules.defect_counting import fermi_density_difference
     from mace.modules.defect_image import Channel
 
+    H = entry.H
+    lam, U = entry.lam.double(), entry.U.double()
+    shift = float(entry.level_shift)
+    vbm_al, cbm_al = float(edges[0]) + shift, float(edges[1]) + shift
+    b_e, b_e_slope = dw.electron_window(lam, vbm_al, cbm_al, cfg)
+    b_h, b_h_slope = dw.hole_window(lam, vbm_al, cbm_al, cfg)
+    B_e = dw.spectral_function(H, b_e, b_e_slope, spectrum=(lam, U))
+    B_h = dw.spectral_function(H, b_h, b_h_slope, spectrum=(lam, U))
     channels: List[Any] = []
+    diagnostics: Dict[str, Any] = {}
     for spin in range(2):
-        for count, hole, sign, name in ((int(n_e[spin]), False, -1.0, "e"),
-                                        (int(n_h[spin]), True, 1.0, "h")):
+        count_e, count_h = int(n_e[spin]), int(n_h[spin])
+        if count_e == 0 and count_h == 0:
+            continue
+        where = f" ({label}, spin {spin})" if label else f" (spin {spin})"
+        f = entry.occupations[fills[spin]].double()
+        # P_sigma, attached to H by the Daleckii-Krein route of the fill it came from.
+        P = fermi_density_difference(H, (float(f.sum()),), (1.0,), t_el, spectrum=(lam, U),
+                                     occupations=f.unsqueeze(0),
+                                     mus=(entry.mu[fills[spin]],))
+        P_V = dw.valence_projector(H, lam, U, int(m_vb[spin]), cfg.gap_floor, label=where)
+        R_e, R_h = dw.positive_excess_pair(P - P_V, cfg.eta)
+        for count, hole, sign, name, B, R in ((count_e, False, -1.0, "e", B_e, R_e),
+                                               (count_h, True, 1.0, "h", B_h, R_h)):
+            D = B @ R @ B
+            kind = "hole" if hole else "electron"
+            # Both channels pass the background gates: the inactive one must be empty
+            # inside its window, the active one must be captured by it.
+            leakage = dw.background_gates(R, D, count, cfg.leakage_tol,
+                                          label=f"{where}, {kind}")
             if count == 0:
                 continue
-            dens, total = channel_site_density(entry, fills[spin], hole, edges, t_el,
-                                               n_sites)
-            weight = float(total.detach())
-            if weight < LOG_BELOW:
-                logging.info("frontier %s channel, spin %d%s: projector weight %.3f < %.1f "
-                             "(a level merging into a band); counts unchanged",
-                             "hole" if hole else "electron", spin,
-                             f" ({label})" if label else "", weight, LOG_BELOW)
-            normalised = dens / total.clamp_min(WEIGHT_FLOOR)
-            p = participation_fraction(normalised)
-            w = torch.sigmoid((p_star - p) / delta_p)
-            channels.append(Channel(name=f"{name}{spin}", density=normalised, count=count,
-                                    sign=sign, weight=w))
-    return channels
+            rho_hat, trace = dw.channel_density(D, n_sites, count, cfg,
+                                                label=f"{where}, {kind}")
+            w, n_eff, r_eff = dw.localisation(rho_hat, positions, cell, cfg)
+            key = f"{name}{spin}"
+            channels.append(Channel(name=key, density=rho_hat, count=count, sign=sign,
+                                    weight=w))
+            diagnostics[key] = dw.ChannelDiagnostics(
+                trace=float(trace.detach()), n_eff=float(n_eff.detach()),
+                r_eff=float(r_eff.detach()), leakage=float(leakage))
+    return channels, diagnostics
 
 
 def _composition_keys(node_species: torch.Tensor, batch: torch.Tensor, num_graphs: int,
