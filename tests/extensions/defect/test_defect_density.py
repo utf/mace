@@ -174,7 +174,7 @@ class TestStatic:
     def test_rho_static_def_integrates_to_q_core(self, harrison_model, frames, table):
         rec = dc.lookup_class(table, [17] * 23 + [55] * 8 + [82] * 8)
         charges, pos, cell = _static_inputs(harrison_model, frames["vcl_39"])
-        out = dc.frame_static_densities(harrison_model, rec, frames["vcl_39"], charges, pos, cell)
+        out = dc.frame_static_densities(harrison_model, rec, frames["pristine"], charges, pos, cell)
         assert float(out["static"].integral()) == pytest.approx(rec.q_core, abs=1e-10)
 
     def test_the_placement_is_at_least_as_good_as_the_tier_2_correspondence(
@@ -525,3 +525,135 @@ class TestRegistrationCovariance:
         assert got[1] == pytest.approx(base[1], abs=1e-10)
         # The norm moves only by the smooth density response, not by a registration slip.
         assert got[0] == pytest.approx(base[0], rel=0.05)
+
+
+# ------------------------------------------------------------------ Stage 4: frozen correspondence, lift, derivative
+
+
+class TestFrozenCorrespondenceAndLift:
+    """Addendum 4.1/4.2: the discrete correspondence is established once per class and the
+    lift's branch is selected from constructor topology on it, covariantly."""
+
+    KEY = [17] * 23 + [55] * 8 + [82] * 8
+
+    def test_the_class_record_carries_the_frozen_correspondence(self, table):
+        rec = dc.lookup_class(table, self.KEY)
+        corr = rec.placement["correspondence"]
+        assert len(corr["matched_sites"]) == 39 and len(set(corr["matched_sites"])) == 39
+        assert len(corr["removal_sites"]) == 1                   # the vacancy
+        assert corr["addition_departure"] == []
+        assert len(corr["site_departure"]) == 40
+        assert all(a >= 0.0 for a in corr["site_departure"])
+        pristine = dc.lookup_class(table, [17] * 24 + [55] * 8 + [82] * 8)
+        assert pristine.placement["correspondence"]["removal_sites"] == []
+        assert len(pristine.placement["correspondence"]["matched_sites"]) == 40
+
+    def test_the_table_stores_the_constructor_pristine_geometry(self, table, frames):
+        numbers, pos, cell = dc.pristine_reference_geometry(table)
+        assert len(numbers) == 40 and pos.shape == (40, 3) and cell.shape == (3, 3)
+        assert table["pristine_reference"]["frame_key"] == int(
+            frames["pristine"].frame_key.reshape(-1)[0])
+        with pytest.raises(RuntimeError, match="pristine_reference"):
+            dc.pristine_reference_geometry({"classes": {}})
+
+    def test_the_forward_form_reads_the_table_and_agrees_with_the_frame_form(
+            self, harrison_model, frames, table):
+        rec = dc.lookup_class(table, self.KEY)
+        charges, pos, cell = _static_inputs(harrison_model, frames["vcl_39"])
+        harrison_model.composition_classes = table
+        with_frame = dc.frame_static_densities(harrison_model, rec, frames["pristine"],
+                                               charges, pos, cell)
+        from_table = dc.frame_static_densities(harrison_model, rec, None, charges, pos, cell)
+        assert float(from_table["raw_norm"]) == pytest.approx(float(with_frame["raw_norm"]),
+                                                              rel=1e-10)
+        assert float(from_table["q_raw"]) == pytest.approx(float(with_frame["q_raw"]))
+
+    def test_the_lift_is_anchored_on_the_vacancy_and_is_covariant(self, harrison_model, frames,
+                                                                    table):
+        rec = dc.lookup_class(table, self.KEY)
+        charges, pos, cell = _static_inputs(harrison_model, frames["vcl_39"])
+        harrison_model.composition_classes = table
+        out = dc.frame_static_densities(harrison_model, rec, None, charges, pos, cell, lift=True)
+        lift = out["lift"]
+        vacancy = out["scaled_pristine"][out["correspondence"]["unmatched_pristine"][0]]
+        for c, v in zip(lift.centre, (vacancy % 1.0).tolist()):
+            assert abs((c - v + 0.5) % 1.0 - 0.5) < 0.06
+        assert min(lift.moments) > lift.z_min
+        assert out["support"]["supported"]
+        # Translate the frame by an arbitrary vector: the centre follows, exactly.
+        t = torch.tensor([2.1, -0.7, 3.3], dtype=torch.float64)
+        moved = dc.frame_static_densities(harrison_model, rec, None, charges, pos + t, cell,
+                                          lift=True)["lift"]
+        dt = (t @ torch.linalg.inv(cell)).tolist()
+        for c0, c1, d in zip(lift.centre, moved.centre, dt):
+            assert abs((c1 - c0 - d + 0.5) % 1.0 - 0.5) < 1e-6
+
+    def test_an_atom_permutation_transports_the_correspondence(self, harrison_model, frames,
+                                                                table):
+        """Section 11.1: atom permutation co-transforms the densities; the frozen record is
+        keyed by SITE, so a relabelling of the atoms changes nothing downstream."""
+        rec = dc.lookup_class(table, self.KEY)
+        charges, pos, cell = _static_inputs(harrison_model, frames["vcl_39"])
+        harrison_model.composition_classes = table
+        base = dc.frame_static_densities(harrison_model, rec, None, charges, pos, cell, lift=True)
+        g = torch.Generator().manual_seed(9)
+        perm = torch.randperm(pos.shape[0], generator=g)
+        got = dc.frame_static_densities(harrison_model, rec, None, charges[perm], pos[perm],
+                                        cell, lift=True)
+        assert float(got["static"].norm2()) == pytest.approx(float(base["static"].norm2()),
+                                                              rel=1e-8)
+        assert got["lift"].centre == pytest.approx(base["lift"].centre, abs=1e-9)
+        assert sorted(got["correspondence"]["departure"]) == pytest.approx(
+            sorted(base["correspondence"]["departure"]))
+
+    def test_a_changed_topology_is_refused_not_refitted(self, harrison_model, frames, table):
+        """Handing a class's record a frame with one more removal is a topology event."""
+        rec = dc.lookup_class(table, self.KEY)
+        charges, pos, cell = _static_inputs(harrison_model, frames["vcl_39"])
+        harrison_model.composition_classes = table
+        with pytest.raises(dc.UnsupportedStateError, match="topology event"):
+            dc.frame_static_densities(harrison_model, rec, None, charges[1:], pos[1:], cell)
+
+    def test_a_record_without_the_correspondence_cannot_lift(self, harrison_model, frames,
+                                                              table):
+        rec = dc.lookup_class(table, self.KEY)
+        legacy = dc.ClassRecord.from_dict({**rec.to_dict(),
+                                           "placement": {k: v for k, v in rec.placement.items()
+                                                         if k != "correspondence"}})
+        charges, pos, cell = _static_inputs(harrison_model, frames["vcl_39"])
+        harrison_model.composition_classes = table
+        with pytest.raises(RuntimeError, match="frozen correspondence"):
+            dc.frame_static_densities(harrison_model, rec if False else legacy, None, charges,
+                                      pos, cell, lift=True)
+
+
+class TestRegistrationDerivative:
+    """Addendum 4.1: 'any continuous geometry-dependent alignment is fully differentiated'.
+    The placement shift is a minimiser, so its derivative is an implicit one; a detached
+    shift leaves it out of every force through the pristine density."""
+
+    def test_the_placed_pristine_density_carries_the_implicit_derivative(
+            self, harrison_model, frames, table):
+        rec = dc.lookup_class(table, [17] * 23 + [55] * 8 + [82] * 8)
+        charges, pos, cell = _static_inputs(harrison_model, frames["vcl_39"])
+        harrison_model.composition_classes = table
+        # A probe that is NOT symmetric about the vacancy, so that a functional of the
+        # pristine density is sensitive to where it was placed.
+        probe = dd.GaussianDensity(torch.tensor([1.0, -0.4]),
+                                   torch.tensor([[1.3, 2.2, 0.7], [4.1, 0.9, 3.3]]), 1.5, cell)
+
+        def functional(p):
+            out = dc.frame_static_densities(harrison_model, rec, None, charges, p, cell)
+            return out["pristine"].overlap(probe)
+
+        p = pos.clone().requires_grad_(True)
+        value = functional(p)
+        (grad,) = torch.autograd.grad(value, p)
+        assert torch.isfinite(grad).all() and float(grad.abs().max()) > 0.0
+        h = 1e-4
+        for atom, comp in ((0, 0), (7, 2), (21, 1)):
+            plus, minus = pos.clone(), pos.clone()
+            plus[atom, comp] += h
+            minus[atom, comp] -= h
+            fd = (float(functional(plus)) - float(functional(minus))) / (2.0 * h)
+            assert float(grad[atom, comp]) == pytest.approx(fd, abs=2e-6, rel=1e-4)

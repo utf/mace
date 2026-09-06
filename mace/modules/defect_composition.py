@@ -57,6 +57,7 @@ import numpy as np
 import torch
 
 from mace.modules.defect_carriers import (
+    UnsupportedStateError,
     assert_charge_consistency,
     carrier_multiplicity,
     class_counts,
@@ -80,10 +81,15 @@ __all__ = ["CLASS_TABLE_VERSION", "QUANTILES", "TIER2_NAMES", "EdgeAlignment",
            "tiling_factors", "tiling_map", "tile_frame", "build_class_table",
            "lookup_class", "verify_class_table", "describe", "DEFAULT_CONSTRUCTOR",
            "constructor_config", "frame_counts_batch", "frame_static_densities",
+           "class_lift_record", "pristine_reference_geometry", "MERGE",
            "pristine_placement", "species_charges", "tiled_pristine_scaled"]
 
 CLASS_TABLE_VERSION = 1
 BOUNDARY_TOL = 1e-9   # eV; a level exactly on the window's edge is on the edge, not inside
+# The proximity (in units of r_res) within which a pristine site and a present atom are one
+# probe point of the residual shape -- and, frozen on the class reference, the discrete
+# correspondence of addendum 4.1 (`defect_density.pristine_correspondence`).
+MERGE = 0.5
 
 # The occupied-manifold window for the edge alignment: quantiles of the occupied spectrum
 # from 5 % to 60 %, i.e. the continuum well below the frontier, so a frontier level inside
@@ -587,7 +593,15 @@ def build_class_table(model, frames: Sequence, device="cpu", formula=None,
                             len(firsts))
         return table
     pristine_frame = firsts[pristine_key]
-    _, _, pristine_cell = _frame_geometry(pristine_frame, model)
+    pristine_numbers, pristine_pos, pristine_cell = _frame_geometry(pristine_frame, model)
+    # Stage 4 (addendum 4.1): the forward builds the static density against THIS geometry,
+    # so it travels with the table rather than being re-derived from whichever pristine
+    # frame a later driver happens to hold.
+    table["pristine_reference"] = {
+        "numbers": [int(z) for z in pristine_numbers],
+        "positions": np.asarray(pristine_pos, dtype=np.float64).tolist(),
+        "cell": np.asarray(pristine_cell, dtype=np.float64).reshape(3, 3).tolist(),
+        "frame_key": _frame_key_of(pristine_frame)}
     tiled: Dict[Tuple[int, int, int], Dict[str, Any]] = {}
     # The sink is a number in the table whether or not any class needs Tier 2: section 2.7's
     # default is 50 eV above the pristine conduction edge, read off the reference frame.
@@ -906,7 +920,29 @@ def tiled_pristine_scaled(model, pristine_frame, factors, perm
     """The tiled pristine reference as `(species index [n0], scaled positions [n0, 3])`, the
     scaled coordinates already in the FRAME's axis order (`perm`)."""
     numbers, pos, cell = _frame_geometry(pristine_frame, model)
-    numbers, pos, cell = tile_frame(numbers, pos, cell, factors)
+    return tiled_pristine_scaled_geometry(model, numbers, pos, cell, factors, perm)
+
+
+def pristine_reference_geometry(table: Dict[str, Any]) -> Tuple[List[int], np.ndarray, np.ndarray]:
+    """The constructor's pristine reference `(numbers, positions, cell)` as stored in the
+    table at build time -- the SAME cell every class's tiling and placement were computed
+    against, which is why it is read from the table and not from any other pristine frame the
+    model may carry. Refuses a table written before it was stored."""
+    ref = (table or {}).get("pristine_reference")
+    if not ref:
+        raise RuntimeError(
+            "the class table carries no pristine_reference: it was built before v8.1 Stage 4 "
+            "stored the constructor's pristine geometry. Rebuild it (refresh_class_table or "
+            "ensure_class_table on a model without a table) before evaluating the static "
+            "density in the forward")
+    return ([int(z) for z in ref["numbers"]], np.asarray(ref["positions"], dtype=np.float64),
+            np.asarray(ref["cell"], dtype=np.float64).reshape(3, 3))
+
+
+def tiled_pristine_scaled_geometry(model, numbers, pos, cell, factors, perm
+                                   ) -> Tuple[torch.Tensor, torch.Tensor]:
+    """`tiled_pristine_scaled` from a bare `(numbers, positions, cell)` geometry."""
+    numbers, pos, cell = tile_frame(list(numbers), np.asarray(pos), np.asarray(cell), factors)
     scaled = pos @ np.linalg.inv(cell)
     scaled = scaled[:, list(perm)]
     zs = [int(z) for z in model.atomic_numbers]
@@ -1019,9 +1055,38 @@ def pristine_placement(model, class_frame, pristine_frame, factors, perm,
     anchor_species, anchor = _alignment_anchor(species, pri_species, zs)
     shift, residual = dd.align_pristine(present, z0.to(dtype)[pri_species], scaled,
                                         pri_species == anchor_species, anchor)
+    shift = shift.detach()
+    # Addendum 4.1 / 4.2: the discrete atom/site correspondence and the departure signal
+    # are established ONCE, here on the class reference, and frozen. Every thermal frame of
+    # the class reuses them; the lift's branch anchor is built from them; a frame on which
+    # they would differ is an unsupported topology event, not a refit.
+    pristine = dd.pristine_placed(z0.to(dtype)[pri_species], scaled, present.cell, shift, r_res)
+    match, unmatched = dd.pristine_correspondence(present.centres, pristine.centres,
+                                                  present.cell, MERGE, r_res)
+    raw = dd.static_raw(present, pristine)
+    centres = torch.cat([present.centres, pristine.centres[unmatched]])
+    _, departure = dd.residual_weights(raw, centres, present.centres.shape[0])
+    departure = departure.detach()
+    n_present = present.centres.shape[0]
+    # Stored by SITE, not by atom index: a registration is unique only up to a lattice
+    # translation and an atom permutation (addendum 4.1), and both are site relabellings.
+    # `transport_correspondence` carries the record to any equivalent representative.
+    site_departure = torch.zeros(scaled.shape[0], dtype=torch.float64)
+    matched = match >= 0
+    site_departure[match[matched]] = departure[:n_present][matched].to(torch.float64)
+    removals = torch.nonzero(unmatched).reshape(-1)
+    site_departure[removals] = departure[n_present:].to(torch.float64)
+    correspondence = {
+        "matched_sites": sorted(int(j) for j in match[matched].tolist()),
+        "removal_sites": [int(j) for j in removals.tolist()],
+        "site_departure": [float(a) for a in site_departure.tolist()],
+        "addition_departure": [float(a) for a in departure[:n_present][~matched].tolist()],
+        "merge": float(MERGE),
+    }
     # The class shift is the STARTING point for every frame; `frame_static_densities`
     # re-minimises from it so the placement co-transforms (addendum 4.1).
-    return {"shift": [float(x) for x in shift], "residual_norm": residual, "r_res": r_res}
+    return {"shift": [float(x) for x in shift], "residual_norm": residual, "r_res": r_res,
+            "correspondence": correspondence}
 
 
 def _functional(model) -> Dict[str, Any]:
@@ -1033,19 +1098,38 @@ def _functional(model) -> Dict[str, Any]:
 def frame_static_densities(model, record: ClassRecord, pristine_frame, charges: torch.Tensor,
                            positions: torch.Tensor, cell: torch.Tensor,
                            r_res: Optional[float] = None,
-                           realign: bool = True) -> Dict[str, Any]:
+                           realign: bool = True, z0: Optional[torch.Tensor] = None,
+                           lift: bool = False) -> Dict[str, Any]:
     """`rho_Z^present`, `rho_Z^pristine`, `rho_static^raw`, `g_res` and `rho_static^def` for
     one frame of `record`'s class, re-minimising the placement from the class shift. `charges` are the frame's
     static charges `Z_i` (with any per-site deviation), `positions`/`cell` the frame's.
-    Reports `||rho_static^raw||` so a frame from a different origin is visible."""
+    Reports `||rho_static^raw||` so a frame from a different origin is visible.
+
+    `pristine_frame` may be None: the constructor's own pristine geometry is then read from
+    the model's class table (`pristine_reference_geometry`), which is what the forward does.
+    `z0` are the species baselines to use for the pristine density -- the LIVE parameters
+    when the caller wants the parameter gradient (the forward), the detached copy otherwise.
+    With `lift=True` the class's canonical lift record (addendum 4.2) and the residual
+    support verdict (addendum 4.1) are built too, under `"lift"` and `"support"`.
+    """
     from mace.modules import defect_density as dd
 
     if record.placement is None:
         raise ValueError(f"class {record.key} has no pristine placement (no static charges)")
     r_res = float(record.placement["r_res"]) if r_res is None else float(r_res)
-    z0 = species_charges(model).to(dtype=positions.dtype, device=positions.device)
+    if z0 is None:
+        z0 = species_charges(model)
+    z0 = z0.to(dtype=positions.dtype, device=positions.device)
     present = dd.static_present(charges, positions, cell, r_res)
-    pri_species, scaled = tiled_pristine_scaled(model, pristine_frame, record.tiling, record.perm)
+    if pristine_frame is None:
+        numbers, pos0, cell0 = pristine_reference_geometry(
+            getattr(model, "composition_classes", None))
+        pri_species, scaled = tiled_pristine_scaled_geometry(model, numbers, pos0, cell0,
+                                                             record.tiling, record.perm)
+    else:
+        pri_species, scaled = tiled_pristine_scaled(model, pristine_frame, record.tiling,
+                                                    record.perm)
+    correspondence = (record.placement or {}).get("correspondence")
     shift = torch.tensor(record.placement["shift"], dtype=positions.dtype, device=positions.device)
     if realign:
         # Addendum 4.1: the pristine reference must co-transform with the frame. A cached
@@ -1064,16 +1148,189 @@ def frame_static_densities(model, record: ClassRecord, pristine_frame, charges: 
             scaled.to(dtype=positions.dtype, device=positions.device),
             all_sites, 0)
         shift = shift.to(dtype=positions.dtype, device=positions.device)
-    pristine = dd.pristine_placed(z0[pri_species.to(z0.device)],
-                                  scaled.to(dtype=positions.dtype, device=positions.device),
-                                  cell, shift, r_res)
+    scaled = scaled.to(dtype=positions.dtype, device=positions.device)
+    pristine = dd.pristine_placed(z0[pri_species.to(z0.device)], scaled, cell, shift, r_res)
     raw = dd.static_raw(present, pristine)
-    g_res = dd.residual_shape(raw, positions, pristine.centres)
+    unmatched = None
+    transported = None
+    if correspondence is not None:
+        # The frozen correspondence, carried to this frame's registration (which may be an
+        # equivalent representative, a pristine lattice translation away from the class's).
+        transported = transport_correspondence(record, correspondence, positions,
+                                               pristine.centres, cell, r_res)
+        unmatched = torch.zeros(scaled.shape[0], dtype=torch.bool)
+        unmatched[transported["unmatched_pristine"]] = True
+    g_res = dd.residual_shape(raw, positions, pristine.centres, unmatched=unmatched)
     if not record.counted:
         raise ValueError(f"class {record.key} carries no Q_core; rho_static^def is undefined")
     static = dd.static_def(raw, g_res, record.q_core)
-    return {"present": present, "pristine": pristine, "raw": raw, "g_res": g_res,
-            "static": static, "q_raw": raw.integral(), "raw_norm": raw.norm()}
+    out = {"present": present, "pristine": pristine, "raw": raw, "g_res": g_res,
+           "static": static, "q_raw": raw.integral(), "raw_norm": raw.norm(),
+           "shift": shift, "scaled_pristine": scaled + shift.reshape(1, 3),
+           "pristine_species": pri_species, "correspondence": transported}
+    if lift:
+        if transported is None:
+            raise RuntimeError(
+                f"class {record.key} carries no frozen correspondence: its table was built "
+                "before v8.1 Stage 4. Rebuild it before evaluating the isolated kernel")
+        # Addendum 4.1: a residual monopole with no local departure signal is a delocalised
+        # charge placed through a numerical fallback -- refused, not evaluated.
+        supported, signal = dd.residual_support(raw, g_res.centres, positions.shape[0],
+                                                record.q_core, float(raw.integral()))
+        if not supported:
+            raise UnsupportedStateError(
+                f"class {record.key}: Q_core - q_raw = "
+                f"{record.q_core - float(raw.integral()):+.4f} e must be placed on g_res, but "
+                f"the local departure signal {signal:.2e} is below the support threshold "
+                f"{dd.SUPPORT_THRESHOLD}: the residual monopole would be delocalised "
+                "(addendum 4.1)")
+        out["support"] = {"supported": True, "signal": signal}
+        out["lift"] = class_lift_record(record, transported, positions, cell,
+                                        out["scaled_pristine"], z0[pri_species.to(z0.device)],
+                                        charges, r_res)
+    return out
+
+
+def transport_correspondence(record: ClassRecord, frozen: Dict[str, Any],
+                             positions: torch.Tensor, pristine_centres: torch.Tensor,
+                             cell: torch.Tensor, r_res: float) -> Dict[str, Any]:
+    """The class's frozen correspondence on THIS frame's registration.
+
+    Addendum 4.1: the discrete atom/site correspondence is established once per class and
+    a registration is unique only up to an exact lattice translation (or symmetry or atom
+    permutation) that gives identical densities. The per-frame re-fit of the placement may
+    therefore land on an equivalent representative -- the pristine lattice translated by one
+    of its own vectors -- under which every frozen site index points somewhere else. This
+    carries the frozen map across: the present atoms' current nearest sites must be the
+    frozen ones composed with ONE common lattice translation, additions must still be
+    additions, and the frozen removals are moved by that same translation. Anything else
+    -- a different number of removals, an addition that found a site, a non-common shift --
+    is a change of correspondence, which is an unsupported topology event, not a refit.
+    """
+    from mace.modules import defect_density as dd
+
+    merge = float(frozen.get("merge", MERGE))
+    frozen_matched = torch.tensor(frozen["matched_sites"], dtype=torch.long)
+    frozen_removals = torch.tensor(frozen["removal_sites"], dtype=torch.long)
+    site_departure = torch.tensor(frozen["site_departure"], dtype=torch.float64)
+    addition_departure = list(frozen.get("addition_departure", []))
+    n_present = positions.shape[0]
+    if frozen_matched.numel() + len(addition_departure) != n_present:
+        raise UnsupportedStateError(
+            f"class {record.key}: the frozen correspondence describes "
+            f"{frozen_matched.numel() + len(addition_departure)} present atoms, this frame "
+            f"has {n_present}: an unsupported topology event (addendum 4.1)")
+    match_now, unmatched_now = dd.pristine_correspondence(positions, pristine_centres, cell,
+                                                          merge, r_res)
+    match_now, unmatched_now = match_now.cpu(), unmatched_now.cpu()
+    additions_now = int((match_now < 0).sum())
+    removals_now = torch.nonzero(unmatched_now).reshape(-1)
+    if additions_now != len(addition_departure) or removals_now.numel() != frozen_removals.numel():
+        raise UnsupportedStateError(
+            f"class {record.key}: {additions_now} addition(s) and {removals_now.numel()} "
+            f"removal(s) on this frame against {len(addition_departure)} and "
+            f"{frozen_removals.numel()} on the class reference: an unsupported topology "
+            "event (addendum 4.1)")
+    scaled = (pristine_centres @ torch.linalg.inv(cell)).detach().to(torch.float64).cpu()
+    cell64 = cell.detach().to(torch.float64).cpu()
+    n_sites = scaled.shape[0]
+
+    def site_under(translation: torch.Tensor, sites: torch.Tensor) -> Optional[torch.Tensor]:
+        """Each of `sites` moved by `translation`, as the nearest site index -- or None if
+        any lands more than `merge x r_res` from every site (not a lattice translation)."""
+        d = scaled[None, :, :] - (scaled[sites] + translation)[:, None, :]
+        d = d - torch.round(d)
+        dist = (d @ cell64).norm(dim=-1)                       # [len(sites), n_sites], A
+        best = dist.argmin(dim=1)
+        if float(dist[torch.arange(sites.numel()), best].max()) > merge * float(r_res):
+            return None
+        return best
+
+    # The equivalence class of registrations is generated by the pristine lattice's
+    # translations. Candidates are every translation taking one frozen anchor site onto
+    # some site; the first that carries the whole frozen record onto this frame's sets is
+    # the transport. Exact symmetry copies give identical densities, so any passing
+    # candidate is as good as any other (addendum 4.1's equivalence rule).
+    anchor = int(frozen_removals[0]) if frozen_removals.numel() else int(frozen_matched[0])
+    matched_now = set(torch.nonzero(match_now >= 0).reshape(-1).tolist())
+    matched_sites_now = set(match_now[match_now >= 0].tolist())
+    removal_set_now = set(removals_now.tolist())
+    for k in range(n_sites):
+        translation = scaled[k] - scaled[anchor]
+        translation = translation - torch.round(translation)
+        moved_removals = site_under(translation, frozen_removals) if frozen_removals.numel() \
+            else torch.zeros(0, dtype=torch.long)
+        if moved_removals is None or set(moved_removals.tolist()) != removal_set_now:
+            continue
+        moved_matched = site_under(translation, frozen_matched) if frozen_matched.numel() \
+            else torch.zeros(0, dtype=torch.long)
+        if moved_matched is None or set(moved_matched.tolist()) != matched_sites_now:
+            continue
+        break
+    else:
+        raise UnsupportedStateError(
+            f"class {record.key}: no lattice translation carries the class reference's "
+            "site correspondence onto this frame's: an unsupported topology event "
+            "(addendum 4.1)")
+    # The departure signal follows its site; additions keep the class order.
+    moved_departure = torch.zeros(n_sites, dtype=torch.float64)
+    if frozen_matched.numel():
+        moved_departure[moved_matched] = site_departure[frozen_matched]
+    if frozen_removals.numel():
+        moved_departure[moved_removals] = site_departure[frozen_removals]
+    departure: List[float] = []
+    extra = iter(addition_departure)
+    for i in range(n_present):
+        j = int(match_now[i])
+        departure.append(float(moved_departure[j]) if j >= 0 else float(next(extra)))
+    departure.extend(float(moved_departure[j]) for j in moved_removals.tolist())
+    return {"match": match_now.tolist(), "unmatched_pristine": moved_removals.tolist(),
+            "departure": departure, "merge": merge, "translation": translation.tolist()}
+
+
+def class_lift_record(record: ClassRecord, corr: Dict[str, Any], positions: torch.Tensor,
+                      cell: torch.Tensor, scaled_pristine: torch.Tensor,
+                      z0_pristine: torch.Tensor, charges: torch.Tensor, r_res: float):
+    """The class's canonical lift (addendum 4.2), built from constructor topology alone.
+
+    The branch envelope lives on the registered union of present and pristine sites with the
+    FROZEN correspondence: a matched present atom carries topology charge zero and sits at
+    its matched pristine site (placed with the current re-fitted shift -- covariant, and
+    free of the frame's thermal displacement), an unmatched pristine site carries `-Z0`, an
+    addition carries `+Z` at its own position. The departure signal is the class reference's,
+    frozen with the correspondence. Nothing here reads `P`, an occupation, a frontier density
+    or a spectral window; the current thermal static density is checked AGAINST the branch
+    by the clearance contract, never used to select it.
+    """
+    from mace.modules.defect_lift import build_lift
+
+    match = torch.tensor(corr["match"], dtype=torch.long)
+    unmatched = torch.tensor(corr["unmatched_pristine"], dtype=torch.long)
+    departure = torch.tensor(corr["departure"], dtype=torch.float64)
+    scaled_present = (positions @ torch.linalg.inv(cell)).detach().to(torch.float64).cpu()
+    scaled_pristine = scaled_pristine.detach().to(torch.float64).cpu()
+    n_present = positions.shape[0]
+    if match.shape[0] != n_present:
+        raise RuntimeError(
+            f"class {record.key}: the frozen correspondence has {match.shape[0]} present "
+            f"atoms, the frame {n_present}: the frame is not of this class's topology")
+    # Present atoms: registered at their matched pristine site, or at themselves (addition).
+    matched = match >= 0
+    sites = scaled_present.clone()
+    sites[matched] = scaled_pristine[match[matched]]
+    topology = torch.zeros(n_present, dtype=torch.float64)
+    topology[~matched] = charges.detach().to(torch.float64).cpu()[~matched]
+    # Removals: the unmatched pristine sites, charge -Z0.
+    sites = torch.cat([sites, scaled_pristine[unmatched]])
+    topology = torch.cat([topology,
+                          -z0_pristine.detach().to(torch.float64).cpu()[unmatched]])
+    if departure.shape[0] != sites.shape[0]:
+        raise RuntimeError(
+            f"class {record.key}: the frozen departure signal has {departure.shape[0]} "
+            f"entries for {sites.shape[0]} union sites")
+    return build_lift(topology, sites % 1.0, departure=departure,
+                      r_lift=float(r_res),
+                      constructor_hash=f"{record.key}@{record.reference_frame_key}")
 
 
 def frame_counts_batch(table: Dict[str, Any], atomic_numbers: Sequence[Sequence[int]],

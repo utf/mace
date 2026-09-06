@@ -272,7 +272,21 @@ def align_pristine(present: GaussianDensity, z0: torch.Tensor, scaled_positions:
             t, r = t_new, r_new
         if r < best_r:
             best_t, best_r = t, r
-    return best_t, math.sqrt(max(best_r, 0.0))
+    # Addendum 4.1: "any continuous geometry-dependent alignment is fully differentiated".
+    # The Newton iterations above ran on detached shifts, so `best_t` carries no graph and a
+    # functional of the placed pristine density would see no registration response in its
+    # forces. One more Newton step, taken WITH the graph through `present` and the cell,
+    # repairs that: at the minimum the gradient is zero so the value does not move, and
+    # `d t* / d R = -H^{-1} d(grad)/dR` is exactly the implicit-function derivative.
+    t_var = best_t.clone().requires_grad_(True)
+    with torch.enable_grad():
+        value = residual(t_var)
+        grad = torch.autograd.grad(value, t_var, create_graph=True)[0]
+        hess = torch.stack([torch.autograd.grad(grad[i], t_var, create_graph=True,
+                                                retain_graph=True)[0] for i in range(3)])
+        step = torch.linalg.solve(hess + 1e-9 * torch.eye(3, dtype=hess.dtype,
+                                                          device=hess.device), grad)
+    return t_var.detach() - step, math.sqrt(max(best_r, 0.0))
 
 
 def local_net_charge(raw: GaussianDensity, centres: torch.Tensor) -> torch.Tensor:
@@ -280,11 +294,33 @@ def local_net_charge(raw: GaussianDensity, centres: torch.Tensor) -> torch.Tenso
     return raw.site_charges(centres)
 
 
+def pristine_correspondence(present_positions: torch.Tensor, pristine_positions: torch.Tensor,
+                            cell: torch.Tensor, merge: float, sigma: float
+                            ) -> Tuple[torch.Tensor, torch.Tensor]:
+    """`(match, unmatched)`: the discrete site correspondence of a composition class.
+
+    `match[i]` is the pristine site within `merge x sigma` of present atom `i` (`-1` for an
+    addition), `unmatched[j]` is True for a pristine site with no present atom that close (a
+    removal). Addendum 4.1: established ONCE, on the class reference geometry, and reused
+    on every thermal frame of the class -- never recomputed by a nearest-neighbour rule per
+    frame. A change of this correspondence is an unsupported topology event, not a refit.
+    """
+    d = _minimum_image(pristine_positions[:, None, :] - present_positions[None, :, :], cell)
+    dist = d.norm(dim=-1)                                   # [n_pristine, n_present]
+    within = dist < merge * float(sigma)
+    unmatched = ~within.any(dim=1)
+    nearest = dist.argmin(dim=0)                            # [n_present]
+    match = torch.where(within[nearest, torch.arange(present_positions.shape[0])],
+                        nearest, torch.full_like(nearest, -1))
+    return match, unmatched
+
+
 def residual_shape(raw: GaussianDensity, present_positions: torch.Tensor,
                    pristine_positions: torch.Tensor, merge: float = 0.5,
                    eps_z: float = EPS_Z, eps_omega: float = EPS_OMEGA,
                    departure: Optional[torch.Tensor] = None,
-                   lambda_d: float = 0.0) -> GaussianDensity:
+                   lambda_d: float = 0.0,
+                   unmatched: Optional[torch.Tensor] = None) -> GaussianDensity:
     """`g_res = sum_i omega_i g(r - R_i; r_res)`, `omega_i = |dZ_i| / sum_j |dZ_j|`, over the
     present atoms and the pristine sites (a vacancy's weight lives at its pristine site).
     Integral 1 by construction; zero weights everywhere fall back to a uniform background.
@@ -293,9 +329,14 @@ def residual_shape(raw: GaussianDensity, present_positions: torch.Tensor,
     the local net charge there is read at the atom already, and a duplicate would count the
     thermal halo twice. A proximity merge of probe points, not an assignment -- nothing is
     matched to anything, and a site with no atom near it (a vacancy) keeps its probe.
+
+    `unmatched` is the class's FROZEN correspondence (`pristine_correspondence` on the class
+    reference); when given it replaces the per-frame proximity rule, as addendum 4.1 asks.
     """
-    d = _minimum_image(pristine_positions[:, None, :] - present_positions[None, :, :], raw.cell)
-    near = (d.norm(dim=-1) < merge * raw.sigma).any(dim=1)
+    if unmatched is None:
+        _, unmatched = pristine_correspondence(present_positions, pristine_positions, raw.cell,
+                                               merge, raw.sigma)
+    near = ~unmatched.to(pristine_positions.device)
     centres = torch.cat([present_positions, pristine_positions[~near]])
     weights, _ = residual_weights(raw, centres, present_positions.shape[0],
                                   eps_z=eps_z, eps_omega=eps_omega,
