@@ -204,6 +204,25 @@ sigma_s = 0.5 eV`; `N_loc = 4` (default: a Pb-dimer state has `N_eff` 2–3; to 
 fraction 0.95; `s_max = 2` for the Route B′ scale; training-time single-valuedness subsample
 and ceiling: to register before Arm 2+3.
 
+**Arm-1 criterion (ii), as implemented, is partly geometric (found 2026-09-06 21:20, before
+results are opened).** With a per-species `b`, the ratio "flanking-Pb `|bQ|` over its bulk
+spread" is `|Q_flank| / std|Q_bulk|` — `b` cancels — and equals 11.9 on every full run (a
+property of the vacancy geometry: the flanking Pb has a strongly anisotropic environment).
+The discriminating content of (ii) is therefore the control-loss test alone (the scalar-only
+control loses ≥ 30 % of the level-vs-bond slope). Flagged to the user; the threshold text is
+not changed here.
+
+**Mid-training monitor (2026-09-06 21:20, epochs 3–7; not the arm result).** On 48
+neutral-vacancy frames the initialised head has `N_eff` 2.0, separation 283 meV,
+precondition 2 %; after 3–7 epochs every run has `N_eff` 1.7–1.8, separation 750–930 meV,
+precondition 85–92 % (full) / 85–88 % (control), level-vs-bond slope 280–340 meV/Å (control
+within 6 % of full so far), Cl splitting −11 to −18 meV (registered sign), no saturation,
+`pp` modulation 0.91–0.98 (no stop). Held-out force RMSE (24-frame subsample, 79 atoms):
+full 39–46 meV/Å, control 43–46 meV/Å (initialised 96). The earlier "no bound state at
+initialisation" finding was on the V_Cl⁺ geometries (flanking Pb far apart); on the
+neutral-vacancy geometries the initial `H0` already splits a dimer state 283 meV off the
+CBM, which is why the precondition is defined on those frames.
+
 ## 3. Task list
 
 Status: `todo` / `wip` / `done` / `blocked`.
