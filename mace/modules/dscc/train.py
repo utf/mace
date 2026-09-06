@@ -50,6 +50,7 @@ class TrainConfig:
     gap_weight: float = 1.0           # L_gap = gap_weight (E_gap_model - E_gap)^2, eV^-2
     e_gap: float = 2.40               # registered host gap (static lattice, C2)
     coupling: bool = False            # Arm 1: Phi = 0
+    coupling_mode: str = "full"       # Arm 2+3: lr_only | lr_u | full | lambda1
     route_b: bool = False
     directional: bool = True          # False: the scalar-only control
     regime: str = "B"

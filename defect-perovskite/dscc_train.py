@@ -44,6 +44,9 @@ def main() -> None:
     ap.add_argument("--run_dir", required=True)
     ap.add_argument("--subset", type=int, default=0, help="debug: use only this many charged frames")
     ap.add_argument("--eval_every", type=int, default=5)
+    ap.add_argument("--coupling_mode", default="full", help="lr_only | lr_u | full | lambda1 (Arm 2+3)")
+    ap.add_argument("--init_from", default="", help="Arm-1 winner checkpoint (model.pt) to start H0 from")
+    ap.add_argument("--n_max", type=int, default=100)
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir)
@@ -55,14 +58,20 @@ def main() -> None:
     np.random.seed(args.seed)
 
     cfg = TrainConfig(name=args.name, seed=args.seed, fold=args.fold, epochs=args.epochs, lr=args.lr,
-                      batch_size=args.batch_size, coupling=bool(args.coupling), route_b=bool(args.route_b),
+                      batch_size=args.batch_size, coupling=bool(args.coupling), coupling_mode=args.coupling_mode, route_b=bool(args.route_b),
                       directional=bool(args.directional), regime=args.regime, gap_weight=args.gap_weight,
                       device=args.device, eval_every=args.eval_every,
                       static_cell_path=str(HERE / "static_pristine_cell.json"))
     base = torch.load(args.base, weights_only=False, map_location="cpu").double()
     model = MACEDSCC(base, r_cut=cfg.r_cut, directional=cfg.directional, coupling=cfg.coupling,
                      route_b=cfg.route_b, kernel=KernelConfig(regime=cfg.regime),
-                     scf=ScfOptions()).to(args.device)
+                     scf=ScfOptions(n_max=args.n_max)).to(args.device)
+    if args.init_from:
+        model.load_h0_from(args.init_from)
+        logging.info("H0 initialised from %s", args.init_from)
+    if cfg.coupling:
+        model.set_coupling_mode(args.coupling_mode)
+        logging.info("coupling mode %s (lambda_fixed %s, u_zero %s)", args.coupling_mode, model.lambda_fixed, model.u_zero)
     frames = load_frames(f"{args.dataset}/train.xyz", f"{args.dataset}/valid.xyz")
     metas = [dd.frame_meta(i, a, "CsPbCl3", pristine_atoms=80) for i, a in enumerate(frames)]
     fold_of = outer_folds(frames, metas, args.cf_dir, cfg.n_folds, cfg.seed)
@@ -76,6 +85,8 @@ def main() -> None:
     logging.info("config %s", json.dumps(cfg.__dict__, default=str))
     logging.info("train %d charged frames, held %d, pristine %d", len(trainer.train_idx), len(trainer.held_idx), len(pristine))
     trainer.prepare(pristine)
+    if args.init_from:
+        model.load_h0_from(args.init_from)     # the centre is part of the winner's H0
     result = trainer.fit()
     logging.info("done: held-out force RMSE %.4f eV/A", result["held_final"]["force_rmse"])
 

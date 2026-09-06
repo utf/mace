@@ -400,3 +400,31 @@ class TestFastPaths:
         # first_block equals the full forward's block-0 slice.
         full = modules.ScaleShiftMACE.forward(model.base, model._trunk_data(dict(batch)), compute_force=False)["node_feats"]
         assert float((full[:, :model.block0_width] - model.first_block(model._trunk_data(dict(batch)))).abs().max()) < 1e-12
+
+
+class TestCouplingModes:
+    def test_modes_fix_the_right_learnables_and_round_trip(self, tmp_path):
+        m = _coupled(regime="B", route_b=False)
+        m.set_coupling_mode("lr_only")
+        assert float(m.lambda_dir()) == 0.0 and float(m.u_eff().abs().max()) == 0.0
+        assert not m.lambda_raw.requires_grad and not m.u_raw.requires_grad
+        m.set_coupling_mode("lambda1")
+        assert float(m.lambda_dir()) == 1.0 and float(m.u_eff().max()) > 0 and m.u_raw.requires_grad
+        m.set_coupling_mode("lr_u")
+        assert float(m.lambda_dir()) == 0.0 and m.u_raw.requires_grad and not m.lambda_raw.requires_grad
+        m.set_coupling_mode("full")
+        assert m.lambda_raw.requires_grad and m.u_raw.requires_grad
+        with pytest.raises(ValueError):
+            m.set_coupling_mode("free")
+        # init from a saved Arm-1 model carries H0 and the pristine references.
+        fresh = _coupled(regime="B", route_b=False, seed=1)
+        assert float((fresh.h0.sk.eps0 - m.h0.sk.eps0).abs().max()) < 1e-12   # same Harrison init
+        with torch.no_grad():
+            m.h0.sk.eps0.add_(0.1)                   # "trained" levels
+        torch.save(m, tmp_path / "winner.pt")
+        fresh.load_h0_from(str(tmp_path / "winner.pt"))
+        assert float((fresh.h0.sk.eps0 - m.h0.sk.eps0).abs().max()) < 1e-12
+        assert fresh.init_from.endswith("winner.pt") and fresh.get_extra_state()["init_from"] == fresh.init_from
+        m.set_coupling_mode("lambda1")
+        fresh.load_state_dict(m.state_dict())
+        assert fresh.coupling_mode == "lambda1" and fresh.lambda_fixed == 1.0

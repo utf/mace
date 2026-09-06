@@ -111,6 +111,10 @@ class MACEDSCC(nn.Module):
         # H0(R) -- locally neutral by construction -- times ONE global scale s in
         # [0, s_max], initialised at 1. Per-species scales are prohibited (they break local
         # neutrality at the vacancy and bring the 1/L error back).
+        self.lambda_fixed: Optional[float] = None
+        self.u_zero = False
+        self.coupling_mode = "full"
+        self.init_from: Optional[str] = None
         self.s_max = float(S_MAX_DEFAULT)
         self.s_raw = nn.Parameter(torch.zeros((), dtype=torch.float64))       # s_max sigmoid(0) = 1
         self.register_buffer("q0_pristine", torch.zeros(n_el, dtype=torch.float64))   # species means
@@ -127,7 +131,9 @@ class MACEDSCC(nn.Module):
                 "r_cut": self.r_cut, "sigma_s": self.sigma_s,
                 "coupling": self.coupling, "route_b": self.route_b, "r_split": self.r_split,
                 "lambda_max": self.lambda_max, "c_q_table": dict(self.c_q_table),
-                "calibration_record": self.calibration_record}
+                "calibration_record": self.calibration_record,
+                "coupling_mode": self.coupling_mode, "lambda_fixed": self.lambda_fixed,
+                "u_zero": self.u_zero, "init_from": self.init_from}
 
     def set_extra_state(self, state: Dict[str, Any]) -> None:
         self.kernel = KernelConfig(**state["kernel"])
@@ -137,15 +143,45 @@ class MACEDSCC(nn.Module):
         self.r_split, self.lambda_max = float(state["r_split"]), float(state["lambda_max"])
         self.c_q_table = {int(k): float(v) for k, v in state.get("c_q_table", {}).items()}
         self.calibration_record = state.get("calibration_record")
+        self.coupling_mode = state.get("coupling_mode", "full")
+        self.lambda_fixed = state.get("lambda_fixed")
+        self.u_zero = bool(state.get("u_zero", False))
+        self.init_from = state.get("init_from")
 
     # ----------------------------------------------------------------- learnables
 
     def lambda_dir(self) -> torch.Tensor:
+        """`lambda_dir`: learned in `[0, lambda_max]`, or held at `lambda_fixed` (Arm 2+3
+        couplings "LR-only" (0), "LR + U" (0) and "lambda_dir = 1 fixed")."""
+        if self.lambda_fixed is not None:
+            return torch.tensor(float(self.lambda_fixed), dtype=torch.float64, device=self.u_max.device)
         return self.lambda_max * torch.sigmoid(self.lambda_raw)
 
     def u_eff(self) -> torch.Tensor:
-        """`U_eff[Z]` in `[0, U_max[Z]]`."""
+        """`U_eff[Z]` in `[0, U_max[Z]]`, or zero when `u_zero` (Arm 2+3 "LR-only")."""
+        if self.u_zero:
+            return torch.zeros_like(self.u_max)
         return self.u_max * torch.sigmoid(self.u_raw)
+
+    def set_coupling_mode(self, mode: str) -> None:
+        """Arm 2+3 (v4.1 section 7): `lr_only` (lambda = 0, U = 0), `lr_u` (lambda = 0, U
+        learned), `full` (both learned), `lambda1` (lambda = 1 fixed, U learned)."""
+        modes = {"lr_only": (0.0, True), "lr_u": (0.0, False), "full": (None, False), "lambda1": (1.0, False)}
+        if mode not in modes:
+            raise ValueError(f"unknown coupling mode {mode!r}; expected one of {sorted(modes)}")
+        self.lambda_fixed, self.u_zero = modes[mode]
+        self.coupling_mode = mode
+        self.lambda_raw.requires_grad_(self.lambda_fixed is None)
+        self.u_raw.requires_grad_(not self.u_zero)
+
+    def load_h0_from(self, path: str) -> None:
+        """Arm 2+3 start from the Arm-1 winner: the trained `H0` (parameters and pristine
+        centre) of a saved `MACEDSCC`; the coupling learnables keep their registered inits."""
+        other = torch.load(path, weights_only=False, map_location=self.u_max.device)
+        self.h0.load_state_dict(other.h0.state_dict())
+        self.q0_pristine.copy_(other.q0_pristine)
+        self.pristine_atoms.copy_(other.pristine_atoms)
+        self.init_from = str(path)
 
     def c_q(self, q: int) -> torch.Tensor:
         """`C_Q`; zero for `Q = 0` and for an uncalibrated model."""
