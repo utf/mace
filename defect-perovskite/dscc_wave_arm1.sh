@@ -15,7 +15,10 @@ for run in "${RUNS[@]}"; do
   if [ "$kind" = "full" ]; then directional=1; else directional=0; fi
   name="dscc_arm1_${kind}_s${seed}"
   gpu=${GPUS[$((slot % ${#GPUS[@]}))]}
-  bash "$W/defect-perovskite/b3_run.sh" "$gpu" "$name" \
+  # CUDA_VISIBLE_DEVICES by UUID: with GPU 6 off the bus, CUDA's own enumeration no longer
+  # matches nvidia-smi's indices (index 7 raised "No CUDA GPUs are available").
+  uuid=$(nvidia-smi --query-gpu=index,uuid --format=csv,noheader | awk -F', ' -v g="$gpu" '$1==g {print $2}')
+  bash "$W/defect-perovskite/b3_run.sh" "${uuid:-$gpu}" "$name" \
     python "$W/defect-perovskite/dscc_train.py" --name "$name" --seed "$seed" --fold "$fold" \
       --directional "$directional" --coupling 0 --route_b 0 --epochs "$EPOCHS" --device cuda \
       --run_dir "$HOME/runs/dscc/$name"
