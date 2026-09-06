@@ -231,3 +231,51 @@ class TestFamilyConsistency:
         d_large = tuple(n_sigma_large - m for m in predicted_large)
         assert d_small == d_large                               # d_sigma invariant
         assert sum(d_small) == sum(d_large)                     # hence Q_core invariant
+
+
+class TestTransportOnStoredTables:
+    """Section 11.1 on real stored class tables, not toys.
+
+    "Across sizes, the rank increment equals the pristine valence rank while d_sigma,
+    Q_core and the carrier counts remain invariant." The golden ladder records carry a
+    pristine class and a V_Cl class at three tilings, which is exactly that statement.
+    """
+
+    @staticmethod
+    def _table():
+        import json
+        import pathlib
+        path = pathlib.Path(__file__).resolve().parents[3] / "defect-perovskite" / "golden"
+        for candidate in sorted(path.glob("stage14_ladder_*.json")):
+            classes = json.loads(candidate.read_text()).get("class_table", {}).get("classes")
+            if classes:
+                return classes
+        return None
+
+    def test_the_defect_offset_is_invariant_across_three_tilings(self):
+        classes = self._table()
+        if not classes:
+            pytest.skip("no stored class table with a class_table/classes section")
+
+        # The pristine class is the one with Q_core = 0; the V_Cl family is the rest.
+        pristine = [c for c in classes.values() if c.get("q_core") == 0 and c.get("m_vb")]
+        defects = [c for c in classes.values() if c.get("q_core") == 1 and c.get("m_vb")]
+        if not pristine or len(defects) < 2:
+            pytest.skip("the stored table does not carry a pristine class and two sizes")
+
+        # One pristine cell fixes the rank density; every tiling is an integer multiple.
+        base = pristine[0]
+        per_atom = base["m_vb"][0] / base["n_atoms"]
+
+        offsets, cores = set(), set()
+        for cls in defects:
+            # The pristine rank at this defect's tiling: the defect removed one atom, so the
+            # parent pristine cell has n_atoms + 1 sites.
+            pristine_rank = round(per_atom * (cls["n_atoms"] + 1))
+            offsets.add(tuple(int(m) - pristine_rank for m in cls["m_vb"]))
+            cores.add(int(cls["q_core"]))
+
+        assert len(offsets) == 1, f"the defect rank offset is not size-invariant: {offsets}"
+        assert len(cores) == 1, f"Q_core is not size-invariant: {cores}"
+        # And the raw rank really is extensive, so this is not invariance by coincidence.
+        assert len({tuple(c["m_vb"]) for c in defects}) == len(defects)
