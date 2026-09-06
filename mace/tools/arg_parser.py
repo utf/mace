@@ -1382,6 +1382,49 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=False,
     )
     parser.add_argument(
+        "--defect_energy_shape_weight",
+        help="plan v8.1 section 8: weight of the within-stratum charged-energy SHAPE loss "
+        "in total-cell eV (the registered pair form on the batch's pair slots). Non-zero "
+        "requires total_energy_weight = delta_energy_weight = 0 and pair slots >= 1; the "
+        "same-size-neutral-null admission rule is retired (every valid charged energy "
+        "enters through its stratum)",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--defect_energy_pair_slots",
+        help="number of registered within-stratum pairs appended to every training batch "
+        "by WithinStratumPairSampler (2 * slots extra graphs per batch)",
+        type=int,
+        default=0,
+    )
+    parser.add_argument(
+        "--defect_energy_scale",
+        help="the frozen physical energy scale (eV) the shape residuals are divided by",
+        type=float,
+        default=1.0,
+    )
+    parser.add_argument(
+        "--defect_energy_strata_json",
+        help="JSON {stratum key: W_g} of frozen stratum weights (absent strata get 1.0 and "
+        "a log line); the objective manifest written to the run's work dir records them",
+        type=str,
+        default="",
+    )
+    parser.add_argument(
+        "--defect_energy_host",
+        help="host label of the strata keys (loss metadata only)",
+        type=str,
+        default="host",
+    )
+    parser.add_argument(
+        "--defect_spectral_gauge",
+        help="plan v8.1 section 3.1: register the frozen-pristine spectral gauge from the "
+        "class table's pristine frame and re-align the table under it",
+        type=str2bool,
+        default=True,
+    )
+    parser.add_argument(
         "--defect_c_shift_per_class",
         help="calibrate c per (charge, size) class over every charged frame at "
         "initialisation, with E_LR's value in the residual (Stage A' spec section 3), "

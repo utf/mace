@@ -288,6 +288,13 @@ DEFECT_ON_SITE_CENTRED="${DEFECT_ON_SITE_CENTRED:-False}"
 DEFECT_BASE_CACHE="${DEFECT_BASE_CACHE:-False}"
 DEFECT_NEUTRAL_SIZE_UPWEIGHT_ENERGY="${DEFECT_NEUTRAL_SIZE_UPWEIGHT_ENERGY:-False}"
 DEFECT_C_SHIFT_PER_CLASS="${DEFECT_C_SHIFT_PER_CLASS:-False}"
+# plan v8.1: the spectral gauge and the within-stratum energy-shape objective
+DEFECT_SPECTRAL_GAUGE="${DEFECT_SPECTRAL_GAUGE:-True}"
+DEFECT_ENERGY_SHAPE_WEIGHT="${DEFECT_ENERGY_SHAPE_WEIGHT:-0.0}"
+DEFECT_ENERGY_PAIR_SLOTS="${DEFECT_ENERGY_PAIR_SLOTS:-0}"
+DEFECT_ENERGY_SCALE="${DEFECT_ENERGY_SCALE:-1.0}"
+DEFECT_ENERGY_STRATA_JSON="${DEFECT_ENERGY_STRATA_JSON:-}"
+DEFECT_ENERGY_HOST="${DEFECT_ENERGY_HOST:-host}"
 DEFECT_NULL_REFERENCE="${DEFECT_NULL_REFERENCE:-}"
 DEFECT_CHARGED_ENERGY_SHARE="${DEFECT_CHARGED_ENERGY_SHARE:-0.0}"
 DEFECT_BASE_CACHE_DIR="${DEFECT_BASE_CACHE_DIR:-}"
@@ -470,6 +477,12 @@ python -m "${MACE_TRAIN_MODULE:-mace.cli.run_train}" \
     --defect_base_cache="${DEFECT_BASE_CACHE}" \
     --defect_neutral_size_upweight_energy="${DEFECT_NEUTRAL_SIZE_UPWEIGHT_ENERGY}" \
     --defect_c_shift_per_class="${DEFECT_C_SHIFT_PER_CLASS}" \
+    --defect_spectral_gauge="${DEFECT_SPECTRAL_GAUGE}" \
+    --defect_energy_shape_weight="${DEFECT_ENERGY_SHAPE_WEIGHT}" \
+    --defect_energy_pair_slots="${DEFECT_ENERGY_PAIR_SLOTS}" \
+    --defect_energy_scale="${DEFECT_ENERGY_SCALE}" \
+    --defect_energy_strata_json="${DEFECT_ENERGY_STRATA_JSON}" \
+    --defect_energy_host="${DEFECT_ENERGY_HOST}" \
     --defect_null_reference="${DEFECT_NULL_REFERENCE}" \
     --defect_charged_energy_share="${DEFECT_CHARGED_ENERGY_SHARE}" \
     --defect_base_cache_dir="${DEFECT_BASE_CACHE_DIR}" \

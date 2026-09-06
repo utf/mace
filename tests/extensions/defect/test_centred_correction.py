@@ -119,49 +119,13 @@ def test_the_centre_survives_the_state_dict():
     assert float(_correction(other, batch).abs().max()) < 1e-9
 
 
-def test_c_table_classes_and_application():
+def test_size_classes_from_the_pristine_atom_count():
+    """`c_shift_classes` survives as the size-class rule (standing rule 1); the per-(charge,
+    size) energy table it named is gone from the head (plan v8.1 section 3.1)."""
     counts = torch.tensor([[1.0, 0, 0, 0], [0, 0, 1.0, 0], [0, 0, 0, 0], [1.0, 0, 0, 0]])
     sizes = torch.tensor([79, 159, 80, 159])
     charge_cls, size_cls = c_shift_classes(counts, sizes)
     assert charge_cls.tolist() == [2, 0, 1, 2]
     assert size_cls.tolist() == [0, 1, 0, 1]
-
     model = _model(on_site_centred=False)
-    atoms = _cubic()
-    batch = _batch(atoms, counts=(1.0, 0.0, 0.0, 0.0))
-    before = model(batch.to_dict(), compute_force=False)["delta_sr_energy"]
-    with torch.no_grad():
-        model.spectral.c_shift_table[2, 0] = 0.3      # Delta_n > 0, small cell
-    after = model(batch.to_dict(), compute_force=False)["delta_sr_energy"]
-    # E_head moves by c * Delta_n and nothing else.
-    assert float((after - before - 0.3).abs()) < 1e-6
-
-
-def test_c_table_calibration_writes_the_per_class_median():
-    from mace.modules.defect_protocol import calibrate_c_shift_table_over_loader
-
-    model = _model(on_site_centred=False)
-    atoms = _cubic()
-    frames = []
-    rng = np.random.default_rng(0)
-    for k in range(5):        # odd, so the lower median IS the median
-        a = atoms.copy()
-        a.rattle(stdev=0.02, seed=k)
-        config = data.Configuration(
-            atomic_numbers=a.get_atomic_numbers(), positions=a.get_positions(),
-            cell=np.array(a.get_cell()), pbc=(True, True, True),
-            properties={"carrier_counts": [1.0, 0, 0, 0], "energy": float(rng.normal())},
-            property_weights={"energy": 1.0})
-        frames.append(data.AtomicData.from_config(config, z_table=Z_TABLE, cutoff=6.0))
-    loader = tools.torch_geometric.dataloader.DataLoader(frames, batch_size=2)
-    summary = calibrate_c_shift_table_over_loader(model, loader, "cpu")
-    assert set(summary) == {(2, 0)}
-    med, n = summary[(2, 0)]
-    assert n == 5
-    assert float(model.spectral.c_shift_table[2, 0]) == pytest.approx(med)
-    # After calibration the median residual over those frames is zero.
-    resid = []
-    for b in loader:
-        out = model(b.to_dict(), compute_force=False)
-        resid += (b.energy - out["energy"]).tolist()
-    assert abs(float(np.median(resid))) < 1e-6
+    assert not hasattr(model.spectral, "c_shift_table") and not hasattr(model.spectral, "c_shift")

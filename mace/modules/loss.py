@@ -775,6 +775,9 @@ class DefectLoss(torch.nn.Module):
         eps_gauge_weight: float = 0.0,
         gap_weight: float = 0.0,
         e_gap: float = 0.0,
+        energy_shape_weight: float = 0.0,
+        energy_pair_slots: int = 0,
+        energy_scale: float = 1.0,
         gap_composition: Optional[Sequence[float]] = None,
     ) -> None:
         super().__init__()
@@ -817,6 +820,25 @@ class DefectLoss(torch.nn.Module):
         self.eps_gauge_weight = eps_gauge_weight
         self.gap_weight = float(gap_weight)
         self.e_gap = float(e_gap)
+        # PLAN v8.1 SECTION 8: the charged-energy objective of Stages 1-4. Every batch built
+        # by `WithinStratumPairSampler` ends with `energy_pair_slots` registered pairs; their
+        # total-cell-eV residuals (one path each, by provenance) enter as the mean over
+        # pairs of (xi_i - xi_j)^2 / 2, whose expectation is the within-stratum shape loss.
+        # When this term is on, the per-atom totals term and the paired delta-energy term
+        # are refused for charged energies: a charged label enters exactly one path.
+        self.energy_shape_weight = float(energy_shape_weight)
+        self.energy_pair_slots = int(energy_pair_slots)
+        self.energy_scale = float(energy_scale)
+        if self.energy_shape_weight > 0:
+            if self.total_energy_weight > 0 or self.delta_energy_weight > 0:
+                raise ValueError(
+                    "the v8.1 energy-shape objective replaces the per-atom totals term and "
+                    "the delta-energy term for charged energies (addendum section 8: one "
+                    "registered path per observation); set total_energy_weight and "
+                    "delta_energy_weight to zero")
+            if self.energy_pair_slots < 1:
+                raise ValueError("energy_shape_weight > 0 needs energy_pair_slots >= 1")
+        self.last_energy_shape_value = 0.0
         # Stoichiometry in the model's own species order, e.g. (3, 1, 1) for CsPbCl3 with
         # the AtomicNumberTable sorted (Cl, Cs, Pb). Only the RATIO is used, so the same
         # numbers describe every supercell of the host.
@@ -927,12 +949,44 @@ class DefectLoss(torch.nn.Module):
             )
             loss = loss + self.pressure_weight * reduce_loss(raw_pressure, ddp)
 
+        loss = loss + self.energy_shape(ref, pred)
         loss = loss + self.size_penalty(ref, pred, ddp)
         loss = loss + self.gap_penalty(ref, pred, ddp)
         loss = loss + self.gauge_penalty(ref, pred, ddp)
         loss = loss + self.eps_gauge(pred, ref, ddp)
         loss = loss + self.regularisation(pred)
         return loss
+
+    def energy_shape(self, ref: Batch, pred: TensorDict) -> torch.Tensor:
+        """The registered pair term (plan v8.1 section 8) on the batch's pair slots.
+
+        The last `2 * energy_pair_slots` graphs of the batch are the sampler's pairs, in
+        order; each pair's members carry the same `stratum_id` (asserted -- a batch that was
+        not built by the registered sampler must not be scored by this term) and the residual
+        path of their `provenance`. Graphs before the slots contribute nothing here.
+        """
+        zero = torch.zeros((), dtype=ref.weight.dtype, device=ref.weight.device)
+        self.last_energy_shape_value = 0.0
+        if self.energy_shape_weight <= 0.0:
+            return zero
+        from mace.modules.defect_objective import residual_paths, sampled_pair_term
+
+        n_pair = 2 * self.energy_pair_slots
+        n_graphs = int(ref.num_graphs)
+        if n_graphs < n_pair:
+            raise ValueError(f"the batch holds {n_graphs} graphs, fewer than its "
+                             f"{n_pair} pair slots: it was not built by the pair sampler")
+        sid = ref["stratum_id"].reshape(-1)[-n_pair:]
+        if not bool((sid[0::2] == sid[1::2]).all()) or bool((sid < 0).any()):
+            raise ValueError("pair slots hold graphs of different strata (or a neutral "
+                             "frame); the batch was not built by WithinStratumPairSampler")
+        xi, path = residual_paths(pred, ref, self.energy_scale)
+        xi_pairs = xi[-n_pair:].reshape(-1, 2)
+        if bool((path[-n_pair:] < 0).any()):
+            raise ValueError("a pair slot holds a frame with no charged-energy residual")
+        term = self.energy_shape_weight * sampled_pair_term(xi_pairs)
+        self.last_energy_shape_value = float(term.detach())
+        return term
 
     def size_threshold(
         self,

@@ -909,18 +909,19 @@ class CountingHead(nn.Module):
         # Diagnostics read this to size their spectra; the counting head returns the whole
         # spectrum, so it is 4 orbitals per atom rather than a truncation.
         self.num_states = -1
-        # One scalar, uniform across sites. It moves E_head by c * Delta_n and nothing else
-        # -- the role mu_c used to play, without mu_c's per-channel bookkeeping. Calibrated
-        # once on an init batch against the median energy target, then trainable.
-        self.c_shift = nn.Parameter(torch.zeros(()))
-        # Stage A' section 3: `c` per (charge, size). Rows index the sign of the net carrier
-        # count (Delta_n < 0, = 0, > 0), columns the cell-size class (below / at or above
-        # C_SHIFT_SIZE_THRESHOLD atoms). Added to the scalar `c_shift`, which stays the
-        # global offset so a model calibrated the old way is the all-zero table.
-        self.c_shift_table = nn.Parameter(torch.zeros(3, C_SHIFT_SIZE_CLASSES))
-        # Standing rule 1: the pristine cell's atom count, which is what the size class is
-        # a multiple of. Zero means "not recorded", and `c_shift_classes` then falls back to
-        # the legacy threshold so a model pickled before this existed keeps its own classes.
+        # PLAN v8.1 (addendum section 3.1): NO ENERGY CONSTANT LIVES IN H. The scalar
+        # `c_shift` and the per-(charge, size) `c_shift_table` of Stage A' were rigid level
+        # shifts of a charged graph -- a state-dependent Hamiltonian term whose only effect
+        # was c * Delta_n on the energy, and which the spectral gauge below makes redundant:
+        # once mu_g fixes the one-electron zero on the frozen pristine reference, a common
+        # shift has no flat direction left to compensate. The Stage 1-4 energy zero is the
+        # analytically profiled nuisance intercept of `defect_objective`, never a parameter;
+        # Stage 5's single C_Q is an additive constant on the energy, never on the levels.
+        # A head pickled with the old parameters restores with them unused (`_forward`
+        # never reads them) and `trainable_mask` leaves them out of the optimiser.
+        #
+        # Standing rule 1: the pristine cell's atom count, which is what a size class is a
+        # multiple of (the loss strata and the diagnostics read it; the head does not).
         self.register_buffer("pristine_atoms", torch.zeros((), dtype=torch.long))
         # `_carrier_head` hands `centre` and `graph_sizes` only to a head that declares it.
         self.accepts_centre = True
@@ -947,14 +948,20 @@ class CountingHead(nn.Module):
                 edge_length, site_bias=None, node_species=None, clamp_mask=None,
                 edge_vector=None, madelung=None, occupations=None, internals=None,
                 positions=None, force_out=None, centre=None, graph_sizes=None,
-                state=None):
+                state=None, gauge_shift=None):
         """`state` is the batch's `StateBatch` (plan v8 section 2.1); built from `counts`
         by the production adapter when absent, so a scorer that hands only counters gets
         the same states the trainer does.
 
         `centre` is the pristine species-mean feature for the centred on-site correction
-        (section 2.1); `graph_sizes` is `[n_graphs]` atom counts for the per-(charge, size)
-        c table (section 3). Both optional; absent, the head behaves as it always has.
+        (section 2.1); `graph_sizes` is `[n_graphs]` atom counts (diagnostics). Both
+        optional; absent, the head behaves as it always has.
+
+        `gauge_shift` is `mu_g` (plan v8.1 section 3.1), a scalar tensor attached to the
+        head parameters: every on-site level of every graph is lowered by it, so the
+        Hamiltonian the eigensolve sees is `H_fix = Htilde_fix - mu_g I`. None means the
+        model has no registered gauge reference yet (the class-table constructor's first
+        pass) and the raw levels are used.
 
         `occupations` is REFUSED when given. It was Stage 4's "state the fill directly"
         override, and under plan v8 a stated fill is an alternate occupation policy -- of
@@ -978,15 +985,29 @@ class CountingHead(nn.Module):
             return self._forward(
                 node_feats, counter_emb, counts, batch, num_graphs, edge_index,
                 edge_length, site_bias, node_species, clamp_mask, edge_vector, madelung,
-                None, internals, positions, force_out, centre, graph_sizes, state)
+                None, internals, positions, force_out, centre, graph_sizes, state,
+                gauge_shift)
         finally:
             use_smearing(*previous)
+
+    def assemble_hamiltonian(self, node_feats, node_species, edge_index, edge_vector,
+                             madelung=None, centre=None, n_nodes=None) -> torch.Tensor:
+        """`Htilde_fix` for ONE graph, `[4N, 4N]`: the SK hoppings with the on-site levels
+        (species level + centred correction + Madelung shift) on the diagonal, exactly as the
+        solvers build it, with no gauge and no energy constant. The gauge reference uses it
+        on the frozen pristine cell (plan v8.1 section 3.1)."""
+        n = int(n_nodes if n_nodes is not None else node_feats.shape[0])
+        H = self.h(node_feats, node_species, edge_index, edge_vector, madelung=None,
+                   n_nodes=n)
+        levels = self.h.on_site(node_feats, node_species, madelung, centre=centre)
+        diag = torch.cat([levels[:, :1], levels[:, 1:].expand(-1, 3)], dim=-1).reshape(-1)
+        return H - torch.diag(torch.diagonal(H)) + torch.diag(diag)
 
     def _forward(self, node_feats, counter_emb, counts, batch, num_graphs, edge_index,
                  edge_length, site_bias=None, node_species=None, clamp_mask=None,
                  edge_vector=None, madelung=None, occupations=None, internals=None,
                  positions=None, force_out=None, centre=None, graph_sizes=None,
-                 state=None):
+                 state=None, gauge_shift=None):
         from mace.modules.defect_spectral import SpectralOutput
         from mace.modules.defect_state import StateBatch
 
@@ -1009,21 +1030,16 @@ class CountingHead(nn.Module):
         device, dtype = node_feats.device, node_feats.dtype
         n_nodes = int(node_feats.shape[0])
 
-        levels = self.h.on_site(node_feats, node_species, madelung, centre=centre) \
-            + self.c_shift
-        table = getattr(self, "c_shift_table", None)
-        # STAGE 1.2: the c table is a RIGID shift of every level of a graph by its charge
-        # class -- section 2.2's per-charge-state constant, realised on the levels. The
-        # class table's edges were read at S_ref (charge class 1, Delta_n = 0), so the
-        # frontier term must shift its projector edges by the same amount to see the same
-        # spectrum: recorded per graph and handed back with the frontier entries.
+        levels = self.h.on_site(node_feats, node_species, madelung, centre=centre)
+        # PLAN v8.1 SECTION 3.1: H_fix = Htilde_fix - mu_g I. The gauge is one scalar for
+        # every graph, state, size and boundary, read off the frozen pristine reference by
+        # the model and handed in attached to the head parameters; nothing state-dependent
+        # touches the levels (the old c table did, and is gone -- see __init__). The
+        # frontier term's projector edges are read from gauged spectra too, so the
+        # per-graph `level_shift` that compensated the c table is identically zero.
+        if gauge_shift is not None:
+            levels = levels - gauge_shift.to(dtype=dtype, device=device).reshape(1, 1)
         level_shift = torch.zeros(num_graphs, device=device, dtype=dtype)
-        if table is not None and graph_sizes is not None:
-            charge_cls, size_cls = c_shift_classes(
-                counts, graph_sizes, getattr(self, "pristine_atoms", None))
-            per_graph = table[charge_cls, size_cls]                     # [n_graphs]
-            levels = levels + per_graph[batch].reshape(-1, 1)
-            level_shift = (per_graph - table[torch.ones_like(charge_cls), size_cls]).detach()
         if clamp_mask is not None:
             # DIAGNOSTIC ONLY, same contract as the spectral heads: sites outside the mask are
             # pushed far above the frontier so no occupied state can live on them.

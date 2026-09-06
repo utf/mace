@@ -208,6 +208,11 @@ def trainable_mask(name: str, freeze_z: bool = False) -> bool:
 
     if freeze_z and name.startswith("madelung."):
         return False
+    # Plan v8.1: a head pickled before the energy constant left H still carries the old
+    # `c_shift` / `c_shift_table` parameters; the forward never reads them and they must
+    # not sit in the optimiser (weight decay would move a number nothing consumes).
+    if name.split(".")[-1] in ("c_shift", "c_shift_table"):
+        return False
     return bool(is_correction_param(name) or ".spectral." in name
                 or name.startswith("madelung."))
 

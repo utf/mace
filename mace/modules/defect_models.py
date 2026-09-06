@@ -707,7 +707,116 @@ class MACEDefect(ScaleShiftMACE):
         state = self.__dict__.copy()
         state["_base_cache"] = None
         state["_collecting_centre"] = False
+        state["_collect_gauge_reference"] = None
         return state
+
+    # ------------------------------------------------------------ plan v8.1 section 3.1
+    #
+    # THE FROZEN-PRISTINE SPECTRAL GAUGE. The head's one-electron zero is fixed by one
+    # scalar read off the registered canonical pristine reference cell with the CURRENT head
+    # parameters: mu_g = rank-normalised trace of the raw Hamiltonian over its fixed-rank
+    # occupied-valence projector. Every runtime Hamiltonian, of every geometry, size, state
+    # and boundary, is H_fix = Htilde_fix - mu_g I, and every aligned edge is read off gauged
+    # spectra. It is a potential-zero convention: never fitted per frame, defect, charge,
+    # class or size; no coordinate or strain dependence (it is evaluated on the frozen
+    # reference, so it contributes nothing to forces or stress); differentiated in theta.
+    #
+    # The reference is REGISTERED once (`register_gauge_reference`, from the class table's
+    # pristine frame): its geometry, neighbour list and the frozen trunk's features for it.
+    # The features are cached because the trunk is frozen in Stages 0-6 (the base checksum
+    # names the trunk they came from; a different trunk invalidates the reference). What is
+    # recomputed every forward is the head's own part: the on-site levels, the Madelung shift
+    # with the live Z, the SK hoppings, one eigensolve of the pristine cell.
+
+    def register_gauge_reference(self, batch_dict: Dict[str, torch.Tensor],
+                                 pristine_key: str) -> None:
+        """Record the pristine reference cell (a batch of ONE graph) as the gauge anchor."""
+        if int(batch_dict["ptr"].numel()) != 2:
+            raise ValueError("the gauge reference is one pristine cell, one graph")
+        self._collect_gauge_reference = str(pristine_key)
+        was_training = self.training
+        self.eval()
+        try:
+            with torch.no_grad():
+                self(dict(batch_dict), training=False, compute_force=False)
+        finally:
+            self._collect_gauge_reference = None
+            self.train(was_training)
+        if getattr(self, "gauge_reference", None) is None:
+            raise RuntimeError("the forward did not record the gauge reference (no counting "
+                               "head on this model?)")
+        # the value under the parameters as they are now, for the record and the log
+        mu, record = self._gauge_shift(self.pristine_centre(next(self.parameters()).dtype))
+        logging.info("Spectral gauge registered on pristine cell %s (%d atoms, ranks %s): "
+                     "mu_g = %+.6f eV, gaps %s", pristine_key,
+                     int(self.gauge_reference["n_atoms"]), record.ranks, float(mu),
+                     tuple(round(g, 4) for g in record.gaps))
+
+    def _record_gauge_reference(self, defect_feats, head_species, head_edge_index,
+                                head_vectors, head_lengths, head_positions, head_cell,
+                                batch, num_graphs) -> None:
+        """Called inside `forward` while `_collect_gauge_reference` is set."""
+        from mace.modules.defect_cache import base_checksum
+        from mace.modules.defect_counting import resolve_fills
+
+        head = self.spectral
+        n_total = int(head.valence[head_species.long()].sum())
+        (_, _), (n_maj, n_min) = resolve_fills(n_total, (0, 0, 0, 0))
+        self.gauge_reference = {
+            "pristine_key": str(self._collect_gauge_reference),
+            "n_atoms": int(head_species.numel()),
+            "node_feats": defect_feats.detach().clone(),
+            "node_species": head_species.detach().clone(),
+            "edge_index": head_edge_index.detach().clone(),
+            "edge_vector": head_vectors.detach().clone(),
+            "edge_length": head_lengths.detach().clone(),
+            "positions": head_positions.detach().clone(),
+            "cell": head_cell.detach().clone(),
+            "batch": batch.detach().clone(),
+            "num_graphs": int(num_graphs),
+            "ranks": (int(round(n_maj)), int(round(n_min))),
+            "n_total": n_total,
+            "base_checksum": base_checksum(self).hex(),
+        }
+
+    def _gauge_shift(self, centre):
+        """`(mu_g, GaugeRecord)` under the current parameters, or `(None, None)` when no
+        reference is registered (the constructor's first pass, or a pre-v8.1 checkpoint)."""
+        ref = getattr(self, "gauge_reference", None)
+        if ref is None or getattr(self, "_collect_gauge_reference", None) is not None:
+            return None, None
+        head = self.spectral
+        if not hasattr(head, "assemble_hamiltonian"):
+            return None, None
+        from mace.modules.defect_gauge import gauge_scalar
+
+        dev = next(self.parameters()).device
+        if ref["node_feats"].device != dev:
+            for k, v in list(ref.items()):
+                if isinstance(v, torch.Tensor):
+                    ref[k] = v.to(dev)
+        feats = ref["node_feats"]
+        if getattr(self, "spectral_first_shell", False):
+            feats = feats[:, : self.spectral_feature_dim]
+        species, positions, cell = ref["node_species"], ref["positions"], ref["cell"]
+        madelung = None
+        if getattr(self, "madelung", None) is not None:
+            madelung_range = getattr(self, "madelung_range", "full")
+            r_split = (float(self.functional["r_split"]) if madelung_range == "long_range"
+                       else None)
+            madelung = self.madelung.on_site_shift(
+                self.latent_ewald, species, positions, cell, ref["batch"],
+                eps_inf=self.madelung_eps_inf, feats=feats, centre=centre,
+                num_graphs=ref["num_graphs"], madelung_range=madelung_range,
+                edge_index=ref["edge_index"], edge_lengths=ref["edge_length"],
+                r_split=r_split)
+        H = head.assemble_hamiltonian(feats, species, ref["edge_index"], ref["edge_vector"],
+                                      madelung=madelung, centre=centre,
+                                      n_nodes=ref["n_atoms"])
+        eig = torch.linalg.eigvalsh(H.to(torch.float64))
+        mu_g, record = gauge_scalar(eig, ref["ranks"], pristine_key=ref["pristine_key"])
+        self.gauge_record = record.to_dict()
+        return mu_g, record
 
     def _resolve_functional_defaults(self) -> None:
         """Every non-parameter float is serialised as a number: `r_split` is the first-block
@@ -778,6 +887,9 @@ class MACEDefect(ScaleShiftMACE):
             ("class_constructor", None),
             ("functional", None),
             ("uncounted_class_policy", "refuse"),
+            ("gauge_reference", None),
+            ("gauge_record", None),
+            ("_collect_gauge_reference", None),
         ):
             if not hasattr(self, name):
                 object.__setattr__(self, name, default)
@@ -882,6 +994,7 @@ class MACEDefect(ScaleShiftMACE):
         centre: Optional[torch.Tensor] = None,
         graph_sizes: Optional[torch.Tensor] = None,
         state=None,
+        gauge_shift: Optional[torch.Tensor] = None,
     ):
         """Either carrier head, behind one signature.
 
@@ -976,6 +1089,8 @@ class MACEDefect(ScaleShiftMACE):
             head_kwargs["graph_sizes"] = graph_sizes
         if getattr(self.spectral, "accepts_state", False):
             head_kwargs["state"] = state
+        if hasattr(self.spectral, "assemble_hamiltonian"):
+            head_kwargs["gauge_shift"] = gauge_shift
         # Section 1. `force_out` is both the request and the reply: a head that can supply the
         # density response advertises `wants_positions`, and gets asked only when the caller
         # is in a training force pass. Absent here, no second backward is built -- which is
@@ -1231,6 +1346,9 @@ class MACEDefect(ScaleShiftMACE):
         trunk_block0 = node_feats_list[0].detach()
         graph_sizes = data["ptr"][1:] - data["ptr"][:-1]
         centre = self.pristine_centre(head_dtype)
+        # Plan v8.1 section 3.1: one gauge scalar for this forward, shared by the state and
+        # the reference branch (the reference's zero is the same convention).
+        gauge_shift, _gauge_rec = self._gauge_shift(centre)
         # The head's geometry, in the head's dtype. A no-op under "uniform".
         # The head sees the geometry in its own dtype through a DIFFERENTIABLE cast; the
         # gradient leaf stays `positions`, whatever the data dtype. Rebinding the name to the
@@ -1261,6 +1379,10 @@ class MACEDefect(ScaleShiftMACE):
         # Carrier correction. The counters are canonicalised at data loading and at every
         # inference entry point, so the network never sees a non-canonical vector.
         defect_feats = torch.cat(defect_feats_list, dim=-1)
+        if getattr(self, "_collect_gauge_reference", None) is not None:
+            self._record_gauge_reference(defect_feats, head_species, head_edge_index,
+                                         head_vectors, head_lengths, head_positions,
+                                         head_cell, data["batch"], num_graphs)
         counts = data["carrier_counts"].view(num_graphs, -1).to(head_dtype)
         # The counter the paired difference is measured from. Absent (zeros) is the
         # closed-shell reference, for which the correction vanishes identically -- so a
@@ -1325,6 +1447,7 @@ class MACEDefect(ScaleShiftMACE):
             centre=centre,
             graph_sizes=graph_sizes,
             state=state,
+            gauge_shift=gauge_shift,
         )
         # Intrinsic gap: the same pooling with the seed switched off, so the logged gap
         # separates what MLP_l has learned from what the seed is supplying. The dead
@@ -1438,6 +1561,7 @@ class MACEDefect(ScaleShiftMACE):
                 centre=centre,
                 graph_sizes=graph_sizes,
                 state=state_ref,
+                gauge_shift=gauge_shift,
             )
 
         # STAGE 1.2 (plan v8 sections 2.2 and 2.8): the frontier-frontier image term
@@ -1579,6 +1703,8 @@ class MACEDefect(ScaleShiftMACE):
             # reference-branch twin and the per-graph diagnostics of section 2.1
             # (`-1` where a graph was at its reference state and nothing was evaluated).
             "base_trunk_energy": base_trunk_energy,
+            "gauge_mu": (torch.zeros((), dtype=base_energy.dtype, device=base_energy.device)
+                         if gauge_shift is None else gauge_shift.detach()),
             "frontier_energy": frontier,
             "frontier_ref_energy": frontier_ref,
             "frontier_w": frontier_diag.get("w"),
@@ -1624,3 +1750,40 @@ class MACEDefect(ScaleShiftMACE):
             # gap magnitude, which cannot tell a species gap from a site gap.
             "carrier_logits_intrinsic": logits_intrinsic,
         }
+
+
+def establish_spectral_gauge(model, frames, device=None, log: bool = True):
+    """Register the gauge reference from the class table's pristine frame and re-align the
+    class table under it (plan v8.1 section 3.1).
+
+    `frames` are the same `AtomicData` the class table was built over; the pristine class's
+    reference frame is its first stoichiometric one. The table's edges were read off raw
+    spectra during construction, so after the gauge exists they are refreshed (the integers
+    are kept; only the alignment fields move, by exactly -mu_g). Returns the gauge record.
+    """
+    from mace.modules import defect_composition as dc
+
+    table = getattr(model, "composition_classes", None)
+    if not table or not table.get("pristine_key"):
+        raise RuntimeError("establish_spectral_gauge needs a built class table with a "
+                           "pristine class")
+    if device is None:
+        device = next(model.parameters()).device
+    pristine_key = table["pristine_key"]
+    pristine_frame = None
+    for fr in frames:
+        numbers = [int(model.atomic_numbers[i]) for i in fr.node_attrs.argmax(dim=-1).tolist()]
+        if dc.composition_key(numbers) == pristine_key:
+            pristine_frame = fr
+            break
+    if pristine_frame is None:
+        raise RuntimeError(f"no frame of the pristine class {pristine_key} among the "
+                           f"{len(frames)} given")
+    batch_dict = dc.tiled_pristine_dict(pristine_frame, model, (1, 1, 1), device)
+    model.register_gauge_reference(batch_dict, pristine_key)
+    summary = dc.refresh_class_table(model, frames, device=device, log=log)
+    if summary.get("disagree"):
+        raise RuntimeError(f"the class integers changed under the gauge: {summary['disagree']}"
+                           " -- a rigid shift cannot do that; the constructor is not shift-"
+                           "invariant")
+    return dict(model.gauge_record)

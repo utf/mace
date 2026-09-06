@@ -89,6 +89,16 @@ def main() -> None:
 
 
 
+def model_gauge_fingerprint(model) -> str:
+    """The gauge record's content hash, or 'none' (plan v8.1 section 3.1)."""
+    rec = getattr(model, "gauge_record", None)
+    if not rec:
+        return "none"
+    from mace.modules.defect_gauge import GaugeRecord
+
+    return GaugeRecord.from_dict(rec).fingerprint
+
+
 def graph_cutoff(args) -> float:
     """Radius the neighbour graph is built at.
 
@@ -837,6 +847,63 @@ def run(args) -> None:
             pin_memory=args.pin_memory,
             num_workers=args.num_workers,
         )
+    elif float(getattr(args, "defect_energy_shape_weight", 0.0) or 0.0) > 0:
+        # PLAN v8.1 SECTION 8: the registered pair sampler. Every batch is the ordinary
+        # shuffled sweep plus `defect_energy_pair_slots` within-stratum pairs; the strata
+        # are stamped on the frames here, before any loader exists, and the manifest that
+        # freezes them is written before training starts.
+        from mace.modules import defect_objective as _obj
+
+        if args.distributed:
+            raise ValueError("the v8.1 pair sampler is single-process")
+        _weights = None
+        if str(getattr(args, "defect_energy_strata_json", "") or ""):
+            with open(args.defect_energy_strata_json, encoding="utf-8") as _h:
+                _weights = {str(k): float(v) for k, v in json.load(_h).items()}
+        _pristine_atoms = int(getattr(getattr(model, "spectral", None), "pristine_atoms", 0)
+                              or 0)
+        if _pristine_atoms <= 0:
+            from mace.data.two_size import pristine_cell_atoms as _pca
+
+            _comp = getattr(getattr(model, "madelung", None), "composition", None)
+            _pristine_atoms = _pca(train_set, [float(x) for x in _comp]) if _comp else 1
+        strata_table = _obj.assign_strata(
+            train_set, z_table, host=str(getattr(args, "defect_energy_host", "host")),
+            pristine_atoms=_pristine_atoms, weights=_weights)
+        for _vset in valid_sets.values():
+            _obj.assign_strata(_vset, z_table, host=str(getattr(args, "defect_energy_host",
+                                                                 "host")),
+                               pristine_atoms=_pristine_atoms, weights=_weights, log=False)
+        pair_sampler = _obj.WithinStratumPairSampler(
+            len(train_set), batch_size=args.batch_size, table=strata_table,
+            n_pair_slots=int(getattr(args, "defect_energy_pair_slots", 0) or 0),
+            generator=torch.Generator().manual_seed(args.seed),
+            drop_last=not args.lbfgs)
+        train_loader = torch_geometric.dataloader.DataLoader(
+            dataset=train_set,
+            batch_sampler=pair_sampler,
+            pin_memory=args.pin_memory,
+            num_workers=args.num_workers,
+        )
+        _manifest = _obj.manifest(
+            strata_table, _obj.ObjectiveStage.NUISANCE,
+            energy_shape_weight=float(args.defect_energy_shape_weight),
+            forces_weight=float(args.forces_weight),
+            n_pair_slots=int(args.defect_energy_pair_slots),
+            tolerances={"energy_scale_eV": float(getattr(args, "defect_energy_scale", 1.0))},
+            extra={"delta_forces_weight": float(args.delta_forces_weight),
+                   "total_energy_weight": float(args.total_energy_weight),
+                   "delta_energy_weight": float(args.delta_energy_weight),
+                   "seed": int(args.seed), "batch_size": int(args.batch_size)})
+        os.makedirs(args.work_dir, exist_ok=True)
+        with open(os.path.join(args.work_dir, f"{args.name}_objective_manifest.json"), "w",
+                  encoding="utf-8") as _h:
+            json.dump(_manifest, _h, indent=1)
+        logging.info("v8.1 energy-shape objective: %d strata (%s), %d pair slots per batch, "
+                     "manifest hash %s", len(strata_table.strata),
+                     ", ".join(f"{k}: n={len(s.members)} W={s.weight:g}"
+                               for k, s in strata_table.strata.items()),
+                     int(args.defect_energy_pair_slots), _manifest["hash"])
     else:
         train_loader = torch_geometric.dataloader.DataLoader(
             dataset=train_set,
@@ -1446,7 +1513,12 @@ def run(args) -> None:
             if protocol_on:
                 head = getattr(target, "spectral", None)
                 if head is not None:
-                    parts = [f"c_shift {float(head.c_shift):+.4f}"]
+                    parts = []
+                    if getattr(head, "c_shift", None) is not None:
+                        parts.append(f"c_shift {float(head.c_shift):+.4f}")
+                    rec = getattr(target, "gauge_record", None)
+                    if rec is not None:
+                        parts.append(f"mu_g {float(rec['mu_g']):+.4f}")
                     table = getattr(head, "c_shift_table", None)
                     if table is not None and float(table.detach().abs().sum()) > 0:
                         nz = table.detach().cpu()
@@ -1762,6 +1834,14 @@ def run(args) -> None:
         # table is refreshed every epoch); the base-cache build and the validation passes
         # run evaluation forwards, so the policy is set on the model, not per call.
         model.uncounted_class_policy = "zero"
+        # PLAN v8.1 SECTION 3.1: the spectral gauge, registered on the table's pristine
+        # frame; the table's edges are re-aligned under it (the integers are kept).
+        if bool(getattr(args, "defect_spectral_gauge", True)):
+            from mace.modules.defect_models import establish_spectral_gauge
+
+            gauge_record = establish_spectral_gauge(model, class_frames, device=device)
+            logging.info("Spectral gauge: mu_g = %+.6f eV, fingerprint %s",
+                         gauge_record["mu_g"], model_gauge_fingerprint(model))
         # Every non-parameter float is a number in the saved config: the resolved sink too.
         model.class_constructor["e_sink"] = model.composition_classes["e_sink"]
         n_counted = sum(1 for r in model.composition_classes["classes"].values()
@@ -1829,7 +1909,14 @@ def run(args) -> None:
         # degenerate case is worse: a first batch that happens to be all neutral skips the
         # calibration entirely, which is what the production smoke hit on a cross-fit fold.
         c_table_summary = None
-        if bool(getattr(args, "defect_c_shift_per_class", False)):
+        if getattr(model.spectral, "c_shift_table", None) is None:
+            # PLAN v8.1 (addendum sections 3.1 and 8): no energy constant lives in H. The
+            # Stage 1-4 energy zero is the analytically profiled nuisance intercept of the
+            # objective; nothing is calibrated onto the levels.
+            c, c_n = None, 0
+            logging.info("Stage-3 protocol: c-shift calibration RETIRED (plan v8.1): the head "
+                         "carries no energy constant; the objective profiles the intercepts")
+        elif bool(getattr(args, "defect_c_shift_per_class", False)):
             c_table_summary = defect_protocol.calibrate_c_shift_table_over_loader(
                 model, train_loader, device)
             c = None if not c_table_summary else float(
@@ -1843,7 +1930,9 @@ def run(args) -> None:
         else:
             c, c_n = defect_protocol.calibrate_c_shift_over_loader(model, train_loader,
                                                                    device)
-        if c is None:
+        if c is None and getattr(model.spectral, "c_shift_table", None) is None:
+            pass
+        elif c is None:
             # NOT silently zero. Delta_n = 0 on every frame makes the ratio undefined, and a
             # 0.0 written here would be indistinguishable from a calibration that happened.
             logging.warning(

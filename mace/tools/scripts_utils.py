@@ -1073,6 +1073,9 @@ def get_loss_fn(
             gap_weight=float(getattr(args, "defect_gap_weight", 0.0)),
             e_gap=float(getattr(args, "defect_e_gap", 0.0)),
             gap_composition=getattr(args, "defect_gap_composition", None),
+            energy_shape_weight=float(getattr(args, "defect_energy_shape_weight", 0.0) or 0.0),
+            energy_pair_slots=int(getattr(args, "defect_energy_pair_slots", 0) or 0),
+            energy_scale=float(getattr(args, "defect_energy_scale", 1.0) or 1.0),
         )
     elif args.loss == "l1l2energyforces":
         loss_fn = modules.WeightedEnergyForcesL1L2Loss(

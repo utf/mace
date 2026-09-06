@@ -72,33 +72,63 @@ class TestForces:
         """STAGE 1 (plan v8 section 4): the counting head no longer detaches the trunk
         features at entry, so `d(delta_sr)/dR` carries `dH/dh . dh/dR`, and so does the
         Madelung per-site charge channel. At Stage 0 this test asserted the OMISSION (an
-        h-independent floor of 5e-3 eV/A once the on-site channel's last layer is scaled up
-        so the omitted piece is visible on the small fixture); the same amplification now
-        has to pass.
+        h-independent floor once the on-site channel's last layer is scaled up so the
+        omitted piece is visible on the small fixture); the same amplification now has to
+        pass, and with the features held fixed on the analytic side only, the harness has
+        to report the omission.
+
+        THE FIXTURE IS CHOSEN, NOT DRAWN. How large the feature path is on this toy depends
+        on the random readout and on-site draws (a parameter added to or removed from the
+        head shifts every later draw), and on one draw the omitted piece sat below the
+        harness's tolerance and the test read "pass" for the wrong reason. So the readout
+        and on-site MLPs are re-drawn over a few seeds until the omitted piece is visible
+        (> 1e-3 eV/A on some component), and the harness is asked about THAT component.
         """
-        model = _model_no_lr()
-        with torch.no_grad():
-            last = [m for m in model.spectral.h.site.modules()
-                    if isinstance(m, torch.nn.Linear)][-1]
-            last.weight.mul_(100.0)
-        ctx = ForwardContext.production(model)
-        batch = _batch([_perovskite(seed=1, reps=(2, 2, 2))], [[0.0, 0.0, 1.0, 0.0]],
-                       cutoff=ctx.cutoff)
-        data = ctx.forward_dict(batch)
+        model, data, component, visible = None, None, None, 0.0
+        for seed in range(12):
+            model = _model_no_lr()
+            torch.manual_seed(100 + seed)
+            for module in list(model.defect_feature_readouts[0].modules()) + list(
+                    model.spectral.h.site.modules()):
+                if hasattr(module, "reset_parameters"):
+                    module.reset_parameters()
+            with torch.no_grad():
+                last = [m for m in model.spectral.h.site.modules()
+                        if isinstance(m, torch.nn.Linear)][-1]
+                last.weight.mul_(100.0)
+            ctx = ForwardContext.production(model)
+            batch = _batch([_perovskite(seed=1, reps=(2, 2, 2))], [[0.0, 0.0, 1.0, 0.0]],
+                           cutoff=ctx.cutoff)
+            data = ctx.forward_dict(batch)
+            attached, _ = fd._analytic_forces(model, data)
+            readouts = model.defect_feature_readouts
+            originals = [r.forward for r in readouts]
+            try:
+                for r, f in zip(readouts, originals):
+                    r.forward = (lambda f: (lambda x: f(x).detach()))(f)
+                detached, _ = fd._analytic_forces(model, data)
+            finally:
+                for r, f in zip(readouts, originals):
+                    r.forward = f
+            diff = (attached["band"] - detached["band"]).abs()
+            visible = float(diff.max())
+            if visible > 1e-3:
+                flat = int(diff.argmax())
+                component = (flat // 3, flat % 3)
+                break
+        assert component is not None, f"no draw with a visible feature path (max {visible:.2e})"
         reports = {r.term: r for r in fd.force_check(
-            model, data, components=[(0, 0), (7, 2), (21, 1)], tol=1e-5,
-            terms=["band"])}
+            model, data, components=[component], tol=1e-5, terms=["band"])}
         assert reports["band"].status == "pass", reports["band"].fit
-        # ... and the feature path is not trivially small on this amplified fixture: with
-        # the features held fixed on the analytic side only, the omission is visible.
+        # ... and with the features held fixed on the analytic side only, the omission is
+        # what the harness reports: an h-independent floor, not a fit.
         readouts = model.defect_feature_readouts
         originals = [r.forward for r in readouts]
         try:
             for r, f in zip(readouts, originals):
                 r.forward = (lambda f: (lambda x: f(x).detach()))(f)
             omitted = {r.term: r for r in fd.force_check(
-                model, data, components=[(0, 0), (7, 2), (21, 1)], tol=1e-5,
-                terms=["band"])}
+                model, data, components=[component], tol=1e-5, terms=["band"])}
         finally:
             for r, f in zip(readouts, originals):
                 r.forward = f

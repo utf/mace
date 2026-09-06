@@ -75,7 +75,7 @@ def hamiltonian(h, atoms):
     feats = torch.zeros(len(atoms), 4, dtype=torch.float64)
     n = len(atoms)
     hh = h.h(feats, species, edge_index, edge_vector, madelung=None, n_nodes=n)
-    levels = h.h.on_site(feats, species, None) + h.c_shift
+    levels = h.h.on_site(feats, species, None)
     diag = torch.cat([levels[:, :1], levels[:, 1:].expand(-1, 3)], dim=-1).reshape(-1)
     return hh - torch.diag(torch.diagonal(hh)) + torch.diag(diag), species
 

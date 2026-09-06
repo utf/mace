@@ -180,33 +180,6 @@ class TestIdentities:
                 float(alone[g]["frontier_w"][0]), abs=1e-9)
 
 
-    def test_a_rigid_level_shift_by_the_c_table_does_not_move_the_term(self, model):
-        """The head's c table shifts every level of a charged graph by a per-charge-class
-        constant (section 2.2's C_Q on the levels). The class edges were aligned at S_ref,
-        so the projectors follow the shift: the frontier density, w and Phi_FF are the same
-        with the table at zero and at +2.5 eV for the frame's charge class -- the case that
-        on arma_s1 read the whole valence band as the electron cloud before the shift was
-        handed to the term."""
-        head = model.spectral
-        table = head.c_shift_table
-        before = table.detach().clone()
-        try:
-            out0, _ = _forward(model, [PRISTINE], [HOLE], training=False, compute_force=False)
-            with torch.no_grad():
-                table[0, :] = 2.5           # charge class 0: Delta_n < 0, the hole
-            out1, _ = _forward(model, [PRISTINE], [HOLE], training=False, compute_force=False)
-        finally:
-            with torch.no_grad():
-                table.copy_(before)
-        assert float(out1["frontier_energy"][0]) == pytest.approx(
-            float(out0["frontier_energy"][0]), abs=1e-9)
-        assert float(out1["frontier_w"][0]) == pytest.approx(float(out0["frontier_w"][0]),
-                                                             abs=1e-9)
-        assert float(out1["frontier_min_weight"][0]) == pytest.approx(
-            float(out0["frontier_min_weight"][0]), abs=1e-9)
-        assert abs(float(out1["frontier_energy"][0])) > 1e-6
-
-
 # ------------------------------------------------------------------ the registry
 
 

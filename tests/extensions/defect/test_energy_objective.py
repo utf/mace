@@ -162,3 +162,74 @@ def test_stratum_key_fields():
     k = stratum_key(PROVENANCE_UNPAIRED, "CsPbCl3", 1, "17x47,55x16,82x16", "pbc", 1)
     assert k == "unpaired|CsPbCl3|Q+1|17x47,55x16,82x16|pbc|1x"
     assert stratum_key(PROVENANCE_PAIRED, "h", -1, "c", "pbc", 2).startswith("paired|")
+
+
+# ------------------------------------------------------------------ the loss wiring
+
+
+def _toy_dataset(n_small=12, n_large=4, seed=0):
+    """AtomicData frames: charged/neutral, two sizes, with energies and forces."""
+    from mace import data
+    from mace.tools import AtomicNumberTable
+
+    rng = np.random.default_rng(seed)
+    z_table = AtomicNumberTable([17, 55, 82])
+    ds = []
+    for k in range(n_small + n_large):
+        n = 4 if k < n_small else 8
+        charged = k % 3 != 2
+        counts = [0.0, 0.0, 1.0, 0.0] if charged else [0.0] * 4
+        numbers = [17, 55, 82, 17] if n == 4 else [17, 55, 82, 17, 17, 55, 82, 17]
+        config = data.Configuration(
+            atomic_numbers=np.array(numbers), positions=rng.normal(size=(n, 3)) * 3,
+            cell=np.eye(3) * 12.0, pbc=(True, True, True),
+            properties={"carrier_counts": counts, "energy": float(rng.normal()),
+                        "forces": rng.normal(size=(n, 3))},
+            property_weights={"energy": 1.0, "forces": 1.0})
+        ds.append(data.AtomicData.from_config(config, z_table=z_table, cutoff=5.0))
+    return ds, z_table
+
+
+def test_strata_are_stamped_and_the_pair_batches_score():
+    from mace.modules.defect_objective import WithinStratumPairSampler, assign_strata
+    from mace.modules.loss import DefectLoss
+    from mace.tools import torch_geometric
+
+    ds, z_table = _toy_dataset()
+    table = assign_strata(ds, z_table, host="toy", pristine_atoms=4, log=False)
+    assert len(table.strata) == 2 and all(s.informative for s in table.strata.values())
+    assert all(int(d.stratum_id) == -1 for d in ds if int(d.carrier_counts.sum()) == 0)
+    sampler = WithinStratumPairSampler(len(ds), batch_size=4, table=table, n_pair_slots=2,
+                                       generator=torch.Generator().manual_seed(1))
+    loader = torch_geometric.dataloader.DataLoader(ds, batch_sampler=sampler)
+    loss_fn = DefectLoss(energy_weight=0.0, forces_weight=0.0, delta_energy_weight=0.0,
+                         delta_forces_weight=0.0, total_energy_weight=0.0,
+                         energy_shape_weight=2.0, energy_pair_slots=2)
+    batch = next(iter(loader))
+    assert int(batch.num_graphs) == 8
+    # a prediction off by a per-stratum constant: the constant never enters the term
+    e_pred = batch.energy + torch.tensor([5.0, -3.0])[batch.stratum_id.reshape(-1).clamp_min(0)]
+    pred = {"energy": e_pred, "delta_energy": torch.zeros_like(e_pred)}
+    assert float(loss_fn.energy_shape(batch, pred)) == pytest.approx(0.0, abs=1e-12)
+    noise = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.3, -0.1, 0.2, 0.6])
+    pred = {"energy": e_pred + noise, "delta_energy": torch.zeros_like(e_pred)}
+    expected = 2.0 * 0.5 * ((0.3 + 0.1) ** 2 + (0.2 - 0.6) ** 2) / 2
+    assert float(loss_fn.energy_shape(batch, pred)) == pytest.approx(expected, abs=1e-12)
+    # a batch not built by the sampler is refused
+    plain = torch_geometric.dataloader.DataLoader(ds, batch_size=8, shuffle=False)
+    with pytest.raises(ValueError):
+        loss_fn.energy_shape(next(iter(plain)), {"energy": torch.zeros(8),
+                                                  "delta_energy": torch.zeros(8)})
+
+
+def test_the_shape_term_refuses_a_second_charged_energy_path():
+    from mace.modules.loss import DefectLoss
+
+    with pytest.raises(ValueError):
+        DefectLoss(total_energy_weight=0.25, delta_energy_weight=0.0,
+                   energy_shape_weight=1.0, energy_pair_slots=1)
+    with pytest.raises(ValueError):
+        DefectLoss(total_energy_weight=0.0, delta_energy_weight=10.0,
+                   energy_shape_weight=1.0, energy_pair_slots=1)
+    DefectLoss(total_energy_weight=0.0, delta_energy_weight=0.0, energy_shape_weight=1.0,
+               energy_pair_slots=1)

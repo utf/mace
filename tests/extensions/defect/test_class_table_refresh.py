@@ -50,7 +50,8 @@ class TestRefresh:
         dc.ensure_class_table(model, frames, log=False)
         before = dc.lookup_class(model.composition_classes, PRISTINE.get_atomic_numbers())
         with torch.no_grad():
-            model.spectral.c_shift.add_(0.7)          # every level up by 0.7 eV
+            model.spectral.h.eps0.add_(0.7)           # every level up by 0.7 eV (no gauge
+            #                                            reference registered: the raw shift)
         summary = dc.refresh_class_table(model, frames, log=False)
         after = dc.lookup_class(model.composition_classes, PRISTINE.get_atomic_numbers())
         assert after.vbm_al == pytest.approx(before.vbm_al + 0.7, abs=1e-6)

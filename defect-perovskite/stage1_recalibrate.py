@@ -111,6 +111,9 @@ def main(argv=None):
             for q, d in by_q.items()}
         # forces after the profile: the profile is post hoc on energies, nothing else moves
         _, f_again = residuals(model, ctx, sets["train"][0][:8], args.device)
+        # the profile is post hoc on energies; a re-evaluation differs only by the machine's
+        # own run-to-run floor (multithreaded reductions), which is reported, not asserted
+        row["forces_max_abs_change"] = float((f_again - f_tr[: f_again.shape[0]]).abs().max())
         row["forces_bit_identical"] = bool(torch.equal(f_again, f_tr[: f_again.shape[0]]))
         results[path.stem] = row
         print(path.stem, json.dumps({k: {kk: (round(vv, 4) if isinstance(vv, float) else vv)
