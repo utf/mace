@@ -746,7 +746,11 @@ class MACEDefect(ScaleShiftMACE):
             raise RuntimeError("the forward did not record the gauge reference (no counting "
                                "head on this model?)")
         # the value under the parameters as they are now, for the record and the log
-        mu, record = self._gauge_shift(self.pristine_centre(next(self.parameters()).dtype))
+        # The head's dtype, not the first parameter's: under the mixed policy the trunk is
+        # float32 and the readout that maps the centre is float64.
+        head_dtype = (torch.float64 if getattr(self, "precision_policy", "uniform") == "mixed"
+                      else next(self.parameters()).dtype)
+        mu, record = self._gauge_shift(self.pristine_centre(head_dtype))
         logging.info("Spectral gauge registered on pristine cell %s (%d atoms, ranks %s): "
                      "mu_g = %+.6f eV, gaps %s", pristine_key,
                      int(self.gauge_reference["n_atoms"]), record.ranks, float(mu),

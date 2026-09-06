@@ -116,3 +116,22 @@ class TestGauge:
         model, _, _ = _gauged_model()
         names = [n for n, _ in model.named_parameters()]
         assert not any(n.endswith("c_shift") or n.endswith("c_shift_table") for n in names)
+
+
+def test_h_fix_takes_no_state_input():
+    """Addendum 3.1 / item 1.1: `H_fix(R)` is a function of the geometry and species alone.
+    The assembler's signature carries no state, policy, counter, or formal-charge argument
+    -- asserted by name, so that a future argument of that kind fails here first."""
+    import inspect
+
+    from mace.modules.defect_counting import CountingHead
+
+    names = set(inspect.signature(CountingHead.assemble_hamiltonian).parameters) - {"self"}
+    assert names == {"node_feats", "node_species", "edge_index", "edge_vector", "madelung",
+                     "centre", "n_nodes"}
+    forbidden = ("state", "policy", "count", "counter", "charge", "q_formal", "occupation",
+                 "carrier", "gauge", "shift")
+    for n in names:
+        assert not any(f in n for f in forbidden), n
+    doc = CountingHead.assemble_hamiltonian.__doc__ or ""
+    assert "no gauge and no energy constant" in doc
