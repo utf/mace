@@ -1,7 +1,8 @@
 # D-SCC v4 — implementation tracker
 
-Normative document: `defect-perovskite/DSCC_PLAN_V4.md` (the user's plan v4, verbatim,
-2026-09-06). It **overrules** `TRANSITION_PLAN_V8_SPEC.md`, `TRANSITION_PLAN_V8_1_ADDENDUM.md`
+Normative documents: `defect-perovskite/DSCC_PLAN_V4.md` (the user's plan v4, verbatim,
+2026-09-06) and `DSCC_PLAN_V4_1_AMENDMENT.md` (kernel-regime ruling and confirmations,
+2026-09-06 evening; takes precedence over v4 where they differ). It **overrules** `TRANSITION_PLAN_V8_SPEC.md`, `TRANSITION_PLAN_V8_1_ADDENDUM.md`
 and `TRANSITION_PLAN_V8_1_IMPLEMENTATION_SPEC.md`, which are history only. This file is the
 task list and the registers the plan's §10 rules require. Paths relative to the worktree
 `/home/alex/src/mace/.claude/worktrees/size-extensivity` (branch `defect`).
@@ -26,10 +27,10 @@ task list and the registers the plan's §10 rules require. Paths relative to the
 
 | # | Item | Status |
 |---|---|---|
-| C1 | Smearing of the labels: the old code records "doped's default ISMEAR = 0, SIGMA = 0.05 eV" as the labels' smearing (`defect_counting.py`). Plan §11 registers Gaussian 0.05 eV and asks for confirmation from the label paper's methods (Mosquera-Lois & Walsh, PRX Energy 4, 043008 (2025)). | **open** — proceeding with Gaussian 0.05 eV |
-| C2 | Whether `E_gap = 2.40 eV` is the static-lattice or the thermal-average PBE gap (decides which cell the gap regulariser acts on, §6). `band_edges.json` only carries the symmetric ±1.2 eV placement. | **open** — Phase 0 does not need it; needed before Phase 2 |
-| C3 | b3 GPU 6 fault: cold power cycle now, or leave until GPU waves are needed (Phase 3)? | **open** |
-| C4 | **Regime-A placement check fails on the training set at the plan's defaults** (`r_d1 = 3.2`, `r_d2 = 3.6` Å, floor 1e-3). Identified first-shell Pb–Cl bonds beyond `r_d1`: 3.1 % on the 544 pristine frames, 5–7 % on the 79-atom vacancy frames (the six-nearest rule counts a Cl across the vacancy for the flanking Pb), 1.2–1.6 % at 159 atoms; intra-octahedron Cl–Cl edges below `r_d2`: 2.0–2.6 % (0 at 159 atoms). The first-shell Pb–Cl distribution is thermal and wide: p50 2.88 Å, fraction > 3.0 / 3.1 / 3.2 / 3.3 Å = 22.5 / 10.8 / 5.6 / 3.4 %. No window in the 3.2–3.6 Å gap clears a 1e-3 floor on these frames. Options for ruling: (a) register a higher floor (≈ 5e-2) with the physical consequence that a few % of first-shell pairs sit inside the switch; (b) move the window up (e.g. 3.5–4.0 Å, still below the 4.8 Å vacancy-spanning minimum, but then the Cs–Cl shell at 3.5–4.1 Å is inside it); (c) make regime B (no switch) the primary regime and report regime A as failing its placement gate. Also: exclude the vacancy-flanking Pb's sixth neighbour from the identified set, or run the check on pristine frames only. | **open** — needed before P0.5 closes |
+| C1 | Smearing of the labels: the old code records "doped's default ISMEAR = 0, SIGMA = 0.05 eV" as the labels' smearing (`defect_counting.py`). Plan §11 registers Gaussian 0.05 eV and asks for confirmation from the label paper's methods (Mosquera-Lois & Walsh, PRX Energy 4, 043008 (2025)). | **confirmed** (v4.1) |
+| C2 | Whether `E_gap = 2.40 eV` is the static-lattice or the thermal-average PBE gap (decides which cell the gap regulariser acts on, §6). `band_edges.json` only carries the symmetric ±1.2 eV placement. | **ruled: static lattice** (v4.1) → the regulariser acts on the static pristine cell (D8); thermal-mean gap reported |
+| C3 | b3 GPU 6 fault: cold power cycle now, or leave until GPU waves are needed (Phase 3)? | **ruled: leave** while GPUs 4, 5, 7 are accessible (checked 2026-09-06 evening: yes); cold power cycle only if not |
+| C4 | **Regime-A placement check fails on the training set at the plan's defaults** (`r_d1 = 3.2`, `r_d2 = 3.6` Å, floor 1e-3). Identified first-shell Pb–Cl bonds beyond `r_d1`: 3.1 % on the 544 pristine frames, 5–7 % on the 79-atom vacancy frames (the six-nearest rule counts a Cl across the vacancy for the flanking Pb), 1.2–1.6 % at 159 atoms; intra-octahedron Cl–Cl edges below `r_d2`: 2.0–2.6 % (0 at 159 atoms). The first-shell Pb–Cl distribution is thermal and wide: p50 2.88 Å, fraction > 3.0 / 3.1 / 3.2 / 3.3 Å = 22.5 / 10.8 / 5.6 / 3.4 %. No window in the 3.2–3.6 Å gap clears a 1e-3 floor on these frames. Options for ruling: (a) register a higher floor (≈ 5e-2) with the physical consequence that a few % of first-shell pairs sit inside the switch; (b) move the window up (e.g. 3.5–4.0 Å, still below the 4.8 Å vacancy-spanning minimum, but then the Cs–Cl shell at 3.5–4.1 Å is inside it); (c) make regime B (no switch) the primary regime and report regime A as failing its placement gate. Also: exclude the vacancy-flanking Pb's sixth neighbour from the identified set, or run the check on pristine frames only. | **ruled (v4.1): regime B primary; regime A failed its gate, retained as a reduced ablation only** (retrospective floor 5e-2 for the ablation; flanking-Pb bond fraction and `m_sw` reported; excluded from selection) |
 
 ## 2. Registers
 
@@ -130,6 +131,31 @@ figure at `eta = 1.5` is float64 rounding at the 500-eV test scale (1e-12 relati
 physical `dq` (|Q| = 1, energies of a few eV) the absolute figure is 1e-11. Cost 0.1–0.4 s
 per matrix on CPU at 160 atoms, 0.34 s on the local GPU.
 
+**D8 — the static pristine cell for the gap regulariser (2026-09-06, after C2).** The
+dataset has no relaxed pristine frame (every `ideal` frame is a thermal snapshot) and no new
+DFT is allowed. The static pristine cell is therefore the label-free time-average of the
+544 pristine frames — the registered site-median lattice symmetrised over the group it
+generates (Pnma × the 2×2×1 supercell translations, 32 operations; built in the v8 programme
+as `defect_composition.mean_pristine_lattice`, cell 16.035 × 16.076 × 11.395 Å, Cl rms
+symmetrisation shift 0.10 Å). Its construction is ported into `dscc/` before the deletion
+sweep (Phase 2 item P2.2a). The thermal ensemble-mean gap over pristine frames is reported
+as a diagnostic. If the user can supply the paper's relaxed bulk structure, it replaces this
+without other change.
+
+**Flanking-Pb placement fraction (v4.1 pre-condition for any regime-A run; computed
+2026-09-06 evening, `scratchpad/flanking_pb.py`).** Flanking Pb identified label-free as the Pb
+whose sixth-nearest Cl is beyond 4.0 Å (a first shell of five): exactly 2 per frame on 1957 of
+1985 79-atom vacancy frames (1 on 27, 3 on 1). Their real first-shell bonds beyond `r_d1 =
+3.2 Å` against the other Pb's: **V_Cl⁰ 79 at.: 15.4 % vs 4.3 % (×3.6); 159 at.: 5.3 % vs 0.3 %
+(×21)** — the expected enhancement, on the neutral frames (where `dq = 0`); **V_Cl⁺ 79 at.:
+2.9 % vs 3.2 % (×0.9); 159 at.: 0 % vs 0.2 %** — no enhancement on the charged frames, where
+`dq` sits (the flanking Pb of V_Cl⁺ move away from the vacancy and their remaining bonds are
+not stretched). Either way the fraction is 30× the 1e-3 floor; the ruling stands.
+
+**D9 — kernel regime (v4.1).** `KernelConfig.regime` defaults to `"B"`; regime A is
+constructed only explicitly for the ablation arm. The flanking-Pb restricted placement
+fraction is computed before any regime-A run (see the note under P0.5).
+
 ## 3. Task list
 
 Status: `todo` / `wip` / `done` / `blocked`.
@@ -148,7 +174,7 @@ Status: `todo` / `wip` / `done` / `blocked`.
 | P0.2 | Data pipeline: geometry-state groups formed before the split; strata keys; size-grouped batches (D4) | no group split across folds | done — `dscc/data.py` (`frame_meta`, `atomic_data` at `r_cut`, `split_by_group`, `assert_no_group_split`, `SizeGroupedSampler`) |
 | P0.3 | `fill(H, N)`: Gaussian smearing, bisection `mu`, `P`, `F_band`, generalised entropy; matrix-function backward (batched Function over `_dk_backward`) | `dF_band/dH_ab = P_ba` to 1e-10 | done — `dscc/fill.py`; FD 1e-8, autograd exact; density response vs FD 1e-6; batched == per-frame |
 | P0.4 | `E_PBC` Ewald matrix of Gaussians with derivatives (D3); LES oracle test; tiling-ladder `K_LR_ii` → `-alpha_M/L` | independent of the splitting parameter to 1e-10 eV (E, F, stress); oracle agreement | done at toy size — `dscc/ewald.py`; η-independence 1e-10 (E, F, stress), LES oracle 1e-6, ladder 1e-8, pair width convention; 159-atom gate: see log |
-| P0.5 | Regime A: `K_SR` (erf, `w_dir` C2 switch), `K_LR`; placement check over identified first-shell bonds; `m_sw` | placement floors satisfied on the training set | code done — `dscc/kernels.py`; **gate FAILED on the training set (C4)** |
+| P0.5 | Regime A: `K_SR` (erf, `w_dir` C2 switch), `K_LR`; placement check over identified first-shell bonds; `m_sw` | placement floors satisfied on the training set | **gate FAILED (C4, ruled v4.1)**: regime A is a reduced ablation only; flanking-Pb restricted fraction: `scratchpad/flanking_pb.py` (running) |
 | P0.6 | Regime B: `K_SR` lattice sum with automatic image range; `K_LR`; `f_SR` | converged to 1e-10 eV; rewrapping-invariant | done — `K_SR + K_LR = E_PBC` to 1e-10, range-converged 1e-12, rewrapping 1e-12 |
 | P0.7 | `Gamma` (both regimes, `lambda_dir`, `U_eff` bounded), `Gamma_LR` (`r_g`/`r_split` cross Ewald), `Zbar` centring, `W` | splitting-parameter independence of `Gamma_LR` | matrices done (`gamma_matrix`, `gamma_lr`, `centred_pattern`, `project_sum_rule`, `host_potential`); the bounded learnables live in the head module (P1) |
 | P0.8 | `H0`: reuse `SlaterKosterH` (SK, Harrison init, decay lengths, log modulation, centred scalar onsite); rank-1 `l=1` descriptor; geometric rank-2 `Q_i`; head graph at its own `r_cut` (D6) | invariance under translation / rotation / permutation / rewrapping with covariant derivatives; `Q_i = 0` at cubic sites (D7) | done — `dscc/hamiltonian.py`, `dscc/graph.py`; rotation covariance `H' = D H D^T` 1e-10, permutation 1e-12, FD of the spectrum 1e-7; scalar-only control = block off |
@@ -167,7 +193,8 @@ Status: `todo` / `wip` / `done` / `blocked`.
 | # | Task | Status |
 |---|---|---|
 | P2.1 | Energy admission per fold and size: coverage table, `s0 ± SE` (out-of-fold base), `sQ`; stored before results | todo |
-| P2.2 | Objective: total-cell residuals, strata, `C_Q` profiling on admitted frames (closed form, quadratic loss), `L_gap` on the Hamiltonian actually filled at `dq = 0`, Route B L2 | todo |
+| P2.2 | Objective: total-cell residuals, strata, `C_Q` profiling on admitted frames (closed form, quadratic loss), `L_gap` on the Hamiltonian actually filled at `dq = 0` on the static pristine cell (D8), Route B L2 | todo |
+| P2.2a | Static pristine cell: port the symmetrised site-median lattice construction into `dscc/` (D8); thermal-mean gap diagnostic | todo |
 | P2.3 | Loss-path audit (±1 eV injection, masks, units, restore; no validation/test/tiling frame in `C_Q`) | todo |
 | P2.4 | Fixed protocol frozen: splits, strata, weights, balance, six seeds, metrics, all §6/§7 thresholds | todo |
 | P2.5 | Leak readout `d(J* + C_Q)/dd` per size | todo |
@@ -176,7 +203,7 @@ Status: `todo` / `wip` / `done` / `blocked`.
 | # | Task | Status |
 |---|---|---|
 | P3.1 | Arm 1: full `H0` vs scalar-only control, `Phi = 0`, Route A; thresholds (i)–(iv) registered before opening | todo |
-| P3.2 | Arm 2+3: 18 configurations × 6 seeds; thresholds registered; forecasts §2.10 checked | todo |
+| P3.2 | Arm 2+3 (v4.1 layout): regime B — route {A, B} × coupling {LR-only; LR+U; full; λ=1 fixed} + Φ=0 per route = 10 configurations × 6 seeds; regime-A ablation: full coupling × 2 routes × 6 seeds, excluded from selection; thresholds registered; forecasts §2.10 checked | todo |
 | P3.3 | Arm 4: matched-kernel and full-kernel F-SCC comparators; decision (1)–(6) | todo |
 
 ### 3.5 Phase 4 — ladder, sparse solver, benchmark (plan §8)

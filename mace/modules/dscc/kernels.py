@@ -41,7 +41,7 @@ REGIMES = ("A", "B")
 class KernelConfig:
     """Registered kernel numbers (plan section 11). Defaults are the plan's; every value is
     serialised with the model."""
-    regime: str = "A"
+    regime: str = "B"           # v4.1 amendment: regime B primary; A a reduced ablation only
     r_g: float = 1.0            # Gaussian width of the site charges (A); to register
     eps_inf: float = 4.0        # host input (plan section 1)
     r_d1: float = 3.2           # regime A switch, A
@@ -78,7 +78,7 @@ def k_sr_regime_a(positions: torch.Tensor, cell: torch.Tensor, cfg: KernelConfig
     r = minimum_image_distances(positions, cell)
     r_safe = torch.where(eye, torch.ones_like(r), r)
     off = COULOMB * torch.erf(r_safe / (2.0 * cfg.r_g)) / r_safe * switch_c2(r_safe, cfg.r_d1, cfg.r_d2)
-    diag = self_term(cfg.r_g).to(positions.dtype).expand(n)
+    diag = self_term(cfg.r_g).to(dtype=positions.dtype, device=positions.device).expand(n)
     return torch.where(eye, torch.diag_embed(diag), off)
 
 
@@ -180,6 +180,42 @@ def f_sr(dq: torch.Tensor, k_sr: torch.Tensor, k_lr: torch.Tensor) -> torch.Tens
     num = (pair * k_sr)[upper].sum()
     den = (pair * (k_sr + k_lr))[upper].sum()
     return num / den
+
+
+def phi_cc_rs_sensitivity(positions: torch.Tensor, cell: torch.Tensor, cfg: KernelConfig,
+                          dq: torch.Tensor, lambda_dir: torch.Tensor, u_eff_site: torch.Tensor,
+                          delta: float = 0.5) -> Dict[str, float]:
+    """Regime B diagnostic (v4.1 section 11): `Phi_cc` at `r_s`, `r_s - delta`, `r_s + delta`
+    with the same `dq` -- how much of the intra-carrier energy the range split decides."""
+    out = {}
+    for name, r_s in (("minus", cfg.r_s - delta), ("centre", cfg.r_s), ("plus", cfg.r_s + delta)):
+        c = KernelConfig(**{**cfg.__dict__, "r_s": r_s})
+        k_sr, k_lr = kernel_components(positions.detach(), cell.detach(), c)
+        g = gamma_matrix(k_sr, k_lr, lambda_dir.detach(), u_eff_site.detach(), cfg.eps_inf)
+        out[name] = float(phi_cc(g, dq.detach()))
+    out["delta"] = float(delta)
+    out["sensitivity"] = (out["plus"] - out["minus"]) / (2.0 * delta)      # eV per A
+    return out
+
+
+def flanking_pb_fraction(positions: torch.Tensor, cell: torch.Tensor, numbers: Sequence[int],
+                         cfg: KernelConfig, cation: int = 82, anion: int = 17,
+                         shell_gap: float = 4.0) -> Dict[str, float]:
+    """v4.1 section 2.4 (regime-A ablation report): the placement fraction restricted to the
+    bonds of the flanking Pb -- identified label-free as the Pb whose sixth-nearest Cl lies
+    beyond `shell_gap` (a first shell of five) -- against the other Pb."""
+    z = torch.as_tensor([int(x) for x in numbers], device=positions.device)
+    r = minimum_image_distances(positions.detach(), cell.detach())
+    pb = torch.nonzero(z == cation).reshape(-1)
+    cl = torch.nonzero(z == anion).reshape(-1)
+    d = torch.sort(r[pb][:, cl], dim=1).values
+    flank = d[:, 5] > shell_gap
+    flank_bonds = d[flank][:, :5].reshape(-1)
+    other_bonds = d[~flank][:, :6].reshape(-1)
+    return {"n_flanking_pb": int(flank.sum()),
+            "flanking_beyond_r_d1": float((flank_bonds > cfg.r_d1).to(torch.float64).mean()) if flank_bonds.numel() else float("nan"),
+            "other_beyond_r_d1": float((other_bonds > cfg.r_d1).to(torch.float64).mean()) if other_bonds.numel() else float("nan"),
+            "n_flanking_bonds": int(flank_bonds.numel()), "n_other_bonds": int(other_bonds.numel())}
 
 
 def placement_fractions(positions: torch.Tensor, cell: torch.Tensor, numbers: Sequence[int],

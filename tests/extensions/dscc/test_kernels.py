@@ -151,3 +151,29 @@ class TestDiagnostics:
         k_sr, k_lr = kn.kernel_components(positions, cell, cfg_b)
         f = float(kn.f_sr(dq, k_sr, k_lr))
         assert math.isfinite(f)
+
+
+class TestAmendmentDiagnostics:
+    def test_regime_b_is_the_default_and_rs_sensitivity_is_reported(self):
+        assert kn.KernelConfig().regime == "B"
+        positions, cell = _frame(seed=10)
+        cfg = kn.KernelConfig(r_g=1.0, r_s=5.0)
+        dq = torch.randn(10, generator=torch.Generator().manual_seed(11))
+        out = kn.phi_cc_rs_sensitivity(positions, cell, cfg, dq, torch.tensor(0.5), torch.ones(10), delta=0.5)
+        assert set(out) == {"minus", "centre", "plus", "delta", "sensitivity"}
+        assert all(math.isfinite(v) for v in out.values())
+        # The long-range part is r_s-independent in the total: only lambda_dir K_SR moves.
+        cfg0 = kn.KernelConfig(r_g=1.0, r_s=5.0)
+        lr_only = kn.phi_cc_rs_sensitivity(positions, cell, cfg0, dq, torch.tensor(0.0), torch.ones(10))
+        assert abs(lr_only["sensitivity"]) > 0.0     # K_LR_ij moves with r_s at lambda = 0 (K_SR off-diagonal only)
+
+    def test_flanking_pb_fraction_on_a_toy_vacancy(self):
+        positions, cell, numbers = _perovskite()
+        cfg = kn.KernelConfig(regime="A", r_d1=3.2, r_d2=3.6)
+        pristine = kn.flanking_pb_fraction(positions, cell, numbers, cfg)
+        assert pristine["n_flanking_pb"] == 0 and math.isnan(pristine["flanking_beyond_r_d1"])
+        cl = [i for i, z in enumerate(numbers) if z == 17]
+        keep = [i for i in range(len(numbers)) if i != cl[0]]
+        out = kn.flanking_pb_fraction(positions[keep], cell, [numbers[i] for i in keep], cfg)
+        assert out["n_flanking_pb"] == 2 and out["n_flanking_bonds"] == 10
+        assert out["flanking_beyond_r_d1"] == 0.0 and out["other_beyond_r_d1"] == 0.0
