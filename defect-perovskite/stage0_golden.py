@@ -175,10 +175,18 @@ def class_table_frames(frames, cutoff):
     return atomic
 
 
-def ensure_table(model, ctx, frames, log=True):
+def ensure_table(model, ctx, frames, log=True, gauge=True):
+    """The class table and, under plan v8.1, the spectral gauge registered on its pristine
+    frame (a model that already carries a gauge reference keeps it)."""
     from mace.modules.defect_composition import ensure_class_table
+    from mace.modules.defect_models import establish_spectral_gauge
 
-    return ensure_class_table(model, class_table_frames(frames, ctx.cutoff), log=log)
+    ds = class_table_frames(frames, ctx.cutoff)
+    table = ensure_class_table(model, ds, log=log)
+    if gauge and getattr(model, "gauge_reference", None) is None \
+            and hasattr(getattr(model, "spectral", None), "assemble_hamiltonian"):
+        establish_spectral_gauge(model, ds, log=log)
+    return table
 
 
 # ------------------------------------------------------------------------------ hooks

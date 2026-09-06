@@ -72,6 +72,12 @@ def main(argv=None):
         model.composition_classes = None
         t0 = time.time()
         table = ensure_class_table(model, frames, log=False)
+        from mace.modules.defect_models import establish_spectral_gauge
+
+        if getattr(model, "gauge_reference", None) is None \
+                and hasattr(getattr(model, "spectral", None), "assemble_hamiltonian"):
+            establish_spectral_gauge(model, frames, log=False)
+            table = model.composition_classes
         counted = {k: (r["n_e"], r["n_h"], r["q_core"], r["tier"])
                    for k, r in table["classes"].items()}
         z = [round(float(v), 4) for v in model.madelung.z.detach().cpu()]

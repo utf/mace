@@ -227,6 +227,14 @@ def classes_for(model, ctx, ideal, atoms_list):
     t0 = time.time()
     model.composition_classes = None
     table = ensure_class_table(model, new, log=False)
+    # plan v8.1: the gauge reference is the ladder's own pristine cell (the model's previous
+    # reference, if any, was cleared with its table above)
+    from mace.modules.defect_models import establish_spectral_gauge
+
+    if hasattr(getattr(model, "spectral", None), "assemble_hamiltonian"):
+        model.gauge_reference = None
+        establish_spectral_gauge(model, new, log=False)
+        table = model.composition_classes
     for a in atoms_list:
         rec = lookup_class(table, a.get_atomic_numbers())
         print(f"  class {rec.key}: {describe(rec)}")
