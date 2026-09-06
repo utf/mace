@@ -322,7 +322,11 @@ class MACEDSCC(nn.Module):
                 if self.route_b:
                     g_lr = gamma_lr(pos_g, cell_g, self.kernel.r_g, self.r_split, self.kernel.eps_inf,
                                     tol=self.kernel.tol)
-                    W = host_potential(g_lr, centred_pattern(self.zstar()[sp_g]))
+                    pattern = self.zstar()[sp_g]
+                    # `_uncentred_test` exists only for the negative tiling-ladder test of
+                    # plan section 5; an uncentred pattern in production is a bug (2.5).
+                    zbar = pattern if getattr(self, "_uncentred_test", False) else centred_pattern(pattern)
+                    W = host_potential(g_lr, zbar)
                 res: ScfResult = solve_dscc(H, gamma, n_s, n_r, self.sigma_s, W, None,
                                             self.scf_options, unroll=training)
                 head_energy[g] = res.energy
