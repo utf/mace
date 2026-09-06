@@ -58,6 +58,7 @@ class TrainConfig:
     single_valued_ceiling: float = 0.10   # failing fraction that fails the arm
     eval_every: int = 5
     grad_clip: float = 10.0
+    cache_base: bool = True           # E_base/F_base cached per frame; block 0 recomputed
     device: str = "cuda"
     static_cell_path: str = "defect-perovskite/static_pristine_cell.json"
 
@@ -156,6 +157,36 @@ class Trainer:
         self.model.set_pristine_centre([to_device(b, self.device) for b in loader])
         static = dd.atomic_data([static_cell_atoms(self.cfg.static_cell_path)], self.z_table, self.cfg.r_cut)
         self.static_batch = to_device(next(iter(torch_geometric.dataloader.DataLoader(static, batch_size=1))), self.device)
+        # The static cell never moves: its base features are geometry-only, cached once.
+        with torch.no_grad():
+            feats = self.model.first_block(self.model._trunk_data(dict(self.static_batch)))
+            self.static_features = tuple(t.detach() for t in self.model.features(feats))
+        # E_base and F_base of every charged frame (frozen base, geometry-only), cached once.
+        self.base_cache: Dict[int, Tuple[torch.Tensor, torch.Tensor]] = {}
+        if self.cfg.cache_base:
+            self._fill_base_cache(self.train_idx + self.held_idx)
+
+    def _fill_base_cache(self, indices: Sequence[int]) -> None:
+        from mace.modules.models import ScaleShiftMACE
+        ds = self._dataset(indices)
+        k = 0
+        for b in torch_geometric.dataloader.DataLoader(ds, batch_size=8):
+            batch = to_device(b, self.device)
+            out = ScaleShiftMACE.forward(self.model.base, self.model._trunk_data(dict(batch)), training=False,
+                                         compute_force=True)
+            ptr = batch["ptr"]
+            for g in range(int(ptr.numel() - 1)):
+                lo, hi = int(ptr[g]), int(ptr[g + 1])
+                self.base_cache[indices[k]] = (out["energy"][g].detach().cpu(), out["forces"][lo:hi].detach().cpu())
+                k += 1
+
+    def _attach_base(self, batch: Dict[str, torch.Tensor], frame_indices: Sequence[int]) -> Dict[str, torch.Tensor]:
+        if not self.base_cache or any(i not in self.base_cache for i in frame_indices):
+            return batch
+        batch = dict(batch)
+        batch["dscc_base_energy"] = torch.stack([self.base_cache[i][0] for i in frame_indices]).to(self.device)
+        batch["dscc_base_forces"] = torch.cat([self.base_cache[i][1] for i in frame_indices]).to(self.device)
+        return batch
         record = {"config": asdict(self.cfg), "strata": self.strata_record, "n_train": len(self.train_idx),
                   "n_held": len(self.held_idx), "fold_of": {str(k): v for k, v in self.fold_of.items()},
                   "model_extra_state": self.model.get_extra_state()}
@@ -166,11 +197,11 @@ class Trainer:
     def step(self, batch, frame_indices: Sequence[int], optimizer) -> Dict[str, float]:
         self.model.train()
         optimizer.zero_grad(set_to_none=True)
-        out = self.model(batch, training=True, compute_force=True)
+        out = self.model(self._attach_base(batch, frame_indices), training=True, compute_force=True)
         weights = torch.tensor([self.frame_weight[i] for i in frame_indices], dtype=torch.float64,
                                device=self.device)
         l_force = force_loss(out, batch, weights)
-        gap = self.model.pristine_gap(self.static_batch)
+        gap = self.model.pristine_gap(self.static_batch, getattr(self, "static_features", None))
         l_gap = self.cfg.gap_weight * ((gap - self.cfg.e_gap) ** 2).sum()
         loss = self.cfg.force_weight * l_force + l_gap
         loss.backward()

@@ -42,10 +42,13 @@ def two_fillings(H: torch.Tensor, n_s: Tuple[int, int], n_ref: Tuple[int, int],
     with torch.no_grad():
         eps, U = torch.linalg.eigh(H)
     spectrum = (eps, U)
-    s_up = fill(H, float(n_s[0]), sigma_s, spectrum)
-    s_dn = fill(H, float(n_s[1]), sigma_s, spectrum)
-    r_up = fill(H, float(n_ref[0]), sigma_s, spectrum)
-    r_dn = fill(H, float(n_ref[1]), sigma_s, spectrum)
+
+    def count(x):                      # a float, or a per-graph tensor for a batched H
+        return x if torch.is_tensor(x) else float(x)
+    s_up = fill(H, count(n_s[0]), sigma_s, spectrum)
+    s_dn = fill(H, count(n_s[1]), sigma_s, spectrum)
+    r_up = fill(H, count(n_ref[0]), sigma_s, spectrum)
+    r_dn = fill(H, count(n_ref[1]), sigma_s, spectrum)
     energy = (s_up.F_band - r_up.F_band) + (s_dn.F_band - r_dn.F_band)
     dP = (s_up.P - r_up.P) + (s_dn.P - r_dn.P)
     n_atoms = H.shape[-1] // ORBITALS

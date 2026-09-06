@@ -145,3 +145,24 @@ class TestControl:
         eps0 = full.sk.eps0.detach()
         assert eps0[ZS.index(17), 1] < eps0[ZS.index(82), 1] < eps0[ZS.index(55), 1]
         assert not bool(H0(ZS, feature_dim=8, n_vectors=6, hidden=16).centre_set)
+
+
+class TestBatched:
+    def test_batched_h0_equals_the_per_graph_matrices(self):
+        atoms = [_perovskite(rattle=0.05, seed=s) for s in (1, 2, 3)]
+        m = _model()
+        singles, feats = [], []
+        for a in atoms:
+            species, scalars, vectors, positions, cell, ei, S = _inputs(a, m.r_cut, seed=int(a.get_positions()[0, 0] * 1000) % 97)
+            singles.append(_h(m, species, scalars, vectors, positions, cell, ei, S))
+            feats.append((species, scalars, vectors, positions, cell, ei, S))
+        n = len(atoms[0])
+        species = torch.cat([f[0] for f in feats]); scalars = torch.cat([f[1] for f in feats])
+        vectors = torch.cat([f[2] for f in feats])
+        batch = torch.arange(3).repeat_interleave(n)
+        ei = torch.cat([f[5] + g * n for g, f in enumerate(feats)], dim=1)
+        ev = torch.cat([gr.edge_vectors(f[3], f[4], f[5], f[6]) for f in feats])
+        H = m.batched(scalars, vectors, species, ei, ev, batch, 3, n)
+        assert H.shape == (3, 4 * n, 4 * n)
+        for g in range(3):
+            assert float((H[g] - singles[g]).abs().max()) < 1e-12

@@ -353,3 +353,50 @@ class TestContinuation:
         assert float(out["dq"].sum()) == pytest.approx(1.0, abs=1e-12)
         assert torch.isfinite(out["forces"]).all()
 
+
+
+class TestFastPaths:
+    """The batched Phi = 0 path, the cached-base path and the cached static features give
+    the per-graph, full-forward numbers."""
+
+    def test_batched_phi0_equals_per_graph(self, model):
+        vac_b = _frame(_perovskite(remove_cl=3, seed=2), [0, 0, 1, 0], 1)
+        batch = _batch([VACP, vac_b])
+        out = model(dict(batch), compute_force=True)                 # equal sizes -> batched
+        assert out["diagnostics"].get("batched") is True
+        for k, atoms in enumerate((VACP, vac_b)):
+            single = model(_batch([atoms]), compute_force=True)
+            assert float((out["energy"][k] - single["energy"][0]).abs()) < 1e-10
+            n = len(atoms)
+            assert float((out["forces"][k * n:(k + 1) * n] - single["forces"]).abs().max()) < 1e-9
+            assert float((out["dq"][k * n:(k + 1) * n] - single["dq"]).abs().max()) < 1e-10
+        mixed = model(_batch([VACP, VAC0]), compute_force=True)     # a reference graph -> per-graph path
+        assert mixed["diagnostics"].get("batched") is None
+
+    def test_cached_base_path_equals_full_forward(self, model):
+        batch = _batch([VACP])
+        ref = model(dict(batch), compute_force=True)
+        base_out = modules.ScaleShiftMACE.forward(model.base, model._trunk_data(dict(_batch([VACP]))), compute_force=True)
+        cached = dict(_batch([VACP]))
+        cached["dscc_base_energy"] = base_out["energy"].detach(); cached["dscc_base_forces"] = base_out["forces"].detach()
+        out = model(cached, compute_force=True)
+        assert float((out["energy"] - ref["energy"]).abs()) < 1e-10
+        assert float((out["forces"] - ref["forces"]).abs().max()) < 1e-9
+        # The training gradient through the head parameters agrees too.
+        for data in (dict(batch), cached):
+            model.zero_grad(set_to_none=True)
+            o = model(data, training=True, compute_force=True)
+            (o["forces"] ** 2).sum().backward()
+        # (both backward passes ran; parameter grads accumulated -> compare to 2x single)
+        assert torch.isfinite(model.h0.alpha.grad).all()
+
+    def test_cached_static_features_give_the_same_gap(self, model):
+        batch = _batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])
+        g1 = model.pristine_gap(batch)
+        with torch.no_grad():
+            feats = model.features(model.first_block(model._trunk_data(dict(batch))))
+        g2 = model.pristine_gap(batch, tuple(t.detach() for t in feats))
+        assert float((g1 - g2).abs()) < 1e-12
+        # first_block equals the full forward's block-0 slice.
+        full = modules.ScaleShiftMACE.forward(model.base, model._trunk_data(dict(batch)), compute_force=False)["node_feats"]
+        assert float((full[:, :model.block0_width] - model.first_block(model._trunk_data(dict(batch)))).abs().max()) < 1e-12

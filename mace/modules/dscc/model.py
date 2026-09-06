@@ -211,6 +211,26 @@ class MACEDSCC(nn.Module):
         trunk["unit_shifts"] = data["unit_shifts"][keep]
         return trunk
 
+    def first_block(self, data: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """The base's block-0 node features alone (embedding + first interaction +
+        product), attached to positions and cell -- the plan's "recomputation of the
+        base's early feature block for derivatives". Used with cached `E_base`/`F_base`
+        so the second interaction and the readouts are not evaluated in training."""
+        from mace.modules.utils import prepare_graph
+        base = self.base
+        ctx = prepare_graph(data, compute_virials=False, compute_stress=False,
+                            compute_displacement=False, lammps_mliap=False)
+        node_feats = base.node_embedding(data["node_attrs"])
+        edge_attrs = base.spherical_harmonics(ctx.vectors)
+        edge_feats, cutoff = base.radial_embedding(ctx.lengths, data["node_attrs"], data["edge_index"],
+                                                   base.atomic_numbers)
+        ikw = ctx.interaction_kwargs
+        node_feats, sc = base.interactions[0](node_attrs=data["node_attrs"], node_feats=node_feats,
+                                              edge_attrs=edge_attrs, edge_feats=edge_feats,
+                                              edge_index=data["edge_index"], cutoff=cutoff, first_layer=True,
+                                              lammps_class=ikw.lammps_class, lammps_natoms=ikw.lammps_natoms)
+        return base.products[0](node_feats=node_feats, sc=sc, node_attrs=data["node_attrs"])
+
     def features(self, node_feats: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Block-0 scalars `[N, n_s]` and polar vectors `[N, n_v, 3]`."""
         n_s, n_v = self.n_scalars, self.n_vectors
@@ -264,16 +284,20 @@ class MACEDSCC(nn.Module):
 
     # ----------------------------------------------------------------- gap (plan 6)
 
-    def pristine_gap(self, data: Dict[str, torch.Tensor]) -> torch.Tensor:
+    def pristine_gap(self, data: Dict[str, torch.Tensor],
+                     cached_features: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
         """`E_gap_model = LUMO - HOMO` at the exact valence count of the Hamiltonian
         actually filled at `dq = 0` -- `H0` in Route A, `H0 - W` in Route B -- for each
         graph of a pristine batch (the static cell for the regulariser, C2 ruled
         static-lattice; thermal frames for the ensemble-mean diagnostic). Differentiable
         in the head parameters through the eigenvalues (not eigenvectors)."""
         num_graphs = int(data["ptr"].numel() - 1)
-        out = ScaleShiftMACE.forward(self.base, self._trunk_data(dict(data)), training=self.training,
-                                     compute_force=False)
-        scalars, vectors = self.features(out["node_feats"])
+        if cached_features is None:
+            scalars, vectors = self.features(self.first_block(self._trunk_data(dict(data))))
+        else:
+            # A fixed cell (the static pristine cell): its geometry-only base features are
+            # cached by the caller; the gap's parameter gradient flows through H0 alone.
+            scalars, vectors = cached_features
         species = data["node_attrs"].argmax(dim=-1)
         positions, cell = data["positions"], data["cell"].view(-1, 3, 3)
         sender, receiver = data["edge_index"][0], data["edge_index"][1]
@@ -354,10 +378,22 @@ class MACEDSCC(nn.Module):
         shifts = torch.einsum("ei,eij->ej", data["unit_shifts"].to(positions.dtype), cell[edge_graph])
         strained = dict(data)
         strained["positions"], strained["cell"], strained["shifts"] = positions, cell.reshape(-1, 3), shifts
-        out = ScaleShiftMACE.forward(self.base, self._trunk_data(strained), training=training,
-                                     compute_force=False)
-        e_base = out["energy"]
-        scalars, vectors = self.features(out["node_feats"])
+        # The frozen base: its energy and forces are geometry-only. When the batch carries
+        # them (`base_energy`, `base_forces`, cached per frame by the trainer) only block 0
+        # is recomputed for the head's features; otherwise the full base forward runs.
+        # (`dscc_base_*`: the MACE data pipeline carries its own `base_energy` /
+        # `base_forces` keys, filled with zeros when absent -- a different thing.)
+        cached_base = (torch.is_tensor(data.get("dscc_base_energy")) and torch.is_tensor(data.get("dscc_base_forces"))
+                       and not compute_stress)
+        if cached_base:
+            node_feats = self.first_block(self._trunk_data(strained))
+            e_base = data["dscc_base_energy"].reshape(num_graphs).to(torch.float64)
+            f_base = data["dscc_base_forces"].to(torch.float64)
+        else:
+            out = ScaleShiftMACE.forward(self.base, self._trunk_data(strained), training=training,
+                                         compute_force=False)
+            node_feats, e_base, f_base = out["node_feats"], out["energy"], None
+        scalars, vectors = self.features(node_feats)
         species = data["node_attrs"].argmax(dim=-1)
         edge_vector = positions[receiver] - positions[sender] + shifts
         ptr = data["ptr"]
@@ -366,7 +402,32 @@ class MACEDSCC(nn.Module):
         cotangent_terms: List[Tuple[torch.Tensor, torch.Tensor]] = []   # (tensor, cotangent)
         dq_all = torch.zeros(positions.shape[0], dtype=torch.float64, device=device)
         diagnostics: Dict[str, List[Any]] = {"dq_sum": [], "n_atoms": []}
+        sizes = (ptr[1:] - ptr[:-1])
+        uniform = (not self.coupling and all(not s_.is_reference for s_ in states)
+                   and bool((sizes == sizes[0]).all()))
+        if uniform:
+            # Phi = 0, equal sizes: one [B, 4n, 4n] Hamiltonian, one batched fill, one
+            # cotangent -- the per-graph path below is the reference it is tested against.
+            n_nodes = int(sizes[0])
+            H = self.h0.batched(scalars, vectors, species, data["edge_index"], edge_vector, batch,
+                                num_graphs, n_nodes)
+            n_up, n_dn, r_up, r_dn = [], [], [], []
+            for g, state in enumerate(states):
+                numbers = [self.atomic_numbers[int(x)] for x in species[int(ptr[g]):int(ptr[g + 1])].tolist()]
+                n_ref = neutral_count(numbers)
+                a, b = state.counts(n_ref); c, d = State(0, 0, 0).counts(n_ref)
+                n_up.append(a); n_dn.append(b); r_up.append(c); r_dn.append(d)
+            t = lambda v: torch.tensor(v, dtype=torch.float64, device=device)  # noqa: E731
+            sol = two_fillings(H, (t(n_up), t(n_dn)), (t(r_up), t(r_dn)), self.sigma_s)
+            head_energy = sol.energy
+            cotangent_terms.append((H, 0.5 * (sol.dP + sol.dP.transpose(-1, -2))))
+            dq_all = sol.dq.reshape(-1)
+            diagnostics["dq_sum"] = sol.dq.sum(-1).detach().cpu().tolist()
+            diagnostics["n_atoms"] = [n_nodes] * num_graphs
+            diagnostics["batched"] = True
         for g, state in enumerate(states):
+            if uniform:
+                break
             lo, hi = int(ptr[g]), int(ptr[g + 1])
             if state.is_reference:
                 continue
@@ -447,18 +508,21 @@ class MACEDSCC(nn.Module):
         result: Dict[str, Optional[torch.Tensor]] = {
             "energy_uncalibrated": energy_uncal, "energy": energy_uncal + c_q,
             "base_energy": e_base, "head_energy": head_energy, "c_q": c_q,
-            "dq": dq_all, "node_feats": out["node_feats"], "short_circuit": False,
+            "dq": dq_all, "node_feats": node_feats, "short_circuit": False,
             "calibrated": self.calibrated, "diagnostics": diagnostics,
         }
         if compute_force or compute_stress:
             inputs = [positions] + ([strain] if compute_stress else [])
             grads = [torch.zeros_like(t) for t in inputs]
-            # Base: the full derivative of E_base.
-            g_base = torch.autograd.grad(e_base.sum(), inputs, create_graph=create,
-                                         retain_graph=True, allow_unused=True)
-            for k, g in enumerate(g_base):
-                if g is not None:
-                    grads[k] = grads[k] + g
+            # Base: the full derivative of E_base (or its cached forces).
+            if cached_base:
+                grads[0] = grads[0] - f_base
+            else:
+                g_base = torch.autograd.grad(e_base.sum(), inputs, create_graph=create,
+                                             retain_graph=True, allow_unused=True)
+                for k, g in enumerate(g_base):
+                    if g is not None:
+                        grads[k] = grads[k] + g
             # Head: Hellmann-Feynman -- the density (and charges) as constant cotangents.
             for tensor, cot in cotangent_terms:
                 g_head = torch.autograd.grad(tensor, inputs, grad_outputs=cot, create_graph=create,

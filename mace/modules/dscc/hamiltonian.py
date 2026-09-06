@@ -112,17 +112,61 @@ class H0(nn.Module):
     def directional_block(self, vectors: torch.Tensor, species: torch.Tensor,
                           edge_index: torch.Tensor, edge_vector: torch.Tensor) -> torch.Tensor:
         """`H_onsite_dir` as a dense `[4N, 4N]` block-diagonal matrix."""
+        return torch.block_diag(*self.directional_site_blocks(vectors, species, edge_index, edge_vector))
+
+    def batched(self, scalars: torch.Tensor, vectors: Optional[torch.Tensor], species: torch.Tensor,
+                edge_index: torch.Tensor, edge_vector: torch.Tensor, batch: torch.Tensor,
+                num_graphs: int, n_nodes: int) -> torch.Tensor:
+        """Dense `H0` for a batch of EQUAL-SIZED graphs at once, `[B, 4n, 4n]`: the same
+        matrices `forward` builds one at a time (asserted equal in the tests), without the
+        per-graph Python loop and its slicing -- which the training-step profile put at a
+        third of the backward. `edge_index` is global (batch-concatenated), `batch` the
+        graph of every node."""
+        if not bool(self.centre_set):
+            raise RuntimeError("H0 needs the pristine species feature means: call set_centre first")
+        scalars = scalars.to(torch.float64)
+        edge_vector = edge_vector.to(torch.float64)
+        local = torch.arange(scalars.shape[0], device=scalars.device) - batch * n_nodes
+        edge_graph = batch[edge_index[0]]
+        H = self.sk.batched(scalars, species, edge_index, edge_vector, local, edge_graph, n_nodes, num_graphs)
+        dim = n_nodes * ORBITALS_PER_ATOM
+        levels = self.sk.on_site(scalars, species, None, centre=self.centre)          # [N, 2]
+        diag = torch.cat([levels[:, :1], levels[:, 1:].expand(-1, 3)], dim=-1)           # [N, 4]
+        diag = diag.reshape(num_graphs, dim)
+        eye = torch.eye(dim, dtype=H.dtype, device=H.device)
+        H = H * (1.0 - eye) + torch.diag_embed(diag)
+        if self.directional:
+            if vectors is None:
+                raise ValueError("the directional block needs the base's l = 1 features")
+            blocks = self.directional_site_blocks(vectors.to(torch.float64), species, edge_index, edge_vector)
+            # Scatter the [N, 4, 4] site blocks onto the block diagonals of [B, 4n, 4n].
+            o = torch.arange(ORBITALS_PER_ATOM, device=H.device)
+            rows = (local * ORBITALS_PER_ATOM).reshape(-1, 1, 1) + o.reshape(1, -1, 1)
+            cols = (local * ORBITALS_PER_ATOM).reshape(-1, 1, 1) + o.reshape(1, 1, -1)
+            flat = batch.reshape(-1, 1, 1) * (dim * dim) + rows * dim + cols
+            add = torch.zeros(num_graphs * dim * dim, dtype=H.dtype, device=H.device)
+            add = add.index_put((flat.reshape(-1),), blocks.reshape(-1), accumulate=True)
+            H = H + add.reshape(num_graphs, dim, dim)
+        H = 0.5 * (H + H.transpose(-1, -2))
+        if self.site_shift is not None:
+            H = H + torch.diag_embed(self.site_shift.to(H.dtype).to(H.device).repeat_interleave(ORBITALS_PER_ATOM).reshape(num_graphs, dim))
+        if self.gauge_shift:
+            H = H + float(self.gauge_shift) * eye
+        return H
+
+    def directional_site_blocks(self, vectors: torch.Tensor, species: torch.Tensor,
+                                edge_index: torch.Tensor, edge_vector: torch.Tensor) -> torch.Tensor:
+        """`H_onsite_dir` as `[N, 4, 4]` site blocks (global node indexing)."""
         n = int(species.shape[0])
         a, b = self.coefficients()
         v = torch.einsum("nc,nca->na", self.vector_mix[species].to(vectors.dtype), vectors)
         Q = quadrupole_descriptor(edge_index, edge_vector, n, self.q_cut)
-        block = torch.zeros(n, ORBITALS_PER_ATOM, ORBITALS_PER_ATOM, dtype=vectors.dtype,
-                            device=vectors.device)
-        sp = a[species].unsqueeze(-1) * v                        # [N, 3]
+        block = torch.zeros(n, ORBITALS_PER_ATOM, ORBITALS_PER_ATOM, dtype=vectors.dtype, device=vectors.device)
+        sp = a[species].unsqueeze(-1) * v
         block[:, 0, 1:] = sp
         block[:, 1:, 0] = sp
         block[:, 1:, 1:] = b[species].reshape(-1, 1, 1) * Q
-        return torch.block_diag(*block)
+        return block
 
     def forward(self, scalars: torch.Tensor, vectors: Optional[torch.Tensor],
                 species: torch.Tensor, edge_index: torch.Tensor, edge_vector: torch.Tensor
