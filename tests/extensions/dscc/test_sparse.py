@@ -37,3 +37,38 @@ def test_csr_hamiltonian_equals_dense_and_frontier_fillings_agree():
     assert float(J - dense.energy) == pytest.approx(0.0, abs=1e-8)
     assert float((dq - dense.dq.detach()).abs().max()) < 1e-8
     assert float(dq.sum()) == pytest.approx(1.0, abs=1e-8)
+
+
+def test_sparse_scf_and_frontier_forces_match_the_dense_model():
+    """The frontier-window solve and the rank-k force contraction reproduce the dense
+    model's coupled energy and forces (Route A, regime B) on the toy vacancy."""
+    from mace.modules.dscc.kernels import KernelConfig, gamma_matrix, kernel_components
+    from mace.modules.dscc.scf import ScfOptions
+    from tests.extensions.dscc.test_model import VACP, _batch, _coupled
+    m = _coupled(regime="B", route_b=False)
+    m.scf_options = ScfOptions(tol_q=1e-10, tol_E=1e-11, continuation_steps=0)
+    batch = _batch([VACP])
+    dense = m(dict(batch), compute_force=True)
+    # Rebuild the pieces for the sparse path.
+    from mace.modules.models import ScaleShiftMACE
+    data = dict(_batch([VACP])); positions = data["positions"].requires_grad_(True)
+    cell = data["cell"].view(3, 3)
+    out = ScaleShiftMACE.forward(m.base, m._trunk_data(data), compute_force=False)
+    scalars, vectors = m.features(out["node_feats"]); species = data["node_attrs"].argmax(-1)
+    ei = data["edge_index"]; ev = positions[ei[1]] - positions[ei[0]] + data["unit_shifts"] @ cell
+    H_csr = sp.csr_hamiltonian(m.h0, scalars.detach(), vectors.detach(), species, ei, ev.detach())
+    k_sr, k_lr = kernel_components(positions, cell, m.kernel)
+    gamma = gamma_matrix(k_sr, k_lr, m.lambda_dir(), m.u_eff()[species], m.kernel.eps_inf)
+    numbers = [ZS[int(s)] for s in species.tolist()]; n_ref = neutral_count(numbers)
+    n_s, n_r = State(1, -1, 0).counts(n_ref), S_REF.counts(n_ref)
+    eps = torch.linalg.eigvalsh(torch.tensor(H_csr.toarray()))
+    sigma = 0.5 * float(eps[n_r[0] - 1] + eps[n_r[0]])
+    sol = sp.solve_dscc_sparse(H_csr, gamma.detach(), n_s, n_r, sigma, k_buffer=12, tol_q=1e-10)
+    assert sol["converged"]
+    assert float(sol["energy"] - dense["head_energy"][0]) == pytest.approx(0.0, abs=1e-7)
+    assert float((sol["dq"] - dense["dq"]).abs().max()) < 1e-7
+    forces = sp.frontier_forces(m.h0, scalars, vectors, species, ei, ev, positions, sol["psi"], sol["w"], gamma, sol["dq"])
+    # dense forces = base forces + head forces; compare the head part.
+    base = ScaleShiftMACE.forward(m.base, m._trunk_data(dict(_batch([VACP]))), compute_force=True)["forces"]
+    head_dense = dense["forces"] - base
+    assert float((forces - head_dense).abs().max()) < 1e-6, float((forces - head_dense).abs().max())
