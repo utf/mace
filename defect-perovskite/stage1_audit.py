@@ -123,7 +123,7 @@ def audit_train(model, loss_fn, train_loader, valid_loaders, optimizer, lr_sched
         dtype=str(c_param.dtype), device=str(dev), batch_size=int(train_loader.batch_size),
         drop_last=bool(train_loader.drop_last), n_train=len(train_loader.dataset),
         n_batches=len(train_loader), post_step_hook=str(post_step_hook),
-        pristine_atoms=getattr(model.spectral, "pristine_atoms", None),
+        pristine_atoms=int(getattr(model.spectral, "pristine_atoms", 0) or 0),
         c_at_startup=c_param.detach().cpu().tolist())
 
     # ------------------------------------------------------------ checkpoint restore
@@ -363,8 +363,10 @@ def audit_train(model, loss_fn, train_loader, valid_loaders, optimizer, lr_sched
                             recovery_error=float(abs((c_star_inj - c_star) + inj)))
     out["items"]["4_profiler"] = prof
     out["seconds"] = time.time() - t_start
+    text = json.dumps(out, indent=1, default=lambda o: (o.item() if hasattr(o, "item")
+                                                         else str(o)))
     with open(out_path, "w") as f:
-        json.dump(out, f, indent=1)
+        f.write(text)
     logging.info("audit written to %s (%.0f s)", out_path, out["seconds"])
     raise SystemExit(0)
 
