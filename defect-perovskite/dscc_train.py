@@ -47,6 +47,7 @@ def main() -> None:
     ap.add_argument("--coupling_mode", default="full", help="lr_only | lr_u | full | lambda1 (Arm 2+3)")
     ap.add_argument("--init_from", default="", help="Arm-1 winner checkpoint (model.pt) to start H0 from")
     ap.add_argument("--n_max", type=int, default=100)
+    ap.add_argument("--fscc", default="", help="Arm 4 comparator: matched | full (empty: D-SCC)")
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir)
@@ -69,6 +70,9 @@ def main() -> None:
     if args.init_from:
         model.load_h0_from(args.init_from)
         logging.info("H0 initialised from %s", args.init_from)
+    if args.fscc:
+        model.fscc = args.fscc
+        logging.info("F-SCC comparator: %s kernel", args.fscc)
     if cfg.coupling:
         model.set_coupling_mode(args.coupling_mode)
         logging.info("coupling mode %s (lambda_fixed %s, u_zero %s)", args.coupling_mode, model.lambda_fixed, model.u_zero)

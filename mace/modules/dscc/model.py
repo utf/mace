@@ -40,6 +40,7 @@ from mace.modules.dscc.scf import (ScfOptions, ScfResult, continuation_solve, co
 from mace.modules.dscc.species import (N0, S_REF, State, U_MAX_GFN1, neutral_count,
                                        states_from_batch)
 from mace.modules.dscc.fill import fill
+from mace.modules.dscc.fscc import fscc_head, excess_trace_norm
 
 # Registered defaults for the bounded learnables (plan section 2.4; to confirm before use).
 LAMBDA_0_DEFAULT = 0.05
@@ -114,6 +115,9 @@ class MACEDSCC(nn.Module):
         self.lambda_fixed: Optional[float] = None
         self.u_zero = False
         self.coupling_mode = "full"
+        # Arm 4 (plan 2.9): "" (D-SCC), "matched" (F-SCC with the D-SCC kernel and bounds)
+        # or "full" (F-SCC with Gamma_F = E_PBC / eps_inf + diag(U_eff)). Offline comparators.
+        self.fscc = ""
         self.init_from: Optional[str] = None
         self.s_max = float(S_MAX_DEFAULT)
         self.s_raw = nn.Parameter(torch.zeros((), dtype=torch.float64))       # s_max sigmoid(0) = 1
@@ -132,7 +136,7 @@ class MACEDSCC(nn.Module):
                 "coupling": self.coupling, "route_b": self.route_b, "r_split": self.r_split,
                 "lambda_max": self.lambda_max, "c_q_table": dict(self.c_q_table),
                 "calibration_record": self.calibration_record,
-                "coupling_mode": getattr(self, "coupling_mode", "full"),
+                "coupling_mode": getattr(self, "coupling_mode", "full"), "fscc": getattr(self, "fscc", ""),
                 "lambda_fixed": getattr(self, "lambda_fixed", None),
                 "u_zero": getattr(self, "u_zero", False), "init_from": getattr(self, "init_from", None)}
 
@@ -145,6 +149,7 @@ class MACEDSCC(nn.Module):
         self.c_q_table = {int(k): float(v) for k, v in state.get("c_q_table", {}).items()}
         self.calibration_record = state.get("calibration_record")
         self.coupling_mode = state.get("coupling_mode", "full")
+        self.fscc = state.get("fscc", "")
         self.lambda_fixed = state.get("lambda_fixed")
         self.u_zero = bool(state.get("u_zero", False))
         self.init_from = state.get("init_from")
@@ -451,7 +456,7 @@ class MACEDSCC(nn.Module):
         diagnostics: Dict[str, List[Any]] = {"dq_sum": [], "n_atoms": []}
         sizes = (ptr[1:] - ptr[:-1])
         uniform = (all(not s_.is_reference for s_ in states) and bool((sizes == sizes[0]).all())
-                   and warm_start is None)
+                   and warm_start is None and not getattr(self, "fscc", ""))
         if uniform:
             # Equal sizes, no reference graph: one [B, 4n, 4n] Hamiltonian, batched fills
             # (and the batched solver when the coupling is on), block-diagonal cotangents --
@@ -524,6 +529,30 @@ class MACEDSCC(nn.Module):
             n_ref = neutral_count(numbers)
             n_s = state.counts(n_ref)
             n_r = State(0, 0, 0).counts(n_ref)
+            if self.coupling and getattr(self, "fscc", ""):
+                # Arm 4: two independent full-SCC solves with absolute charges (plan 2.9).
+                pos_g, cell_g, sp_g = positions[nodes], cell[g], species[nodes]
+                k_sr, k_lr = kernel_components(pos_g, cell_g, self.kernel)
+                if self.fscc == "matched":
+                    gamma_f = gamma_matrix(k_sr, k_lr, self.lambda_dir(), self.u_eff()[sp_g], self.kernel.eps_inf)
+                else:                                              # full kernel: E_PBC / eps + diag(U)
+                    gamma_f = (k_sr + k_lr) / self.kernel.eps_inf + torch.diag(self.u_eff()[sp_g])
+                n0 = torch.tensor([float(N0[z]) for z in numbers], dtype=H.dtype, device=device)
+                head, st, rf = fscc_head(H, gamma_f, n0, n_s, n_r, self.sigma_s, self.scf_options)
+                head_energy[g] = head
+                # HF at fixed P_X and Dq_X per state: -Tr(P dH0/dR) - 1/2 Dq^T dGamma/dR Dq, S minus ref.
+                dP = 0.5 * ((st.P - rf.P) + (st.P - rf.P).transpose(0, 1))
+                cotangent_terms.append((H, dP))
+                cotangent_terms.append((gamma_f, 0.5 * (st.dq.unsqueeze(-1) * st.dq.unsqueeze(0)
+                                                        - rf.dq.unsqueeze(-1) * rf.dq.unsqueeze(0))))
+                dq_all[nodes] = st.dq - rf.dq
+                for key, value in (("iterations", st.iterations + rf.iterations), ("converged", st.converged and rf.converged),
+                                   ("residual", max(st.residual, rf.residual)),
+                                   ("excess_trace_norm", excess_trace_norm(st.P, rf.P, state.Q))):
+                    diagnostics.setdefault(key, []).append(value)
+                diagnostics["dq_sum"].append(float((st.dq - rf.dq).detach().sum()))
+                diagnostics["n_atoms"].append(hi - lo)
+                continue
             if self.coupling:
                 pos_g, cell_g, sp_g = positions[nodes], cell[g], species[nodes]
                 k_sr, k_lr = kernel_components(pos_g, cell_g, self.kernel)

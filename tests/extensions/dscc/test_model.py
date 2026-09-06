@@ -452,3 +452,25 @@ class TestBatchedCoupled:
         o = m(_batch([VACP, vac_b]), training=True, compute_force=True)
         (o["forces"] ** 2).sum().backward()
         assert torch.isfinite(m.lambda_raw.grad) and float(m.lambda_raw.grad.abs()) > 0
+
+
+class TestFsccPath:
+    @pytest.mark.parametrize("kind", ["matched", "full"])
+    def test_fscc_comparator_forces_match_finite_differences(self, kind):
+        from mace.modules.dscc.scf import ScfOptions
+        m = _coupled(regime="B", route_b=False)
+        m.fscc = kind
+        m.scf_options = ScfOptions(tol_q=1e-11, tol_E=1e-11)
+        out = m(_batch([VACP]), compute_force=True)
+        d = out["diagnostics"]
+        assert d["converged"] == [True] and d.get("batched") is None
+        assert float(out["dq"].sum()) == pytest.approx(1.0, abs=1e-10)     # Dq_S - Dq_ref sums to Q
+        assert d["excess_trace_norm"][0] >= 0.0
+        h = 1e-4
+        for atom, comp in ((1, 0), (9, 2)):
+            plus, minus = VACP.copy(), VACP.copy()
+            plus.positions[atom, comp] += h
+            minus.positions[atom, comp] -= h
+            e_plus = float(m(_batch([plus]), compute_force=False)["energy"])
+            e_minus = float(m(_batch([minus]), compute_force=False)["energy"])
+            assert float(out["forces"][atom, comp]) == pytest.approx(-(e_plus - e_minus) / (2 * h), abs=3e-6)
