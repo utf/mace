@@ -118,35 +118,41 @@ def frontier_site_charges(entry: FrontierEntry, fills: Sequence[int], n_e: Seque
     return {"site": site, "w": w, "p": p, "q_F": q_f, "weights": weights}
 
 
-def frontier_channels(entry: FrontierEntry, fills: Sequence[int], n_e: Sequence[int],
-                      n_h: Sequence[int], edges, t_el: float, n_sites: int, cfg,
-                      m_vb: Sequence[int], positions: torch.Tensor, cell: torch.Tensor,
-                      label: str = "") -> Tuple[List[Any], Dict[str, Any]]:
-    """The active channels of one state as `defect_image.Channel`s (addendum 5.1/5.2).
-
-    Built the explicit way: compact-support windows `B_c = b_c(H_fix)`, the continued-valence
-    projector `P_V^fix = Pi_{M_VB}(H_fix)`, the positive excess `r_+(+-Delta P)` of the
-    state's own density matrix, `D_c = B_c r_+ B_c`, its normalised site density and the
-    exact-plateau localisation weight `w_c = W(N_eff) W(R_eff)` (`defect_windows`). Each
-    channel carries its own weight, so electron and hole participation are evaluated
-    separately and opposite signs cannot cancel. `edges` are the class's aligned
-    `(VBM_al, CBM_al)`; `cfg` is the `WindowConfig`; `m_vb` the per-spin valence rank.
-
-    The gates fire here, before any density is handed on: the projector's gap, the
-    occupation tails, the trace bounds -- each an `UnsupportedStateError`.
-    """
+def window_operators(entry: FrontierEntry, edges, cfg) -> Tuple[torch.Tensor, torch.Tensor]:
+    """`(B_e, B_h) = (b_e(H_fix), b_h(H_fix))`: the compact windows as matrix functions of
+    the occupation-independent Hamiltonian, attached to it by the Daleckii-Krein route."""
     from mace.modules import defect_windows as dw
-    from mace.modules.defect_counting import fermi_density_difference
-    from mace.modules.defect_image import Channel
 
-    H = entry.H
     lam, U = entry.lam.double(), entry.U.double()
     shift = float(entry.level_shift)
     vbm_al, cbm_al = float(edges[0]) + shift, float(edges[1]) + shift
     b_e, b_e_slope = dw.electron_window(lam, vbm_al, cbm_al, cfg)
     b_h, b_h_slope = dw.hole_window(lam, vbm_al, cbm_al, cfg)
-    B_e = dw.spectral_function(H, b_e, b_e_slope, spectrum=(lam, U))
-    B_h = dw.spectral_function(H, b_h, b_h_slope, spectrum=(lam, U))
+    return (dw.spectral_function(entry.H, b_e, b_e_slope, spectrum=(lam, U)),
+            dw.spectral_function(entry.H, b_h, b_h_slope, spectrum=(lam, U)))
+
+
+def channels_from_density(entry: FrontierEntry, P: Sequence[torch.Tensor],
+                          n_e: Sequence[int], n_h: Sequence[int], m_vb: Sequence[int],
+                          windows: Tuple[torch.Tensor, torch.Tensor], cfg, n_sites: int,
+                          positions: torch.Tensor, cell: torch.Tensor, label: str = ""
+                          ) -> Tuple[List[Any], Dict[str, Any]]:
+    """The active channels of one state from an INDEPENDENT `P` (addendum 5.1/5.2).
+
+    `P` is one density matrix per spin, attached or not as the caller decides: attached to
+    `H` through a fill for the Stage-4 forward-only terms, a free variable for the Stage-5
+    potential `V_B = dPhi_B / dP`, a detached stationary solution for the envelope-theorem
+    energy. `windows` are `window_operators(entry, ...)`; the continued-valence projector
+    `P_V^fix = Pi_{M_VB}(H_fix)` is built here from `entry`'s spectrum. The gates fire here,
+    before any density is handed on: the projector's gap, the background traces, the trace
+    bounds -- each an `UnsupportedStateError`.
+    """
+    from mace.modules import defect_windows as dw
+    from mace.modules.defect_image import Channel
+
+    H = entry.H
+    lam, U = entry.lam.double(), entry.U.double()
+    B_e, B_h = windows
     channels: List[Any] = []
     diagnostics: Dict[str, Any] = {}
     for spin in range(2):
@@ -154,13 +160,8 @@ def frontier_channels(entry: FrontierEntry, fills: Sequence[int], n_e: Sequence[
         if count_e == 0 and count_h == 0:
             continue
         where = f" ({label}, spin {spin})" if label else f" (spin {spin})"
-        f = entry.occupations[fills[spin]].double()
-        # P_sigma, attached to H by the Daleckii-Krein route of the fill it came from.
-        P = fermi_density_difference(H, (float(f.sum()),), (1.0,), t_el, spectrum=(lam, U),
-                                     occupations=f.unsqueeze(0),
-                                     mus=(entry.mu[fills[spin]],))
         P_V = dw.valence_projector(H, lam, U, int(m_vb[spin]), cfg.gap_floor, label=where)
-        R_e, R_h = dw.positive_excess_pair(P - P_V, cfg.eta)
+        R_e, R_h = dw.positive_excess_pair(P[spin] - P_V, cfg.eta)
         for count, hole, sign, name, B, R in ((count_e, False, -1.0, "e", B_e, R_e),
                                                (count_h, True, 1.0, "h", B_h, R_h)):
             D = B @ R @ B
@@ -181,6 +182,35 @@ def frontier_channels(entry: FrontierEntry, fills: Sequence[int], n_e: Sequence[
                 trace=float(trace.detach()), n_eff=float(n_eff.detach()),
                 r_eff=float(r_eff.detach()), leakage=float(leakage))
     return channels, diagnostics
+
+
+def fill_densities(entry: FrontierEntry, fills: Sequence[int], t_el: float
+                   ) -> List[torch.Tensor]:
+    """`P_sigma` of the head's own fills, attached to `H` by the Daleckii-Krein route of the
+    fill they came from (the Stage-4 `P^(0)`)."""
+    from mace.modules.defect_counting import fermi_density_difference
+
+    lam, U = entry.lam.double(), entry.U.double()
+    out = []
+    for spin in range(2):
+        f = entry.occupations[fills[spin]].double()
+        out.append(fermi_density_difference(entry.H, (float(f.sum()),), (1.0,), t_el,
+                                            spectrum=(lam, U), occupations=f.unsqueeze(0),
+                                            mus=(entry.mu[fills[spin]],)))
+    return out
+
+
+def frontier_channels(entry: FrontierEntry, fills: Sequence[int], n_e: Sequence[int],
+                      n_h: Sequence[int], edges, t_el: float, n_sites: int, cfg,
+                      m_vb: Sequence[int], positions: torch.Tensor, cell: torch.Tensor,
+                      label: str = "", windows: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
+                      ) -> Tuple[List[Any], Dict[str, Any]]:
+    """The active channels of the head's OWN fill (`P^(0)`): `channels_from_density` on
+    `fill_densities`. The Stage-4 forward-only path; Stage 5 hands its own `P` in."""
+    if windows is None:
+        windows = window_operators(entry, edges, cfg)
+    return channels_from_density(entry, fill_densities(entry, fills, t_el), n_e, n_h, m_vb,
+                                 windows, cfg, n_sites, positions, cell, label=label)
 
 
 def _composition_keys(node_species: torch.Tensor, batch: torch.Tensor, num_graphs: int,
