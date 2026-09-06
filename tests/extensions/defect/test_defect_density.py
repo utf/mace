@@ -627,6 +627,71 @@ class TestFrozenCorrespondenceAndLift:
                                       pos, cell, lift=True)
 
 
+    def test_the_uniqueness_radius_is_a_lattice_property_and_is_frozen(self, table):
+        """Half the smallest site separation of the ideal lattice -- the radius inside which
+        the site nearest to an atom is unambiguous -- stored on the class record."""
+        numbers, pos, cell = dc.pristine_reference_geometry(table)
+        radius = dd.uniqueness_radius(torch.tensor(pos), torch.tensor(cell))
+        d = dd._minimum_image(torch.tensor(pos)[:, None] - torch.tensor(pos)[None], torch.tensor(cell))
+        d = d.norm(dim=-1) + torch.eye(len(numbers)) * 1e9
+        assert radius == pytest.approx(0.5 * float(d.min()))
+        assert radius > 0.5                       # the old hard 0.5 A rule was below it
+        rec = dc.lookup_class(table, self.KEY)
+        assert rec.placement["correspondence"]["uniqueness_radius"] == pytest.approx(radius)
+        assert "merge" not in rec.placement["correspondence"]
+
+    def test_thermal_displacements_inside_the_ball_keep_the_frozen_map(
+            self, harrison_model, frames, table):
+        """Addendum 4.1: the correspondence is NOT re-decided per thermal frame. Every atom
+        displaced by a random vector well beyond the retired 0.5 A rule but inside its
+        site's ball reads the frozen map (same removal site, same departure signal)."""
+        rec = dc.lookup_class(table, self.KEY)
+        charges, pos, cell = _static_inputs(harrison_model, frames["vcl_39"])
+        harrison_model.composition_classes = table
+        base = dc.frame_static_densities(harrison_model, rec, None, charges, pos, cell)
+        radius = rec.placement["correspondence"]["uniqueness_radius"]
+        g = torch.Generator().manual_seed(4)
+        direction = torch.randn(pos.shape, generator=g, dtype=torch.float64)
+        direction = direction / direction.norm(dim=-1, keepdim=True)
+        amplitude = 0.5 * radius * torch.rand(pos.shape[0], 1, generator=g, dtype=torch.float64)
+        assert float(amplitude.max()) > 0.55     # some atoms move more than 0.5 A
+        hot = dc.frame_static_densities(harrison_model, rec, None, charges,
+                                        pos + amplitude * direction, cell)
+        # The re-fit may land on a lattice-translation-equivalent representative (a different
+        # site INDEX for the vacancy); the physical removal site is the same place.
+        vac_base = base["pristine"].centres[base["correspondence"]["unmatched_pristine"]]
+        vac_hot = hot["pristine"].centres[hot["correspondence"]["unmatched_pristine"]]
+        assert vac_hot.shape == vac_base.shape == (1, 3)
+        assert float(dd._minimum_image(vac_hot - vac_base, cell).norm()) < radius
+        assert hot["correspondence"]["departure"] == pytest.approx(
+            base["correspondence"]["departure"])
+        assert float(hot["static"].integral()) == pytest.approx(float(base["static"].integral()),
+                                                                abs=1e-9)
+
+    def test_an_atom_that_leaves_every_ball_is_a_topology_event(self, harrison_model, frames,
+                                                                 table):
+        """One atom parked farther than the uniqueness radius from every site is an addition
+        and its site a removal: a changed correspondence, refused, not refitted."""
+        rec = dc.lookup_class(table, self.KEY)
+        charges, pos, cell = _static_inputs(harrison_model, frames["vcl_39"])
+        harrison_model.composition_classes = table
+        base = dc.frame_static_densities(harrison_model, rec, None, charges, pos, cell)
+        sites = base["pristine"].centres
+        radius = rec.placement["correspondence"]["uniqueness_radius"]
+        # A grid search for a point outside every ball (the interstitial region).
+        best, best_d = None, 0.0
+        for f in torch.cartesian_prod(*[torch.linspace(0.05, 0.95, 10)] * 3):
+            point = f.to(cell.dtype) @ cell
+            dmin = float(dd._minimum_image(sites - point, cell).norm(dim=-1).min())
+            if dmin > best_d:
+                best, best_d = point, dmin
+        assert best_d > radius
+        moved = pos.clone()
+        moved[0] = best
+        with pytest.raises(dc.UnsupportedStateError, match="topology event"):
+            dc.frame_static_densities(harrison_model, rec, None, charges, moved, cell)
+
+
 class TestRegistrationDerivative:
     """Addendum 4.1: 'any continuous geometry-dependent alignment is fully differentiated'.
     The placement shift is a minimiser, so its derivative is an implicit one; a detached

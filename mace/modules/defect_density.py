@@ -65,6 +65,7 @@ and Stage 5 (V_F). `rho_ind` (Stage 6) is absent, so `Delta rho_def = rho_static
 
 from __future__ import annotations
 
+import itertools
 import logging
 import math
 from dataclasses import dataclass, replace
@@ -348,29 +349,51 @@ def local_net_charge(raw: GaussianDensity, centres: torch.Tensor) -> torch.Tenso
     return raw.site_charges(centres)
 
 
-def pristine_correspondence(present_positions: torch.Tensor, pristine_positions: torch.Tensor,
-                            cell: torch.Tensor, merge: float, sigma: float
-                            ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """`(match, unmatched)`: the discrete site correspondence of a composition class.
+def uniqueness_radius(pristine_positions: torch.Tensor, cell: torch.Tensor) -> float:
+    """Half the smallest separation of two pristine sites (minimum image, a site's own periodic
+    images included): inside the ball of this radius around a site no other site is nearer,
+    so "the site nearest to an atom" is unambiguous, and it is the frozen site for every atom
+    that has not left its own site's ball. A property of the ideal lattice (constructor
+    topology), not of the frame, the temperature or `r_res`.
+    """
+    cell64 = cell.detach().to(torch.float64)
+    pos = pristine_positions.detach().to(torch.float64)
+    n = pos.shape[0]
+    d = _minimum_image(pos[:, None, :] - pos[None, :, :], cell64).norm(dim=-1)
+    d = d + torch.diag(torch.full((n,), float("inf"), dtype=d.dtype, device=d.device))
+    shortest = min(float((torch.tensor(v, dtype=torch.float64, device=cell64.device) @ cell64).norm())
+                   for v in itertools.product((-1, 0, 1), repeat=3) if any(v))
+    return 0.5 * min(float(d.min()) if n > 1 else float("inf"), shortest)
 
-    `match[i]` is the pristine site within `merge x sigma` of present atom `i` (`-1` for an
-    addition), `unmatched[j]` is True for a pristine site with no present atom that close (a
-    removal). Addendum 4.1: established ONCE, on the class reference geometry, and reused
-    on every thermal frame of the class -- never recomputed by a nearest-neighbour rule per
-    frame. A change of this correspondence is an unsupported topology event, not a refit.
+
+def pristine_correspondence(present_positions: torch.Tensor, pristine_positions: torch.Tensor,
+                            cell: torch.Tensor, radius: float
+                            ) -> Tuple[torch.Tensor, torch.Tensor]:
+    """`(match, unmatched)`: the discrete atom/site correspondence read at the uniqueness
+    radius of the pristine lattice. `match[i]` is the site nearest to present atom `i` when
+    it lies within `radius` (`-1`, an addition, otherwise); `unmatched[j]` is True for a site
+    no atom is matched to (a removal).
+
+    Addendum 4.1: the correspondence is established ONCE, on the class reference, and frozen;
+    a thermal frame does not re-decide it. Here the map is READ, and the reading is provably
+    the frozen one for every atom still inside its site's ball (the balls are disjoint by
+    construction); `transport_correspondence` refuses the frame when the reading differs
+    from the frozen record -- a change of discrete correspondence is an unsupported topology
+    event, not a refit. No thermal displacement short of leaving the ball is refused.
     """
     d = _minimum_image(pristine_positions[:, None, :] - present_positions[None, :, :], cell)
     dist = d.norm(dim=-1)                                   # [n_pristine, n_present]
-    within = dist < merge * float(sigma)
-    unmatched = ~within.any(dim=1)
+    n_present = present_positions.shape[0]
     nearest = dist.argmin(dim=0)                            # [n_present]
-    match = torch.where(within[nearest, torch.arange(present_positions.shape[0])],
-                        nearest, torch.full_like(nearest, -1))
-    return match, unmatched
+    within = dist[nearest, torch.arange(n_present, device=dist.device)] <= float(radius)
+    match = torch.where(within, nearest, torch.full_like(nearest, -1))
+    occupied = torch.zeros(pristine_positions.shape[0], dtype=torch.bool, device=dist.device)
+    occupied[match[match >= 0]] = True
+    return match, ~occupied
 
 
 def residual_shape(raw: GaussianDensity, present_positions: torch.Tensor,
-                   pristine_positions: torch.Tensor, merge: float = 0.5,
+                   pristine_positions: torch.Tensor,
                    eps_z: float = EPS_Z, eps_omega: float = EPS_OMEGA,
                    departure: Optional[torch.Tensor] = None,
                    lambda_d: float = 0.0,
@@ -379,17 +402,17 @@ def residual_shape(raw: GaussianDensity, present_positions: torch.Tensor,
     present atoms and the pristine sites (a vacancy's weight lives at its pristine site).
     Integral 1 by construction; zero weights everywhere fall back to a uniform background.
 
-    A pristine site within `merge x r_res` of a present atom is not a separate probe point:
-    the local net charge there is read at the atom already, and a duplicate would count the
-    thermal halo twice. A proximity merge of probe points, not an assignment -- nothing is
-    matched to anything, and a site with no atom near it (a vacancy) keeps its probe.
+    A pristine site an atom is matched to is not a separate probe point: the local net charge
+    there is read at the atom already, and a duplicate would count the thermal halo twice. A
+    site no atom is matched to (a vacancy) keeps its probe.
 
-    `unmatched` is the class's FROZEN correspondence (`pristine_correspondence` on the class
-    reference); when given it replaces the per-frame proximity rule, as addendum 4.1 asks.
+    `unmatched` is the class's FROZEN correspondence transported to this frame (addendum 4.1);
+    without one (a bare density with no class) the sites are read once at the lattice's own
+    uniqueness radius.
     """
     if unmatched is None:
         _, unmatched = pristine_correspondence(present_positions, pristine_positions, raw.cell,
-                                               merge, raw.sigma)
+                                               uniqueness_radius(pristine_positions, raw.cell))
     near = ~unmatched.to(pristine_positions.device)
     centres = torch.cat([present_positions, pristine_positions[~near]])
     weights, _ = residual_weights(raw, centres, present_positions.shape[0],

@@ -81,15 +81,11 @@ __all__ = ["CLASS_TABLE_VERSION", "QUANTILES", "TIER2_NAMES", "EdgeAlignment",
            "tiling_factors", "tiling_map", "tile_frame", "build_class_table",
            "lookup_class", "verify_class_table", "describe", "DEFAULT_CONSTRUCTOR",
            "constructor_config", "frame_counts_batch", "frame_static_densities",
-           "class_lift_record", "pristine_reference_geometry", "MERGE",
+           "class_lift_record", "pristine_reference_geometry",
            "pristine_placement", "species_charges", "tiled_pristine_scaled"]
 
 CLASS_TABLE_VERSION = 1
 BOUNDARY_TOL = 1e-9   # eV; a level exactly on the window's edge is on the edge, not inside
-# The proximity (in units of r_res) within which a pristine site and a present atom are one
-# probe point of the residual shape -- and, frozen on the class reference, the discrete
-# correspondence of addendum 4.1 (`defect_density.pristine_correspondence`).
-MERGE = 0.5
 
 # The occupied-manifold window for the edge alignment: quantiles of the occupied spectrum
 # from 5 % to 60 %, i.e. the continuum well below the frontier, so a frontier level inside
@@ -1066,8 +1062,14 @@ def pristine_placement(model, class_frame, pristine_frame, factors, perm,
     # the class reuses them; the lift's branch anchor is built from them; a frame on which
     # they would differ is an unsupported topology event, not a refit.
     pristine = dd.pristine_placed(z0.to(dtype)[pri_species], scaled, present.cell, shift, r_res)
+    radius = dd.uniqueness_radius(pristine.centres, present.cell)
     match, unmatched = dd.pristine_correspondence(present.centres, pristine.centres,
-                                                  present.cell, MERGE, r_res)
+                                                  present.cell, radius)
+    if int(torch.unique(match[match >= 0]).numel()) != int((match >= 0).sum()):
+        raise ValueError(
+            "two present atoms of the class reference frame lie within the uniqueness radius "
+            f"({radius:.3f} A) of ONE pristine site: the discrete correspondence of this "
+            "class is ambiguous (addendum 4.1)")
     raw = dd.static_raw(present, pristine)
     centres = torch.cat([present.centres, pristine.centres[unmatched]])
     _, departure = dd.residual_weights(raw, centres, present.centres.shape[0])
@@ -1086,7 +1088,7 @@ def pristine_placement(model, class_frame, pristine_frame, factors, perm,
         "removal_sites": [int(j) for j in removals.tolist()],
         "site_departure": [float(a) for a in site_departure.tolist()],
         "addition_departure": [float(a) for a in departure[:n_present][~matched].tolist()],
-        "merge": float(MERGE),
+        "uniqueness_radius": float(radius),
     }
     # The class shift is the STARTING point for every frame; `frame_static_densities`
     # re-minimises from it so the placement co-transforms (addendum 4.1).
@@ -1162,7 +1164,7 @@ def frame_static_densities(model, record: ClassRecord, pristine_frame, charges: 
         # The frozen correspondence, carried to this frame's registration (which may be an
         # equivalent representative, a pristine lattice translation away from the class's).
         transported = transport_correspondence(record, correspondence, positions,
-                                               pristine.centres, cell, r_res)
+                                               pristine.centres, cell)
         unmatched = torch.zeros(scaled.shape[0], dtype=torch.bool)
         unmatched[transported["unmatched_pristine"]] = True
     g_res = dd.residual_shape(raw, positions, pristine.centres, unmatched=unmatched)
@@ -1209,7 +1211,7 @@ def frame_static_densities(model, record: ClassRecord, pristine_frame, charges: 
 
 def transport_correspondence(record: ClassRecord, frozen: Dict[str, Any],
                              positions: torch.Tensor, pristine_centres: torch.Tensor,
-                             cell: torch.Tensor, r_res: float) -> Dict[str, Any]:
+                             cell: torch.Tensor) -> Dict[str, Any]:
     """The class's frozen correspondence on THIS frame's registration.
 
     Addendum 4.1: the discrete atom/site correspondence is established once per class and
@@ -1225,7 +1227,11 @@ def transport_correspondence(record: ClassRecord, frozen: Dict[str, Any],
     """
     from mace.modules import defect_density as dd
 
-    merge = float(frozen.get("merge", MERGE))
+    radius = frozen.get("uniqueness_radius")
+    if radius is None:
+        # A lattice property, so a table frozen before the radius was recorded is not stale.
+        radius = dd.uniqueness_radius(pristine_centres, cell)
+    radius = float(radius)
     frozen_matched = torch.tensor(frozen["matched_sites"], dtype=torch.long)
     frozen_removals = torch.tensor(frozen["removal_sites"], dtype=torch.long)
     site_departure = torch.tensor(frozen["site_departure"], dtype=torch.float64)
@@ -1237,7 +1243,7 @@ def transport_correspondence(record: ClassRecord, frozen: Dict[str, Any],
             f"{frozen_matched.numel() + len(addition_departure)} present atoms, this frame "
             f"has {n_present}: an unsupported topology event (addendum 4.1)")
     match_now, unmatched_now = dd.pristine_correspondence(positions, pristine_centres, cell,
-                                                          merge, r_res)
+                                                          radius)
     match_now, unmatched_now = match_now.cpu(), unmatched_now.cpu()
     additions_now = int((match_now < 0).sum())
     removals_now = torch.nonzero(unmatched_now).reshape(-1)
@@ -1253,12 +1259,13 @@ def transport_correspondence(record: ClassRecord, frozen: Dict[str, Any],
 
     def site_under(translation: torch.Tensor, sites: torch.Tensor) -> Optional[torch.Tensor]:
         """Each of `sites` moved by `translation`, as the nearest site index -- or None if
-        any lands more than `merge x r_res` from every site (not a lattice translation)."""
+        any lands farther than the uniqueness radius from every site (not a lattice
+        translation)."""
         d = scaled[None, :, :] - (scaled[sites] + translation)[:, None, :]
         d = d - torch.round(d)
         dist = (d @ cell64).norm(dim=-1)                       # [len(sites), n_sites], A
         best = dist.argmin(dim=1)
-        if float(dist[torch.arange(sites.numel()), best].max()) > merge * float(r_res):
+        if float(dist[torch.arange(sites.numel()), best].max()) > radius:
             return None
         return best
 
@@ -1301,7 +1308,8 @@ def transport_correspondence(record: ClassRecord, frozen: Dict[str, Any],
         departure.append(float(moved_departure[j]) if j >= 0 else float(next(extra)))
     departure.extend(float(moved_departure[j]) for j in moved_removals.tolist())
     return {"match": match_now.tolist(), "unmatched_pristine": moved_removals.tolist(),
-            "departure": departure, "merge": merge, "translation": translation.tolist()}
+            "departure": departure, "uniqueness_radius": radius,
+            "translation": translation.tolist()}
 
 
 def class_lift_record(record: ClassRecord, corr: Dict[str, Any], positions: torch.Tensor,
