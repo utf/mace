@@ -5,4 +5,4 @@
 W=$(cd "$(dirname "$0")/.." && pwd)
 while pgrep -f "[d]scc_train.py --name dscc_arm1" > /dev/null; do sleep 300; done
 echo "$(date): wave 1 finished, launching wave 2"
-bash "$W/defect-perovskite/dscc_wave_arm1.sh" "4 5 7" "ctrl:3 full:4 ctrl:4 full:5 ctrl:5"
+bash "$W/defect-perovskite/dscc_wave_arm1.sh" "4 5 7" "full:4 ctrl:4 full:5 ctrl:5"
