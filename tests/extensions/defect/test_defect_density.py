@@ -770,6 +770,64 @@ class TestRegistrationDerivative:
             assert float(grad[atom, comp]) == pytest.approx(fd, abs=2e-6, rel=1e-4)
 
 
+class TestSymmetryClosure:
+    """The lattice is symmetrised over the GROUP the accepted operations generate, so that a
+    noisy median whose operations do not compose within the tolerance still comes out
+    exactly invariant."""
+
+    def test_closure_of_a_rotation_and_a_translation_is_their_group(self):
+        eye = np.eye(3, dtype=np.int64).tolist()
+        rot = {"R": [[0, -1, 0], [1, 0, 0], [0, 0, 1]], "t": [0.0, 0.0, 0.0]}   # 4-fold about z
+        half = {"R": eye, "t": [0.5, 0.0, 0.0]}
+        group = dc.symmetry_closure([{"R": eye, "t": [0.0] * 3}, rot, half])
+        # 4 rotations x the translations they generate {0, (1/2,0,0), (0,1/2,0), (1/2,1/2,0)}
+        assert len(group) == 16
+        assert len(dc.symmetry_closure(group)) == 16
+        trans = sorted(tuple(round(x, 6) for x in g["t"]) for g in group if g["R"] == eye)
+        assert trans == [(0.0, 0.0, 0.0), (0.0, 0.5, 0.0), (0.5, 0.0, 0.0), (0.5, 0.5, 0.0)]
+
+    def test_a_trapped_distortion_of_the_median_is_removed_by_the_group(self, harrison_model):
+        """Every frame carries the same sub-cell distortion (as a finite MD trapped in one
+        tilt pattern does): Cl atoms of one 5.6 A sub-cell displaced +0.12 A along z, those of
+        its x-neighbour -0.12 A. The median IS that distorted lattice; the operations relating
+        the two sub-cells hold only to 0.24 A -- rejected at 0.2 A, accepted at `SITE_TOL` --
+        and symmetrising over the group they generate returns the ideal lattice exactly."""
+        from mace.modules.defect_cache import attach_frame_keys
+        from tests.extensions.defect.test_neutral_reference_skip import Z_TABLE
+
+        delta = 0.12
+        frames = []
+        for seed in range(1, 9):
+            atoms = _perovskite(reps=(2, 2, 2), rattle=0.02, seed=seed)
+            frac = atoms.get_scaled_positions()
+            cl = atoms.get_atomic_numbers() == 17
+            cell_a = (frac[:, 0] < 0.5) & (frac[:, 1] < 0.5) & (frac[:, 2] < 0.5)
+            cell_b = (frac[:, 0] >= 0.5) & (frac[:, 1] < 0.5) & (frac[:, 2] < 0.5)
+            atoms.positions[cl & cell_a, 2] += delta
+            atoms.positions[cl & cell_b, 2] -= delta
+            frames.append(_frame(atoms, [0.0] * 4))
+        attach_frame_keys(frames, z_table=Z_TABLE)
+        r_res = float(dc._functional(harrison_model)["r_res"])
+        zs = [int(z) for z in harrison_model.atomic_numbers]
+        # The raw median (no symmetrisation) keeps the distortion: fewer operations at 0.2 A.
+        ref = dc.mean_pristine_lattice(harrison_model, frames, r_res, log=False)
+        c = ref["construction"]
+        assert c["n_symmetries"] == 384 and c["symmetry_rounds"] <= 3
+        assert 0.10 < c["symmetrisation_shift"] < 0.16          # the +-delta distortion, removed
+        ideal = torch.tensor(ref["positions"])
+        cell_t = torch.tensor(ref["cell"])
+        species = torch.tensor([zs.index(int(z)) for z in ref["numbers"]])
+        scaled = ideal @ torch.linalg.inv(cell_t)
+        assert len(dc.lattice_symmetries(scaled, species, cell_t.numpy(), 1e-6)) == 384
+        # Every Pb-Cl nearest distance is a/2 = 2.8 A to the rattle's median noise.
+        pb = ideal[species == zs.index(82)]
+        cl_ = ideal[species == zs.index(17)]
+        d = pb[:, None, :] - cl_[None, :, :]
+        d = d - torch.round(d @ torch.linalg.inv(cell_t)) @ cell_t
+        nearest = d.norm(dim=-1).min(dim=1).values
+        assert float((nearest - 2.8).abs().max()) < 0.02
+
+
 class TestMeanPristineLattice:
     """D21: the pristine reference lattice is the symmetrised site-mean of the stoichiometric
     frames, not one thermal snapshot."""
@@ -784,7 +842,14 @@ class TestMeanPristineLattice:
         rattled[2] = rattled[2][rng.permutation(len(rattled[2]))]
         rattled[2].positions += np.array([1.7, -0.4, 2.9])
         rattled[2].wrap()
-        frames = [_frame(a, [0.0] * 4) for a in rattled] + [_frame(_remove_cl(rattled[0], 0), [0.0] * 4)]
+        # The vacancy class frame is an NPT snapshot: its cell is sheared and dilated by
+        # 0.5 %, so nothing of the class record may be measured against ITS cell.
+        vacancy = _remove_cl(rattled[0], 0)
+        strained = np.array(vacancy.get_cell()) @ np.array([[1.005, 0.003, 0.0],
+                                                             [0.0, 0.998, 0.004],
+                                                             [0.002, 0.0, 1.003]])
+        vacancy.set_cell(strained, scale_atoms=True)
+        frames = [_frame(a, [0.0] * 4) for a in rattled] + [_frame(vacancy, [0.0] * 4)]
         attach_frame_keys(frames, z_table=Z_TABLE)
         table = dc.build_class_table(harrison_model, frames, log=False)
         ref = table["pristine_reference"]
@@ -815,6 +880,9 @@ class TestMeanPristineLattice:
         rec = dc.lookup_class(table, [17] * 23 + [55] * 8 + [82] * 8)
         assert rec.placement["correspondence"]["max_matched_displacement"] < 0.5
         assert rec.placement["reference_geometry"] == "ideal_defect"
+        # The record's operations are those of the reference lattice in its own cell -- all
+        # of them, the class frame's strained cell notwithstanding.
+        assert len(rec.placement["correspondence"]["symmetries"]) == c["n_symmetries"] == 384
         # Topological departure: |Z_Cl| = 1 at the vacancy site; elsewhere only the Gaussian
         # readout's overlap tail of that one removal (2 % on the octahedron's Pb, geometric,
         # not thermal), the same on every symmetry-equivalent neighbour.

@@ -168,9 +168,9 @@ Status: `todo` / `wip` / `done` / `blocked`. Keep this column current.
 | 5.1 | Compact-support spectral windows `b_e`, `b_h` with exact-zero plateaus and `C²` quintic transitions | add §5.1 | done — `defect_windows.plateau_window`/`electron_window`/`hole_window`, matrix functions of `H_fix` with Daleckii–Krein derivatives (`spectral_function`) |
 | 5.2 | `P_V^fix` projector, `ΔP_σ`, `r_+`, `D_{e/h,σ}[P]`, `ρ̂_{c,σ}[P]` with trace bounds and leakage gate | add §5.1 | done — `valence_projector` (gap-gated), `positive_excess_pair`, `channel_density` (α bounds), `background_gates` (carrier-free background trace; excess outside the window); wired as `defect_frontier.frontier_channels` (replaces the sigmoid construction under the unified regime) |
 | 5.3 | Exact-plateau localisation switch `W`; absolute `N_loc/N_ext`, `R_loc/R_ext` thresholds | add §5.1 | done — `localisation` (`N_eff`, centre-free `R_eff` on the minimum-image metric, `w = W(N_eff)·W(R_eff)`); Stage-4 FD (force+strain, both boundaries) passes through the whole chain; see D18 for the registered numbers |
-| 5.4 | `ρ_img`, `q_img`; `Φ_img^PBC` single quadratic form; `Φ_SF^{∞,LR}` | add §5.2, §6.1 | done — `defect_image.py` (pure functions, 23 tests) and the Stage-4 forward-only wiring; the Stage-5 use (as a functional of `P` inside the SCF) is 5.5 |
-| 5.5 | Stationarity on the **unmixed** fixed-point residual; multistart; competing-solution gap guard | add §6.2 | todo |
-| 5.6 | Constrained energy-Hessian guards (`λ_min`, `κ`) in the registered tangent metric | add §6.2 | todo |
+| 5.4 | `ρ_img`, `q_img`; `Φ_img^PBC` single quadratic form; `Φ_SF^{∞,LR}` | add §5.2, §6.1 | done — `defect_image.py` (pure functions, 23 tests), the Stage-4 forward-only wiring, and as a functional of an independent `P` (`defect_boundary.phi_b`, `boundary_potential` = `V_B`, §11.1 matrix-FD test passing) |
+| 5.5 | Stationarity on the **unmixed** fixed-point residual; multistart; competing-solution gap guard | add §6.2 | solver done — `defect_scf.stationary_solution` (Anderson accelerator, unmixed residual, commutator, ΔA, envelope energy; band/primary identity 1e-7; history invariance; stationarity; refusal); multistart + gap guard: todo (registered start rule to be frozen with D24) |
+| 5.6 | Constrained energy-Hessian guards (`λ_min`, `κ`) in the registered tangent metric | add §6.2 | done — `TangentSpace` (pairs of different occupation, `PAIR_ETA`), band Hessian from the spectrum, boundary part by FD of `V_B` (D19), Lanczos; matvec = rotation curvature of `A_B` to 2 %; symmetry quotient not yet applied (D24) |
 | 5.7 | Fixed-training-boundary anchor `E_B` with exact algebraic nulls in energy, force and stress | add §6.3 | todo |
 | 5.8 | Five output fields + structured support record | add §6.4 | todo |
 | 5.9 | Single profiled `C_Q*`; retire per-size `c`; exact reprofile before every gradient evaluation | add §8, §10 | todo |
@@ -741,6 +741,55 @@ snapped to the orthogonal cell of its lengths — the NPT-sampled mean cell is n
 orthogonal, and without the snap no signed permutation is an exact isometry, so only the
 identity was found (1 operation on the real lattice; the Pnma cell should give 8 × 4).
 
+### D21 amendment (2026-09-06, after the full-data survey): the group, and `SITE_TOL = 0.3 Å`
+
+On the 544 stoichiometric frames the median lattice converges in 8 passes (last shift
+0.015 Å; per-species thermal rms Cl 0.55 / Cs 0.51 / Pb 0.32 Å; max residual 4.8 Å = one
+hopped atom of a hot frame, which the median does not see). Its symmetry is NOT Pnma at
+0.2 Å: only an order-8 subgroup (identity, inversion, the 2₁ screw and the glide along c, with
+one sub-cell translation) holds within 0.07–0.19 Å; the remaining Pnma point operations and
+the (½,0,0), (0,½,0) sub-cell translations of the 2×2×1 supercell hold only to 0.24–0.35 Å
+(median site deviation 0.09–0.14 Å). That is not sampling noise (0.55/√504 ≈ 0.03 Å; the
+504-frame source and the whole set agree to 0.02 Å) — the time-average of the finite MD keeps
+the tilt pattern the run was trapped in, with a 2×2 modulation of ≈ 0.3 Å. The "ideal
+pristine lattice" of addendum §4.1 has the periodicity and symmetry of the phase, so the
+symmetrisation must remove it. Registered:
+* `SITE_TOL = 0.3 Å` (was 0.2): about half the thermal rms, a quarter of the smallest site
+  separation, so no non-symmetry can pass;
+* the lattice is symmetrised over the **group generated** by the operations found
+  (`symmetry_closure`: composition, translations compared modulo the lattice to 0.05
+  fractional), then the operations are found again on the symmetrised lattice and the step
+  repeated until it moves no site (two rounds on the data; `symmetry_rounds` recorded).
+  Operations found within a tolerance on a noisy lattice need not compose within it; only
+  the closed group makes the result exactly invariant (every operation to 1e-14 Å after);
+* result: 32 operations (Pnma's 8 × the 4 supercell translations); the symmetrisation moves
+  sites by at most 0.21 Å (Cl rms 0.10, Cs 0.06, Pb 0.03 Å), recorded as
+  `symmetrisation_shift`. At 0.2 Å the closure gives 8 operations, 8 Cl-site orbits, and a
+  shift of 0.10 Å — the trapped pattern kept.
+Also fixed in the same pass: `pristine_placement` rebound `pristine` to the placed density
+and measured the record's operations against the class frame's **thermal** cell, which is
+never an exact isometry — the records carried 8 operations (mostly translations) where the
+lattice has 32, and every transport in the earlier survey was a pure translation. The
+operations are now taken in the reference lattice's own (snapped) cell, tiled; a toy test
+strains the class frame's cell by 0.5 % and asserts the record still carries all 384.
+
+### D25 — OPEN (user): one frozen correspondence per class cannot cover both Cl orbits
+
+Under Pnma the 48 Cl sites of the 80-atom cell fall into **two** orbits (the 4c apical and
+8d equatorial Wyckoff sites: 16 and 32 sites); the 1985 79-atom V_Cl frames have their
+vacancy on 34 distinct sites — 1325 frames in one orbit, 660 in the other. A frozen
+correspondence "established once for the composition class" (addendum §4.1) is transported
+by symmetry operations only within the orbit of its removal set, so the literal reading
+refuses every frame of the other orbit (660 or 1325 frames, whichever the class's first
+frame is not in) as a "topology event". They are not one: the vacancy at an inequivalent
+site is a different ideal defect geometry of the same composition. Proposed extension: per
+composition class, one placement record per **orbit of the removal set** under the
+lattice's group — found by scanning the class's frames once at table build (`variants`),
+each with its own frozen correspondence, departure signal and ideal defect geometry; the
+Tier-1/2 integers stay per composition; transport tries each variant's operations, and a
+frame carried by none is the topology event. Not implemented until ruled; until then the
+survey reports the second orbit as refused.
+
 ### D22 — OPEN (user): the spectral class reference geometry
 
 The same v8 sentence covers the class reference geometry of the Tier-1/2 records (spectra,
@@ -768,3 +817,16 @@ cache "1.14×"/"0.85×") are inflated by the ~58k small ops per step and are not
 time. Levers, both the user's call: batch the four bisections per graph (numerically
 unchanged beyond 1e-10); `--defect_size_grouped_batches=True` (batched eigh, asserted equal
 to the loop path at 1e-8, but a different sampler).
+
+### D24 — OPEN: where the Stage-5 guards run, and the multistart rule
+
+The addendum wants the Hessian guards and the competing-solution gap "at each accepted
+Stage-5 solution". A Lanczos guard costs ~30 `V_B` evaluations per graph (each an autograd
+pass through the channel construction); at every training step for every graph that is
+prohibitive. Proposal: the SCF's own bounds (unmixed residual, commutator, ΔA) at every solve;
+the Hessian guards and the multistart on a registered schedule — every validation pass and
+every reported result — with a failed guard invalidating the result (never silently
+evaluated). The multistart rule proposed: starts from `P^(0) = count_fill(H_fix)` and from
+`count_fill(H_fix + s V_B[P^(0)])` at registered `s ∈ {0.5, 1.5}`, solutions compared by
+`A_B`, symmetry-equivalent copies collapsed by identical observables, `Δ_A^guard` registered.
+Both to be ruled before the Stage-5 arm.
