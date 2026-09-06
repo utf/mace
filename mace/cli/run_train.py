@@ -860,13 +860,22 @@ def run(args) -> None:
         if str(getattr(args, "defect_energy_strata_json", "") or ""):
             with open(args.defect_energy_strata_json, encoding="utf-8") as _h:
                 _weights = {str(k): float(v) for k, v in json.load(_h).items()}
-        _pristine_atoms = int(getattr(getattr(model, "spectral", None), "pristine_atoms", 0)
-                              or 0)
-        if _pristine_atoms <= 0:
-            from mace.data.two_size import pristine_cell_atoms as _pca
+        # The loader is built before the model exists, so the pristine size is read off
+        # the training set by the host's composition (a per-host input, standing rule 1).
+        from mace.data.two_size import pristine_cell_atoms as _pca
 
-            _comp = getattr(getattr(model, "madelung", None), "composition", None)
-            _pristine_atoms = _pca(train_set, [float(x) for x in _comp]) if _comp else 1
+        _comp_text = (getattr(args, "defect_madelung_composition", None)
+                      or getattr(args, "defect_gap_composition", None))
+        if not _comp_text:
+            raise ValueError("--defect_energy_shape_weight needs the host composition "
+                             "(--defect_madelung_composition or --defect_gap_composition) "
+                             "to key the size strata")
+        _comp = ([float(x) for x in str(_comp_text).split(",")]
+                 if isinstance(_comp_text, str) else [float(x) for x in _comp_text])
+        _pristine_atoms = int(_pca(train_set, _comp))
+        if _pristine_atoms <= 0:
+            raise ValueError("no stoichiometric frame in the training set: the size strata "
+                             "have no pristine cell to key on")
         strata_table = _obj.assign_strata(
             train_set, z_table, host=str(getattr(args, "defect_energy_host", "host")),
             pristine_atoms=_pristine_atoms, weights=_weights)
@@ -879,12 +888,9 @@ def run(args) -> None:
             n_pair_slots=int(getattr(args, "defect_energy_pair_slots", 0) or 0),
             generator=torch.Generator().manual_seed(args.seed),
             drop_last=not args.lbfgs)
-        train_loader = torch_geometric.dataloader.DataLoader(
-            dataset=train_set,
-            batch_sampler=pair_sampler,
-            pin_memory=args.pin_memory,
-            num_workers=args.num_workers,
-        )
+        train_loader = _obj.pair_loader(
+            train_set, pair_sampler, pin_memory=args.pin_memory,
+            num_workers=args.num_workers)
         _manifest = _obj.manifest(
             strata_table, _obj.ObjectiveStage.NUISANCE,
             energy_shape_weight=float(args.defect_energy_shape_weight),
@@ -894,7 +900,12 @@ def run(args) -> None:
             extra={"delta_forces_weight": float(args.delta_forces_weight),
                    "total_energy_weight": float(args.total_energy_weight),
                    "delta_energy_weight": float(args.delta_energy_weight),
-                   "seed": int(args.seed), "batch_size": int(args.batch_size)})
+                   "seed": int(args.seed), "batch_size": int(args.batch_size),
+                   "member_weight_column": "weight (the loader weight; not the OOD w_E)",
+                   "pair_graphs": "weight 0 in every term but the shape term; base "
+                                  "columns rescaled so the other terms equal their "
+                                  "values on the base graphs alone (PairBatchCollater)",
+                   "validation": "plain loader; the shape term is not scored there"})
         os.makedirs(args.work_dir, exist_ok=True)
         with open(os.path.join(args.work_dir, f"{args.name}_objective_manifest.json"), "w",
                   encoding="utf-8") as _h:

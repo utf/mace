@@ -91,7 +91,7 @@ Per batch (8 graphs, one 159-atom charged frame with residual `E_label - E_pred`
 |---|---|
 | totals term `L_E` | 4.0e-6 to 4.9e-6 |
 | analytic `dL_E/dc` of the implemented per-atom-squared form, `(0.25 / 8) * 2 * resid / N^2 * (-dE/dc)` | -4.25e-6 to -4.68e-6 |
-| autodiff `dL_E/dc` (the totals term alone) | -4.37e-6 to -4.89e-6 (within 3-5% of the analytic value; the residual difference is the frontier term's own weak dependence on the shift inside `E_pred`) |
+| autodiff `dL_E/dc` (the totals term alone) | -4.37e-6 to -4.89e-6 (within 3-5% of the analytic value; since `dE_pred/dc` is exactly -1.0 by finite differences there is no value dependence to account for the gap -- it is the same phantom gradient of the force path, below, appearing inside `E_pred`'s autograd) |
 | **finite differences of the WHOLE loss at c +- 1 eV and +- 0.1 eV** | equal to the totals term's quadratic prediction to five digits on every batch (e.g. batch 105: dL(+1 eV) = -3.2329e-6, predicted -3.2329e-6): the loss depends on c ONLY through the totals term |
 | autodiff `dL/dc` of the whole loss | **-3.5e-2 to +2.8e-1**, 4 to 5 orders of magnitude larger than the totals term, and entirely from the FORCE terms (`dL_forces/dc`: -3.09e-2, +2.77e-1, -3.63e-2, +1.37e-1, -2.69e-2, -3.50e-2) |
 
@@ -101,16 +101,16 @@ residual at 159 atoms), and it is the only path by which the loss's VALUE depend
 
 But the implemented gradient carried a second, larger component that the loss's value does
 not have. The force terms' autodiff derivative with respect to c is non-zero while their
-finite-difference derivative is zero: a **phantom gradient**. Its mechanism is decision 15
-of the v8 Stage 1.2 record: the frontier term's projector windows were shifted, on the
-value side, by the c-table level shift as a DETACHED number, so the term's value is
-invariant to c, while its divided-difference backward through the attached Hamiltonian
-still contains the window-slope response of the spectrum moving relative to fixed edges.
-The value was compensated; the gradient was not. That path acts on every charged graph,
-including the 928 79-atom frames whose energies the null gate removed, which is why the
-79-atom constant and the scalar `c_shift` -- with NO energy term at all -- drifted by
--0.49 and -0.46 eV over the run in lock-step (the same phantom gradient, the same Adam
-dynamics).
+finite-difference derivative is zero: a **phantom gradient**. Its mechanism, by
+construction of decision 15 of the v8 Stage 1.2 record (read off the code, not measured
+separately): the frontier term's projector windows were shifted, on the value side, by the
+c-table level shift as a DETACHED number, so the term's value is invariant to c, while its
+divided-difference backward through the attached Hamiltonian still contains the
+window-slope response of the spectrum moving relative to fixed edges. The value was
+compensated; the gradient was not. That path acts on every charged graph, including the
+928 79-atom frames whose energies the null gate removed. Supporting evidence: the 79-atom
+constant and the scalar `c_shift` -- with NO energy term at all -- drifted by -0.49 and
+-0.46 eV over the run in lock-step, as one gradient under one Adam dynamics would.
 
 ### Item 3: the optimiser replay of epoch 21 from the epoch-20 checkpoint
 

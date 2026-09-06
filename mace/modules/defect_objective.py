@@ -69,7 +69,7 @@ __all__ = [
     "stratum_key", "Stratum", "StrataTable", "assign_strata", "residual_paths",
     "shape_loss_centred", "shape_loss_pairs", "profile_intercepts",
     "profile_charge_constant", "WithinStratumPairSampler", "assert_no_split_groups",
-    "manifest",
+    "PairBatchCollater", "pair_loader", "FORCE_WEIGHT_COLUMNS", "manifest",
 ]
 
 PROVENANCE_UNPAIRED = 0
@@ -365,6 +365,70 @@ class WithinStratumPairSampler(torch.utils.data.Sampler):
             for _ in range(self.n_pair_slots):
                 pairs.extend(self.draw_pair())
             yield base + pairs
+
+
+# ------------------------------------------------------------------ the pair batches
+
+# The per-graph columns the Stage B terms multiply. `weight` enters every term; the force
+# columns enter the atom-mean terms. Both are rescaled on the base graphs so that the
+# non-shape terms on a 12-graph pair batch equal, exactly, what Stage B computes on the
+# 8-graph batch the base graphs form on their own.
+FORCE_WEIGHT_COLUMNS = ("forces_weight", "base_forces_weight", "delta_forces_weight")
+
+
+class PairBatchCollater:
+    """Collate a pair-sampler batch and mark it structurally.
+
+    The first `num_graphs - 2 n_pair_slots` graphs are the ordinary sweep, the rest are the
+    registered pairs. The batch is stamped with `pair_slots` (the number of pairs) so the
+    loss finds the pairs by a property of the batch, not by trusting its length or the
+    module's mode: a validation batch carries no stamp and scores no pair term.
+
+    The pair graphs enter ONLY the shape term. Their `weight` is set to zero, which removes
+    them from every other term (each of those multiplies `weight`), and the base graphs'
+    columns are rescaled by the graph ratio (graph-mean terms) and the atom ratio (atom-mean
+    force terms) so those terms' values are what the same base graphs give on their own.
+    Without this the pair draws -- half of them from the 16-frame stratum under equal W_g --
+    would enter the force terms some forty times per epoch each, at the two-size force
+    upweight, and the realised force shares would no longer be the recipe's. The shape term
+    does not read `weight`: the sampler already draws members with probability w_i.
+    """
+
+    def __init__(self, inner, n_pair_slots: int) -> None:
+        self.inner = inner
+        self.n_pair_slots = int(n_pair_slots)
+
+    def __call__(self, data_list):
+        batch = self.inner(data_list)
+        n_pair = 2 * self.n_pair_slots
+        n_graphs = int(batch.num_graphs)
+        if n_graphs <= n_pair:
+            raise ValueError(f"a pair batch of {n_graphs} graphs has no base graphs")
+        n_base = n_graphs - n_pair
+        counts = batch.ptr[1:] - batch.ptr[:-1]
+        graph_ratio = n_graphs / n_base
+        atom_ratio = float(counts.sum()) / float(counts[:n_base].sum())
+        weight = batch.weight.view(-1)
+        weight[:n_base] = weight[:n_base] * graph_ratio
+        weight[n_base:] = 0.0
+        for name in FORCE_WEIGHT_COLUMNS:
+            col = getattr(batch, name, None)
+            if col is None:
+                continue
+            col = col.view(-1)
+            col[:n_base] = col[:n_base] * (atom_ratio / graph_ratio)
+        batch.pair_slots = torch.tensor(self.n_pair_slots, dtype=torch.long)
+        return batch
+
+
+def pair_loader(dataset, sampler: WithinStratumPairSampler, **kwargs):
+    """A DataLoader over `sampler`'s batches whose collater is `PairBatchCollater`."""
+    from mace.tools import torch_geometric
+
+    loader = torch_geometric.dataloader.DataLoader(dataset=dataset, batch_sampler=sampler,
+                                                   **kwargs)
+    loader.collate_fn = PairBatchCollater(loader.collate_fn, sampler.n_pair_slots)
+    return loader
 
 
 # ------------------------------------------------------------------ manifest

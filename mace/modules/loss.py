@@ -960,10 +960,12 @@ class DefectLoss(torch.nn.Module):
     def energy_shape(self, ref: Batch, pred: TensorDict) -> torch.Tensor:
         """The registered pair term (plan v8.1 section 8) on the batch's pair slots.
 
-        The last `2 * energy_pair_slots` graphs of the batch are the sampler's pairs, in
-        order; each pair's members carry the same `stratum_id` (asserted -- a batch that was
-        not built by the registered sampler must not be scored by this term) and the residual
-        path of their `provenance`. Graphs before the slots contribute nothing here.
+        A batch built by `defect_objective.pair_loader` carries `pair_slots`; its last
+        `2 * energy_pair_slots` graphs are the sampler's pairs, in order, each pair's members
+        of one `stratum_id` (asserted) and scored on the residual path of their
+        `provenance`. Those graphs carry `weight` zero, so they enter no other term; the
+        base graphs contribute nothing here. A batch without the stamp (validation, a plain
+        loader) scores zero rather than being mis-read by position.
         """
         zero = torch.zeros((), dtype=ref.weight.dtype, device=ref.weight.device)
         self.last_energy_shape_value = 0.0
@@ -971,10 +973,18 @@ class DefectLoss(torch.nn.Module):
             return zero
         from mace.modules.defect_objective import residual_paths, sampled_pair_term
 
+        slots = getattr(ref, "pair_slots", None)
+        if slots is None:
+            # Not a pair batch (validation, or any plain loader): the term is not scored.
+            # The held-out shape diagnostic is the recalibration tool's, on whole strata.
+            return zero
+        if int(slots) != self.energy_pair_slots:
+            raise ValueError(f"the batch carries {int(slots)} pair slots, the loss expects "
+                             f"{self.energy_pair_slots}")
         n_pair = 2 * self.energy_pair_slots
         n_graphs = int(ref.num_graphs)
-        if n_graphs < n_pair:
-            raise ValueError(f"the batch holds {n_graphs} graphs, fewer than its "
+        if n_graphs <= n_pair:
+            raise ValueError(f"the batch holds {n_graphs} graphs, no more than its "
                              f"{n_pair} pair slots: it was not built by the pair sampler")
         sid = ref["stratum_id"].reshape(-1)[-n_pair:]
         if not bool((sid[0::2] == sid[1::2]).all()) or bool((sid < 0).any()):

@@ -191,7 +191,8 @@ def _toy_dataset(n_small=12, n_large=4, seed=0):
 
 
 def test_strata_are_stamped_and_the_pair_batches_score():
-    from mace.modules.defect_objective import WithinStratumPairSampler, assign_strata
+    from mace.modules.defect_objective import (WithinStratumPairSampler, assign_strata,
+                                               pair_loader)
     from mace.modules.loss import DefectLoss
     from mace.tools import torch_geometric
 
@@ -201,12 +202,13 @@ def test_strata_are_stamped_and_the_pair_batches_score():
     assert all(int(d.stratum_id) == -1 for d in ds if int(d.carrier_counts.sum()) == 0)
     sampler = WithinStratumPairSampler(len(ds), batch_size=4, table=table, n_pair_slots=2,
                                        generator=torch.Generator().manual_seed(1))
-    loader = torch_geometric.dataloader.DataLoader(ds, batch_sampler=sampler)
+    loader = pair_loader(ds, sampler)
     loss_fn = DefectLoss(energy_weight=0.0, forces_weight=0.0, delta_energy_weight=0.0,
                          delta_forces_weight=0.0, total_energy_weight=0.0,
                          energy_shape_weight=2.0, energy_pair_slots=2)
     batch = next(iter(loader))
-    assert int(batch.num_graphs) == 8
+    assert int(batch.num_graphs) == 8 and int(batch.pair_slots) == 2
+    assert bool((batch.weight.view(-1)[4:] == 0).all())
     # a prediction off by a per-stratum constant: the constant never enters the term
     e_pred = batch.energy + torch.tensor([5.0, -3.0])[batch.stratum_id.reshape(-1).clamp_min(0)]
     pred = {"energy": e_pred, "delta_energy": torch.zeros_like(e_pred)}
@@ -215,11 +217,60 @@ def test_strata_are_stamped_and_the_pair_batches_score():
     pred = {"energy": e_pred + noise, "delta_energy": torch.zeros_like(e_pred)}
     expected = 2.0 * 0.5 * ((0.3 + 0.1) ** 2 + (0.2 - 0.6) ** 2) / 2
     assert float(loss_fn.energy_shape(batch, pred)) == pytest.approx(expected, abs=1e-12)
-    # a batch not built by the sampler is refused
+    # a batch without the stamp (validation, a plain loader) scores zero, never by position
     plain = torch_geometric.dataloader.DataLoader(ds, batch_size=8, shuffle=False)
+    assert float(loss_fn.energy_shape(next(iter(plain)), {"energy": torch.zeros(8),
+                                                           "delta_energy": torch.zeros(8)})) == 0.0
+    # a stamped batch with the wrong slot count is refused
+    wrong = DefectLoss(energy_weight=0.0, forces_weight=0.0, delta_energy_weight=0.0,
+                       delta_forces_weight=0.0, total_energy_weight=0.0,
+                       energy_shape_weight=2.0, energy_pair_slots=1)
     with pytest.raises(ValueError):
-        loss_fn.energy_shape(next(iter(plain)), {"energy": torch.zeros(8),
-                                                  "delta_energy": torch.zeros(8)})
+        wrong.energy_shape(batch, pred)
+
+
+def test_pair_graphs_enter_no_other_term_and_the_base_terms_are_stage_b_exact():
+    """The Stage B terms on a pair batch equal their values on the base graphs alone."""
+    from mace.modules.defect_objective import (PairBatchCollater, WithinStratumPairSampler,
+                                               assign_strata)
+    from mace.modules.loss import DefectLoss
+    from mace.tools import torch_geometric
+
+    ds, z_table = _toy_dataset()
+    table = assign_strata(ds, z_table, host="toy", pristine_atoms=4, log=False)
+    sampler = WithinStratumPairSampler(len(ds), batch_size=4, table=table, n_pair_slots=2,
+                                       generator=torch.Generator().manual_seed(3))
+    idx = next(iter(sampler))
+    base = torch_geometric.dataloader.DataLoader([ds[i] for i in idx[:4]], batch_size=4)
+    both = torch_geometric.dataloader.DataLoader([ds[i] for i in idx], batch_size=8)
+    both.collate_fn = PairBatchCollater(both.collate_fn, 2)
+    b_base, b_both = next(iter(base)), next(iter(both))
+    assert int(b_both.num_graphs) == 8 and int(b_base.num_graphs) == 4
+    torch.manual_seed(0)
+    n_base = int(b_base.num_nodes)
+
+    def pred_for(b):
+        n = int(b.num_nodes)
+        g = int(b.num_graphs)
+        return {"energy": b.energy + e_noise[:g], "base_energy": b.base_energy + 0.2,
+                "delta_energy": torch.zeros(g),
+                "forces": b.forces + f_noise[:n], "base_forces": b.base_forces + f_noise[:n],
+                "delta_forces": torch.zeros(n, 3), "correction_energy": torch.zeros(g)}
+
+    f_noise = torch.randn(int(b_both.num_nodes), 3)
+    e_noise = torch.randn(int(b_both.num_graphs))
+    # the base graphs come first in both batches, so the same noise lands on the same atoms
+    assert bool((b_both.forces[:n_base] == b_base.forces).all())
+    stage_b = DefectLoss(energy_weight=1.0, forces_weight=10.0, delta_energy_weight=0.0,
+                         delta_forces_weight=10.0, total_energy_weight=0.0)
+    v81 = DefectLoss(energy_weight=1.0, forces_weight=10.0, delta_energy_weight=0.0,
+                     delta_forces_weight=10.0, total_energy_weight=0.0,
+                     energy_shape_weight=0.5, energy_pair_slots=2)
+    ref_value = float(stage_b(b_base, pred_for(b_base)))
+    full = float(v81(b_both, pred_for(b_both)))
+    shape = v81.last_energy_shape_value
+    assert shape > 0.0
+    assert full - shape == pytest.approx(ref_value, rel=1e-10)
 
 
 def test_the_shape_term_refuses_a_second_charged_energy_path():
