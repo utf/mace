@@ -1,0 +1,70 @@
+{
+  "classes": {
+    "17x47,55x16,82x16": {
+      "_n_atoms": null,
+      "_tier": 1,
+      "m_vb": [
+        204,
+        204
+      ],
+      "n_e": [
+        1,
+        0
+      ],
+      "n_h": [
+        0,
+        0
+      ],
+      "n_sigma": [
+        205,
+        204
+      ],
+      "q_core": 1
+    },
+    "17x48,55x16,82x16": {
+      "_n_atoms": null,
+      "_tier": 1,
+      "m_vb": [
+        208,
+        208
+      ],
+      "n_e": [
+        0,
+        0
+      ],
+      "n_h": [
+        0,
+        0
+      ],
+      "n_sigma": [
+        208,
+        208
+      ],
+      "q_core": 0
+    },
+    "17x95,55x32,82x32": {
+      "_n_atoms": null,
+      "_tier": 1,
+      "m_vb": [
+        412,
+        412
+      ],
+      "n_e": [
+        1,
+        0
+      ],
+      "n_h": [
+        0,
+        0
+      ],
+      "n_sigma": [
+        413,
+        412
+      ],
+      "q_core": 1
+    }
+  },
+  "git_sha": "d0561b0 (stage0_acceptance.json, 2026-09-05)",
+  "model": "/home/alex/runs/arma_models/arma_s1.model",
+  "torch": "recorded"
+}

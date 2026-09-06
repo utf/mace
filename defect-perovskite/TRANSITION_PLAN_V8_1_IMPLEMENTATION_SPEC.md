@@ -125,19 +125,19 @@ Status: `todo` / `wip` / `done` / `blocked`. Keep this column current.
 
 | id | item | source | status |
 |---|---|---|---|
-| 2.1 | Loss-path audit item 1: perturb the implemented 159-atom constant by ±1 eV; compare autodiff `∂L/∂c` with the analytic derivative | add §8 | todo |
-| 2.2 | Audit item 2: trace all 16 retained charged energies through masks, indexing, units, reduction, weighting, optimiser groups, clipping, dtype, restore | add §8 | todo |
-| 2.3 | Audit item 3: deterministic optimiser replay accounting for the observed 0.03 eV motion, or identify the detach/overwrite/frozen-parameter event | add §8 | todo |
-| 2.4 | Audit item 4: analytic profiler recovers an injected constant offset to the numerical floor | add §8 | todo |
-| 2.5 | Audit item 5: recompute diagnostic `c_g*` for every saved seed from training frames only; non-energy predictions must stay bit-identical | add §8 | todo |
-| 2.6 | `defect_objective.py`: total-cell-eV residual `r_i`, paired `r_i^Δ`, single registered path `ξ_i` per observation | add §8 | todo |
-| 2.7 | Stratum keys (label provenance, host, formal charge, composition hash, cell convention, size/shape class) with frozen weights `W_g` | add §8 | todo |
-| 2.8 | Within-stratum shape loss + exactly equivalent weighted pair form; unbiased pair sampler | add §8 | todo |
-| 2.9 | Group geometry-paired states **before** the split; assert no group spans splits | add §8, §11.1 | todo |
-| 2.10 | Retire the same-size-neutral-null admission rule; keep neutral-null availability as a diagnostic | add §8 | todo |
-| 2.11 | Stage separation test: Stages 1–4 contain no production `C_Q`; Stages 5–6 contain no nuisance `c_g*` | add §11.1 | todo |
-| 2.12 | Freeze energy scale, strata, weights, force/energy balance, pair rule and tolerances **before** opening corrected retraining results | add §8 | todo |
-| 2.13 | Retrain the Stage-1 reference under the corrected gauge and objective (wave-packed) | add §8 | todo |
+| 2.1 | Loss-path audit item 1: perturb the implemented 159-atom constant by ±1 eV; compare autodiff `∂L/∂c` with the analytic derivative | add §8 | done — stage1_audit.py / STAGE1_V8_1_AUDIT.md |
+| 2.2 | Audit item 2: trace all 16 retained charged energies through masks, indexing, units, reduction, weighting, optimiser groups, clipping, dtype, restore | add §8 | done — STAGE1_V8_1_AUDIT.md |
+| 2.3 | Audit item 3: deterministic optimiser replay accounting for the observed 0.03 eV motion, or identify the detach/overwrite/frozen-parameter event | add §8 | done — optimiser replay recorded in the audit |
+| 2.4 | Audit item 4: analytic profiler recovers an injected constant offset to the numerical floor | add §8 | done — profiler recovers an injected offset |
+| 2.5 | Audit item 5: recompute diagnostic `c_g*` for every saved seed from training frames only; non-energy predictions must stay bit-identical | add §8 | done — stage1_recalibrate.py over the saved seeds |
+| 2.6 | `defect_objective.py`: total-cell-eV residual `r_i`, paired `r_i^Δ`, single registered path `ξ_i` per observation | add §8 | done — defect_objective.py |
+| 2.7 | Stratum keys (label provenance, host, formal charge, composition hash, cell convention, size/shape class) with frozen weights `W_g` | add §8 | done — defect_objective.py |
+| 2.8 | Within-stratum shape loss + exactly equivalent weighted pair form; unbiased pair sampler | add §8 | done — centred and pair forms, registered sampler |
+| 2.9 | Group geometry-paired states **before** the split; assert no group spans splits | add §8, §11.1 | done — collater stamps pair_slots; groups precede the split |
+| 2.10 | Retire the same-size-neutral-null admission rule; keep neutral-null availability as a diagnostic | add §8 | done |
+| 2.11 | Stage separation test: Stages 1–4 contain no production `C_Q`; Stages 5–6 contain no nuisance `c_g*` | add §11.1 | done — stage-separation test |
+| 2.12 | Freeze energy scale, strata, weights, force/energy balance, pair rule and tolerances **before** opening corrected retraining results | add §8 | done — pre-registered manifest (8eb00f0) |
+| 2.13 | Retrain the Stage-1 reference under the corrected gauge and objective (wave-packed) | add §8 | RUNNING — 6 seeds, b3 GPUs 4-7, 2/GPU (s14a_s1..s6) |
 
 ### WP3 — Stage 2
 
@@ -377,3 +377,39 @@ the shared stash empty at handover, so nothing was lost; every item below is com
 2. Three of its bash pollers had been looping `until ! ssh b3 pgrep -f queue_protocol_smoke`
    since 2026-09-02, waiting on a finished job. Killed on consolidation.
 3. Its WP2 items keep their tracker status; ownership is now here.
+
+---
+
+## 9. The golden routing thread: CLOSED (2026-09-06)
+
+The inherited open thread -- does the v8.1 Tier-1 routing change (`06f4fd1`) alter the class
+integers? -- is now answered directly rather than by inference.
+
+`stage0_routing_ab.py` builds the class table on the golden frames and records the integers.
+The post-change capture is at HEAD; the pre-change side is the committed acceptance record
+`golden/stage0_acceptance.json` (`d0561b0`, 2026-09-05 00:48), which predates the routing
+change (2026-09-06 02:17). Both are stored as `golden/stage0_routing_{pre,post}.json`.
+
+```
+routing moved (expected): 17x47,55x16,82x16  tier 1 -> 2
+INTEGERS UNCHANGED across the routing change: 3 classes,
+fields compared: m_vb, n_e, n_h, n_sigma, q_core
+```
+
+Every integer is identical on all three classes: the 79-atom V_Cl (`m_vb [204,204]`,
+`n_e [1,0]`, `q_core +1`), the pristine 80-atom cell (`[208,208]`, `q_core 0`) and the
+159-atom V_Cl (`[412,412]`, `q_core +1`). Only `tier` moved, and only on the 79-atom class,
+which is the designed behaviour: it is the first size of its homologous family, so it now
+runs the continuation while the 159-atom class is verified by transport --
+`412 = 204 + (416 - 208)`, the pristine-rank increment.
+
+Two notes on method, because the first two attempts were wrong:
+
+* Re-running the *pre-change tree* was abandoned: at `06f4fd1^` the mixed-precision dtype
+  bug (fixed later in `0f86246`) makes `arma_s1` fail before the table is built. The
+  committed acceptance record is the better instrument anyway -- it is the artefact of
+  record, not a reconstruction.
+* The comparator initially reported nine "changed" integers. All nine were fields absent
+  from the pre record (`d_sigma`, `m_f`, `ambiguous`) -- schema additions from this
+  programme, not value changes. It now separates "new since the pre record" from "changed",
+  because conflating them would hide a real difference among the additions.
