@@ -28,13 +28,16 @@ this module and NOWHERE ELSE (`TIER2_NAMES`; the AST test in
 `tests/extensions/defect/test_composition_classes.py` asserts their absence from every
 production module).
 
-THE CLASS REFERENCE GEOMETRY is the class's FIRST FRAME, always. The plan allows "the ideal
-defect geometry built from the pristine cell when constructible"; on the data in hand it is
-not: the stoichiometric training frames are thermal snapshots (cells 15.80 vs 16.25 A for
-the same 80-atom composition), so there is no ideal cell to build from, and building V_Cl
-from one would require choosing WHICH Cl to remove -- orthorhombic CsPbCl3 has inequivalent
-Cl sites -- which is a defect position, and principle 9 forbids the model any such input.
-The cache records the frame key of the geometry used.
+THE CLASS REFERENCE GEOMETRY (spectra, ranks, edges) is the class's FIRST FRAME, always. The
+plan allows "the ideal defect geometry built from the pristine cell when constructible"; on
+the data in hand no frame is relaxed (every stoichiometric frame is a thermal snapshot), so
+the certified Tier-1/2 records are built on first frames. THE PRISTINE REFERENCE LATTICE of
+the static density (addendum 4.1, "an ideal pristine lattice") is a different object and IS
+constructible: the registered, label-free site-mean of the stoichiometric frames after
+registration and assignment, symmetrised over the lattice's own symmetry operations
+(`mean_pristine_lattice`, D21 -- ruled by the user 2026-09-06). It is stored in the table
+(`pristine_reference`) with its construction record and is what every class's placement,
+frozen correspondence and lift are built against.
 
 PER-FRAME COUNTS (`frame_counts`) net the class integers against the exact counters:
 
@@ -84,8 +87,26 @@ __all__ = ["CLASS_TABLE_VERSION", "QUANTILES", "TIER2_NAMES", "EdgeAlignment",
            "class_lift_record", "pristine_reference_geometry",
            "pristine_placement", "species_charges", "tiled_pristine_scaled"]
 
-CLASS_TABLE_VERSION = 1
+CLASS_TABLE_VERSION = 2   # 2: the pristine reference is the symmetrised site-mean (D21)
 BOUNDARY_TOL = 1e-9   # eV; a level exactly on the window's edge is on the edge, not inside
+# Plan v8's registered `r_match` for the static density's site correspondence: a matched atom
+# farther than this from its site is FLAGGED (counted, reported), never refused -- the
+# assignment is a topology, the distance a departure (addendum 4.1).
+R_MATCH = 2.0
+# A symmetry operation of the pristine lattice carries every site onto a site. The reference
+# lattice is a registered site-mean of thermal frames (D21), periodic and symmetric to its
+# sampling noise (~0.02 A on the data in hand) and then symmetrised; this is the tolerance
+# (A) within which an operation is accepted, small against the smallest site separation
+# (2.7 A) so that no non-symmetry passes. Registered, absolute.
+SITE_TOL = 0.2
+# The site-mean iterates until a pass moves no site by more than this (A), up to a fixed
+# number of passes; and a mean cell whose off-diagonal elements are below this fraction of
+# its shortest axis is snapped to the orthogonal cell of the same lengths (the ideal cell of
+# an orthorhombic lattice sampled under NPT is orthogonal; its symmetry operations are exact
+# isometries only of the snapped cell). Both registered, absolute.
+MEAN_LATTICE_TOL = 0.005
+MEAN_LATTICE_MAX_PASSES = 8
+CELL_ORTHO_TOL = 0.02
 
 # The occupied-manifold window for the edge alignment: quantiles of the occupied spectrum
 # from 5 % to 60 %, i.e. the continuum well below the frontier, so a frontier level inside
@@ -96,8 +117,12 @@ QUANTILES = np.linspace(0.05, 0.60, 23)
 # Names of the Tier 2 machinery. The site correspondence and the union basis are used ONLY
 # inside the constructor; a production module that mentions any of these has crossed the
 # fence, and the AST test fails it.
+# `linear_sum_assignment` is NOT in this list: the generic assignment routine is also the
+# primitive by which the frozen site correspondence of addendum 4.1 is read on a frame
+# (`defect_density.pristine_correspondence`, D20); what is fenced is the Tier-2 machinery
+# built on it (`site_correspondence` and the union-basis continuation), by their own names.
 TIER2_NAMES = ("site_correspondence", "union_basis", "transport_valence_subspace",
-               "endpoint_classification", "tier2", "linear_sum_assignment", "ghost_orbitals",
+               "endpoint_classification", "tier2", "ghost_orbitals",
                "interpolated_hamiltonian", "tier2_continuation")
 
 # The constructor's parameters (plan section 3: every one of them is config and round-trips).
@@ -593,11 +618,21 @@ def build_class_table(model, frames: Sequence, device="cpu", formula=None,
     # Stage 4 (addendum 4.1): the forward builds the static density against THIS geometry,
     # so it travels with the table rather than being re-derived from whichever pristine
     # frame a later driver happens to hold.
-    table["pristine_reference"] = {
-        "numbers": [int(z) for z in pristine_numbers],
-        "positions": np.asarray(pristine_pos, dtype=np.float64).tolist(),
-        "cell": np.asarray(pristine_cell, dtype=np.float64).reshape(3, 3).tolist(),
-        "frame_key": _frame_key_of(pristine_frame)}
+    if species_charges(model) is not None:
+        pristine_frames = [fr for fr in frames
+                           if composition_key(_numbers_of(fr, model)) == pristine_key]
+        table["pristine_reference"] = mean_pristine_lattice(
+            model, pristine_frames, float(_functional(model)["r_res"]), log=log)
+    else:
+        table["pristine_reference"] = {
+            "numbers": [int(z) for z in pristine_numbers],
+            "positions": np.asarray(pristine_pos, dtype=np.float64).tolist(),
+            "cell": np.asarray(pristine_cell, dtype=np.float64).reshape(3, 3).tolist(),
+            "frame_key": _frame_key_of(pristine_frame),
+            "construction": {"method": "first_frame"}}
+    reference_lattice = (table["pristine_reference"]["numbers"],
+                         np.asarray(table["pristine_reference"]["positions"], dtype=np.float64),
+                         np.asarray(table["pristine_reference"]["cell"], dtype=np.float64))
     tiled: Dict[Tuple[int, int, int], Dict[str, Any]] = {}
     # The sink is a number in the table whether or not any class needs Tier 2: section 2.7's
     # default is 50 eV above the pristine conduction edge, read off the reference frame.
@@ -747,7 +782,7 @@ def build_class_table(model, frames: Sequence, device="cpu", formula=None,
         m_vb = (m_vb_one, m_vb_one)
         accepted = tier is not None
         n_e, n_h, q_core = class_integers(m_vb, n_sig) if accepted else ((0, 0), (0, 0), 0)
-        placement = pristine_placement(model, fr, pristine_frame, factors, perm)
+        placement = pristine_placement(model, fr, reference_lattice, factors, perm)
         record = ClassRecord(
             key=key, n_atoms=spec["n_atoms"], reference_frame_key=_frame_key_of(fr),
             n_total=spec["n_total"], n_sigma=n_sig, tier=tier, ambiguous=not accepted,
@@ -1035,11 +1070,218 @@ def _alignment_anchor(species: torch.Tensor, pri_species: torch.Tensor,
     return anchor_species, int(torch.nonzero(species == anchor_species).reshape(-1)[0])
 
 
-def pristine_placement(model, class_frame, pristine_frame, factors, perm,
+def _signed_permutations() -> List[np.ndarray]:
+    """The 48 signed permutation matrices: every point operation a lattice with orthogonal
+    axes can have, in fractional coordinates."""
+    import itertools
+
+    out = []
+    for perm in itertools.permutations(range(3)):
+        for signs in itertools.product((1, -1), repeat=3):
+            R = np.zeros((3, 3), dtype=np.int64)
+            for i, j in enumerate(perm):
+                R[i, j] = signs[i]
+            out.append(R)
+    return out
+
+
+def lattice_symmetries(scaled: torch.Tensor, species: torch.Tensor, cell: np.ndarray,
+                       tol: float = SITE_TOL) -> List[Dict[str, Any]]:
+    """Every affine map `x -> R x + t` of the fractional coordinates -- `R` a signed
+    permutation that is an isometry of `cell`, `t` any vector -- carrying the species-labelled
+    site set onto itself within `tol` (A): the crystal symmetries of the (tiled) pristine
+    reference, lattice translations included, the identity first. Addendum 4.1's accepted
+    equivalence class of registrations is generated by exactly these.
+    """
+    scaled = scaled.detach().to(torch.float64).cpu()
+    species = species.detach().cpu()
+    cell_t = torch.tensor(np.asarray(cell, dtype=np.float64)).reshape(3, 3)
+    n = scaled.shape[0]
+    anchor = 0
+    same = torch.nonzero(species == species[anchor]).reshape(-1)
+    cross = species[:, None] != species[None, :]
+    ops: List[Dict[str, Any]] = []
+    seen = set()
+    eye = np.eye(3, dtype=np.int64).tolist()
+    for R in _signed_permutations():
+        # An isometry of the cell: the Cartesian map cell^T R cell^-T must be orthogonal.
+        R_t = torch.tensor(R, dtype=torch.float64)
+        A = cell_t.T @ R_t @ torch.linalg.inv(cell_t.T)
+        if float((A.T @ A - torch.eye(3, dtype=torch.float64)).abs().max()) > 1e-6:
+            continue
+        moved = scaled @ R_t.T
+        for k in same.tolist():
+            t = scaled[k] - moved[anchor]
+            d = (moved + t)[:, None, :] - scaled[None, :, :]
+            d = d - torch.round(d)
+            dist = (d @ cell_t).norm(dim=-1)
+            dist = torch.where(cross, torch.full_like(dist, float("inf")), dist)
+            best = dist.argmin(dim=1)
+            if float(dist[torch.arange(n), best].max()) > tol or torch.unique(best).numel() != n:
+                continue
+            t_mod = t - torch.floor(t)
+            key = (tuple(R.reshape(-1).tolist()), tuple((t_mod * 1000).round().long().tolist()))
+            if key in seen:
+                continue
+            seen.add(key)
+            ops.append({"R": R.tolist(), "t": [float(x) for x in t_mod.tolist()]})
+    identity = [op for op in ops
+                if op["R"] == eye and max(min(x, 1.0 - x) for x in op["t"]) < 1e-9]
+    others = [op for op in ops if op not in identity]
+    return identity + others
+
+
+def _apply_symmetry(op: Dict[str, Any], scaled: torch.Tensor) -> torch.Tensor:
+    R = torch.tensor(op["R"], dtype=scaled.dtype, device=scaled.device)
+    t = torch.tensor(op["t"], dtype=scaled.dtype, device=scaled.device)
+    return scaled @ R.T + t
+
+
+def symmetrise_sites(scaled: torch.Tensor, species: torch.Tensor, cell: np.ndarray,
+                     ops: Sequence[Dict[str, Any]]) -> torch.Tensor:
+    """Each site replaced by the mean of its images under every operation, pulled back: the
+    site set made exactly invariant under `ops` (the ideal lattice the sampled mean
+    approximates)."""
+    scaled = scaled.detach().to(torch.float64).cpu()
+    species = species.detach().cpu()
+    cell_t = torch.tensor(np.asarray(cell, dtype=np.float64)).reshape(3, 3)
+    cross = species[:, None] != species[None, :]
+    acc = torch.zeros_like(scaled)
+    count = 0
+    for op in ops:
+        R = torch.tensor(op["R"], dtype=torch.float64)
+        t = torch.tensor(op["t"], dtype=torch.float64)
+        moved = scaled @ R.T + t
+        d = moved[:, None, :] - scaled[None, :, :]
+        d = d - torch.round(d)
+        dist = torch.where(cross, torch.full_like(d[..., 0], float("inf")),
+                           (d @ cell_t).norm(dim=-1))
+        image = dist.argmin(dim=1)                       # site i -> its image site
+        # Pull the image site back through the operation onto site i (minimum image).
+        back = (scaled[image] - t) @ torch.linalg.inv(R.T)
+        back = back - torch.round(back - scaled)
+        acc += back
+        count += 1
+    return acc / max(count, 1)
+
+
+def mean_pristine_lattice(model, pristine_frames: Sequence, r_res: float,
+                          passes: int = MEAN_LATTICE_MAX_PASSES, tol: float = SITE_TOL,
+                          log: bool = True) -> Dict[str, Any]:
+    """The ideal pristine lattice as the registered site-mean of the stoichiometric frames
+    (D21): each frame is registered to the running reference (`align_pristine`, the global
+    search), its atoms assigned to sites (`pristine_correspondence`, species-wise), and the
+    per-site mean fractional displacement and the mean cell taken; repeated from the new
+    mean until a pass moves no site by more than `MEAN_LATTICE_TOL` (at most `passes`
+    rounds). A nearly orthogonal mean cell is snapped to the orthogonal cell of its lengths
+    (`CELL_ORTHO_TOL`). The mean is then symmetrised over the lattice's own symmetry
+    operations, found on it within `tol`. Deterministic and label-free given the frame set,
+    whose fingerprint is recorded with the residual statistics.
+    """
+    import hashlib
+
+    from mace.modules import defect_density as dd
+
+    numbers0, pos0, cell0 = _frame_geometry(pristine_frames[0], model)
+    zs = [int(z) for z in model.atomic_numbers]
+    z0 = species_charges(model).to(torch.float64)
+    pri_species = torch.tensor([zs.index(int(z)) for z in numbers0], dtype=torch.long)
+    n_sites = len(numbers0)
+    scaled = torch.tensor(np.asarray(pos0) @ np.linalg.inv(np.asarray(cell0)), dtype=torch.float64)
+    scaled = scaled - torch.floor(scaled)
+    cell_mean = np.asarray(cell0, dtype=np.float64).reshape(3, 3)
+    all_sites = torch.ones(n_sites, dtype=torch.bool)
+    used = skipped = 0
+    keys: List[int] = []
+    residual = torch.zeros(0, dtype=torch.float64)
+    residual_species = torch.zeros(0, dtype=torch.long)
+    pass_shift = 0.0
+    passes_run = 0
+    for _ in range(max(int(passes), 1)):
+        passes_run += 1
+        acc = torch.zeros(n_sites, 3, dtype=torch.float64)
+        count = torch.zeros(n_sites, dtype=torch.float64)
+        acc_cell = np.zeros((3, 3), dtype=np.float64)
+        used = skipped = 0
+        keys = []
+        res_list, res_species = [], []
+        for fr in pristine_frames:
+            numbers, pos, cell = _frame_geometry(fr, model)
+            if len(numbers) != n_sites or sorted(numbers) != sorted(numbers0):
+                skipped += 1
+                continue
+            species = torch.tensor([zs.index(int(z)) for z in numbers], dtype=torch.long)
+            pos_t = torch.tensor(np.asarray(pos), dtype=torch.float64)
+            cell_t = torch.tensor(np.asarray(cell), dtype=torch.float64).reshape(3, 3)
+            present = dd.static_present(z0[species], pos_t, cell_t, r_res)
+            shift, _ = dd.align_pristine(present, z0[pri_species], scaled, all_sites, 0)
+            shift = shift.detach().reshape(1, 3)
+            sites = (scaled + shift) @ cell_t
+            match, unmatched = dd.pristine_correspondence(pos_t, sites, cell_t, species,
+                                                          pri_species)
+            if bool(unmatched.any()) or bool((match < 0).any()):
+                skipped += 1
+                continue
+            d = pos_t @ torch.linalg.inv(cell_t) - (scaled[match] + shift)
+            d = d - torch.round(d)
+            acc.index_add_(0, match, d)
+            count.index_add_(0, match, torch.ones(n_sites, dtype=torch.float64))
+            acc_cell += np.asarray(cell, dtype=np.float64).reshape(3, 3)
+            used += 1
+            keys.append(_frame_key_of(fr))
+            res_list.append((d @ cell_t).norm(dim=-1))
+            res_species.append(species)
+        if used == 0:
+            raise ValueError("mean_pristine_lattice: no stoichiometric frame could be "
+                             "registered and assigned to the reference lattice")
+        new_scaled = scaled + acc / count.clamp(min=1.0).unsqueeze(-1)
+        pass_shift = float(((new_scaled - scaled) @ torch.tensor(cell_mean)).norm(dim=-1).max())
+        scaled = new_scaled - torch.floor(new_scaled)
+        cell_mean = acc_cell / used
+        residual = torch.cat(res_list)
+        residual_species = torch.cat(res_species)
+        if pass_shift < MEAN_LATTICE_TOL:
+            break
+    lengths = np.linalg.norm(cell_mean, axis=1)
+    off_diagonal = float(np.abs(cell_mean - np.diag(np.diag(cell_mean))).max())
+    snapped = off_diagonal < CELL_ORTHO_TOL * float(lengths.min())
+    if snapped:
+        cell_mean = np.diag(lengths)
+    ops = lattice_symmetries(scaled, pri_species, cell_mean, tol)
+    symmetrised = symmetrise_sites(scaled, pri_species, cell_mean, ops)
+    symmetrisation = float(((symmetrised - scaled) @ torch.tensor(cell_mean)).norm(dim=-1).max())
+    scaled = symmetrised - torch.floor(symmetrised)
+    rms = {str(zs[s]): float(residual[residual_species == s].pow(2).mean().sqrt())
+           for s in torch.unique(residual_species).tolist()}
+    construction = {
+        "method": "site_mean_symmetrised", "passes": passes_run, "n_frames": used,
+        "skipped": skipped, "tol": float(tol), "mean_tol": MEAN_LATTICE_TOL,
+        "cell_snapped_orthogonal": bool(snapped), "cell_off_diagonal": off_diagonal,
+        "frames_fingerprint": hashlib.sha256(",".join(str(k) for k in sorted(keys)).encode()
+                                             ).hexdigest()[:16],
+        "rms_residual": rms, "max_residual": float(residual.max()),
+        "last_pass_shift": pass_shift, "symmetrisation_shift": symmetrisation,
+        "n_symmetries": len(ops)}
+    if log:
+        logging.info("Pristine reference lattice: symmetrised site-mean of %d frames (%d skipped, "
+                     "%d passes, last pass moved sites by <= %.4f A, cell %s, symmetrisation by "
+                     "<= %.4f A, %d symmetry operations); thermal residual rms %s A, max %.3f A",
+                     used, skipped, passes_run, pass_shift,
+                     "snapped orthogonal" if snapped else "as sampled", symmetrisation,
+                     len(ops), {k: round(v, 3) for k, v in rms.items()}, float(residual.max()))
+    return {"numbers": [int(z) for z in numbers0],
+            "positions": (scaled @ torch.tensor(cell_mean)).tolist(),
+            "cell": cell_mean.reshape(3, 3).tolist(),
+            "frame_key": _frame_key_of(pristine_frames[0]), "construction": construction}
+
+
+def pristine_placement(model, class_frame, pristine, factors, perm,
                        r_res: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """The fractional shift placing the tiled pristine density in the class reference frame,
-    by minimising `||rho_static^raw||` (`defect_density.align_pristine`). None when the model
-    carries no static charges."""
+    by minimising `||rho_static^raw||` (`defect_density.align_pristine`), with the frozen
+    correspondence, the departure signal and the symmetry operations of the tiled lattice.
+    `pristine` is the reference lattice as `(numbers, positions, cell)` (the table's
+    `pristine_reference`) or a frame. None when the model carries no static charges."""
     from mace.modules import defect_density as dd
 
     z0 = species_charges(model)
@@ -1052,7 +1294,10 @@ def pristine_placement(model, class_frame, pristine_frame, factors, perm,
     dtype = torch.get_default_dtype()
     present = dd.static_present(z0.to(dtype)[species], torch.tensor(pos, dtype=dtype),
                                 torch.tensor(cell, dtype=dtype), r_res)
-    pri_species, scaled = tiled_pristine_scaled(model, pristine_frame, factors, perm)
+    if isinstance(pristine, (tuple, list)):
+        pri_species, scaled = tiled_pristine_scaled_geometry(model, *pristine, factors, perm)
+    else:
+        pri_species, scaled = tiled_pristine_scaled(model, pristine, factors, perm)
     anchor_species, anchor = _alignment_anchor(species, pri_species, zs)
     shift, residual = dd.align_pristine(present, z0.to(dtype)[pri_species], scaled,
                                         pri_species == anchor_species, anchor)
@@ -1062,24 +1307,45 @@ def pristine_placement(model, class_frame, pristine_frame, factors, perm,
     # the class reuses them; the lift's branch anchor is built from them; a frame on which
     # they would differ is an unsupported topology event, not a refit.
     pristine = dd.pristine_placed(z0.to(dtype)[pri_species], scaled, present.cell, shift, r_res)
-    radius = dd.uniqueness_radius(pristine.centres, present.cell)
     match, unmatched = dd.pristine_correspondence(present.centres, pristine.centres,
-                                                  present.cell, radius)
-    if int(torch.unique(match[match >= 0]).numel()) != int((match >= 0).sum()):
-        raise ValueError(
-            "two present atoms of the class reference frame lie within the uniqueness radius "
-            f"({radius:.3f} A) of ONE pristine site: the discrete correspondence of this "
-            "class is ambiguous (addendum 4.1)")
-    raw = dd.static_raw(present, pristine)
-    centres = torch.cat([present.centres, pristine.centres[unmatched]])
-    _, departure = dd.residual_weights(raw, centres, present.centres.shape[0])
-    departure = departure.detach()
+                                                  present.cell, species, pri_species)
+    displacement = dd.matched_displacements(match, present.centres, pristine.centres,
+                                            present.cell)
     n_present = present.centres.shape[0]
+    matched = match >= 0
+    if bool(matched.all()):
+        # Plan v8: "the class reference geometry is the ideal defect geometry built from the
+        # pristine cell when constructible". With the ideal lattice in hand (D21) it is, for
+        # every class made of removals alone: the tiled lattice with the removal sites
+        # emptied. The departure signal read there is constructor topology exactly -- |Z|
+        # at each removal, zero elsewhere -- with no thermal displacement of the class's
+        # first frame in it (addendum 4.2: the envelope "contains no current thermal
+        # displacement"). The registration `shift` above is still the frame's.
+        ideal_cell = torch.tensor(np.asarray(pristine[2]) if isinstance(pristine, (tuple, list))
+                                  else pristine.cell.detach().cpu().numpy().reshape(3, 3),
+                                  dtype=dtype)
+        ideal_cell = ideal_cell * torch.tensor(factors, dtype=dtype).reshape(3, 1)
+        ideal_cell = ideal_cell[list(perm)][:, list(perm)]
+        ideal_sites = scaled @ ideal_cell
+        ideal_present = dd.GaussianDensity(z0.to(dtype)[pri_species][match[matched]],
+                                           ideal_sites[match[matched]], r_res, ideal_cell)
+        ideal_pristine = dd.GaussianDensity(z0.to(dtype)[pri_species], ideal_sites, r_res,
+                                            ideal_cell)
+        raw = dd.static_raw(ideal_present, ideal_pristine)
+        centres = torch.cat([ideal_present.centres, ideal_sites[unmatched]])
+        reference_geometry = "ideal_defect"
+    else:
+        # Additions (interstitials, substitutions): not constructible from the lattice; the
+        # departure is read on the class's first frame, as the plan's fallback says.
+        raw = dd.static_raw(present, pristine)
+        centres = torch.cat([present.centres, pristine.centres[unmatched]])
+        reference_geometry = "first_frame"
+    _, departure = dd.residual_weights(raw, centres, n_present)
+    departure = departure.detach()
     # Stored by SITE, not by atom index: a registration is unique only up to a lattice
     # translation and an atom permutation (addendum 4.1), and both are site relabellings.
     # `transport_correspondence` carries the record to any equivalent representative.
     site_departure = torch.zeros(scaled.shape[0], dtype=torch.float64)
-    matched = match >= 0
     site_departure[match[matched]] = departure[:n_present][matched].to(torch.float64)
     removals = torch.nonzero(unmatched).reshape(-1)
     site_departure[removals] = departure[n_present:].to(torch.float64)
@@ -1088,12 +1354,17 @@ def pristine_placement(model, class_frame, pristine_frame, factors, perm,
         "removal_sites": [int(j) for j in removals.tolist()],
         "site_departure": [float(a) for a in site_departure.tolist()],
         "addition_departure": [float(a) for a in departure[:n_present][~matched].tolist()],
-        "uniqueness_radius": float(radius),
+        "r_match": float(R_MATCH),
+        "max_matched_displacement": float(displacement.max()) if displacement.numel() else 0.0,
+        "flagged": int((displacement > R_MATCH).sum()),
+        # The symmetry operations of the TILED lattice in this frame's axis order: what
+        # `transport_correspondence` may compose the frozen map with (addendum 4.1).
+        "symmetries": lattice_symmetries(scaled, pri_species, cell),
     }
     # The class shift is the STARTING point for every frame; `frame_static_densities`
     # re-minimises from it so the placement co-transforms (addendum 4.1).
     return {"shift": [float(x) for x in shift], "residual_norm": residual, "r_res": r_res,
-            "correspondence": correspondence}
+            "reference_geometry": reference_geometry, "correspondence": correspondence}
 
 
 def _functional(model) -> Dict[str, Any]:
@@ -1106,7 +1377,8 @@ def frame_static_densities(model, record: ClassRecord, pristine_frame, charges: 
                            positions: torch.Tensor, cell: torch.Tensor,
                            r_res: Optional[float] = None,
                            realign: bool = True, z0: Optional[torch.Tensor] = None,
-                           lift: bool = False) -> Dict[str, Any]:
+                           lift: bool = False, species: Optional[torch.Tensor] = None
+                           ) -> Dict[str, Any]:
     """`rho_Z^present`, `rho_Z^pristine`, `rho_static^raw`, `g_res` and `rho_static^def` for
     one frame of `record`'s class, re-minimising the placement from the class shift. `charges` are the frame's
     static charges `Z_i` (with any per-site deviation), `positions`/`cell` the frame's.
@@ -1157,24 +1429,37 @@ def frame_static_densities(model, record: ClassRecord, pristine_frame, charges: 
         shift = shift.to(dtype=positions.dtype, device=positions.device)
     scaled = scaled.to(dtype=positions.dtype, device=positions.device)
     pristine = dd.pristine_placed(z0[pri_species.to(z0.device)], scaled, cell, shift, r_res)
-    raw = dd.static_raw(present, pristine)
     unmatched = None
     transported = None
+    anchors = None
     if correspondence is not None:
         # The frozen correspondence, carried to this frame's registration (which may be an
-        # equivalent representative, a pristine lattice translation away from the class's).
+        # equivalent representative, a symmetry operation of the pristine lattice away from
+        # the class's).
         transported = transport_correspondence(record, correspondence, positions,
-                                               pristine.centres, cell)
+                                               pristine.centres, cell, species=species,
+                                               pristine_species=pri_species)
         unmatched = torch.zeros(scaled.shape[0], dtype=torch.bool)
         unmatched[transported["unmatched_pristine"]] = True
-    g_res = dd.residual_shape(raw, positions, pristine.centres, unmatched=unmatched)
+        # Component anchors (addendum 4.2): a matched atom is lifted with its site, an
+        # addition with itself. Detached: the image assignment is an integer.
+        match = torch.tensor(transported["match"], dtype=torch.long, device=positions.device)
+        site_frac = (scaled + shift.reshape(1, 3)).detach()
+        anchors = (positions @ torch.linalg.inv(cell)).detach().clone()
+        matched = match >= 0
+        anchors[matched] = site_frac[match[matched]]
+        present = dd.static_present(charges, positions, cell, r_res, anchors=anchors)
+    raw = dd.static_raw(present, pristine)
+    g_res = dd.residual_shape(raw, positions, pristine.centres, unmatched=unmatched,
+                              present_anchors=anchors)
     if not record.counted:
         raise ValueError(f"class {record.key} carries no Q_core; rho_static^def is undefined")
     static = dd.static_def(raw, g_res, record.q_core)
     out = {"present": present, "pristine": pristine, "raw": raw, "g_res": g_res,
            "static": static, "q_raw": raw.integral(), "raw_norm": raw.norm(),
            "shift": shift, "scaled_pristine": scaled + shift.reshape(1, 3),
-           "pristine_species": pri_species, "correspondence": transported}
+           "pristine_species": pri_species, "correspondence": transported,
+           "anchors": anchors}
     if lift:
         if transported is None:
             raise RuntimeError(
@@ -1211,7 +1496,8 @@ def frame_static_densities(model, record: ClassRecord, pristine_frame, charges: 
 
 def transport_correspondence(record: ClassRecord, frozen: Dict[str, Any],
                              positions: torch.Tensor, pristine_centres: torch.Tensor,
-                             cell: torch.Tensor) -> Dict[str, Any]:
+                             cell: torch.Tensor, species: Optional[torch.Tensor] = None,
+                             pristine_species: Optional[torch.Tensor] = None) -> Dict[str, Any]:
     """The class's frozen correspondence on THIS frame's registration.
 
     Addendum 4.1: the discrete atom/site correspondence is established once per class and
@@ -1227,11 +1513,7 @@ def transport_correspondence(record: ClassRecord, frozen: Dict[str, Any],
     """
     from mace.modules import defect_density as dd
 
-    radius = frozen.get("uniqueness_radius")
-    if radius is None:
-        # A lattice property, so a table frozen before the radius was recorded is not stale.
-        radius = dd.uniqueness_radius(pristine_centres, cell)
-    radius = float(radius)
+    r_match = float(frozen.get("r_match", R_MATCH))
     frozen_matched = torch.tensor(frozen["matched_sites"], dtype=torch.long)
     frozen_removals = torch.tensor(frozen["removal_sites"], dtype=torch.long)
     site_departure = torch.tensor(frozen["site_departure"], dtype=torch.float64)
@@ -1243,7 +1525,8 @@ def transport_correspondence(record: ClassRecord, frozen: Dict[str, Any],
             f"{frozen_matched.numel() + len(addition_departure)} present atoms, this frame "
             f"has {n_present}: an unsupported topology event (addendum 4.1)")
     match_now, unmatched_now = dd.pristine_correspondence(positions, pristine_centres, cell,
-                                                          radius)
+                                                          species, pristine_species)
+    displacement = dd.matched_displacements(match_now, positions, pristine_centres, cell)
     match_now, unmatched_now = match_now.cpu(), unmatched_now.cpu()
     additions_now = int((match_now < 0).sum())
     removals_now = torch.nonzero(unmatched_now).reshape(-1)
@@ -1257,44 +1540,45 @@ def transport_correspondence(record: ClassRecord, frozen: Dict[str, Any],
     cell64 = cell.detach().to(torch.float64).cpu()
     n_sites = scaled.shape[0]
 
-    def site_under(translation: torch.Tensor, sites: torch.Tensor) -> Optional[torch.Tensor]:
-        """Each of `sites` moved by `translation`, as the nearest site index -- or None if
-        any lands farther than the uniqueness radius from every site (not a lattice
-        translation)."""
-        d = scaled[None, :, :] - (scaled[sites] + translation)[:, None, :]
+    def site_under(op: Dict[str, Any], sites: torch.Tensor) -> Optional[torch.Tensor]:
+        """Each of `sites` carried by the operation, as the nearest site index -- or None if
+        any lands off every site (not a symmetry of the lattice)."""
+        d = scaled[None, :, :] - _apply_symmetry(op, scaled[sites])[:, None, :]
         d = d - torch.round(d)
         dist = (d @ cell64).norm(dim=-1)                       # [len(sites), n_sites], A
         best = dist.argmin(dim=1)
-        if float(dist[torch.arange(sites.numel()), best].max()) > radius:
+        if float(dist[torch.arange(sites.numel()), best].max()) > SITE_TOL:
             return None
         return best
 
-    # The equivalence class of registrations is generated by the pristine lattice's
-    # translations. Candidates are every translation taking one frozen anchor site onto
-    # some site; the first that carries the whole frozen record onto this frame's sets is
-    # the transport. Exact symmetry copies give identical densities, so any passing
-    # candidate is as good as any other (addendum 4.1's equivalence rule).
+    # The equivalence class of registrations (addendum 4.1: "an exact crystal symmetry,
+    # lattice translation, or atom permutation that gives identical densities") is generated
+    # by the symmetry operations of the tiled pristine lattice, established once per class
+    # (`lattice_symmetries`) and frozen with the record; the first that carries the whole
+    # frozen record onto this frame's sets is the transport. Records written before the
+    # operations were stored fall back to the lattice translations between site pairs.
     anchor = int(frozen_removals[0]) if frozen_removals.numel() else int(frozen_matched[0])
-    matched_now = set(torch.nonzero(match_now >= 0).reshape(-1).tolist())
+    ops = frozen.get("symmetries")
+    if not ops:
+        eye = np.eye(3, dtype=np.int64).tolist()
+        ops = [{"R": eye, "t": (scaled[k] - scaled[anchor]).tolist()} for k in range(n_sites)]
     matched_sites_now = set(match_now[match_now >= 0].tolist())
     removal_set_now = set(removals_now.tolist())
-    for k in range(n_sites):
-        translation = scaled[k] - scaled[anchor]
-        translation = translation - torch.round(translation)
-        moved_removals = site_under(translation, frozen_removals) if frozen_removals.numel() \
+    for op in ops:
+        moved_removals = site_under(op, frozen_removals) if frozen_removals.numel() \
             else torch.zeros(0, dtype=torch.long)
         if moved_removals is None or set(moved_removals.tolist()) != removal_set_now:
             continue
-        moved_matched = site_under(translation, frozen_matched) if frozen_matched.numel() \
+        moved_matched = site_under(op, frozen_matched) if frozen_matched.numel() \
             else torch.zeros(0, dtype=torch.long)
         if moved_matched is None or set(moved_matched.tolist()) != matched_sites_now:
             continue
         break
     else:
         raise UnsupportedStateError(
-            f"class {record.key}: no lattice translation carries the class reference's "
-            "site correspondence onto this frame's: an unsupported topology event "
-            "(addendum 4.1)")
+            f"class {record.key}: no symmetry operation of the pristine lattice carries the "
+            "class reference's site correspondence onto this frame's: an unsupported "
+            "topology event (addendum 4.1)")
     # The departure signal follows its site; additions keep the class order.
     moved_departure = torch.zeros(n_sites, dtype=torch.float64)
     if frozen_matched.numel():
@@ -1308,8 +1592,10 @@ def transport_correspondence(record: ClassRecord, frozen: Dict[str, Any],
         departure.append(float(moved_departure[j]) if j >= 0 else float(next(extra)))
     departure.extend(float(moved_departure[j]) for j in moved_removals.tolist())
     return {"match": match_now.tolist(), "unmatched_pristine": moved_removals.tolist(),
-            "departure": departure, "uniqueness_radius": radius,
-            "translation": translation.tolist()}
+            "departure": departure, "operation": op,
+            "r_match": r_match,
+            "max_matched_displacement": float(displacement.max()) if displacement.numel() else 0.0,
+            "flagged": int((displacement.detach() > r_match).sum())}
 
 
 def class_lift_record(record: ClassRecord, corr: Dict[str, Any], positions: torch.Tensor,

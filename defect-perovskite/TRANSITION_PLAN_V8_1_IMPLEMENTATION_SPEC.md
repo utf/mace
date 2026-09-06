@@ -536,16 +536,17 @@ Hamiltonian with no electrostatics in it, so the electrostatic site selection Ed
 head is absent until Stage 5's stationary solve puts `V_B` into `H`. That is what the
 addendum prescribes for Stage 4; it is a diagnostic stage, not a production model.
 
-### D14 — the legacy `Φ_FF` is half of v8 §2.8
+### D14 — the legacy `Φ_FF` is half of v8 §2.8: RETIRED, not fixed (user, 2026-09-06)
 
 `LatentEwald.energy` is the energy `E = ½ qᵀAq` (`test_madelung_convention` pins
-`E = ½ Σ q V`). v8 §2.8 defines `Φ_FF = ½ B_img[wρ, wρ] = E_PBC − E_∞`. The legacy code
-writes `0.5 * (E_PBC − E_∞)` — a quarter of `B_img`, half the specified term. Left as it is:
-the Stage-1 reference and s14a depend on its numerics, and changing it mid-flight would make
-the corrected retrain incomparable with its pre-registration. Recorded here, in the
-`defect_image` module docstring, and to be raised with the user; the unified term uses the
-correct `E_PBC − E_∞`. Also: the legacy term calls `isolated_energy` on **wrapped**
-positions, which §6.1 prohibits; the unified term lifts first.
+`E = ½ Σ q V`). v8 §2.8 defines `Φ_FF = ½ B_img[wρ, wρ] = E_PBC − E_∞`. The legacy
+`frontier_ff` regime writes `0.5 * (E_PBC − E_∞)` — half the specified term — and calls
+`isolated_energy` on **wrapped** positions, which §6.1 prohibits. The user's ruling: *follow
+the spec exactly, do not rely on the legacy code*. So the legacy regime is not corrected; it
+is retired: `image_functional="unified"` is the spec path for every new arm from Stage 4 on,
+`frontier_ff` survives only so that pre-Stage-4 checkpoints (the Stage-1 reference, s14a) load
+and evaluate as they were trained, and no Stage-4+ recipe may select it. Recorded in the
+`defect_image` module docstring.
 
 ### D15 — the periodic evaluator's `dl` is a numerical floor that the image term inherits
 
@@ -577,12 +578,17 @@ class reference is itself thermal) and refuses anything else as a topology event
 per-frame proximity rule is used only to find the representative and to verify — never to
 re-establish — the correspondence.
 
-### Cost note (Stage 4 arm)
+### Cost note (Stage 4 arm): RESOLVED
 
-`stage4_terms` re-fits the pristine placement (global candidate search, 8 candidates × 12
-Newton steps on an `n × m` Gaussian kernel) for every off-reference graph on every forward.
-Fine on the toy and for the diagnostic arm; measure the per-step cost on the 159-atom cells
-before committing six seeds to it.
+`stage4_terms` re-fits the pristine placement for every off-reference graph on every forward.
+The first implementation ran the Newton refinement through autograd (0.30 s per 39-atom
+graph, 3.8 s at 79 atoms; the real-data survey stalled at > 6 s/frame). The refinement is now
+analytic (`_cross_terms`: value, gradient, Hessian of the cross term in closed form, one
+attached step at the end for the implicit derivative): 0.026 s at 39 atoms, 0.05 s at 79,
+the class-table build 48 s → 2.8 s. The registered global search ranks every candidate site
+by the exact cross-term score and refines the top 3 (was 8) — a change to D11's method,
+exercised on every real frame by the survey below with no mis-registration
+(`mean displacement vector` 0.02–0.03 Å on every class).
 
 ### D17 — a state with no lift branch is unsupported under the unified regime
 
@@ -602,8 +608,22 @@ contribute a tolerated zero. That is the intended reading of "unsupported".
 
 1. **GPU**: one unified forward with forces on the local A4000 — both terms on `cuda:0`,
    finite forces, parameter gradient through `Z`. Passed.
-2. **Correspondence tolerance on the real data**: `MERGE·r_res = 0.5 Å` is now a hard
-   refusal. Surveyed over `dataset_pbe/train.xyz` with `arma_s1` (see the survey note below).
+2. **Correspondence on the real data** (surveyed over `dataset_pbe/train.xyz`, 2560 frames,
+   with `arma_s1`; pristine class 544 `ideal` frames, V_Cl 79-atom 1985, V_Cl 159-atom 31):
+   * the hard `MERGE·r_res = 0.5 Å` rule refused **2553 / 2560** frames as "topology events";
+   * a lattice uniqueness-radius rule (½ the smallest site separation, 1.33 Å) still refused
+     **2280 / 2560**;
+   * the displacements are physical, not mis-registration: the mean displacement vector after
+     the re-fit is 0.02–0.03 Å on every class; per frame, against the class's pristine
+     reference, the median displacement of a Cl atom is 0.56 Å (Cs 0.48, Pb 0.22) and the
+     per-frame maxima are Cl 1.3 Å (p99 2.0, max 2.4), Cs 0.9 (max 1.55), Pb 0.5 (max 1.7);
+     the species-aware half spacings are Cl 1.84, Cs 2.64, Pb 2.61 Å;
+   * any distance threshold is the per-frame nearest-neighbour rule §4.1 forbids. The rule is
+     now species-wise **minimum-cost assignment** (`pristine_correspondence`, D20), which
+     refuses only a changed removal/addition set and reports large departures against the
+     registered `r_match` flag. Result of the survey under this rule: see D20.
+   * the pristine reference itself is a **thermal snapshot** (all 544 `ideal` frames have
+     max |F| 0.46–2.4 eV/Å; the table takes the first): open decision D21.
 3. **1.14 under G_∞**: `model_fingerprint` now carries `image_functional`, the converged
    `image_ewald` (σ, dl) and the lift algorithm/parameters; a cached unified result must pass
    the frame's `boundary_lift_fingerprint` through `defect_cache.lift_extra` (test added).
@@ -628,3 +648,123 @@ reference state: its excess electron is smeared over two near-degenerate levels
 addendum describes is on the *background*: a carrier-free channel's trace inside its window,
 and an active channel's excess outside its window — both absolute, both now enforced
 (`background_gates`).
+
+### D19 — custom autograd Functions are not double-differentiable (Stage-5 Hessians)
+
+`_FermiDensitySum`, `_ChannelMatrix` and `defect_windows._SpectralFunction` save detached
+spectra and implement `backward` by the Daleckii–Krein map; a double backward through them
+drops the second-order term of the matrix function (it is exactly zero on a compact
+window's plateau, not in the quintic transition). The Stage-5 Hessian guards therefore use
+Lanczos on Hessian–vector products of the *stationary functional in the tangent metric*,
+validated on the toy against a dense finite-difference Hessian of `V_B` (5.6), and the band
+part's tangent Hessian is built from the spectrum (`ε_a − ε_i` in the particle–hole block),
+never by inverting an occupation.
+
+### D20 — the frozen correspondence is read by minimum-cost assignment, never by a distance
+
+Addendum §4.1: established once per class, "not recomputed by a nearest-neighbour rule on
+each thermal frame"; v8 §(constructor): "automatic minimum-cost assignment on positions;
+flag if any matched displacement exceeds `r_match`". Implemented as such:
+`defect_density.pristine_correspondence` assigns present atoms to tiled pristine sites
+species by species (`scipy.optimize.linear_sum_assignment` on the squared minimum-image
+distance); leftover sites are removals, leftover atoms additions, and species never cross.
+`transport_correspondence` refuses a frame only when the removal/addition sets differ from
+the frozen record under every lattice translation (a vacancy hop to an inequivalent site,
+an atom of another species on a site); a hop to a lattice-equivalent site is transported.
+A matched displacement beyond `R_MATCH = 2.0 Å` is **counted and reported**
+(`registration_flagged`, `registration_max_displacement` on the Stage-4 outputs), not
+refused. Tests: thermal displacements to 0.9 Å keep the map; equivalent/inequivalent hops;
+a Cs atom parked on the Cl vacancy site is flagged, not refused, and refused without species.
+No production module imports the Tier-2 `site_correspondence` (the AST fence stands).
+
+### D21 — RULED (user, 2026-09-06): the pristine reference is the symmetrised site-mean lattice
+
+v8: "The class reference geometry is the ideal defect geometry built from the pristine cell
+when constructible, otherwise the class's first frame." The pristine class's first frame is a
+thermal snapshot (no `ideal` frame of the dataset is relaxed: max |F| 0.46–2.4 eV/Å), so
+every `ρ_S` carried that frame's disorder and displacements against it were ~√2 larger than
+the thermal amplitude. The user ruled for the constructible reading: `mean_pristine_lattice`
+registers every stoichiometric frame to the running reference (global search), assigns its
+atoms to sites, takes the per-site mean fractional displacement and the mean cell (2 passes),
+then finds the lattice's own symmetry operations on the mean (`lattice_symmetries`: signed
+permutations that are isometries of the cell, with any fractional translation, carrying the
+species-labelled site set onto itself within `SITE_TOL = 0.2 Å`) and symmetrises the sites
+over them. Stored as `table["pristine_reference"]` with a construction record (method,
+frame count and fingerprint, passes, per-species thermal rms about the mean, max residual,
+last-pass shift, symmetrisation shift, number of operations); `CLASS_TABLE_VERSION = 2`; the
+whole table is in the constructor fingerprint, so every Stage-4 cache key changes.
+
+Consequences taken in the same change:
+* every class's placement and frozen correspondence are built against the mean lattice;
+* for a class made of removals alone the departure signal is read on the **ideal defect
+  geometry** (the tiled mean lattice with the removal sites emptied): exactly `|Z|` at each
+  removal and zero elsewhere — constructor topology, with no thermal displacement of the
+  first frame in it (addendum 4.2). Classes with additions keep the first-frame reading
+  (not constructible). `placement["reference_geometry"]` records which;
+* the frozen correspondence is transported by the lattice's **symmetry operations**, not
+  only its translations (addendum 4.1: "an exact crystal symmetry, lattice translation, or
+  atom permutation"). Needed: the 79-atom V_Cl frames have their vacancy on **36 distinct
+  sites** of the 48 (the 159-atom ones on 8 of 96), and only 4 sites are related to the
+  reference's by a pure translation of the 2×2×1 Pnma cell. The operations are computed
+  once per class on the tiled lattice and frozen with the record (`symmetries`); the
+  transported record carries the operation used.
+
+### D23 — the canonical lift is component-preserving, with a deterministic on-cut rule
+
+Found by the Stage-4 rewrapping and finite-difference tests once the departure signal was
+topological: with the envelope centred exactly on the vacancy site, the cut half a cell away
+is the antipodal SITE plane of a centrosymmetric lattice, and the per-primitive image
+assignment split thermal atom/site pairs across it — a present atom at 0.75+0.002 and its
+site at 0.7500 on opposite sides — leaving cell-long dipoles in the lifted static density
+(`ΔΦ_SF` 0.34 vs 0.23 eV between a frame and its rewrapped copy; FD floor 120 eV/Å). Two
+things the addendum states, now implemented literally:
+* **component-preserving** (§4.2): every density primitive carries a component *anchor*
+  (`GaussianDensity.anchors`, fractional, detached) — a matched present atom's anchor is
+  its pristine site, as are the residual probe on it and the carrier density on it; a site's
+  anchor is itself; an addition's is its own position. The integer image is read on the
+  anchor and the primitive is lifted as its anchor's image plus its minimum-image offset
+  from the anchor (`lift_positions`), so a thermal pair is one image in any periodic
+  representation of the frame. The clearance mass is per component (net charge of the
+  primitives sharing an anchor), not per primitive.
+* **one integer image assignment at fixed geometry**: an anchor within `CUT_TIE = 0.01`
+  (fractional) of the cut, on either side, is assigned to the positive side of the centre.
+  Sites of the antipodal plane are a few 1e-4 off the cut (the envelope's departure tails),
+  and which side that lands on depended on the frame's representation.
+With both, `ΔΦ_B` of a frame and its rewrapped copy agree to 1e-7 under either boundary and
+it is smooth under 1e-3 Å displacements. Registered: `CUT_TIE`, the anchor convention, the
+component clearance — all in `LIFT_ALGORITHM`'s fingerprint scope.
+
+Mean-lattice details settled in the same pass: the site-mean iterates to
+`MEAN_LATTICE_TOL = 0.005 Å` (at most 8 passes; two passes left 0.078 Å on the real data),
+and a mean cell whose off-diagonals are below `CELL_ORTHO_TOL = 0.02` of its shortest axis is
+snapped to the orthogonal cell of its lengths — the NPT-sampled mean cell is not exactly
+orthogonal, and without the snap no signed permutation is an exact isometry, so only the
+identity was found (1 operation on the real lattice; the Pnma cell should give 8 × 4).
+
+### D22 — OPEN (user): the spectral class reference geometry
+
+The same v8 sentence covers the class reference geometry of the Tier-1/2 records (spectra,
+ranks, aligned edges): with the ideal lattice in hand the ideal vacancy geometry is
+constructible for those too. They are still built on the class's first frame — the certified
+WP1 records the running s14a wave was launched with. Re-certifying on the ideal defect
+geometry is the literal reading and would give cleaner ranks/edges (no thermal broadening);
+it changes the constructor record and every downstream number. Not done without a ruling.
+
+### Timing note (user question, 2026-09-06)
+
+Per epoch on b3: s13ra (7e155c9, before the energy-shape objective) 8–11 min; s13rb
+(b98685d) 27–34 min; s14a (069f1f2) 13 min alone on a GPU, 17–18 min for the runs sharing
+one. Same configuration on the local A4000, one epoch of a 128-frame subset under cProfile:
+s13ra code 1.7 s/step, s14a code 2.4 s/step (1.4×). Where it goes (s14a): the counting head
+is ~60 % of a step and is called for the state and the reference; inside it the
+chemical-potential bisection `find_mu` is about half the head's CPU time (a ~37-iteration
+Python loop per fill per graph, ~35 calls per step at 6.5 ms); eigh is ~12 ms per graph;
+forces backward 0.15 s; the frontier term 0.075 s per call. Versus the s13ra code the
+head runs ~25 % more fills per step and the Madelung on-site shift runs twice as often (the
+energy-shape objective's two pair slots per batch add paired graphs whose reference is the
+partner state, so the reference pass is no longer skipped) — that objective is part of the
+frozen Stage-2/3 contract. The trainer's own torch-profiler numbers (5.9–7.2 s/step, base
+cache "1.14×"/"0.85×") are inflated by the ~58k small ops per step and are not the wall
+time. Levers, both the user's call: batch the four bisections per graph (numerically
+unchanged beyond 1e-10); `--defect_size_grouped_batches=True` (batched eigh, asserted equal
+to the loop path at 1e-8, but a different sampler).

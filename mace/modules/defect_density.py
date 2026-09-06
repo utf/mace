@@ -65,7 +65,6 @@ and Stage 5 (V_F). `rho_ind` (Stage 6) is absent, so `Delta rho_def = rho_static
 
 from __future__ import annotations
 
-import itertools
 import logging
 import math
 from dataclasses import dataclass, replace
@@ -149,12 +148,20 @@ class GaussianDensity:
 
     `charges` `[n]`, `centres` `[n, 3]` (torch, differentiable), `sigma` a float,
     `cell` `[3, 3]`, `background` a float (the uniform part's integral).
+
+    `anchors` `[n, 3]` (fractional, detached, optional) name the COMPONENT each primitive
+    belongs to for the canonical lift (addendum 4.2, "component-preserving"): a present atom
+    and the pristine site it is matched to share the site as anchor, so the thermal pair is
+    unwrapped whole and never split across a cut into a cell-long dipole; a residual probe or
+    a channel density on an atom carries the atom's anchor. None means each primitive is its
+    own component (anchored at its own position).
     """
     charges: torch.Tensor
     centres: torch.Tensor
     sigma: float
     cell: torch.Tensor
     background: float = 0.0
+    anchors: Optional[torch.Tensor] = None
 
     def integral(self) -> torch.Tensor:
         return self.charges.sum() + self.background
@@ -163,12 +170,26 @@ class GaussianDensity:
     def volume(self) -> torch.Tensor:
         return torch.abs(torch.linalg.det(self.cell))
 
+    def scaled_centres(self) -> torch.Tensor:
+        """Fractional coordinates of the centres (attached)."""
+        return self.centres @ torch.linalg.inv(self.cell)
+
+    def component_anchors(self) -> torch.Tensor:
+        """The anchors, or each primitive's own fractional position when it has none."""
+        if self.anchors is not None:
+            return self.anchors
+        return self.scaled_centres().detach()
+
     def __add__(self, other: "GaussianDensity") -> "GaussianDensity":
         if abs(self.sigma - other.sigma) > 1e-12:
             raise ValueError("densities of different widths cannot be added as one list")
+        anchors = None
+        if self.anchors is not None or other.anchors is not None:
+            anchors = torch.cat([self.component_anchors().to(self.centres.device),
+                                 other.component_anchors().to(self.centres.device)])
         return GaussianDensity(torch.cat([self.charges, other.charges]),
                                torch.cat([self.centres, other.centres]), self.sigma,
-                               self.cell, self.background + other.background)
+                               self.cell, self.background + other.background, anchors)
 
     def scaled(self, factor) -> "GaussianDensity":
         return replace(self, charges=self.charges * factor, background=self.background * factor)
@@ -216,19 +237,20 @@ class GaussianDensity:
 
 
 def static_present(charges: torch.Tensor, positions: torch.Tensor, cell: torch.Tensor,
-                   r_res: float) -> GaussianDensity:
+                   r_res: float, anchors: Optional[torch.Tensor] = None) -> GaussianDensity:
     """`rho_Z^present`: the static charges `Z_i` on the present atoms at the frame positions.
-    `int = sum_i Z_i` by construction."""
-    return GaussianDensity(charges, positions, float(r_res), cell)
+    `int = sum_i Z_i` by construction. `anchors`: the matched pristine sites (fractional),
+    when the frozen correspondence is known."""
+    return GaussianDensity(charges, positions, float(r_res), cell, anchors=anchors)
 
 
 def pristine_placed(z0: torch.Tensor, scaled_positions: torch.Tensor, cell: torch.Tensor,
                     shift: torch.Tensor, r_res: float) -> GaussianDensity:
     """`rho_Z^pristine`: the tiled pristine reference's species charges at its SCALED
     positions (already in the frame's axis order) placed in the frame's cell and shifted by
-    the fractional `shift` `[3]`."""
+    the fractional `shift` `[3]`. Each site is its own component anchor."""
     frac = scaled_positions + shift.reshape(1, 3)
-    return GaussianDensity(z0, frac @ cell, float(r_res), cell)
+    return GaussianDensity(z0, frac @ cell, float(r_res), cell, anchors=frac.detach())
 
 
 def static_raw(present: GaussianDensity, pristine: GaussianDensity) -> GaussianDensity:
@@ -349,47 +371,60 @@ def local_net_charge(raw: GaussianDensity, centres: torch.Tensor) -> torch.Tenso
     return raw.site_charges(centres)
 
 
-def uniqueness_radius(pristine_positions: torch.Tensor, cell: torch.Tensor) -> float:
-    """Half the smallest separation of two pristine sites (minimum image, a site's own periodic
-    images included): inside the ball of this radius around a site no other site is nearer,
-    so "the site nearest to an atom" is unambiguous, and it is the frozen site for every atom
-    that has not left its own site's ball. A property of the ideal lattice (constructor
-    topology), not of the frame, the temperature or `r_res`.
-    """
-    cell64 = cell.detach().to(torch.float64)
-    pos = pristine_positions.detach().to(torch.float64)
-    n = pos.shape[0]
-    d = _minimum_image(pos[:, None, :] - pos[None, :, :], cell64).norm(dim=-1)
-    d = d + torch.diag(torch.full((n,), float("inf"), dtype=d.dtype, device=d.device))
-    shortest = min(float((torch.tensor(v, dtype=torch.float64, device=cell64.device) @ cell64).norm())
-                   for v in itertools.product((-1, 0, 1), repeat=3) if any(v))
-    return 0.5 * min(float(d.min()) if n > 1 else float("inf"), shortest)
-
-
 def pristine_correspondence(present_positions: torch.Tensor, pristine_positions: torch.Tensor,
-                            cell: torch.Tensor, radius: float
+                            cell: torch.Tensor, present_species: Optional[torch.Tensor] = None,
+                            pristine_species: Optional[torch.Tensor] = None
                             ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """`(match, unmatched)`: the discrete atom/site correspondence read at the uniqueness
-    radius of the pristine lattice. `match[i]` is the site nearest to present atom `i` when
-    it lies within `radius` (`-1`, an addition, otherwise); `unmatched[j]` is True for a site
-    no atom is matched to (a removal).
+    """`(match, unmatched)`: the discrete atom/site correspondence, by species-wise
+    minimum-cost assignment of the present atoms to the tiled pristine sites on the
+    minimum-image distance (the primitive plan v8 names for the constructor: "automatic
+    minimum-cost assignment on positions"). `match[i]` is the site of present atom `i` (`-1`
+    for an atom left over by the assignment: an addition); `unmatched[j]` is True for a site
+    left over (a removal). Species never cross: an atom is assigned only to a site of its
+    own species; without species every atom and site are one species.
 
-    Addendum 4.1: the correspondence is established ONCE, on the class reference, and frozen;
-    a thermal frame does not re-decide it. Here the map is READ, and the reading is provably
-    the frozen one for every atom still inside its site's ball (the balls are disjoint by
-    construction); `transport_correspondence` refuses the frame when the reading differs
-    from the frozen record -- a change of discrete correspondence is an unsupported topology
-    event, not a refit. No thermal displacement short of leaving the ball is refused.
+    NO DISTANCE REFUSAL. Addendum 4.1: the correspondence is established once, on the class
+    reference, and a thermal frame does not re-decide it; reading it here on a frame is
+    exact wherever the frame is a continuous deformation of the reference that keeps the
+    assignment, and a frame whose reading differs from the frozen record (a vacancy hop, an
+    atom of another species on a site) is a topology event, refused by
+    `transport_correspondence`. A large excursion that keeps the assignment is a large
+    departure -- reported against the registered `r_match` flag, never a refusal.
     """
+    from scipy.optimize import linear_sum_assignment
+
+    n_present, n_sites = present_positions.shape[0], pristine_positions.shape[0]
+    device = present_positions.device
     d = _minimum_image(pristine_positions[:, None, :] - present_positions[None, :, :], cell)
-    dist = d.norm(dim=-1)                                   # [n_pristine, n_present]
-    n_present = present_positions.shape[0]
-    nearest = dist.argmin(dim=0)                            # [n_present]
-    within = dist[nearest, torch.arange(n_present, device=dist.device)] <= float(radius)
-    match = torch.where(within, nearest, torch.full_like(nearest, -1))
-    occupied = torch.zeros(pristine_positions.shape[0], dtype=torch.bool, device=dist.device)
-    occupied[match[match >= 0]] = True
-    return match, ~occupied
+    cost = (d.norm(dim=-1) ** 2).detach().cpu().numpy()             # [n_sites, n_present]
+    if present_species is None or pristine_species is None:
+        present_species = torch.zeros(n_present, dtype=torch.long)
+        pristine_species = torch.zeros(n_sites, dtype=torch.long)
+    present_species = present_species.detach().cpu()
+    pristine_species = pristine_species.detach().cpu()
+    match = torch.full((n_present,), -1, dtype=torch.long)
+    occupied = torch.zeros(n_sites, dtype=torch.bool)
+    for s in torch.unique(torch.cat([present_species, pristine_species])).tolist():
+        atoms = torch.nonzero(present_species == s).reshape(-1)
+        sites = torch.nonzero(pristine_species == s).reshape(-1)
+        if atoms.numel() == 0 or sites.numel() == 0:
+            continue
+        rows, cols = linear_sum_assignment(cost[sites.numpy()][:, atoms.numpy()])
+        match[atoms[torch.as_tensor(cols)]] = sites[torch.as_tensor(rows)]
+        occupied[sites[torch.as_tensor(rows)]] = True
+    return match.to(device), (~occupied).to(device)
+
+
+def matched_displacements(match: torch.Tensor, present_positions: torch.Tensor,
+                          pristine_positions: torch.Tensor, cell: torch.Tensor) -> torch.Tensor:
+    """`|R_i - R_site(i)|` (minimum image) per matched present atom, 0 for an addition."""
+    matched = match >= 0
+    out = torch.zeros(present_positions.shape[0], dtype=present_positions.dtype,
+                      device=present_positions.device)
+    if bool(matched.any()):
+        d = _minimum_image(present_positions[matched] - pristine_positions[match[matched]], cell)
+        out[matched] = d.norm(dim=-1)
+    return out
 
 
 def residual_shape(raw: GaussianDensity, present_positions: torch.Tensor,
@@ -397,7 +432,8 @@ def residual_shape(raw: GaussianDensity, present_positions: torch.Tensor,
                    eps_z: float = EPS_Z, eps_omega: float = EPS_OMEGA,
                    departure: Optional[torch.Tensor] = None,
                    lambda_d: float = 0.0,
-                   unmatched: Optional[torch.Tensor] = None) -> GaussianDensity:
+                   unmatched: Optional[torch.Tensor] = None,
+                   present_anchors: Optional[torch.Tensor] = None) -> GaussianDensity:
     """`g_res = sum_i omega_i g(r - R_i; r_res)`, `omega_i = |dZ_i| / sum_j |dZ_j|`, over the
     present atoms and the pristine sites (a vacancy's weight lives at its pristine site).
     Integral 1 by construction; zero weights everywhere fall back to a uniform background.
@@ -407,18 +443,21 @@ def residual_shape(raw: GaussianDensity, present_positions: torch.Tensor,
     site no atom is matched to (a vacancy) keeps its probe.
 
     `unmatched` is the class's FROZEN correspondence transported to this frame (addendum 4.1);
-    without one (a bare density with no class) the sites are read once at the lattice's own
-    uniqueness radius.
+    without one (a bare density with no class) the sites are assigned once, here.
     """
     if unmatched is None:
-        _, unmatched = pristine_correspondence(present_positions, pristine_positions, raw.cell,
-                                               uniqueness_radius(pristine_positions, raw.cell))
+        _, unmatched = pristine_correspondence(present_positions, pristine_positions, raw.cell)
     near = ~unmatched.to(pristine_positions.device)
     centres = torch.cat([present_positions, pristine_positions[~near]])
     weights, _ = residual_weights(raw, centres, present_positions.shape[0],
                                   eps_z=eps_z, eps_omega=eps_omega,
                                   departure=departure, lambda_d=lambda_d)
-    return GaussianDensity(weights, centres, raw.sigma, raw.cell)
+    anchors = None
+    if present_anchors is not None:
+        inv = torch.linalg.inv(raw.cell)
+        anchors = torch.cat([present_anchors.to(centres.device),
+                             (pristine_positions[~near] @ inv).detach()])
+    return GaussianDensity(weights, centres, raw.sigma, raw.cell, anchors=anchors)
 
 
 def residual_weights(raw: GaussianDensity, centres: torch.Tensor, n_at: int,

@@ -82,6 +82,12 @@ class TestGaussianDensity:
 # ------------------------------------------------------------------ the static part
 
 
+def _species(model, frame):
+    numbers, _, _ = dc._frame_geometry(frame, model)
+    zs = [int(z) for z in model.atomic_numbers]
+    return torch.tensor([zs.index(int(z)) for z in numbers])
+
+
 def _static_inputs(model, frame):
     numbers, pos, cell = dc._frame_geometry(frame, model)
     zs = [int(z) for z in model.atomic_numbers]
@@ -191,15 +197,16 @@ class TestStatic:
         # family carries the continuation.)
         assert rec.counted, rec.reason
         n1, p1, c1 = dc._frame_geometry(frames["vcl_79"], harrison_model)
-        n0, p0, c0 = dc._frame_geometry(frames["pristine"], harrison_model)
+        # Against the table's own reference lattice (D21), which is what the placement used.
+        n0, p0, c0 = dc.pristine_reference_geometry(table)
         n0, p0, c0 = dc.tile_frame(n0, p0, c0, rec.tiling)
         corr = dc.site_correspondence(n1, p1, c1, n0, p0, c0, perm=rec.perm, r_match=2.0)
         t_corr = torch.tensor(np.asarray(corr["translation"]) @ np.linalg.inv(c1))
         charges, pos, cell = _static_inputs(harrison_model, frames["vcl_79"])
         z0 = dc.species_charges(harrison_model)
         present = dd.static_present(charges, pos, cell, rec.placement["r_res"])
-        species, scaled = dc.tiled_pristine_scaled(harrison_model, frames["pristine"],
-                                                   rec.tiling, rec.perm)
+        species, scaled = dc.tiled_pristine_scaled_geometry(
+            harrison_model, *dc.pristine_reference_geometry(table), rec.tiling, rec.perm)
 
         def residual(t):
             pri = dd.pristine_placed(z0[species], scaled, cell, t, rec.placement["r_res"])
@@ -561,8 +568,13 @@ class TestFrozenCorrespondenceAndLift:
         rec = dc.lookup_class(table, self.KEY)
         charges, pos, cell = _static_inputs(harrison_model, frames["vcl_39"])
         harrison_model.composition_classes = table
-        with_frame = dc.frame_static_densities(harrison_model, rec, frames["pristine"],
-                                               charges, pos, cell)
+        from ase import Atoms
+
+        numbers, ref_pos, ref_cell = dc.pristine_reference_geometry(table)
+        reference = _frame(Atoms(numbers=numbers, positions=ref_pos, cell=ref_cell, pbc=True),
+                           [0.0] * 4)
+        with_frame = dc.frame_static_densities(harrison_model, rec, reference, charges, pos,
+                                               cell)
         from_table = dc.frame_static_densities(harrison_model, rec, None, charges, pos, cell)
         assert float(from_table["raw_norm"]) == pytest.approx(float(with_frame["raw_norm"]),
                                                               rel=1e-10)
@@ -600,9 +612,12 @@ class TestFrozenCorrespondenceAndLift:
         perm = torch.randperm(pos.shape[0], generator=g)
         got = dc.frame_static_densities(harrison_model, rec, None, charges[perm], pos[perm],
                                         cell, lift=True)
+        # The re-fit converges to the registration to ~1e-5 A (Newton, 12 steps); the
+        # norm follows at ~1e-7.
         assert float(got["static"].norm2()) == pytest.approx(float(base["static"].norm2()),
-                                                              rel=1e-8)
-        assert got["lift"].centre == pytest.approx(base["lift"].centre, abs=1e-9)
+                                                              rel=1e-6)
+        # The lift centre follows the registration, converged to ~1e-6 (fractional).
+        assert got["lift"].centre == pytest.approx(base["lift"].centre, abs=1e-4)
         assert sorted(got["correspondence"]["departure"]) == pytest.approx(
             sorted(base["correspondence"]["departure"]))
 
@@ -627,67 +642,98 @@ class TestFrozenCorrespondenceAndLift:
                                       pos, cell, lift=True)
 
 
-    def test_the_uniqueness_radius_is_a_lattice_property_and_is_frozen(self, table):
-        """Half the smallest site separation of the ideal lattice -- the radius inside which
-        the site nearest to an atom is unambiguous -- stored on the class record."""
-        numbers, pos, cell = dc.pristine_reference_geometry(table)
-        radius = dd.uniqueness_radius(torch.tensor(pos), torch.tensor(cell))
-        d = dd._minimum_image(torch.tensor(pos)[:, None] - torch.tensor(pos)[None], torch.tensor(cell))
-        d = d.norm(dim=-1) + torch.eye(len(numbers)) * 1e9
-        assert radius == pytest.approx(0.5 * float(d.min()))
-        assert radius > 0.5                       # the old hard 0.5 A rule was below it
+    def test_the_record_carries_the_registered_flag_not_a_distance_rule(self, table):
         rec = dc.lookup_class(table, self.KEY)
-        assert rec.placement["correspondence"]["uniqueness_radius"] == pytest.approx(radius)
-        assert "merge" not in rec.placement["correspondence"]
+        corr = rec.placement["correspondence"]
+        assert corr["r_match"] == dc.R_MATCH and corr["flagged"] == 0
+        assert corr["max_matched_displacement"] < 0.5
+        assert "merge" not in corr and "uniqueness_radius" not in corr
 
-    def test_thermal_displacements_inside_the_ball_keep_the_frozen_map(
-            self, harrison_model, frames, table):
+    def test_thermal_displacements_keep_the_frozen_map(self, harrison_model, frames, table):
         """Addendum 4.1: the correspondence is NOT re-decided per thermal frame. Every atom
-        displaced by a random vector well beyond the retired 0.5 A rule but inside its
-        site's ball reads the frozen map (same removal site, same departure signal)."""
+        displaced by a random vector well beyond the retired 0.5 A rule reads the frozen map
+        (same removal site, same departure signal) with no distance refusal."""
         rec = dc.lookup_class(table, self.KEY)
         charges, pos, cell = _static_inputs(harrison_model, frames["vcl_39"])
+        species = _species(harrison_model, frames["vcl_39"])
         harrison_model.composition_classes = table
-        base = dc.frame_static_densities(harrison_model, rec, None, charges, pos, cell)
-        radius = rec.placement["correspondence"]["uniqueness_radius"]
+        base = dc.frame_static_densities(harrison_model, rec, None, charges, pos, cell,
+                                         species=species)
         g = torch.Generator().manual_seed(4)
         direction = torch.randn(pos.shape, generator=g, dtype=torch.float64)
         direction = direction / direction.norm(dim=-1, keepdim=True)
-        amplitude = 0.5 * radius * torch.rand(pos.shape[0], 1, generator=g, dtype=torch.float64)
-        assert float(amplitude.max()) > 0.55     # some atoms move more than 0.5 A
+        amplitude = 0.9 * torch.rand(pos.shape[0], 1, generator=g, dtype=torch.float64)
+        assert float(amplitude.max()) > 0.7      # some atoms move well past 0.5 A
         hot = dc.frame_static_densities(harrison_model, rec, None, charges,
-                                        pos + amplitude * direction, cell)
+                                        pos + amplitude * direction, cell, species=species)
         # The re-fit may land on a lattice-translation-equivalent representative (a different
         # site INDEX for the vacancy); the physical removal site is the same place.
         vac_base = base["pristine"].centres[base["correspondence"]["unmatched_pristine"]]
         vac_hot = hot["pristine"].centres[hot["correspondence"]["unmatched_pristine"]]
         assert vac_hot.shape == vac_base.shape == (1, 3)
-        assert float(dd._minimum_image(vac_hot - vac_base, cell).norm()) < radius
+        assert float(dd._minimum_image(vac_hot - vac_base, cell).norm()) < 1.0
         assert hot["correspondence"]["departure"] == pytest.approx(
             base["correspondence"]["departure"])
+        assert hot["correspondence"]["flagged"] == 0
+        assert 0.7 < hot["correspondence"]["max_matched_displacement"] < dc.R_MATCH
         assert float(hot["static"].integral()) == pytest.approx(float(base["static"].integral()),
                                                                 abs=1e-9)
 
-    def test_an_atom_that_leaves_every_ball_is_a_topology_event(self, harrison_model, frames,
-                                                                 table):
-        """One atom parked farther than the uniqueness radius from every site is an addition
-        and its site a removal: a changed correspondence, refused, not refitted."""
+    def test_a_vacancy_hop_is_transported_by_a_symmetry_of_the_lattice(
+            self, harrison_model, frames, table):
+        """A Cl atom moved onto the vacancy site leaves ITS site empty: the removal set has
+        moved. Every Cl site of the cubic toy is related to every other by a symmetry
+        operation of the pristine lattice (addendum 4.1's equivalence class), so the frozen
+        map is transported by that operation -- the vacancy is now at the moved atom's old
+        site -- and nothing is refused or refitted."""
         rec = dc.lookup_class(table, self.KEY)
         charges, pos, cell = _static_inputs(harrison_model, frames["vcl_39"])
+        species = _species(harrison_model, frames["vcl_39"])
         harrison_model.composition_classes = table
-        base = dc.frame_static_densities(harrison_model, rec, None, charges, pos, cell)
-        sites = base["pristine"].centres
-        radius = rec.placement["correspondence"]["uniqueness_radius"]
-        # A grid search for a point outside every ball (the interstitial region).
-        best, best_d = None, 0.0
-        for f in torch.cartesian_prod(*[torch.linspace(0.05, 0.95, 10)] * 3):
-            point = f.to(cell.dtype) @ cell
-            dmin = float(dd._minimum_image(sites - point, cell).norm(dim=-1).min())
-            if dmin > best_d:
-                best, best_d = point, dmin
-        assert best_d > radius
+        base = dc.frame_static_densities(harrison_model, rec, None, charges, pos, cell,
+                                         species=species)
+        vacancy = base["pristine"].centres[base["correspondence"]["unmatched_pristine"][0]]
+        ops = rec.placement["correspondence"]["symmetries"]
+        assert len(ops) == 384                       # 48 point operations x 8 translations
+        non_translations = 0
+        for atom in torch.nonzero(species == 0).reshape(-1).tolist():      # every Cl atom
+            moved = pos.clone()
+            moved[atom] = vacancy
+            out = dc.frame_static_densities(harrison_model, rec, None, charges, moved, cell,
+                                            species=species)
+            corr = out["correspondence"]
+            new_vac = out["pristine"].centres[corr["unmatched_pristine"]]
+            assert new_vac.shape == (1, 3)
+            assert float(dd._minimum_image(new_vac[0] - pos[atom], cell).norm()) < 1.0
+            # The departure pattern follows the vacancy: transported by the operation, so
+            # the per-atom list is a permutation of the base's (identical as a multiset).
+            assert sorted(corr["departure"]) == pytest.approx(
+                sorted(base["correspondence"]["departure"]))
+            non_translations += corr["operation"]["R"] != torch.eye(3).long().tolist()
+        assert non_translations >= 1                 # some hops need a point operation
+
+    def test_species_never_cross_and_a_far_excursion_is_flagged_not_refused(
+            self, harrison_model, frames, table):
+        """A Cs atom parked on the Cl vacancy site is not assigned to the Cl site: the Cl
+        sublattice keeps its removal, the Cs sublattice keeps its bijection with one atom
+        far from its site -- a departure beyond r_match, counted, never refused."""
+        rec = dc.lookup_class(table, self.KEY)
+        charges, pos, cell = _static_inputs(harrison_model, frames["vcl_39"])
+        species = _species(harrison_model, frames["vcl_39"])
+        harrison_model.composition_classes = table
+        base = dc.frame_static_densities(harrison_model, rec, None, charges, pos, cell,
+                                         species=species)
+        vacancy = base["pristine"].centres[base["correspondence"]["unmatched_pristine"][0]]
+        cs = int(torch.nonzero(species == 1).reshape(-1)[0])
         moved = pos.clone()
-        moved[0] = best
+        moved[cs] = vacancy
+        out = dc.frame_static_densities(harrison_model, rec, None, charges, moved, cell,
+                                        species=species)
+        corr = out["correspondence"]
+        assert len(corr["unmatched_pristine"]) == 1 and -1 not in corr["match"]
+        assert corr["flagged"] == 1 and corr["max_matched_displacement"] > dc.R_MATCH
+        # The same frame WITHOUT species is one sublattice: the Cs atom takes the Cl site and
+        # a different site is left over -- the reading differs from the record, refused.
         with pytest.raises(dc.UnsupportedStateError, match="topology event"):
             dc.frame_static_densities(harrison_model, rec, None, charges, moved, cell)
 
@@ -722,3 +768,58 @@ class TestRegistrationDerivative:
             minus[atom, comp] -= h
             fd = (float(functional(plus)) - float(functional(minus))) / (2.0 * h)
             assert float(grad[atom, comp]) == pytest.approx(fd, abs=2e-6, rel=1e-4)
+
+
+class TestMeanPristineLattice:
+    """D21: the pristine reference lattice is the symmetrised site-mean of the stoichiometric
+    frames, not one thermal snapshot."""
+
+    def test_the_mean_of_rattled_frames_recovers_the_ideal_lattice(self, harrison_model):
+        from mace.modules.defect_cache import attach_frame_keys
+        from tests.extensions.defect.test_neutral_reference_skip import Z_TABLE
+
+        rattled = [_perovskite(reps=(2, 2, 2), rattle=0.05, seed=s) for s in range(1, 9)]
+        # One frame with its atoms permuted and rigidly translated: label-free, origin-free.
+        rng = np.random.default_rng(3)
+        rattled[2] = rattled[2][rng.permutation(len(rattled[2]))]
+        rattled[2].positions += np.array([1.7, -0.4, 2.9])
+        rattled[2].wrap()
+        frames = [_frame(a, [0.0] * 4) for a in rattled] + [_frame(_remove_cl(rattled[0], 0), [0.0] * 4)]
+        attach_frame_keys(frames, z_table=Z_TABLE)
+        table = dc.build_class_table(harrison_model, frames, log=False)
+        ref = table["pristine_reference"]
+        c = ref["construction"]
+        assert c["method"] == "site_mean_symmetrised" and c["n_frames"] == 8 and c["skipped"] == 0
+        assert c["n_symmetries"] == 384 and 2 <= c["passes"] <= dc.MEAN_LATTICE_MAX_PASSES
+        assert c["cell_snapped_orthogonal"]
+        # The thermal residual about the mean is the rattle (0.05 A per coordinate, 0.087 rms).
+        for z, rms in c["rms_residual"].items():
+            assert 0.06 < rms < 0.13, (z, rms)
+        # The mean lattice is the ideal one: every Pb-Cl nearest distance is a/2 = 2.8 A to
+        # a few hundredths, where a single rattled frame is off by tenths.
+        numbers, pos, cell = dc.pristine_reference_geometry(table)
+        numbers = np.asarray(numbers)
+
+        def pb_cl_spread(numbers, pos, cell):
+            pos, cell = torch.tensor(pos), torch.tensor(cell)
+            pb, cl = torch.tensor(numbers == 82), torch.tensor(numbers == 17)
+            d = dd._minimum_image(pos[pb][:, None] - pos[cl][None], cell).norm(dim=-1)
+            nearest = torch.sort(d, dim=1).values[:, :6]        # the octahedron
+            return float((nearest - 2.8).abs().max())
+
+        assert pb_cl_spread(numbers, pos, cell) < 0.01          # symmetrised: ideal
+        assert pb_cl_spread(rattled[0].get_atomic_numbers(), rattled[0].get_positions(),
+                            np.array(rattled[0].get_cell())) > 0.08
+        assert np.allclose(np.diag(cell), 11.2, atol=1e-6)
+        # The vacancy class was placed against the mean lattice, not against frame 0.
+        rec = dc.lookup_class(table, [17] * 23 + [55] * 8 + [82] * 8)
+        assert rec.placement["correspondence"]["max_matched_displacement"] < 0.5
+        assert rec.placement["reference_geometry"] == "ideal_defect"
+        # Topological departure: |Z_Cl| = 1 at the vacancy site; elsewhere only the Gaussian
+        # readout's overlap tail of that one removal (2 % on the octahedron's Pb, geometric,
+        # not thermal), the same on every symmetry-equivalent neighbour.
+        site_departure = rec.placement["correspondence"]["site_departure"]
+        vac = rec.placement["correspondence"]["removal_sites"]
+        assert len(vac) == 1 and site_departure[vac[0]] > 0.5
+        assert max(a for i, a in enumerate(site_departure) if i != vac[0]) < 0.05
+        assert table["version"] == 2

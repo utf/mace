@@ -152,53 +152,93 @@ def build_lift(topology_charges: torch.Tensor, scaled_positions: torch.Tensor,
         z_min=float(z_min), d_clear=float(d_clear), constructor_hash=constructor_hash)
 
 
-def image_assignment(scaled_positions: torch.Tensor, record: LiftRecord) -> torch.Tensor:
-    """Integer image shift per primitive, fixed with respect to ``P``.
+#: A component anchor within this fractional distance of the cut (on either side) is "on
+#: the cut" and is assigned to the POSITIVE side of the centre, deterministically.
+#: Ideal-lattice sites of a centrosymmetric lattice sit half a cell from a site-centred
+#: envelope (the antipodal plane of a site is a site plane), so the tie is generic, not
+#: measure-zero, and the envelope's centre sits a few 1e-4 off the site (the departure
+#: tails); resolving the side by that offset would make the assignment depend on the
+#: frame's representation and flip under rewrapping or a finite-difference step. The
+#: margin is far below the clearance buffer (`D_CLEAR`), which is what flags such a
+#: component for the isolated claim; here only determinism is at stake.
+CUT_TIE = 0.01
+
+
+def image_assignment(anchors: torch.Tensor, record: LiftRecord) -> torch.Tensor:
+    """Integer image shift per COMPONENT anchor, fixed with respect to ``P``.
 
     Everything on the far side of the cut from the centre is pulled back by one cell. The
     result is an *integer* array held constant through the SCF and through the admissible
     finite-difference neighbourhood, so ``d U / d P = 0`` while ``U (d rho / d P)`` is
-    retained.
+    retained. The assignment is read on the component ANCHORS (a present atom's matched
+    pristine site, addendum 4.2's "component-preserving" lift), never on the thermal
+    positions themselves, so a displaced atom and its site are one image.
     """
-    centre = torch.tensor(record.centre, dtype=torch.float64, device=scaled_positions.device)
-    # Minimum image about the SUPPORT CENTRE: every primitive is pulled into the half-cell
+    centre = torch.tensor(record.centre, dtype=torch.float64, device=anchors.device)
+    # Minimum image about the SUPPORT CENTRE: every component is pulled into the half-cell
     # window centred on the support, which is the same thing as unwrapping through a cut
     # placed half a cell away. Measuring the offset from the cut instead is wrong -- a site
     # just past the centre is then more than half a cell from the cut and gets shifted,
-    # splitting a compact object across two images.
-    #
-    # A site exactly on the cut is the measure-zero ambiguity of any branch choice; the
-    # clearance-and-tail contract is what keeps density away from there, not this rounding.
-    delta = scaled_positions.to(torch.float64) - centre
-    return -torch.round(delta)
+    # splitting a compact object across two images. An anchor within CUT_TIE of the cut,
+    # whichever side its representation puts it on, goes to the positive side.
+    delta = anchors.to(torch.float64) - centre
+    image = -torch.round(delta)
+    offset = delta + image                                  # in [-0.5, 0.5]
+    return image + (offset < -0.5 + CUT_TIE).to(image.dtype)
 
 
 def lift_positions(scaled_positions: torch.Tensor, cell: torch.Tensor,
-                   record: LiftRecord) -> torch.Tensor:
-    """Cartesian positions unwrapped onto ``R^3`` under the record's branch."""
-    shifted = scaled_positions.to(torch.float64) + image_assignment(scaled_positions, record)
+                   record: LiftRecord, anchors: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """Cartesian positions unwrapped onto ``R^3`` under the record's branch, each primitive
+    by the image of its component anchor (its own position when it has none): the lifted
+    anchor plus the primitive's minimum-image displacement from its anchor, so a primitive
+    stored in any periodic representation (wrapped or not) lands with its component."""
+    positions = scaled_positions.to(torch.float64)
+    if anchors is None:
+        shifted = positions + image_assignment(positions, record)
+    else:
+        anchors = anchors.to(torch.float64)
+        relative = positions - anchors
+        relative = relative - torch.round(relative.detach())
+        shifted = anchors + image_assignment(anchors, record) + relative
     return shifted @ cell.to(torch.float64)
 
 
 def clearance_report(scaled_positions: torch.Tensor, weights: torch.Tensor,
-                     cell: torch.Tensor, record: LiftRecord) -> Dict[str, float]:
-    """How much density sits in the buffer either side of each cut.
+                     cell: torch.Tensor, record: LiftRecord,
+                     anchors: Optional[torch.Tensor] = None) -> Dict[str, float]:
+    """How much density sits in the buffer either side of each cut, per COMPONENT.
 
     A Gaussian has no compact support, so the cut always slices something; the question is
     only whether what it slices is below the registered absolute tolerance. Absolute, not
     relative: a per-atom tolerance would loosen as the cell grows, which is precisely the
-    regime the isolated claim is about.
+    regime the isolated claim is about. With `anchors`, primitives sharing an anchor are one
+    component (a thermal atom/site pair, its residual probe, the carrier density on it) and
+    the component's mass is the absolute value of its NET charge: a pair that cancels to its
+    thermal dipole is not counted twice at `|Z|`. Without anchors every primitive is a
+    component (the old, cruder measure).
     """
     lengths = torch.linalg.norm(cell.to(torch.float64), dim=-1)
     cut = torch.tensor(record.cut, dtype=torch.float64, device=scaled_positions.device)
-    distance = (scaled_positions.to(torch.float64) - cut + 0.5) % 1.0 - 0.5   # signed, [-.5,.5)
-    physical = distance.abs() * lengths                                        # A, per axis
+    anchors = scaled_positions if anchors is None else anchors
+    anchors = anchors.to(torch.float64)
+    # Components: primitives with the same anchor (to 1e-6 fractional).
+    key = torch.round(anchors * 1e6)
+    _, component = torch.unique(key, dim=0, return_inverse=True)
+    n_components = int(component.max()) + 1 if component.numel() else 0
+    net = torch.zeros(n_components, dtype=torch.float64, device=anchors.device)
+    net.index_add_(0, component, weights.to(torch.float64))
+    where = torch.zeros(n_components, 3, dtype=torch.float64, device=anchors.device)
+    where.index_copy_(0, component, anchors)
+    distance = (where - cut + 0.5) % 1.0 - 0.5                                # signed, [-.5,.5)
+    physical = distance.abs() * lengths                                       # A, per axis
     inside = (physical < record.d_clear).any(dim=-1)
-    total = float(weights.abs().sum())
-    mass = float(weights.abs()[inside].sum())
+    total = float(net.abs().sum())
+    mass = float(net.abs()[inside].sum())
     return {"buffer_mass": mass, "total_mass": total,
             "buffer_fraction": (mass / total) if total > 0 else 0.0,
-            "n_in_buffer": int(inside.sum()), "d_clear": record.d_clear}
+            "n_in_buffer": int(inside.sum()), "n_components": n_components,
+            "d_clear": record.d_clear}
 
 
 @dataclass(frozen=True)

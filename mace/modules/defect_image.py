@@ -131,11 +131,13 @@ class ImageDensity:
 
 
 def image_active_density(static: GaussianDensity, channels: Sequence[Channel],
-                         positions: torch.Tensor, q_core: int) -> ImageDensity:
+                         positions: torch.Tensor, q_core: int,
+                         anchors: Optional[torch.Tensor] = None) -> ImageDensity:
     """`rho_F`, `rho_F^img` and their sums with `rho_S` from the active channels.
 
     The channels are built separately and combined with their own signs and counts; nothing
-    here reads the sign of `q_F`. Channels with zero count are simply absent."""
+    here reads the sign of `q_F`. Channels with zero count are simply absent. `anchors` are
+    the atoms' component anchors (their matched pristine sites) for the lift."""
     n_sites = positions.shape[0]
     dtype, device = positions.dtype, positions.device
     site = torch.zeros(n_sites, dtype=dtype, device=device)
@@ -155,8 +157,9 @@ def image_active_density(static: GaussianDensity, channels: Sequence[Channel],
         weights[ch.name] = ch.weight
         q_f += int(round(ch.sign)) * int(ch.count)
         q_img = q_img + float(ch.sign) * float(ch.count) * ch.weight
-    frontier = GaussianDensity(site, positions, static.sigma, static.cell)
-    frontier_img = GaussianDensity(site_img, positions, static.sigma, static.cell)
+    frontier = GaussianDensity(site, positions, static.sigma, static.cell, anchors=anchors)
+    frontier_img = GaussianDensity(site_img, positions, static.sigma, static.cell,
+                                   anchors=anchors)
     q_img_t = q_img if isinstance(q_img, torch.Tensor) else torch.tensor(q_img, dtype=dtype,
                                                                            device=device)
     return ImageDensity(static=static, frontier=frontier, frontier_img=frontier_img,
@@ -257,11 +260,13 @@ def isolated_self_energy(charges: torch.Tensor, centres: torch.Tensor, sigma: fl
 
 def lifted_centres(density: GaussianDensity, record: LiftRecord) -> torch.Tensor:
     """`U_h rho`'s centres: the density's primitives unwrapped under the record's branch,
-    in the density's own dtype. The integer image assignment carries no gradient; the
-    smooth dependence on the centres and the cell is retained."""
+    each by the image of its component anchor, in the density's own dtype. The integer image
+    assignment carries no gradient; the smooth dependence on the centres and the cell is
+    retained."""
     cell = density.cell
     scaled = density.centres @ torch.linalg.inv(cell)
-    return lift_positions(scaled, cell, record).to(density.centres.dtype)
+    return lift_positions(scaled, cell, record,
+                          anchors=density.component_anchors()).to(density.centres.dtype)
 
 
 # ------------------------------------------------------------------ the functional
