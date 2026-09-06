@@ -11,7 +11,8 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PATH="$HOME/micromamba/envs/py13/bin:$PATH"
 export PYTHONPATH="$(cd "$HERE/.." && pwd)"
-export DEFECT_NULL_REFERENCE="${DEFECT_NULL_REFERENCE:-$HOME/runs/aprime_nulls.json}"
+export DEFECT_NULL_REFERENCE="${DEFECT_NULL_REFERENCE-$HOME/runs/aprime_nulls.json}"
+RECIPE="${RECIPE:-stage_b_run}"      # stage_b_run (Stage B) or stage_v81_run (plan v8.1)
 source "$HERE/stage_b_recipe.sh"
 PER_GPU="${PER_GPU:-2}"; STAGGER="${STAGGER:-60}"; CANDIDATES="${CANDIDATES:-4 5 6 7}"
 JOBS="${JOBS:?JOBS='tag:mode:seed ...' required}"
@@ -28,7 +29,7 @@ done
 [ "${#healthy[@]}" -gt 0 ] || { echo "ABORT: no healthy GPU among $CANDIDATES"; exit 1; }
 n_slots=$(( ${#healthy[@]} * PER_GPU ))
 threads=$(( $(nproc) / n_slots )); [ "$threads" -lt 2 ] && threads=2
-echo "=== packed queue: GPUs ${healthy[*]}, $n_slots slots, $threads threads each, jobs: $JOBS  $(date +%F' '%H:%M:%S) ==="
+echo "=== packed queue ($RECIPE): GPUs ${healthy[*]}, $n_slots slots, $threads threads each, jobs: $JOBS  $(date +%F' '%H:%M:%S) ==="
 
 slots=()          # pid per slot ("" = free)
 slot_gpu=()
@@ -49,7 +50,7 @@ for job in $JOBS; do
     while ! s=$(free_slot); do sleep 30; done
     gpu="${slot_gpu[$s]}"
     echo "start $name on GPU $gpu (slot $s)  $(date +%F' '%H:%M:%S)"
-    stage_b_run "$gpu" "$seed" "$name" "$mode" "$threads" &
+    "$RECIPE" "$gpu" "$seed" "$name" "$mode" "$threads" &
     slots[$s]=$!
     sleep "$STAGGER"
 done

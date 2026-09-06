@@ -1,0 +1,57 @@
+{
+  "manifest": "Stage 1 retrain under plan v8.1 (addendum sections 3.1 and 8): frozen BEFORE any corrected-regime result is opened",
+  "written": "2026-09-06",
+  "regime_tag": "v8.1-stage1-gauge-shape",
+  "code": "HEAD at the launch commit (recorded in the run log); Stage 0 modules 4ad6f91/63afc53/c90e181, wiring 550e7d8",
+  "gauge": {
+    "convention": "frozen-pristine spectral gauge, addendum 3.1: mu_g = rank-normalised occupied trace on the class table's pristine reference (1x1x1 tiling of its first stoichiometric frame); H_fix = Htilde - mu_g I on every runtime graph; the class-table edges re-aligned under it; gap floor per defect_gauge.DEFAULT_GAP_FLOOR",
+    "energy_constant_in_H": "none (the c table is retired)"
+  },
+  "objective": {
+    "stage": "nuisance_intercepts",
+    "energy_scale_eV": 1.0,
+    "residual_paths": "exactly one per charged observation: r_i^Delta when the frame is a paired member (delta_energy label present), r_i otherwise; the current dataset carries no pair_id groups, so every charged frame is unpaired",
+    "strata_key": "provenance|host|Q_formal|composition|cell|size_class",
+    "expected_strata": {
+      "unpaired|CsPbCl3|Q+1|17x47,55x16,82x16|pbc|1x": {"n_train": 928, "W_g": 1.0},
+      "unpaired|CsPbCl3|Q+1|17x95,55x32,82x32|pbc|2x": {"n_train": 16, "W_g": 1.0}
+    },
+    "stratum_weights_rule": "W_g = 1.0 for every represented stratum (equal weight, independent of frame count); within-stratum w_i = the frame's loader weight, normalised to one",
+    "pair_rule": "WithinStratumPairSampler: 2 pairs appended to every batch of 8 (12 graphs per batch); stratum drawn with probability W_g / sum W; members with probability w_i, with replacement",
+    "energy_shape_weight": 0.5,
+    "energy_shape_weight_rationale": "the saved-seed recalibration gives within-stratum RMS 0.26-0.32 eV at 79 atoms and 0.04-0.06 eV at 159 atoms, so a pair term of about 0.09 eV^2 per 79-atom pair; at weight 0.5 it is of the same order as the force term (100 x mean squared force error, about 0.04 at convergence). Chosen before any corrected-regime result; a different weight is a different regime",
+    "total_energy_weight": 0.0,
+    "delta_energy_weight": 0.0,
+    "forces_weight": 100.0,
+    "delta_forces_weight": 100.0,
+    "neutral_null_rule": "retired; DEFECT_NULL_REFERENCE and DEFECT_CHARGED_ENERGY_SHARE unset; every charged energy of both sizes enters through its stratum",
+    "two_size_force_upweight": 0.25,
+    "gap_penalty": {"weight": 1.0, "e_gap": 2.4, "composition": "3,1,1"},
+    "epochs": 24,
+    "seeds": [1, 2, 3, 4, 5, 6],
+    "batch_size": 8
+  },
+  "held_out_joint_tolerance": {
+    "population": "dataset_pbe/valid.xyz, charged frames, per size stratum",
+    "energy_shape_rms_eV": "train-centred (training c_g*) held-out RMS <= 0.50 eV at 79 atoms; reported at 159 (one frame)",
+    "force_rmse_meV_A": "charged 79 <= 45, charged 159 <= 35 (the retrained arm (a) cohort's mean plus its seed sd under the old objective)",
+    "size_conflict": "the sign of the mean centred held-out residual must not differ between the two size strata by more than 0.3 eV; a larger conflict routes to objective-identifiability review, never to dropping a population"
+  },
+  "decision_table_scalar_range_ablation": {
+    "status": "RETROSPECTIVE for arm (a): its old-objective numbers were inspected before this table was written; pre-registered for the corrected-regime retrains of every arm",
+    "arms": {"a": "full", "b": "long_range", "c": "off"},
+    "simplicity_order": ["off", "long_range", "full"],
+    "metrics": {
+      "F4_slope": {"direction": "inside band", "band": [-0.142, -0.063], "tau_phys": 0.02, "tau_noise": "seed sd", "population": "159-atom charged, c12 convention", "pass": ">= 4 of 6 seeds in band"},
+      "pristine_gap_eV": {"direction": "closer to 2.4", "tolerance": 0.1, "pass": ">= 4 of 6 seeds within 0.1 eV"},
+      "R_bound": {"direction": "inside band", "band": [0.66, 1.34], "pass": ">= 4 of 6 seeds"},
+      "F10_centred": {"direction": "pass", "pass": ">= 4 of 6 seeds"},
+      "force_rmse_charged_79_meV_A": {"direction": "lower", "tau_phys": 5.0, "tau_noise": "seed sd", "equivalence_margin": 5.0},
+      "force_rmse_charged_159_meV_A": {"direction": "lower", "tau_phys": 5.0, "tau_noise": "seed sd", "equivalence_margin": 5.0},
+      "energy_shape_rms_train_eV": {"direction": "lower", "tau_phys": 0.03, "tau_noise": "seed sd", "equivalence_margin": 0.03, "note": "within-stratum, training frames, per size"},
+      "energy_shape_rms_valid_eV": {"direction": "lower", "tau_phys": 0.05, "tau_noise": "seed sd", "equivalence_margin": 0.05}
+    },
+    "rule": "an arm is preferred only where it improves at least one metric by more than max(tau_phys, tau_noise) and regresses none beyond its equivalence margin; indistinguishable arms resolve to the simpler one; hard gates (identities, FD) are constraints, not scores",
+    "existing_arms_policy": "arms (b) and (c) are retrained under the corrected regime only if the recalibrated selection readouts of the old regime change the ordering; the old-regime readouts (arm (a) retrained; arms (b), (c) forward-only) retained arm (a)"
+  }
+}
