@@ -1171,7 +1171,7 @@ def mean_pristine_lattice(model, pristine_frames: Sequence, r_res: float,
     """The ideal pristine lattice as the registered site-mean of the stoichiometric frames
     (D21): each frame is registered to the running reference (`align_pristine`, the global
     search), its atoms assigned to sites (`pristine_correspondence`, species-wise), and the
-    per-site mean fractional displacement and the mean cell taken; repeated from the new
+    per-site coordinate-wise MEDIAN fractional displacement and the mean cell taken; repeated from the new
     mean until a pass moves no site by more than `MEAN_LATTICE_TOL` (at most `passes`
     rounds). A nearly orthogonal mean cell is snapped to the orthogonal cell of its lengths
     (`CELL_ORTHO_TOL`). The mean is then symmetrised over the lattice's own symmetry
@@ -1199,8 +1199,7 @@ def mean_pristine_lattice(model, pristine_frames: Sequence, r_res: float,
     passes_run = 0
     for _ in range(max(int(passes), 1)):
         passes_run += 1
-        acc = torch.zeros(n_sites, 3, dtype=torch.float64)
-        count = torch.zeros(n_sites, dtype=torch.float64)
+        samples: List[List[torch.Tensor]] = [[] for _ in range(n_sites)]
         acc_cell = np.zeros((3, 3), dtype=np.float64)
         used = skipped = 0
         keys = []
@@ -1224,8 +1223,8 @@ def mean_pristine_lattice(model, pristine_frames: Sequence, r_res: float,
                 continue
             d = pos_t @ torch.linalg.inv(cell_t) - (scaled[match] + shift)
             d = d - torch.round(d)
-            acc.index_add_(0, match, d)
-            count.index_add_(0, match, torch.ones(n_sites, dtype=torch.float64))
+            for atom, site in enumerate(match.tolist()):
+                samples[site].append(d[atom])
             acc_cell += np.asarray(cell, dtype=np.float64).reshape(3, 3)
             used += 1
             keys.append(_frame_key_of(fr))
@@ -1234,7 +1233,12 @@ def mean_pristine_lattice(model, pristine_frames: Sequence, r_res: float,
         if used == 0:
             raise ValueError("mean_pristine_lattice: no stoichiometric frame could be "
                              "registered and assigned to the reference lattice")
-        new_scaled = scaled + acc / count.clamp(min=1.0).unsqueeze(-1)
+        # The coordinate-wise MEDIAN per site: the rare mis-assigned atom of a hot frame (a
+        # displacement of several A) would move a mean by hundredths of an A and break the
+        # lattice's symmetry at that level; the median does not see it.
+        centre = torch.stack([torch.stack(s_).median(dim=0).values if s_ else
+                              torch.zeros(3, dtype=torch.float64) for s_ in samples])
+        new_scaled = scaled + centre
         pass_shift = float(((new_scaled - scaled) @ torch.tensor(cell_mean)).norm(dim=-1).max())
         scaled = new_scaled - torch.floor(new_scaled)
         cell_mean = acc_cell / used
@@ -1254,7 +1258,7 @@ def mean_pristine_lattice(model, pristine_frames: Sequence, r_res: float,
     rms = {str(zs[s]): float(residual[residual_species == s].pow(2).mean().sqrt())
            for s in torch.unique(residual_species).tolist()}
     construction = {
-        "method": "site_mean_symmetrised", "passes": passes_run, "n_frames": used,
+        "method": "site_median_symmetrised", "passes": passes_run, "n_frames": used,
         "skipped": skipped, "tol": float(tol), "mean_tol": MEAN_LATTICE_TOL,
         "cell_snapped_orthogonal": bool(snapped), "cell_off_diagonal": off_diagonal,
         "frames_fingerprint": hashlib.sha256(",".join(str(k) for k in sorted(keys)).encode()

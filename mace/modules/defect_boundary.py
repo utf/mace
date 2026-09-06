@@ -135,8 +135,10 @@ def boundary_potential(ctx: GraphBoundary, P: Sequence[torch.Tensor], n_e: Seque
     Returns `(V, phi, rho, diagnostics)` with `phi` evaluated at this `P`.
     """
     leaves = [p.detach().clone().requires_grad_(True) for p in P]
-    phi, rho, diagnostics = phi_b(ctx, leaves, n_e, n_h, label=label)
-    grads = torch.autograd.grad(phi["phi"], leaves, allow_unused=True)
+    # The SCF runs under no_grad (it is a solver); the potential still needs its own graph.
+    with torch.enable_grad():
+        phi, rho, diagnostics = phi_b(ctx, leaves, n_e, n_h, label=label)
+        grads = torch.autograd.grad(phi["phi"], leaves, allow_unused=True)
     V = []
     for p, g in zip(leaves, grads):
         if g is None:

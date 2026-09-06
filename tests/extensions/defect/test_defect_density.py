@@ -789,7 +789,7 @@ class TestMeanPristineLattice:
         table = dc.build_class_table(harrison_model, frames, log=False)
         ref = table["pristine_reference"]
         c = ref["construction"]
-        assert c["method"] == "site_mean_symmetrised" and c["n_frames"] == 8 and c["skipped"] == 0
+        assert c["method"] == "site_median_symmetrised" and c["n_frames"] == 8 and c["skipped"] == 0
         assert c["n_symmetries"] == 384 and 2 <= c["passes"] <= dc.MEAN_LATTICE_MAX_PASSES
         assert c["cell_snapped_orthogonal"]
         # The thermal residual about the mean is the rattle (0.05 A per coordinate, 0.087 rms).
