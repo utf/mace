@@ -86,8 +86,11 @@ class H0(nn.Module):
         # Species feature means over the pristine cell (plan 2.1), set once and stored.
         self.register_buffer("centre", torch.zeros(num_elements, feature_dim))
         self.register_buffer("centre_set", torch.tensor(False))
-        # Test knob for the gauge gate (plan section 5): `H0 -> H0 + a I`. Not a parameter.
+        # Test knobs (plan section 5 gates): `H0 -> H0 + a I` for the gauge gate, and a
+        # per-site level shift `[N]` that binds a carrier on chosen sites for the tiling
+        # ladder. Neither is a parameter; both are None/0 in production.
         self.gauge_shift = 0.0
+        self.site_shift: Optional[torch.Tensor] = None
 
     # ------------------------------------------------------------- pristine centre
 
@@ -143,6 +146,8 @@ class H0(nn.Module):
             H = H + self.directional_block(vectors.to(torch.float64), species, edge_index,
                                            edge_vector)
         H = 0.5 * (H + H.transpose(0, 1))
+        if self.site_shift is not None:
+            H = H + torch.diag(self.site_shift.to(H.dtype).to(H.device).repeat_interleave(ORBITALS_PER_ATOM))
         if self.gauge_shift:
             H = H + float(self.gauge_shift) * torch.eye(H.shape[0], dtype=H.dtype, device=H.device)
         return H

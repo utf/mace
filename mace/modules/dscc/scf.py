@@ -13,7 +13,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
-from mace.modules.dscc.fill import SIGMA_S, FillResult, fill
+import math
+
+from mace.modules.dscc.fill import SIGMA_S, FillResult, chemical_potential, fill
+
+_SQRT_PI = math.sqrt(math.pi)
 
 ORBITALS = 4
 
@@ -63,6 +67,8 @@ class ScfOptions:
     tol_root: float = 1e-6       # root rule: |dq_a - dq_b| max-norm
     rho_ceiling: float = 0.9     # contraction ratio ceiling
     continuation_steps: int = 4  # registered schedule: s = k / steps, k = 1..steps
+    method: str = "newton"       # "newton" (exact response Jacobian, damped) or "anderson"
+    max_backtrack: int = 6       # Newton: halvings of the step when the residual grows
 
 
 class ScfError(RuntimeError):
@@ -115,8 +121,14 @@ def _anderson(dq_hist: List[torch.Tensor], res_hist: List[torch.Tensor], mixing:
     X = torch.stack(dq_hist, dim=1)
     dF = F[:, 1:] - F[:, :-1]
     dX = X[:, 1:] - X[:, :-1]
-    # Least squares for the coefficients on the residual differences (Walker-Ni form).
-    gamma_coef = torch.linalg.lstsq(dF, F[:, -1:]).solution.reshape(-1)
+    # Least squares for the coefficients on the residual differences (Walker-Ni form), by
+    # the Tikhonov-regularised normal equations: the residual differences are nearly
+    # collinear late in a solve, and a full-rank QR driver (CUDA's `gels`) returns garbage
+    # there where a rank-revealing one does not -- the solve must not depend on the device.
+    G = dF.transpose(0, 1) @ dF
+    ridge = 1e-10 * float(torch.diagonal(G).max().clamp_min(1e-300))
+    rhs = dF.transpose(0, 1) @ F[:, -1]
+    gamma_coef = torch.linalg.solve(G + ridge * torch.eye(G.shape[0], dtype=G.dtype, device=G.device), rhs)
     x_new = X[:, -1] - dX @ gamma_coef
     f_new = F[:, -1] - dF @ gamma_coef
     return x_new + mixing * f_new
@@ -161,12 +173,27 @@ def solve_dscc(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[int, int],
             if r_norm < opt.tol_q and delta_energy < opt.tol_E:
                 converged = True
                 break
-            dq_hist.append(dq)
-            res_hist.append(res)
-            if len(dq_hist) > opt.history:
-                dq_hist.pop(0)
-                res_hist.pop(0)
-            dq = _anderson(dq_hist, res_hist, opt.mixing)
+            if opt.method == "newton":
+                jac = hole_response(H, n_s, n_ref, sigma_s, spectrum=(sol.fills[0].eps, sol.fills[0].U)) @ gamma
+                step = _newton_step(res.detach(), jac.detach())
+                # Damped: halve the step while the unmixed residual grows (the map is
+                # strongly non-linear where levels are nearly degenerate on the smearing scale).
+                scale = 1.0
+                for _ in range(opt.max_backtrack):
+                    trial = dq + scale * step
+                    V_t = gamma @ trial + (W if W is not None else 0.0)
+                    r_t = two_fillings(H0 - site_potential_matrix(V_t), n_s, n_ref, sigma_s).dq - trial
+                    if float(r_t.detach().abs().max()) < r_norm:
+                        break
+                    scale *= 0.5
+                dq = dq + scale * step
+            else:
+                dq_hist.append(dq)
+                res_hist.append(res)
+                if len(dq_hist) > opt.history:
+                    dq_hist.pop(0)
+                    res_hist.pop(0)
+                dq = _anderson(dq_hist, res_hist, opt.mixing)
     # The attached pass at the fixed point (or the last iterate, flagged).
     dq_star = dq if unroll else dq.detach()
     V = gamma @ dq_star + (W if W is not None else 0.0)
@@ -218,3 +245,71 @@ def root_rule(H0: torch.Tensor, gamma_full: torch.Tensor, gamma_zero: torch.Tens
             spread = max(spread, float((sols[names[i]].dq.detach() - sols[names[j]].dq.detach()).abs().max()))
     return {"solutions": sols, "spread": spread,
             "passed": spread < opt.tol_root and all(s.converged for s in sols.values())}
+
+
+# ------------------------------------------------------------------ exact Jacobian, Newton
+
+def hole_response(H: torch.Tensor, n_s: Tuple[int, int], n_ref: Tuple[int, int],
+                  sigma_s: float = SIGMA_S, active_tol: float = 1e-12,
+                  spectrum: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
+    """`M_ij = d dq_new_i / d V_j` at `H = H0 - diag(V)`: the site-resolved response of the
+    charge DIFFERENCE `dq = -sum_sigma Tr(Pi (P_S - P_ref))` to the site potential, exact
+    in the eigenbasis (Daleckii-Krein divided differences with the fixed-N correction, as
+    the fill's backward). The difference of two fills of one `H` responds only through the
+    levels whose occupation differs between them (plus the smearing tails): the sum runs
+    over pairs with one index in that active set, so the cost is `O(N_act n_orb N^2)`.
+    `dq_new(dq) = dq_new(V = Gamma dq + W)`, so the fixed-point Jacobian is `M Gamma`.
+    """
+    with torch.no_grad():
+        eps, U = torch.linalg.eigh(H) if spectrum is None else spectrum
+        n_orb = H.shape[-1]
+        n_atoms = n_orb // ORBITALS
+        M = torch.zeros(n_atoms, n_atoms, dtype=H.dtype, device=H.device)
+        for n_state, n_reference in ((n_s[0], n_ref[0]), (n_s[1], n_ref[1])):
+            if n_state == n_reference:
+                continue
+            terms = []
+            for n_el, sign in ((n_state, 1.0), (n_reference, -1.0)):
+                mu = chemical_potential(eps, float(n_el), sigma_s)
+                x = (eps - mu) / sigma_s
+                f = 0.5 * torch.erfc(x)
+                fp = -torch.exp(-x * x) / (sigma_s * _SQRT_PI)           # df/d eps <= 0
+                terms.append((f, fp, sign))
+            f_s, f_r = terms[0][0], terms[1][0]
+            active = torch.nonzero((f_s - f_r).abs() > active_tol).reshape(-1)
+            if active.numel() == 0:
+                continue
+            # A^(i)_ab = sum_{mu in i} U_mu a U_mu b for a in the active set, all b: [N, n_act, n].
+            U_act = U[:, active]                                              # [n, n_act]
+            A = torch.einsum("ma,mb->mab", U_act, U).reshape(n_atoms, ORBITALS, active.numel(), n_orb).sum(1)
+            for f, fp, sign in terms:
+                # Divided differences L_ab for a active, all b; the limit f'(mid) at coincidence.
+                d_eps = eps[active].unsqueeze(-1) - eps.unsqueeze(0)
+                d_f = f[active].unsqueeze(-1) - f.unsqueeze(0)
+                near = d_eps.abs() <= 1e-7
+                mid = 0.5 * (eps[active].unsqueeze(-1) + eps.unsqueeze(0))
+                x_mid = (mid - chemical_potential(eps, float(n_state if sign > 0 else n_reference), sigma_s)) / sigma_s
+                L = torch.where(near, -torch.exp(-x_mid * x_mid) / (sigma_s * _SQRT_PI),
+                                d_f / torch.where(near, torch.ones_like(d_eps), d_eps))
+                # Pairs (a in act, b any) counted once, (b in act, a any) once, minus both-in-act.
+                both = torch.zeros(active.numel(), n_orb, dtype=torch.bool, device=H.device)
+                both[:, active] = True
+                weight = torch.where(both, torch.ones_like(L), 2.0 * torch.ones_like(L))
+                # dP/dV_j = -sum_ab L_ab A^(j)_ab (U_a U_b^T) -> Tr(Pi_i dP/dV_j) = -sum L A^i A^j;
+                # dq_new_i = -sum_sigma sign Tr(Pi_i P) -> +sum L A^i A^j per fill, signed.
+                contrib = torch.einsum("iab,ab,jab->ij", A, weight * L, A)
+                # Fixed-N correction: mu moves with V. d mu / d V_j = -(sum_b f'_b A^j_bb) / (sum f'),
+                # and the density responds by f'_a along the diagonal: subtract the rank-one term.
+                diag_A = torch.einsum("ma,ma->ma", U, U).reshape(n_atoms, ORBITALS, n_orb).sum(1)  # [N, n]
+                s_fp = fp.sum()
+                if float(s_fp.abs()) > 1e-300:
+                    g = diag_A @ fp                                            # [N]
+                    contrib = contrib - torch.outer(g, g) / s_fp
+                M = M + sign * contrib
+        return M
+
+
+def _newton_step(res: torch.Tensor, jac: torch.Tensor) -> torch.Tensor:
+    """`delta` with `(I - J) delta = res` for the fixed point of `dq -> dq_new(dq)`."""
+    n = res.shape[0]
+    return torch.linalg.solve(torch.eye(n, dtype=res.dtype, device=res.device) - jac, res)

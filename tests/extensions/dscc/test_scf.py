@@ -101,3 +101,30 @@ class TestSolve:
         H0, gamma, _, _, _ = _toy(seed=5)
         res = scf.solve_dscc(H0, gamma, N_S, N_REF, options=scf.ScfOptions(n_max=2, tol_q=1e-14))
         assert not res.converged and res.iterations == 2
+
+
+class TestNewton:
+    def test_hole_response_matches_finite_differences(self):
+        """`M = d dq_new / dV` against central differences on the toy."""
+        H0, gamma, _, _, _ = _toy(seed=6)
+        n = N_ATOMS
+        V0 = 0.05 * torch.randn(n, generator=torch.Generator().manual_seed(7))
+        H = H0 - scf.site_potential_matrix(V0)
+        M = scf.hole_response(H, N_S, N_REF)
+        h = 1e-5
+        for j in (0, 3, 5):
+            e = torch.zeros(n); e[j] = h
+            plus = scf.two_fillings(H0 - scf.site_potential_matrix(V0 + e), N_S, N_REF).dq
+            minus = scf.two_fillings(H0 - scf.site_potential_matrix(V0 - e), N_S, N_REF).dq
+            fd = (plus - minus).detach() / (2 * h)
+            assert torch.allclose(M[:, j], fd, atol=1e-6, rtol=1e-5), (j, M[:, j], fd)
+        assert torch.allclose(M, M.T, atol=1e-8)          # a static response is symmetric
+
+    def test_newton_converges_fast_and_agrees_with_anderson(self):
+        H0, gamma, _, _, _ = _toy(seed=8)
+        newton = scf.solve_dscc(H0, gamma, N_S, N_REF, options=scf.ScfOptions(method="newton", tol_q=1e-11, tol_E=1e-13))
+        anderson = scf.solve_dscc(H0, gamma, N_S, N_REF, options=scf.ScfOptions(method="anderson", tol_q=1e-11, tol_E=1e-13))
+        assert newton.converged and anderson.converged
+        assert newton.iterations <= 8 and newton.iterations < anderson.iterations
+        assert float((newton.dq - anderson.dq).abs().max()) < 1e-9
+        assert abs(float(newton.energy - anderson.energy)) < 1e-10

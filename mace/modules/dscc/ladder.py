@@ -45,7 +45,7 @@ def fit_one_over_l(lengths: Sequence[float], values: Sequence[float]) -> Tuple[f
 
 
 def ladder_report(model, frames: Sequence, z_table, r_cut: float, batch_fn, device="cpu",
-                  q_plus: Sequence[int] = (0, 0, 1, 0)) -> Dict[str, object]:
+                  q_plus: Sequence[int] = (0, 0, 1, 0), force_atoms: int = 200) -> Dict[str, object]:
     """`E(+1) - E(0)` and the diagnostics per ladder cell; `batch_fn(frames) -> data dict`."""
     from mace.modules.dscc import data as dd
     rows = []
@@ -53,12 +53,13 @@ def ladder_report(model, frames: Sequence, z_table, r_cut: float, batch_fn, devi
         L = float(np.cbrt(atoms.get_volume()))
         neutral = atoms.copy(); neutral.info.update({"carrier_counts": np.zeros(4), "cell_charge": 0})
         charged = atoms.copy(); charged.info.update({"carrier_counts": np.array(q_plus), "cell_charge": 1})
-        e0 = float(model(batch_fn([neutral]), compute_force=True)["energy"])
-        out = model(batch_fn([charged]), compute_force=True)
+        with_forces = len(atoms) <= force_atoms
+        e0 = float(model(batch_fn([neutral]), compute_force=with_forces)["energy"])
+        out = model(batch_fn([charged]), compute_force=with_forces)
         d = out["diagnostics"]
         rows.append({"n_atoms": len(atoms), "L": L, "dE": float(out["energy"]) - e0,
                      "dq_max": float(out["dq"].abs().max()), "dq_spread": float(out["dq"].std()),
-                     "total_force": float(out["forces"].sum(0).abs().max()),
+                     "total_force": float(out["forces"].sum(0).abs().max()) if with_forces else None,
                      "iterations": d.get("iterations", [None])[0], "converged": d.get("converged", [None])[0]})
     a, b = fit_one_over_l([r["L"] for r in rows], [r["dE"] for r in rows])
     return {"rows": rows, "intercept": a, "slope": b, "madelung_slope": madelung_slope(model.kernel.eps_inf)}

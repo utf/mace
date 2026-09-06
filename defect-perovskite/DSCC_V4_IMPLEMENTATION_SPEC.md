@@ -30,6 +30,7 @@ task list and the registers the plan's §10 rules require. Paths relative to the
 | C1 | Smearing of the labels: the old code records "doped's default ISMEAR = 0, SIGMA = 0.05 eV" as the labels' smearing (`defect_counting.py`). Plan §11 registers Gaussian 0.05 eV and asks for confirmation from the label paper's methods (Mosquera-Lois & Walsh, PRX Energy 4, 043008 (2025)). | **confirmed** (v4.1) |
 | C2 | Whether `E_gap = 2.40 eV` is the static-lattice or the thermal-average PBE gap (decides which cell the gap regulariser acts on, §6). `band_edges.json` only carries the symmetric ±1.2 eV placement. | **ruled: static lattice** (v4.1) → the regulariser acts on the static pristine cell (D8); thermal-mean gap reported |
 | C3 | b3 GPU 6 fault: cold power cycle now, or leave until GPU waves are needed (Phase 3)? | **ruled: leave** while GPUs 4, 5, 7 are accessible (checked 2026-09-06 evening: yes); cold power cycle only if not |
+| C5 | Single-valuedness gate (plan §5, root rule): at initialisation the real frames have no bound vacancy state and the SCF has distinct fixed points on some frames (D10 finding). Read the gate on the trained model (the arms report the root rule anyway), or require an initialisation with a bound state first? | **open** |
 | C4 | **Regime-A placement check fails on the training set at the plan's defaults** (`r_d1 = 3.2`, `r_d2 = 3.6` Å, floor 1e-3). Identified first-shell Pb–Cl bonds beyond `r_d1`: 3.1 % on the 544 pristine frames, 5–7 % on the 79-atom vacancy frames (the six-nearest rule counts a Cl across the vacancy for the flanking Pb), 1.2–1.6 % at 159 atoms; intra-octahedron Cl–Cl edges below `r_d2`: 2.0–2.6 % (0 at 159 atoms). The first-shell Pb–Cl distribution is thermal and wide: p50 2.88 Å, fraction > 3.0 / 3.1 / 3.2 / 3.3 Å = 22.5 / 10.8 / 5.6 / 3.4 %. No window in the 3.2–3.6 Å gap clears a 1e-3 floor on these frames. Options for ruling: (a) register a higher floor (≈ 5e-2) with the physical consequence that a few % of first-shell pairs sit inside the switch; (b) move the window up (e.g. 3.5–4.0 Å, still below the 4.8 Å vacancy-spanning minimum, but then the Cs–Cl shell at 3.5–4.1 Å is inside it); (c) make regime B (no switch) the primary regime and report regime A as failing its placement gate. Also: exclude the vacancy-flanking Pb's sixth neighbour from the identified set, or run the check on pristine frames only. | **ruled (v4.1): regime B primary; regime A failed its gate, retained as a reduced ablation only** (retrospective floor 5e-2 for the ablation; flanking-Pb bond fraction and `m_sw` reported; excluded from selection) |
 
 ## 2. Registers
@@ -155,6 +156,35 @@ not stretched). Either way the fraction is 30× the 1e-3 floor; the ruling stand
 **D9 — kernel regime (v4.1).** `KernelConfig.regime` defaults to `"B"`; regime A is
 constructed only explicitly for the ablation arm. The flanking-Pb restricted placement
 fraction is computed before any regime-A run (see the note under P0.5).
+
+**D10 — the SCF solver is a damped Newton on the exact response Jacobian (2026-09-06
+evening).** On the real 79-atom V_Cl⁺ frames at the initialised head, Anderson mixing
+(0.3 / 6) converged on some frames in 30–50 iterations and not at all on others within
+100 (residual oscillating at 0.05–0.17 e): the map `dq -> dq_new` is strongly non-linear
+there (see the finding below). The plan's "broyden_or_anderson" is replaced by its exact
+limit: `hole_response` gives `M = d dq_new / dV` in closed form from the eigenbasis
+(Daleckii-Krein divided differences with the fixed-N correction, over the active levels
+only — `O(N_act n_orb N²)`, FD-verified to 1e-6), the fixed-point Jacobian is `J = M Gamma`,
+and each step solves `(I - J) delta = r` with backtracking on the unmixed residual. On the
+same two frames: 6 and 8 iterations (Anderson 34/44 or failing). Anderson stays available
+(`ScfOptions.method`). The Anderson least squares is now the Tikhonov-regularised normal
+equations (a full-rank QR driver on CUDA returned garbage on nearly collinear residual
+differences — the solve must not depend on the device). Convergence criteria unchanged
+(unmixed residual `tol_q` and `|ΔJ| < tol_E`).
+
+**Finding (2026-09-06 evening): the initialised `H0` has no bound vacancy state.** On the
+real frames, Harrison-initialised `H0` gives the pristine cell a 2.400 eV gap (−9.93 →
+−7.53 eV). On the V_Cl frames the reference majority electron (205th) sits in a
+near-degenerate manifold at the conduction-band edge (−7.532, −7.529, −7.502, −7.45 eV;
+gap(up) 0.003–0.045 eV): the vacancy-spanning Pb–Pb `pp` hopping at 5–7 Å does not split a
+dimer state off the CBM at initialisation (the Arm-1 question). Consequences: the
+`Phi = 0` hole is delocalised over the Pb sublattice (N_eff 17–18); the localising
+feedback on a near-degenerate manifold produces **distinct fixed points** on some frames
+(frame 2: max|dq| 0.287 by Newton vs 0.402 by Anderson on CPU, 0.290 on CUDA — different
+converged solutions), i.e. the single-valuedness gate of plan section 5 fails at
+initialisation on real frames for a physical reason. A full-set run with Newton is in
+progress (`scratchpad/stability_probe.py cpu`); ruling needed on whether the Phase-1
+single-valuedness gate is read at initialisation or on the trained model (C5).
 
 ## 3. Task list
 
