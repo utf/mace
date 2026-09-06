@@ -417,7 +417,9 @@ case "${USE_EMA}" in
         ;;
 esac
 
-python -m mace.cli.run_train \
+# MACE_TRAIN_MODULE: a module that wraps `mace.cli.run_train.main` (the v8.1 loss-path
+# audit runs this way, inside the run's own data pipeline); default is the trainer itself.
+python -m "${MACE_TRAIN_MODULE:-mace.cli.run_train}" \
     --name="${NAME}" \
     --model="MACEDefect" \
     --loss="defect" \
