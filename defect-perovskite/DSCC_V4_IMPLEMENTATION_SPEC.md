@@ -54,7 +54,10 @@ task list and the registers the plan's §10 rules require. Paths relative to the
 | `r_g`, `r_split` | — | plan §2.4/§2.5 | to register before Phase 0 gate |
 | `lambda_0`, `lambda_max`, `U_max[Z]` (GFN1-xTB hardness, bounds only) | — | plan §2.4 | to register before Phase 1 |
 | `n_max`, `tol_q`, `tol_E`, `tol_c`, `tol_root`, `rho` ceiling, continuation schedule, mixing | — | plan §2.6 | to register before Phase 1 gate |
-| `Z_max`, Route B L2 weight | from init magnitudes | plan §2.5 | to register before Phase 1 (Route B) |
+| `Z_max`, Route B L2 weight | `Z_max = 2 × max_s |Zstar_init,s|` (`Z_MAX_FACTOR`); L2 weight: — | plan §2.5; `model.py` | default 2026-09-06, to confirm |
+| `lambda_0`, `lambda_max`, `U_eff` init | 0.05, 2.0, `0.05 U_max[Z]` (`LAMBDA_0_DEFAULT`, `LAMBDA_MAX_DEFAULT`, `U_INIT_FRACTION`); bounded by `x_max sigmoid(raw)` | `model.py` | defaults 2026-09-06, to confirm before Phase 1 gate |
+| `r_g`, `r_split`, `q_cut`, `a_max`, `b_max`, `r_cut` | 1.0 Å, 2.5 Å, 4.5 Å, 1.0 eV, 1.0 eV, 10.0 Å | `kernels.KernelConfig`, `model.py`, `hamiltonian.py` | defaults 2026-09-06, to confirm |
+| Solver: `tol_q`, `tol_E`, `tol_c`, `n_max`, mixing, history, `tol_root`, `rho` ceiling, continuation steps | 1e-8 e, 1e-10 eV, 1e-7, 100, 0.3 (Anderson), 6, 1e-6, 0.9, 4 | `scf.ScfOptions` | defaults 2026-09-06, to confirm before Phase 1 gate |
 | `s_tol`, `z`, `n_min`, coverage bin width, out-of-fold base protocol id | — | plan §6 | to register before Phase 2 |
 | Gap-regulariser convention | static-lattice or thermal-mean (C2) | plan §6 | before Phase 2 |
 | Benchmark hardware / batch / trajectory | — | plan §8 | before Phase 4 |
@@ -136,29 +139,29 @@ Status: `todo` / `wip` / `done` / `blocked`.
 |---|---|---|
 | 0.1 | Cancel the v8 s14a wave; leave the v8 branch clean (`06c04c8`, 689 tests green) | done |
 | 0.2 | Plan v4 saved verbatim; this tracker; memory updated | done |
-| 0.3 | Report to the user: cancellation outcome, GPU 6 fault, C1–C3 | todo |
+| 0.3 | Report to the user: cancellation outcome, GPU 6 fault, C1–C4 | done 2026-09-06 (evening) |
 
 ### 3.1 Phase 0 — scaffold (plan §4)
 | # | Task | Gate | Status |
 |---|---|---|---|
 | P0.1 | Species table `n0`, state adapter (D2), `N_ref`, spin split; dataset assertion `Q == cell_charge` | counts match on every frame | done — `dscc/species.py`; all 2877 train+valid frames: `Q == cell_charge`, (205,204)/(204,204)/(208,208)/(413,412)/(412,412) |
-| P0.2 | Data pipeline: geometry-state groups formed before the split; strata keys; size-grouped batches (D4) | no group split across folds | todo |
+| P0.2 | Data pipeline: geometry-state groups formed before the split; strata keys; size-grouped batches (D4) | no group split across folds | done — `dscc/data.py` (`frame_meta`, `atomic_data` at `r_cut`, `split_by_group`, `assert_no_group_split`, `SizeGroupedSampler`) |
 | P0.3 | `fill(H, N)`: Gaussian smearing, bisection `mu`, `P`, `F_band`, generalised entropy; matrix-function backward (batched Function over `_dk_backward`) | `dF_band/dH_ab = P_ba` to 1e-10 | done — `dscc/fill.py`; FD 1e-8, autograd exact; density response vs FD 1e-6; batched == per-frame |
 | P0.4 | `E_PBC` Ewald matrix of Gaussians with derivatives (D3); LES oracle test; tiling-ladder `K_LR_ii` → `-alpha_M/L` | independent of the splitting parameter to 1e-10 eV (E, F, stress); oracle agreement | done at toy size — `dscc/ewald.py`; η-independence 1e-10 (E, F, stress), LES oracle 1e-6, ladder 1e-8, pair width convention; 159-atom gate: see log |
 | P0.5 | Regime A: `K_SR` (erf, `w_dir` C2 switch), `K_LR`; placement check over identified first-shell bonds; `m_sw` | placement floors satisfied on the training set | code done — `dscc/kernels.py`; **gate FAILED on the training set (C4)** |
 | P0.6 | Regime B: `K_SR` lattice sum with automatic image range; `K_LR`; `f_SR` | converged to 1e-10 eV; rewrapping-invariant | done — `K_SR + K_LR = E_PBC` to 1e-10, range-converged 1e-12, rewrapping 1e-12 |
 | P0.7 | `Gamma` (both regimes, `lambda_dir`, `U_eff` bounded), `Gamma_LR` (`r_g`/`r_split` cross Ewald), `Zbar` centring, `W` | splitting-parameter independence of `Gamma_LR` | matrices done (`gamma_matrix`, `gamma_lr`, `centred_pattern`, `project_sum_rule`, `host_potential`); the bounded learnables live in the head module (P1) |
 | P0.8 | `H0`: reuse `SlaterKosterH` (SK, Harrison init, decay lengths, log modulation, centred scalar onsite); rank-1 `l=1` descriptor; geometric rank-2 `Q_i`; head graph at its own `r_cut` (D6) | invariance under translation / rotation / permutation / rewrapping with covariant derivatives; `Q_i = 0` at cubic sites (D7) | done — `dscc/hamiltonian.py`, `dscc/graph.py`; rotation covariance `H' = D H D^T` 1e-10, permutation 1e-12, FD of the spectrum 1e-7; scalar-only control = block off |
-| P0.9 | Serialisation and checkpoint round trip | loaded checkpoint reproduces an uncached forward bit-for-bit | todo |
+| P0.9 | Serialisation and checkpoint round trip | loaded checkpoint reproduces an uncached forward bit-for-bit | done — `dscc/model.py` (`MACEDSCC`; registered numbers, `C_Q` table and record in `extra_state`); whole-object and state-dict round trips bit-identical |
 
 ### 3.2 Phase 1 — D-SCC forward and derivatives (plan §5)
 | # | Task | Status |
 |---|---|---|
-| P1.1 | Batched SCF loop (Anderson/Broyden, unmixed residual, `tol_q`/`tol_E`/`tol_c`, `n_max` cap + flag, `rho`) | todo |
-| P1.2 | Energy (band form vs primary functional to 1e-9 eV), HF forces, autodiff stress; neutral short-circuit (D5) | todo |
-| P1.3 | Route B switch (off by default); both regimes selectable | todo |
-| P1.4 | Root-rule harness: initialisations (i)–(iii), `tol_root`, symmetry-equivalent collapse | todo |
-| P1.5 | Gates: neutral null; `sum dq = Q` to 1e-12; gauge shift; FD forces {1e-2,1e-3,1e-4} Å to 1e-4 eV/Å and six strains; invariances to 1e-10 eV; stability / single-valuedness on every frame of both charge states; Route B centred/uncentred ladder test | todo |
+| P1.1 | Batched SCF loop (Anderson/Broyden, unmixed residual, `tol_q`/`tol_E`/`tol_c`, `n_max` cap + flag, `rho`) | per-graph loop done — `dscc/scf.py` (`solve_dscc`: Anderson, unmixed residual, cap flagged, `rho`, commutator, primary vs band); batching over equal-size frames: todo |
+| P1.2 | Energy (band form vs primary functional to 1e-9 eV), HF forces, autodiff stress; neutral short-circuit (D5) | done — model `_charged_forward`: band form, HF cotangents `(H, dP)`, `(Gamma, -½ dq dqᵀ)`, strain-based stress; short-circuit bit-identical |
+| P1.3 | Route B switch (off by default); both regimes selectable | done — `route_b`, `initialise_route_b` (q0 from the reference fill, sum rule, `Z_MAX_FACTOR`), `kernel.regime` |
+| P1.4 | Root-rule harness: initialisations (i)–(iii), `tol_root`, symmetry-equivalent collapse | `scf.root_rule` (zero / continuation / warm, spread, `passed`); symmetry-equivalent collapse by identical observables: todo |
+| P1.5 | Gates: neutral null; `sum dq = Q` to 1e-12; gauge shift; FD forces {1e-2,1e-3,1e-4} Å to 1e-4 eV/Å and six strains; invariances to 1e-10 eV; stability / single-valuedness on every frame of both charge states; Route B centred/uncentred ladder test | toy-size gates pass (`test_model.py`, `test_scf.py`): neutral null bit-identical; `sum dq = Q` 1e-12 (Newton-polished `mu`); gauge `-aQ` 1e-10; FD forces 3e-6 and strains 1e-7 (both regimes, Route B); invariances 1e-9; band vs primary 1e-9; root rule; unrolled vs envelope gradient. Real-data stability run: `scratchpad/stability_probe.py` (running). FD step ladder, six strains and the Route B tiling ladder: todo |
 
 ### 3.3 Phase 2 — training protocol (plan §6)
 | # | Task | Status |

@@ -86,6 +86,8 @@ class H0(nn.Module):
         # Species feature means over the pristine cell (plan 2.1), set once and stored.
         self.register_buffer("centre", torch.zeros(num_elements, feature_dim))
         self.register_buffer("centre_set", torch.tensor(False))
+        # Test knob for the gauge gate (plan section 5): `H0 -> H0 + a I`. Not a parameter.
+        self.gauge_shift = 0.0
 
     # ------------------------------------------------------------- pristine centre
 
@@ -140,4 +142,7 @@ class H0(nn.Module):
                 raise ValueError("the directional block needs the base's l = 1 features")
             H = H + self.directional_block(vectors.to(torch.float64), species, edge_index,
                                            edge_vector)
-        return 0.5 * (H + H.transpose(0, 1))
+        H = 0.5 * (H + H.transpose(0, 1))
+        if self.gauge_shift:
+            H = H + float(self.gauge_shift) * torch.eye(H.shape[0], dtype=H.dtype, device=H.device)
+        return H

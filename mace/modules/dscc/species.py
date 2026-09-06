@@ -19,6 +19,12 @@ OCCUPATION_POLICY = "count_fill"
 
 # Plan section 1 / section 11. Registered 2026-09-06.
 N0: Dict[int, int] = {55: 1, 82: 4, 17: 7}
+# Plan section 2.4: `U_max[Z]` from the GFN1-xTB hardness `GAM` (bounds only, never values):
+# Cl 0.519712, Cs 0.085110, Pb 1.000000 Hartree (param_gfn1-xtb.txt, grimme-lab/xtb,
+# doi 10.1021/acs.jctc.7b00118), in eV. Registered 2026-09-06.
+HARTREE = 27.211386
+U_MAX_GFN1: Dict[int, float] = {17: 0.519712 * HARTREE, 55: 0.085110 * HARTREE,
+                                82: 1.000000 * HARTREE}
 
 
 def neutral_count(atomic_numbers: Sequence[int], n0: Mapping[int, int] = N0) -> int:

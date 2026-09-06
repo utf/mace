@@ -47,10 +47,20 @@ def generalised_entropy(eps: torch.Tensor, mu: torch.Tensor, sigma_s: float) -> 
 
 
 def chemical_potential(eps: torch.Tensor, n_electrons, sigma_s: float,
-                       tol: float = 1e-12) -> torch.Tensor:
+                       tol: float = 1e-12, polish: int = 3) -> torch.Tensor:
     """The `mu` with `sum_a f_a = N`, by the batched bisection (no host synchronisation in
-    the loop); detached, which is exact at fixed `N`."""
-    return _cnt.find_mu(eps.detach(), n_electrons, sigma_s, "gaussian", tol=tol)
+    the loop) followed by Newton steps that take the count to the rounding floor (the
+    `sum dq = Q` gate of plan section 5 is 1e-12, below what a 1e-12 eV bracket gives at
+    `sigma_s = 0.05 eV`); detached, which is exact at fixed `N`."""
+    eps = eps.detach()
+    n = torch.as_tensor(n_electrons, dtype=eps.dtype, device=eps.device)
+    mu = _cnt.find_mu(eps, n, sigma_s, "gaussian", tol=tol)
+    for _ in range(polish):
+        x = (eps - mu.unsqueeze(-1)) / sigma_s
+        count = (0.5 * torch.erfc(x)).sum(dim=-1) - n
+        slope = (torch.exp(-x * x) / (sigma_s * _SQRT_PI)).sum(dim=-1)   # d(sum f)/d mu > 0
+        mu = torch.where(slope > 1e-300, mu - count / slope, mu)
+    return mu
 
 
 class _DensityMatrix(torch.autograd.Function):
