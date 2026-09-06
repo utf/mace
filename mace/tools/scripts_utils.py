@@ -488,6 +488,7 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         config["madelung_on_site"] = bool(getattr(model, "madelung_on_site", False))
         config["madelung_eps_inf"] = float(getattr(model, "madelung_eps_inf", 4.0))
         config["madelung_range"] = str(getattr(model, "madelung_range", "full"))
+        config["image_functional"] = str(getattr(model, "image_functional", "frontier_ff"))
         # Plan v8 section 2.1: the occupation policy and S_ref are config. A model pickled
         # before they existed ran the count fill against the neutral reference, which is
         # what the defaults say.

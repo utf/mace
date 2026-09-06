@@ -251,27 +251,30 @@ def align_pristine(present: GaussianDensity, z0: torch.Tensor, scaled_positions:
         scored.append((float(residual(t)), t))
     scored.sort(key=lambda s: s[0])
     best_t, best_r = None, float("inf")
-    for r0, t0 in scored[:n_candidates]:
-        t = t0.clone()
-        r = r0
-        for _ in range(newton_steps):
-            t_var = t.clone().requires_grad_(True)
-            value = residual(t_var)
-            grad = torch.autograd.grad(value, t_var, create_graph=True)[0]
-            hess = torch.stack([torch.autograd.grad(grad[i], t_var, retain_graph=True)[0]
-                                for i in range(3)])
-            try:
-                step = torch.linalg.solve(hess + 1e-9 * torch.eye(3, dtype=hess.dtype),
-                                          grad)
-            except RuntimeError:
-                break
-            t_new = (t_var - step).detach()
-            r_new = float(residual(t_new))
-            if r_new >= r - 1e-14:
-                break
-            t, r = t_new, r_new
-        if r < best_r:
-            best_t, best_r = t, r
+    # The refinement differentiates its own objective, so it builds its own graph whatever
+    # mode the caller is in (the FD harness's energy pass runs the forward under no_grad).
+    with torch.enable_grad():
+        for r0, t0 in scored[:n_candidates]:
+            t = t0.clone()
+            r = r0
+            for _ in range(newton_steps):
+                t_var = t.clone().requires_grad_(True)
+                value = residual(t_var)
+                grad = torch.autograd.grad(value, t_var, create_graph=True)[0]
+                hess = torch.stack([torch.autograd.grad(grad[i], t_var, retain_graph=True)[0]
+                                    for i in range(3)])
+                try:
+                    step = torch.linalg.solve(hess + 1e-9 * torch.eye(3, dtype=hess.dtype),
+                                              grad)
+                except RuntimeError:
+                    break
+                t_new = (t_var - step).detach()
+                r_new = float(residual(t_new))
+                if r_new >= r - 1e-14:
+                    break
+                t, r = t_new, r_new
+            if r < best_r:
+                best_t, best_r = t, r
     # Addendum 4.1: "any continuous geometry-dependent alignment is fully differentiated".
     # The Newton iterations above ran on detached shifts, so `best_t` carries no graph and a
     # functional of the placed pristine density would see no registration response in its

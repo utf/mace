@@ -1533,6 +1533,17 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default="full",
     )
     parser.add_argument(
+        "--defect_image_functional",
+        help="Transition plan v8.1 addendum section 6.1, the image regime: 'frontier_ff' "
+        "is the Stage 1.2 frontier-frontier image patch (Stages 1-3, as is); 'unified' is "
+        "the Stage-4 functional -- H_fix = H_local (requires --defect_madelung_range off, "
+        "or the static-frontier interaction is counted twice) with the forward-only "
+        "Phi_SF^{inf,LR} + Phi_img^B two-boundary diagnostic on the canonical lift",
+        type=str,
+        choices=["frontier_ff", "unified"],
+        default="frontier_ff",
+    )
+    parser.add_argument(
         "--defect_madelung_composition",
         help="Pristine stoichiometry in the model's own species order, comma-separated "
         "(CsPbCl3 with Z-table [17, 55, 82] is '3,1,1'). A property of the training set's "

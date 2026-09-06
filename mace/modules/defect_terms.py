@@ -124,6 +124,25 @@ def registry(model) -> List[TermSpec]:
             potential="absent", response="divided_difference", depends_on_R=True,
             depends_on_features=True, kernel=getattr(model, "gauge", Kernel.PBC.value),
             section="2.8 (Phi_FF; V_FF = dPhi_FF/dP from Stage 5)"))
+    elif getattr(model, "boundary_active", False):
+        # STAGE 4 (addendum 6.1, section 8). The unified regime REPLACES the frontier
+        # patch: two terms, each holding its interactions exactly once. Both are P-dependent
+        # (through the frontier channels), forward-only at this stage (potential absent;
+        # V_B = dPhi_B/dP is Stage 5's), with their response in the forces by the
+        # divided-difference route and the full geometry/cell dependence of rho_S, the
+        # registration and the lift. Phi_SF is boundary-COMMON (the same under both
+        # kernels; it calls G_inf on the canonical lift), so it is not gauge-dependent;
+        # Phi_img is the periodic image functional and is zero under the isolated boundary.
+        terms.append(TermSpec(
+            name="static_frontier", output_key="phi_sf_energy", depends_on_P=True,
+            potential="absent", response="divided_difference", depends_on_R=True,
+            depends_on_features=True, kernel=None,
+            section="6.1 (Phi_SF^{inf,LR} on the lift, boundary-common; V_SF from Stage 5)"))
+        terms.append(TermSpec(
+            name="image", output_key="phi_img_energy", depends_on_P=True,
+            potential="absent", response="divided_difference", depends_on_R=True,
+            depends_on_features=True, kernel=getattr(model, "gauge", Kernel.PBC.value),
+            section="6.1 (Phi_img^B = 1/2 B_{K_img}[rho_img, rho_img]; zero when isolated)"))
     return terms
 
 

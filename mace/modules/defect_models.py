@@ -116,6 +116,20 @@ def _restore_trunk_constants_from_buffer(module, incompatible_keys):
             block.avg_num_neighbors = float(value)
 
 
+def _check_image_regime(image_functional: str, madelung_range: str) -> None:
+    """Addendum 6.1: 'no separate image potential or image energy may duplicate' the
+    unified functional. Under it `H_fix = H_local` (section 8, Stage 4): the long-range
+    static--frontier interaction is the explicit `Phi_SF^{inf,LR}[P]`, so the Madelung
+    on-site shift -- the same interaction, as a potential inside `H` -- may not also be
+    present. The combination is refused at construction and on load, not warned about."""
+    if image_functional == "unified" and madelung_range != "off":
+        raise ValueError(
+            f"image_functional='unified' requires madelung_range='off', got "
+            f"{madelung_range!r}: the unified functional evaluates the static-frontier "
+            "interaction explicitly as Phi_SF^{inf,LR}[P] (addendum 6.1), and the Madelung "
+            "shift inside H would count it a second time. H_fix = H_local at Stage 4")
+
+
 @compile_mode("script")
 class MACEDefect(ScaleShiftMACE):
     """MACE with a carrier-conditioned short-range correction.
@@ -188,6 +202,12 @@ class MACEDefect(ScaleShiftMACE):
         # removed at r_split = the first-block cutoff), "off" (removed entirely; the module
         # stays for the formula and the static charges).
         madelung_range: str = "full",
+        # Addendum 6.1 / section 8 Stage 4: the image regime. "frontier_ff" is the Stage-1.2
+        # frontier-frontier patch (Stages 1-3, as is); "unified" is the Stage-4 functional
+        # -- H_fix = H_local, with Phi_SF^{inf,LR} + Phi_img^B evaluated forward-only on
+        # the canonical lift. A regime, not a term: the two are never both evaluated, and
+        # "unified" requires madelung_range = "off" (see the check below).
+        image_functional: str = "frontier_ff",
         madelung_composition: Optional[Sequence[float]] = None,
         madelung_z_init: Optional[Sequence[float]] = None,
         logit_seed_gamma: float = 0.0,
@@ -345,6 +365,13 @@ class MACEDefect(ScaleShiftMACE):
             raise ValueError(f"madelung_range must be one of {MADELUNG_RANGES}, got "
                              f"{madelung_range!r}")
         self.madelung_range = str(madelung_range)
+        from mace.modules.defect_image import IMAGE_REGIMES
+
+        if str(image_functional) not in IMAGE_REGIMES:
+            raise ValueError(f"image_functional must be one of {IMAGE_REGIMES}, got "
+                             f"{image_functional!r}")
+        self.image_functional = str(image_functional)
+        _check_image_regime(self.image_functional, self.madelung_range)
         self.madelung = None
         if madelung_on_site:
             from mace.modules.defect_madelung import MadelungOnSite
@@ -579,6 +606,7 @@ class MACEDefect(ScaleShiftMACE):
         self._apply_precision_policy()
         self._apply_long_range_policy()
         self._ensure_frontier_ewald()
+        self._ensure_image_ewald()
 
     # ------------------------------------------------------------ Stage A' policies
 
@@ -878,6 +906,7 @@ class MACEDefect(ScaleShiftMACE):
             ("counting_centre_form", "output"),
             ("madelung_site_zeta", 0.0),
             ("madelung_range", "full"),
+            ("image_functional", "frontier_ff"),
             ("skip_neutral_reference", True),
             ("on_site_centred", False),
             ("_base_cache", None),
@@ -925,6 +954,18 @@ class MACEDefect(ScaleShiftMACE):
                 self._ensure_frontier_ewald()
             except (AttributeError, KeyError, TypeError):
                 pass
+        # STAGE 4: the regime is config; a checkpoint from before it ran the frontier patch.
+        # A checkpoint that DOES declare the unified regime is held to its rule on load too.
+        if not hasattr(self, "image_functional"):
+            object.__setattr__(self, "image_functional", "frontier_ff")
+        _check_image_regime(getattr(self, "image_functional", "frontier_ff"),
+                            getattr(self, "madelung_range", "full"))
+        if "image_ewald" not in getattr(self, "_modules", {}):
+            object.__setattr__(self, "image_ewald", None)
+            try:
+                self._ensure_image_ewald()
+            except (AttributeError, KeyError, TypeError):
+                pass
         # Buffers need registering, not just setting, or they stay out of the state dict
         # and out of `.to()`. A model pickled before the gauge probe existed has none, and
         # an empty buffer is exactly the "probe disabled" state, so old checkpoints keep
@@ -959,9 +1000,45 @@ class MACEDefect(ScaleShiftMACE):
     @property
     def frontier_active(self) -> bool:
         """Plan v8 section 2.8: `Phi_FF` exists when the model has a periodic evaluator and
-        the counting head (the channel objects are built from its Hamiltonian)."""
-        return (getattr(self, "frontier_ewald", None) is not None
+        the counting head (the channel objects are built from its Hamiltonian) -- and the
+        image regime is the legacy one. Under the unified regime it is REPLACED, not joined,
+        by `boundary_active`."""
+        return (getattr(self, "image_functional", "frontier_ff") == "frontier_ff"
+                and getattr(self, "frontier_ewald", None) is not None
                 and hasattr(getattr(self, "spectral", None), "valence"))
+
+    @property
+    def boundary_active(self) -> bool:
+        """Addendum 6.1 / section 8 Stage 4: the unified functional exists when the regime
+        selects it and the model has its (converged) periodic evaluator, the counting head
+        and the static charges."""
+        return (getattr(self, "image_functional", "frontier_ff") == "unified"
+                and getattr(self, "image_ewald", None) is not None
+                and hasattr(getattr(self, "spectral", None), "valence")
+                and getattr(self, "madelung", None) is not None)
+
+    def _ensure_image_ewald(self) -> None:
+        """The periodic evaluator of `Phi_img` (addendum 6.1) at `sigma = r_res`, with its
+        reciprocal-space resolution CONVERGED (`defect_image.converged_dl`): the isolated
+        half of `K_img` is exact, so any truncation of the periodic half would land in the
+        image term undiminished. The legacy `frontier_ewald` keeps LES's default `dl` so
+        the Stage-1 numerics are untouched."""
+        if getattr(self, "image_ewald", None) is not None:
+            return
+        if getattr(self, "image_functional", "frontier_ff") != "unified":
+            return
+        ewald = getattr(self, "latent_ewald", None)
+        if ewald is None or not getattr(self, "use_long_range", False):
+            return
+        from mace.modules.defect_image import converged_dl
+
+        arguments = dict(getattr(ewald, "les_arguments", {}) or {})
+        r_res = float(self.functional["r_res"])
+        arguments["sigma"] = r_res
+        arguments["dl"] = converged_dl(r_res, float(arguments.get("dl", 2.0)))
+        self.image_ewald = LatentEwald(arguments)
+        for p_ in self.image_ewald.parameters():
+            p_.requires_grad_(False)
 
     def _ensure_frontier_ewald(self) -> None:
         """The evaluator of `B_img` at `sigma = r_res` (section 2.7): the model's own Ewald
@@ -1581,6 +1658,14 @@ class MACEDefect(ScaleShiftMACE):
         frontier = torch.zeros_like(base_energy)
         frontier_ref = torch.zeros_like(base_energy)
         frontier_diag: Dict[str, Any] = {}
+        # STAGE 4 (addendum 6.1, section 8): under the unified regime the frontier patch is
+        # REPLACED by Phi_SF^{inf,LR} + Phi_img^B, forward-only on the model's own fill. The
+        # two are never both evaluated.
+        phi_sf = torch.zeros_like(base_energy)
+        phi_img = torch.zeros_like(base_energy)
+        phi_sf_ref = torch.zeros_like(base_energy)
+        phi_img_ref = torch.zeros_like(base_energy)
+        boundary_diag: Dict[str, Any] = {}
         if self.frontier_active:
             from mace.modules.defect_frontier import entries_from_head, frontier_energy
 
@@ -1598,6 +1683,35 @@ class MACEDefect(ScaleShiftMACE):
                         data["batch"], num_graphs, frontier_gauge, label="reference",
                         training=bool(training))
                     frontier_ref = fr_ref["energy"]
+        elif self.boundary_active:
+            from mace.modules.defect_boundary import stage4_terms
+            from mace.modules.defect_frontier import entries_from_head
+
+            head_feats_static = defect_feats
+            if getattr(self, "spectral_first_shell", False):
+                head_feats_static = defect_feats[:, : self.spectral_feature_dim]
+            with mark("ewald/boundary"):
+                bd = stage4_terms(
+                    self, entries_from_head(head_extras.get("frontier")), state, s_ref,
+                    head_species, head_positions, head_cell, data["batch"], num_graphs,
+                    frontier_gauge, feats=head_feats_static, centre=centre, label="state",
+                    training=bool(training))
+                boundary_diag = bd
+                # The state's own reference fill is subtracted INSIDE stage4_terms (the
+                # frame's reference cloud, as the frontier term does); `energy` is already
+                # Phi(S) - Phi(S_ref) and the parts are reported separately.
+                phi_sf = bd["phi_sf"] - bd["phi_sf_ref"]
+                phi_img = bd["phi_img"] - bd["phi_img_ref"]
+                frontier = bd["energy"]
+                if not skip_reference:
+                    bd_ref = stage4_terms(
+                        self, entries_from_head(head_extras_ref.get("frontier")),
+                        state_ref, s_ref, head_species, head_positions, head_cell,
+                        data["batch"], num_graphs, frontier_gauge, feats=head_feats_static,
+                        centre=centre, label="reference", training=bool(training))
+                    phi_sf_ref = bd_ref["phi_sf"] - bd_ref["phi_sf_ref"]
+                    phi_img_ref = bd_ref["phi_img"] - bd_ref["phi_img_ref"]
+                    frontier_ref = bd_ref["energy"]
 
         # The correction at this frame's own counter is what the total energy carries;
         # the paired difference is what the delta labels supervise. They coincide only
@@ -1716,6 +1830,21 @@ class MACEDefect(ScaleShiftMACE):
             "frontier_q_F": frontier_diag.get("q_F"),
             "frontier_w_ref": frontier_diag.get("w_ref"),
             "frontier_min_weight": frontier_diag.get("min_weight"),
+            # STAGE 4 (addendum 6.1, 6.4): the two registered terms of the unified regime
+            # (each `Phi(S) - Phi(S_ref)`), their reference-branch twins, and the
+            # two-boundary diagnostic -- the periodic image functional under EITHER
+            # boundary, at the state and at the reference -- with the support evidence.
+            "phi_sf_energy": phi_sf,
+            "phi_img_energy": phi_img,
+            "phi_sf_ref_energy": phi_sf_ref,
+            "phi_img_ref_energy": phi_img_ref,
+            "phi_img_pbc": boundary_diag.get("phi_img_pbc"),
+            "phi_img_pbc_ref": boundary_diag.get("phi_img_pbc_ref"),
+            "boundary_q_img": boundary_diag.get("q_img"),
+            "boundary_q_img_ref": boundary_diag.get("q_img_ref"),
+            "boundary_w_min": boundary_diag.get("w_min"),
+            "boundary_clearance_mass": boundary_diag.get("clearance_mass"),
+            "boundary_lift_fingerprint": boundary_diag.get("lift_fingerprint"),
             "node_energy": node_energy,
             "forces": forces,
             "base_forces": base_forces,

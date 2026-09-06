@@ -119,7 +119,7 @@ Status: `todo` / `wip` / `done` / `blocked`. Keep this column current.
 | 1.12 | Migrate the existing 159-atom Tier-2 record into the anchor cache **only** if it reconstructs every key field and passes every Tier-2 gate | add §3.5 | done — migration implemented and gated on the §3.2 conditions (`anchors_from_table`); supersedes D9 |
 | 1.13 | Fix `q_raw` definition and its tests | add §4.1 | done — shorthand shown FALSE here, see D4 |
 | 1.14 | Extend every result cache key with geometry/cell, canonical state, checkpoint, constructor, boundary+potential-zero, occupation/smearing, solver-regime and (when `G_∞` is called) lift/support fingerprints | add §3.5, §6.3 | done — delivered by the stopped session; owned here |
-| 1.15 | Tests: electron↔hole crossings; gauge shift invariance (`H → H + aI`); Tier-1 routing test asserting no Tier-2 eigensolve after Tier-1 passes | add §11.1 | wip (gauge shift + crossings done; routing test owed) |
+| 1.15 | Tests: electron↔hole crossings; gauge shift invariance (`H → H + aI`); Tier-1 routing test asserting no Tier-2 eigensolve after Tier-1 passes | add §11.1 | done — routing test `TestAnchorReuseAndRouting` (tier2 monkeypatched to raise) |
 
 ### WP2 — Stage 1 energy-zero correction (blocking before any Stage-1 result is interpreted)
 
@@ -151,13 +151,15 @@ Status: `todo` / `wip` / `done` / `blocked`. Keep this column current.
 | id | item | source | status |
 |---|---|---|---|
 | 4.1 | Smooth `g_res`: `a_i`, `ω_i` with `ε_Z`, `ε_ω`, `λ_d d_i`; `O(1/N_at)` fallback; finite derivatives as `δZ_i → 0` | add §4.1 | done |
-| 4.2 | Support gate: nonzero `|Q_core − q_raw|` with sub-threshold departure signal ⇒ unsupported, not a silent monopole | add §4.1 | done — `residual_support`, not yet enforced at the call site |
-| 4.3 | Covariant registration (co-translation, co-rotation, wrap, permutation, affine strain); discrete correspondence fixed per class | add §4.1 | done — all five covariances pass; see D11 |
+| 4.2 | Support gate: nonzero `|Q_core − q_raw|` with sub-threshold departure signal ⇒ unsupported, not a silent monopole | add §4.1 | done — enforced in `frame_static_densities(lift=True)`, the forward's path (raises `UnsupportedStateError`) |
+| 4.3 | Covariant registration (co-translation, co-rotation, wrap, permutation, affine strain); discrete correspondence fixed per class | add §4.1 | done — five covariances pass; the alignment is differentiated (implicit step) and the correspondence is frozen per class, stored by site and transported by lattice translation; see D11, D16 |
 | 4.4 | `defect_lift.py`: constructor-topology branch envelope `ζ_lift`, circular moment, cut placement, integer image assignment fixed w.r.t. `P` | add §4.2 | done — `defect_lift.py`, constructor-topology envelope + circular moment |
 | 4.5 | Boundary-clearance and tail contract with certified `ε_ρ`, `ε_E`, `ε_F`, `ε_σ` bounds | add §4.2 | done — `clearance_report`, absolute buffer mass |
 | 4.6 | `IsoOK` conjunctive predicate (6 clauses) with per-clause negative tests | add §4.2 | done — `iso_ok`, 8 clauses with per-clause negative tests |
-| 4.7 | Forward-only two-boundary diagnostic; retain `dP⁽⁰⁾/d(R,h)`; do **not** feed `δΦ/δP` back into `H` | add §8 Stage 4 | todo |
-| 4.8 | Remove any independent static image potential or pairwise image patch | add §8 Stage 4 | todo |
+| 4.7 | Forward-only two-boundary diagnostic; retain `dP⁽⁰⁾/d(R,h)`; do **not** feed `δΦ/δP` back into `H` | add §8 Stage 4 | done — `image_functional="unified"`: `defect_image.py` (Φ_SF^{∞,LR}, Φ_img^B on the lift) + `defect_boundary.stage4_terms`; force and strain FD pass for `static_frontier`, `image`, `assembled` under both boundaries; see D13–D15 |
+| 4.8 | Remove any independent static image potential or pairwise image patch | add §8 Stage 4 | done — the unified regime REPLACES `Φ_FF` (registry: base/band/static_frontier/image) and refuses the Madelung shift inside `H` (D13); no static image potential existed to remove (v8's `G_img ⋆ ρ_static^def` was never built) |
+| 4.9 | `m_F ≤ 1` guard wired on every nontrivial charge-head path, requested and reference state, before any energy | add §3.4, §8 Stage 4 | done — `stage4_terms` (`assert_supported_multiplicity` on both states); test `TestGates` |
+| 4.10 | Affine-reference strain and thermal-background tests | add §8 Stage 4 | done — `strain_check` on the unified terms (both boundaries); thermal pristine background reported in the cut buffers and refused by the lift (`test_stage4_boundary.py`) |
 
 ### WP5 — Stage 5
 
@@ -214,6 +216,8 @@ runs per GPU      : 2
 live check        : nvidia-smi --query-gpu=index,memory.used --format=csv,noheader
                     GPUs that error out of nvidia-smi are dropped from the wave
 2026-09-06 status : GPU6 = Unknown Error -> capacity 3 GPUs x 2 = 6 concurrent runs
+2026-09-06 10:00  : after the cold power cycle all of 4-7 are back (GPU 6 included);
+                    capacity 4 GPUs x 2 = 8. s14a_s1..s6 occupy 4,5 (two each) and 6,7.
 ```
 
 A wave launcher must: enumerate live allowed GPUs, assign at most two runs per GPU, pin each
@@ -511,3 +515,71 @@ warm (anchored) : 4.61 s   tiers [1, 1, 1]        2.2x, integers identical
 
 The instrumented test the addendum names is now present: `tier2` is monkeypatched to raise,
 and a rebuild with a seeded anchor completes without calling it.
+
+### D13 — under the unified regime `H_fix = H_local`: the Madelung shift leaves `H`
+
+Addendum §8 Stage 4 says "keep `H_fix = H_local`", §3.1 defines `H_fix` as the local
+Slater–Koster plus accepted on-site and edge terms, and §6.1 assigns the long-range
+static–frontier interaction to the *explicit* functional `Φ_SF^{∞,LR}[P] = B_{K_∞^LR}[ρ_S,
+ρ_F[P]]`, whose Hamiltonian contribution `V_SF = δΦ_SF/δP` is activated only at Stage 5 ("no
+unsigned scalar field is inserted directly into an electron Hamiltonian"; §13: "Stage 4 is
+forward-only"). The legacy Madelung on-site shift is that same interaction as a potential
+inside `H`. Keeping it while also evaluating `Φ_SF[P⁽⁰⁾]` counts the defect-induced
+long-range S–F piece twice, which §6.1 forbids ("no separate image potential or image energy
+may duplicate it").
+
+Decision: `image_functional="unified"` **requires** `madelung_range="off"`; the combination
+is refused at construction and on checkpoint load, with the double-count reason. The default
+regime (`"frontier_ff"`) is untouched, so the Stage-1 reference and the runs in flight are
+unaffected. The consequence for the Stage-4 arm is real and stated: `P⁽⁰⁾` is filled from a
+Hamiltonian with no electrostatics in it, so the electrostatic site selection Edit 1 gave the
+head is absent until Stage 5's stationary solve puts `V_B` into `H`. That is what the
+addendum prescribes for Stage 4; it is a diagnostic stage, not a production model.
+
+### D14 — the legacy `Φ_FF` is half of v8 §2.8
+
+`LatentEwald.energy` is the energy `E = ½ qᵀAq` (`test_madelung_convention` pins
+`E = ½ Σ q V`). v8 §2.8 defines `Φ_FF = ½ B_img[wρ, wρ] = E_PBC − E_∞`. The legacy code
+writes `0.5 * (E_PBC − E_∞)` — a quarter of `B_img`, half the specified term. Left as it is:
+the Stage-1 reference and s14a depend on its numerics, and changing it mid-flight would make
+the corrected retrain incomparable with its pre-registration. Recorded here, in the
+`defect_image` module docstring, and to be raised with the user; the unified term uses the
+correct `E_PBC − E_∞`. Also: the legacy term calls `isolated_energy` on **wrapped**
+positions, which §6.1 prohibits; the unified term lifts first.
+
+### D15 — the periodic evaluator's `dl` is a numerical floor that the image term inherits
+
+LES sums reciprocal space to `k_max = 2π/dl`. At its default `dl = 2` with `σ = r_res = 1`
+the Gaussian weight at the cutoff is still `7e-3`, and because the isolated half of `K_img`
+is exact the remainder lands in the image term undiminished: measured 0.5 % on a lone
+charge's Makov–Payne energy, 2.4 % on a 64-site lattice (`TestConvergence`). With
+`k_max σ ≥ 2π` the lone charge matches Makov–Payne to `1e-6`. The unified regime's
+evaluator (`image_ewald`) uses `dl = min(dl_config, r_res)`; the legacy `frontier_ewald`
+keeps LES's default so Stage-1 numerics are untouched. The 1.5 % "agreement" the Madelung
+convention test tolerates against Makov–Payne is this truncation.
+
+### D16 — the registration derivative, and the correspondence by site
+
+`align_pristine` returned a detached minimiser, so every functional of the placed pristine
+density had no registration response in its force (the FD harness would have reported it
+as `missing_derivative`). One Newton step at the converged shift with the graph attached
+gives the implicit-function derivative without moving the value; the refinement builds its
+own graph under `enable_grad` because the harness's energy pass runs under `no_grad`.
+
+The discrete correspondence is established once per class (`pristine_placement`) and stored
+**by pristine site**, not by atom index, with the departure signal per site: the global
+re-fit on a thermal frame may land on an equivalent representative (a pristine lattice
+translation — measured on the 2×2×4 class, where the re-fit differs from the class shift by
+(−½, −½, +¾) of the supercell, one 5.6 Å lattice vector), and an atom permutation relabels
+the present atoms. `transport_correspondence` finds the one lattice translation carrying the
+frozen site sets onto the frame's (tolerance `MERGE·r_res`, a physical distance, because the
+class reference is itself thermal) and refuses anything else as a topology event. The
+per-frame proximity rule is used only to find the representative and to verify — never to
+re-establish — the correspondence.
+
+### Cost note (Stage 4 arm)
+
+`stage4_terms` re-fits the pristine placement (global candidate search, 8 candidates × 12
+Newton steps on an `n × m` Gaussian kernel) for every off-reference graph on every forward.
+Fine on the toy and for the diagnostic arm; measure the per-step cost on the 159-atom cells
+before committing six seeds to it.

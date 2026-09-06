@@ -117,6 +117,42 @@ def frontier_site_charges(entry: FrontierEntry, fills: Sequence[int], n_e: Seque
     return {"site": site, "w": w, "p": p, "q_F": q_f, "weights": weights}
 
 
+def frontier_channels(entry: FrontierEntry, fills: Sequence[int], n_e: Sequence[int],
+                      n_h: Sequence[int], edges, t_el: float, n_sites: int, p_star: float,
+                      delta_p: float, label: str = "") -> List[Any]:
+    """The active channels of one state as `defect_image.Channel`s (addendum 5.1/5.2).
+
+    Each channel carries its own normalised site density `rho^_c,sigma` (integral 1) and its
+    own localisation weight `w_c,sigma` -- the participation switch of THAT channel's
+    density, so that electron and hole participation are evaluated separately and opposite
+    signs cannot cancel in the localisation diagnostic. Under the `m_F <= 1` guard there is
+    at most one active channel, where this coincides with the legacy single switch. The
+    exact-plateau `W(N_eff) W(R_eff)` switch of section 5.1 is Stage 5.3's and replaces the
+    sigmoid here without changing this interface."""
+    from mace.modules.defect_image import Channel
+
+    channels: List[Any] = []
+    for spin in range(2):
+        for count, hole, sign, name in ((int(n_e[spin]), False, -1.0, "e"),
+                                        (int(n_h[spin]), True, 1.0, "h")):
+            if count == 0:
+                continue
+            dens, total = channel_site_density(entry, fills[spin], hole, edges, t_el,
+                                               n_sites)
+            weight = float(total.detach())
+            if weight < LOG_BELOW:
+                logging.info("frontier %s channel, spin %d%s: projector weight %.3f < %.1f "
+                             "(a level merging into a band); counts unchanged",
+                             "hole" if hole else "electron", spin,
+                             f" ({label})" if label else "", weight, LOG_BELOW)
+            normalised = dens / total.clamp_min(WEIGHT_FLOOR)
+            p = participation_fraction(normalised)
+            w = torch.sigmoid((p_star - p) / delta_p)
+            channels.append(Channel(name=f"{name}{spin}", density=normalised, count=count,
+                                    sign=sign, weight=w))
+    return channels
+
+
 def _composition_keys(node_species: torch.Tensor, batch: torch.Tensor, num_graphs: int,
                       atomic_numbers: Sequence[int]) -> List[str]:
     """One class key per graph from a species histogram: no per-atom host round trip."""
