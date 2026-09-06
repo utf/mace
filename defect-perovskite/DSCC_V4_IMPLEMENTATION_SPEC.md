@@ -29,6 +29,7 @@ task list and the registers the plan's §10 rules require. Paths relative to the
 | C1 | Smearing of the labels: the old code records "doped's default ISMEAR = 0, SIGMA = 0.05 eV" as the labels' smearing (`defect_counting.py`). Plan §11 registers Gaussian 0.05 eV and asks for confirmation from the label paper's methods (Mosquera-Lois & Walsh, PRX Energy 4, 043008 (2025)). | **open** — proceeding with Gaussian 0.05 eV |
 | C2 | Whether `E_gap = 2.40 eV` is the static-lattice or the thermal-average PBE gap (decides which cell the gap regulariser acts on, §6). `band_edges.json` only carries the symmetric ±1.2 eV placement. | **open** — Phase 0 does not need it; needed before Phase 2 |
 | C3 | b3 GPU 6 fault: cold power cycle now, or leave until GPU waves are needed (Phase 3)? | **open** |
+| C4 | **Regime-A placement check fails on the training set at the plan's defaults** (`r_d1 = 3.2`, `r_d2 = 3.6` Å, floor 1e-3). Identified first-shell Pb–Cl bonds beyond `r_d1`: 3.1 % on the 544 pristine frames, 5–7 % on the 79-atom vacancy frames (the six-nearest rule counts a Cl across the vacancy for the flanking Pb), 1.2–1.6 % at 159 atoms; intra-octahedron Cl–Cl edges below `r_d2`: 2.0–2.6 % (0 at 159 atoms). The first-shell Pb–Cl distribution is thermal and wide: p50 2.88 Å, fraction > 3.0 / 3.1 / 3.2 / 3.3 Å = 22.5 / 10.8 / 5.6 / 3.4 %. No window in the 3.2–3.6 Å gap clears a 1e-3 floor on these frames. Options for ruling: (a) register a higher floor (≈ 5e-2) with the physical consequence that a few % of first-shell pairs sit inside the switch; (b) move the window up (e.g. 3.5–4.0 Å, still below the 4.8 Å vacancy-spanning minimum, but then the Cs–Cl shell at 3.5–4.1 Å is inside it); (c) make regime B (no switch) the primary regime and report regime A as failing its placement gate. Also: exclude the vacancy-flanking Pb's sixth neighbour from the identified set, or run the check on pristine frames only. | **open** — needed before P0.5 closes |
 
 ## 2. Registers
 
@@ -41,6 +42,8 @@ task list and the registers the plan's §10 rules require. Paths relative to the
 | `eps_inf` | 4 | plan §1 (host input) | 2026-09-06 (plan) |
 | `E_gap` | 2.40 eV | plan §1 (host input); convention C2 open | 2026-09-06 (plan) |
 | Coulomb constant `C` | 14.399645 eV·Å | `defect_madelung.COULOMB_CONSTANT` | 2026-09-06 |
+| Gaussian width convention | a charge of width `r_g` has density `∝ exp(-r²/(2 r_g²))`; two of widths `s_i`, `s_j` interact as `C erf(r / sqrt(2 (s_i² + s_j²))) / r` (equal widths: `erf(r/(2 r_g))/r`, self term `C/(sqrt(pi) r_g)`); the LES `sigma` is `sqrt(2) r_g` (measured: cross term of two unit charges, Richardson-extrapolated in 1/L, matches `r_g = sigma/sqrt(2)` to 4e-5 at r = 1–3 Å); LES with `remove_self_interaction` excludes the Gaussian self term (a lone unit charge gives `-alpha_M C/(2L)` exactly: `E·L = -20.428` at L = 20/40/80 Å) | `scratchpad/les_convention.py`, 2026-09-06 | 2026-09-06 |
+| `U_max[Z]` | GFN1-xTB hardness `GAM` (Hartree): Cl 0.519712, Cs 0.085110, Pb 1.000000 → 14.142, 2.316, 27.211 eV; bounds only | `param_gfn1-xtb.txt` (grimme-lab/xtb, doi 10.1021/acs.jctc.7b00118) | 2026-09-06 |
 | Background | VASP neutralising background; `E_bg = -pi C sigma^2 Q^2 / V` for Gaussian width `sigma` | plan §11; `latent_ewald.LatentEwald.energy` | 2026-09-06 (plan) |
 | Spin split | majority-channel: `N_ref_up = ceil(N_ref/2)`, `N_ref_dn = floor(N_ref/2)` | plan §1 | 2026-09-06 (plan) |
 | Base features | `l = 1` only, position derivatives through the recomputed first block | plan §11 | 2026-09-06 (plan) |
@@ -95,6 +98,35 @@ Phase 0.
 `forward` never enters the head branch, so the base outputs are returned bit-identically
 (adding an exact zero can change the last bit).
 
+**D6 — base wiring (2026-09-06).** The frozen neutral base is
+`/home/alex/runs/aprime_prod/aprime_prod.model` (the `--defect_base_init` of the last v8
+wave): a `MACEDefect` object with `spectral_head = False`, `r_max = 5.0 Å`, two interactions,
+block-0 irreps `128x0e+128x1o`, species [Cl, Cs, Pb]. `E_base`, `F_base` and the stress are
+taken from `ScaleShiftMACE.forward(base, data)` (the parent class's forward: measured equal
+to `base(data)` at `S_ref` to 1e-16), with every base parameter frozen; `out["node_feats"]`
+`[N, 640]` is block 0 (`[:, :128]` scalars, `[:, 128:512]` the 128 `l = 1` vectors as
+`[N, 128, 3]`) followed by block 1, attached to positions and cell. The head's neighbour
+list is built in the data pipeline at the head's `r_cut` (registered; the old head used 10 Å
+and the vacancy-spanning Pb–Pb pair is 4.8–7.1 Å, so the base's 5 Å list cannot serve) and
+the trunk is fed the `≤ r_max` subset, as the old model did. `cf_base_f0..f2` are the
+k-fold bases for the out-of-fold `s0` of §6 (Phase 2).
+
+**D7 — the rank-2 descriptor (2026-09-06).** `Q_i = sum_j w(r_ij)(rhat rhat^T - I/3)` with
+`w = (1 - (r/q_cut)^6)^2`, `q_cut = 4.5 Å` (registered default). A traceless rank-2 tensor is
+even under inversion, so `Q_i` vanishes at sites of cubic symmetry (ideal Pb, Cs), not at
+every centrosymmetric site as the plan's remark says: on the ideal Cl site (D4h) it is the
+uniaxial quadrupole along the Pb–Cl–Pb axis, `2w(2.8) diag(-1/3, -1/3, 2/3)`, which is the
+crystal field that splits Cl `p_sigma` from `p_pi` — the sign Arm 1 (iii) tests. The formula
+is what is implemented; the remark is corrected here. The rank-1 term is the one that
+vanishes at centrosymmetric sites.
+
+**P0.4 at production size (2026-09-06).** On a 159-atom training frame with a random `dq`
+of net +1 (energy 496 eV): `eta` = 1.5 / 2.5 / 4.0 Å against the default 3.14 Å gives
+|ΔE| ≤ 2.6e-11, |ΔF| ≤ 2e-12, |Δstress| ≤ 5.2e-10 / 6.9e-11 / 2.3e-11 eV. The stress
+figure at `eta = 1.5` is float64 rounding at the 500-eV test scale (1e-12 relative); at
+physical `dq` (|Q| = 1, energies of a few eV) the absolute figure is 1e-11. Cost 0.1–0.4 s
+per matrix on CPU at 160 atoms, 0.34 s on the local GPU.
+
 ## 3. Task list
 
 Status: `todo` / `wip` / `done` / `blocked`.
@@ -109,14 +141,14 @@ Status: `todo` / `wip` / `done` / `blocked`.
 ### 3.1 Phase 0 — scaffold (plan §4)
 | # | Task | Gate | Status |
 |---|---|---|---|
-| P0.1 | Species table `n0`, state adapter (D2), `N_ref`, spin split; dataset assertion `Q == cell_charge` | counts match on every frame | todo |
+| P0.1 | Species table `n0`, state adapter (D2), `N_ref`, spin split; dataset assertion `Q == cell_charge` | counts match on every frame | done — `dscc/species.py`; all 2877 train+valid frames: `Q == cell_charge`, (205,204)/(204,204)/(208,208)/(413,412)/(412,412) |
 | P0.2 | Data pipeline: geometry-state groups formed before the split; strata keys; size-grouped batches (D4) | no group split across folds | todo |
-| P0.3 | `fill(H, N)`: Gaussian smearing, bisection `mu`, `P`, `F_band`, generalised entropy; matrix-function backward (reuse `_FermiDensityMatrix`) | `dF_band/dH_ab = P_ba` to 1e-10 | todo |
-| P0.4 | `E_PBC` Ewald matrix of Gaussians with derivatives (D3); LES oracle test; tiling-ladder `K_LR_ii` → `-alpha_M/L` | independent of the splitting parameter to 1e-10 eV (E, F, stress); oracle agreement | todo |
-| P0.5 | Regime A: `K_SR` (erf, `w_dir` C2 switch), `K_LR`; placement check over identified first-shell bonds; `m_sw` | placement floors satisfied on the training set | todo |
-| P0.6 | Regime B: `K_SR` lattice sum with automatic image range; `K_LR`; `f_SR` | converged to 1e-10 eV; rewrapping-invariant | todo |
-| P0.7 | `Gamma` (both regimes, `lambda_dir`, `U_eff` bounded), `Gamma_LR` (`r_g`/`r_split` cross Ewald), `Zbar` centring, `W` | splitting-parameter independence of `Gamma_LR` | todo |
-| P0.8 | `H0`: reuse `SlaterKosterH` (SK, Harrison init, decay lengths, log modulation, centred scalar onsite); rank-1 `l=1` descriptor; geometric rank-2 `Q_i`; `r_cut ≤` base `r_max` asserted | invariance under translation / rotation / permutation / rewrapping with covariant derivatives; `Q_i = 0` at centrosymmetric sites | todo |
+| P0.3 | `fill(H, N)`: Gaussian smearing, bisection `mu`, `P`, `F_band`, generalised entropy; matrix-function backward (batched Function over `_dk_backward`) | `dF_band/dH_ab = P_ba` to 1e-10 | done — `dscc/fill.py`; FD 1e-8, autograd exact; density response vs FD 1e-6; batched == per-frame |
+| P0.4 | `E_PBC` Ewald matrix of Gaussians with derivatives (D3); LES oracle test; tiling-ladder `K_LR_ii` → `-alpha_M/L` | independent of the splitting parameter to 1e-10 eV (E, F, stress); oracle agreement | done at toy size — `dscc/ewald.py`; η-independence 1e-10 (E, F, stress), LES oracle 1e-6, ladder 1e-8, pair width convention; 159-atom gate: see log |
+| P0.5 | Regime A: `K_SR` (erf, `w_dir` C2 switch), `K_LR`; placement check over identified first-shell bonds; `m_sw` | placement floors satisfied on the training set | code done — `dscc/kernels.py`; **gate FAILED on the training set (C4)** |
+| P0.6 | Regime B: `K_SR` lattice sum with automatic image range; `K_LR`; `f_SR` | converged to 1e-10 eV; rewrapping-invariant | done — `K_SR + K_LR = E_PBC` to 1e-10, range-converged 1e-12, rewrapping 1e-12 |
+| P0.7 | `Gamma` (both regimes, `lambda_dir`, `U_eff` bounded), `Gamma_LR` (`r_g`/`r_split` cross Ewald), `Zbar` centring, `W` | splitting-parameter independence of `Gamma_LR` | matrices done (`gamma_matrix`, `gamma_lr`, `centred_pattern`, `project_sum_rule`, `host_potential`); the bounded learnables live in the head module (P1) |
+| P0.8 | `H0`: reuse `SlaterKosterH` (SK, Harrison init, decay lengths, log modulation, centred scalar onsite); rank-1 `l=1` descriptor; geometric rank-2 `Q_i`; head graph at its own `r_cut` (D6) | invariance under translation / rotation / permutation / rewrapping with covariant derivatives; `Q_i = 0` at cubic sites (D7) | done — `dscc/hamiltonian.py`, `dscc/graph.py`; rotation covariance `H' = D H D^T` 1e-10, permutation 1e-12, FD of the spectrum 1e-7; scalar-only control = block off |
 | P0.9 | Serialisation and checkpoint round trip | loaded checkpoint reproduces an uncached forward bit-for-bit | todo |
 
 ### 3.2 Phase 1 — D-SCC forward and derivatives (plan §5)
