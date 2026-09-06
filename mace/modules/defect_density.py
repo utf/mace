@@ -235,72 +235,112 @@ def static_raw(present: GaussianDensity, pristine: GaussianDensity) -> GaussianD
     return present - pristine
 
 
+def _cross_terms(charges: torch.Tensor, centres: torch.Tensor, z0: torch.Tensor,
+                 scaled_positions: torch.Tensor, cell: torch.Tensor, t: torch.Tensor,
+                 s2: float, derivatives: bool = True):
+    """`C(t) = <rho_p, rho_0(t)>` for shifts `t` `[..., 3]`, with its gradient and Hessian
+    in `t`, analytically: only this cross term of `||rho_p - rho_0(t)||^2` depends on `t`
+    (the two self-overlaps are translation invariant), and its kernel is a Gaussian, so
+
+        dK/dt_a   = K (d . cell_a) / s^2,
+        d2K/dt_ab = K [(d . cell_a)(d . cell_b) / s^4 - cell_a . cell_b / s^2],
+
+    with `d = R_i - X_j(t)` under the minimum image and `dX_j/dt_a = cell_a`. Detached: the
+    Newton refinement is a solver, and the one attached step is taken by the caller."""
+    inv = torch.linalg.inv(cell)
+    lead = (1,) * (t.dim() - 1)
+    n, m = centres.shape[0], scaled_positions.shape[0]
+    x = (scaled_positions.reshape(*lead, 1, m, 3) + t.reshape(*t.shape[:-1], 1, 1, 3)) @ cell
+    d = centres.reshape(*lead, n, 1, 3) - x                                        # [...,n,m,3]
+    frac = d @ inv
+    d = (frac - torch.round(frac)) @ cell
+    r2 = (d * d).sum(-1)
+    k = (2.0 * math.pi * s2) ** (-1.5) * torch.exp(-r2 / (2.0 * s2))
+    w = k * charges.reshape(*lead, n, 1) * z0.reshape(*lead, 1, m)
+    c = w.sum((-1, -2))
+    if not derivatives:
+        return c, None, None
+    dc = d @ cell.T                                       # (d . cell_a), [..., n, m, 3]
+    grad = (w.unsqueeze(-1) * dc).sum((-2, -3)) / s2
+    outer = dc.unsqueeze(-1) * dc.unsqueeze(-2) / (s2 * s2)
+    metric = (cell @ cell.T) / s2
+    hess = (w.unsqueeze(-1).unsqueeze(-1) * (outer - metric)).sum((-3, -4))
+    return c, grad, hess
+
+
 def align_pristine(present: GaussianDensity, z0: torch.Tensor, scaled_positions: torch.Tensor,
                    anchor_species_mask: torch.Tensor, present_anchor: int,
-                   n_candidates: int = 8, newton_steps: int = 12
-                   ) -> Tuple[torch.Tensor, float]:
+                   n_candidates: int = 3, newton_steps: int = 12,
+                   warm_start: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, float]:
     """The fractional shift `t*` minimising `||rho_Z^present - rho_Z^pristine(t)||^2`.
 
     Coarse candidates put the frame's `present_anchor` atom on every pristine site of the
     anchor species (`anchor_species_mask` over the pristine sites), ranked by the residual
-    norm; the best few are refined by Newton steps on the three shift components (the
-    objective is analytic in t). Returns `(t*, residual_norm)`. No site is ever assigned to
-    another; only the total density difference is minimised.
+    norm; the best few are refined by Newton steps on the three shift components, with the
+    objective's gradient and Hessian in closed form (`_cross_terms`). Returns
+    `(t*, residual_norm)`. No site is ever assigned to another; only the total density
+    difference is minimised.
+
+    `warm_start` is a converged shift of THIS geometry (or one a finite difference away
+    from it): the global search is skipped and the refinement starts there. It must never
+    be a shift of a translated frame -- that is the basin error D11 records.
+
+    Addendum 4.1, "any continuous geometry-dependent alignment is fully differentiated": the
+    returned shift carries the implicit-function derivative, `d t* / d R = -H^{-1}
+    d(grad)/dR`, from one Newton step taken with the graph attached at the converged point
+    (the value does not move there, the gradient being zero).
     """
     cell = present.cell
-    inv = torch.linalg.inv(cell)
-    anchor_frac = present.centres[present_anchor] @ inv
-    sites = torch.nonzero(anchor_species_mask).reshape(-1)
+    sigma = present.sigma
+    s2 = 2.0 * sigma * sigma
+    with torch.no_grad():
+        q_d, r_d = present.charges.detach(), present.centres.detach()
+        z_d, c_d = z0.detach(), cell.detach()
+        scaled_d = scaled_positions.detach()
 
-    def residual(t):
-        pri = pristine_placed(z0, scaled_positions, cell, t, present.sigma)
-        return static_raw(present, pri).norm2()
-
-    scored = []
-    for j in sites.tolist():
-        t = (anchor_frac - scaled_positions[j]).detach()
-        scored.append((float(residual(t)), t))
-    scored.sort(key=lambda s: s[0])
-    best_t, best_r = None, float("inf")
-    # The refinement differentiates its own objective, so it builds its own graph whatever
-    # mode the caller is in (the FD harness's energy pass runs the forward under no_grad).
-    with torch.enable_grad():
-        for r0, t0 in scored[:n_candidates]:
+        def refine(t0: torch.Tensor) -> Tuple[torch.Tensor, float]:
             t = t0.clone()
-            r = r0
+            c, g, h = _cross_terms(q_d, r_d, z_d, scaled_d, c_d, t, s2)
             for _ in range(newton_steps):
-                t_var = t.clone().requires_grad_(True)
-                value = residual(t_var)
-                grad = torch.autograd.grad(value, t_var, create_graph=True)[0]
-                hess = torch.stack([torch.autograd.grad(grad[i], t_var, retain_graph=True)[0]
-                                    for i in range(3)])
+                # Minimising R = const - 2C: the Newton step on -2C is -(-2H)^-1 (-2g).
+                hess = -h + 1e-9 * torch.eye(3, dtype=h.dtype, device=h.device)
                 try:
-                    step = torch.linalg.solve(hess + 1e-9 * torch.eye(3, dtype=hess.dtype),
-                                              grad)
+                    step = torch.linalg.solve(hess, -g)
                 except RuntimeError:
                     break
-                t_new = (t_var - step).detach()
-                r_new = float(residual(t_new))
-                if r_new >= r - 1e-14:
+                t_new = t - step
+                c_new, g_new, h_new = _cross_terms(q_d, r_d, z_d, scaled_d, c_d, t_new, s2)
+                if float(c_new) <= float(c) + 1e-14:
                     break
-                t, r = t_new, r_new
-            if r < best_r:
-                best_t, best_r = t, r
-    # Addendum 4.1: "any continuous geometry-dependent alignment is fully differentiated".
-    # The Newton iterations above ran on detached shifts, so `best_t` carries no graph and a
-    # functional of the placed pristine density would see no registration response in its
-    # forces. One more Newton step, taken WITH the graph through `present` and the cell,
-    # repairs that: at the minimum the gradient is zero so the value does not move, and
-    # `d t* / d R = -H^{-1} d(grad)/dR` is exactly the implicit-function derivative.
+                t, c, g, h = t_new, c_new, g_new, h_new
+            return t, float(c)
+
+        if warm_start is not None:
+            best_t, best_c = refine(warm_start.detach().to(dtype=r_d.dtype, device=r_d.device))
+        else:
+            inv = torch.linalg.inv(c_d)
+            anchor_frac = r_d[present_anchor] @ inv
+            sites = torch.nonzero(anchor_species_mask).reshape(-1)
+            candidates = anchor_frac.unsqueeze(0) - scaled_d[sites]              # [k, 3]
+            scores, _, _ = _cross_terms(q_d, r_d, z_d, scaled_d, c_d, candidates, s2,
+                                        derivatives=False)
+            order = torch.argsort(scores, descending=True)[:n_candidates]
+            best_t, best_c = None, -float("inf")
+            for j in order.tolist():
+                t, c = refine(candidates[j])
+                if c > best_c:
+                    best_t, best_c = t, c
+        _, _, h_star = _cross_terms(q_d, r_d, z_d, scaled_d, c_d, best_t, s2)
+        hess_star = -2.0 * h_star + 1e-9 * torch.eye(3, dtype=h_star.dtype, device=h_star.device)
+    # The one attached step: the gradient of the residual through `present`, `z0` and the
+    # cell, against the (detached) Hessian at the solution.
     t_var = best_t.clone().requires_grad_(True)
     with torch.enable_grad():
-        value = residual(t_var)
+        pri = pristine_placed(z0, scaled_positions, cell, t_var, sigma)
+        value = static_raw(present, pri).norm2()
         grad = torch.autograd.grad(value, t_var, create_graph=True)[0]
-        hess = torch.stack([torch.autograd.grad(grad[i], t_var, create_graph=True,
-                                                retain_graph=True)[0] for i in range(3)])
-        step = torch.linalg.solve(hess + 1e-9 * torch.eye(3, dtype=hess.dtype,
-                                                          device=hess.device), grad)
-    return t_var.detach() - step, math.sqrt(max(best_r, 0.0))
+        step = torch.linalg.solve(hess_star, grad)
+    return t_var.detach() - step, math.sqrt(max(float(value.detach()), 0.0))
 
 
 def local_net_charge(raw: GaussianDensity, centres: torch.Tensor) -> torch.Tensor:
