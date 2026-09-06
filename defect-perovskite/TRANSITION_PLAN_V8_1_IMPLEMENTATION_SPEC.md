@@ -19,6 +19,10 @@ acceptance tests pass.
 
 - **Task tracking.** The harness task-list tools are unavailable in this session, so the
   checklist in §3 is the task list. Update the status column in the same commit as the work.
+- **One session.** From 2026-09-06 this programme is worked by a single session. A second
+  session previously owned WP2, the launchers and b3; it was stopped on consolidation and
+  its work (all committed) is now owned here. See §8 for what came across and what is
+  still open from it.
 - **GPU waves.** b3 only, GPUs **4–7 only**, **up to two runs per GPU**. As of 2026-09-06
   GPU 6 reports `Unknown Error` from `nvidia-smi` and is unavailable, so today's usable
   capacity is GPUs 4, 5, 7 → **6 concurrent runs**. Every wave launcher must query
@@ -101,7 +105,7 @@ Status: `todo` / `wip` / `done` / `blocked`. Keep this column current.
 
 | id | item | source | status |
 |---|---|---|---|
-| 1.1 | Rename to `H_class` / `H_fix` / `H_{B,S}`; no `state_id`, policy name or formal charge reaches `H_fix` | add §3.1 | peer session (defect_counting.py / defect_models.py) |
+| 1.1 | Rename to `H_class` / `H_fix` / `H_{B,S}`; no `state_id`, policy name or formal charge reaches `H_fix` | add §3.1 | done — delivered by the stopped session; owned here |
 | 1.2 | `defect_gauge.py`: `μ_g(θ)` from frozen pristine projector, rank-normalised, spin-summed | add §3.1 | done |
 | 1.3 | Enforce registered orthonormal representation; `H − μ_g S` path for generalised eigenproblem; forbid `μ_g I` in nonorthogonal basis | add §3.1 | done |
 | 1.4 | Subtract same `μ_g` from all aligned spectral edges; assert pristine projector keeps its separating gap | add §3.1 | done |
@@ -114,7 +118,7 @@ Status: `todo` / `wip` / `done` / `blocked`. Keep this column current.
 | 1.11 | Split constructor cache: Tier-1 verifier key vs Tier-2 anchor key; invariant vs target field partitions; field-wise cross-size predicate | add §3.5 | done — `defect_constructor_cache.py` |
 | 1.12 | Migrate the existing 159-atom Tier-2 record into the anchor cache **only** if it reconstructs every key field and passes every Tier-2 gate | add §3.5 | **declined** — see D9; no anchor enshrined, class takes the ordinary Tier-2 route |
 | 1.13 | Fix `q_raw` definition and its tests | add §4.1 | done — shorthand shown FALSE here, see D4 |
-| 1.14 | Extend every result cache key with geometry/cell, canonical state, checkpoint, constructor, boundary+potential-zero, occupation/smearing, solver-regime and (when `G_∞` is called) lift/support fingerprints | add §3.5, §6.3 | peer session (defect_cache.py) |
+| 1.14 | Extend every result cache key with geometry/cell, canonical state, checkpoint, constructor, boundary+potential-zero, occupation/smearing, solver-regime and (when `G_∞` is called) lift/support fingerprints | add §3.5, §6.3 | done — delivered by the stopped session; owned here |
 | 1.15 | Tests: electron↔hole crossings; gauge shift invariance (`H → H + aI`); Tier-1 routing test asserting no Tier-2 eigensolve after Tier-1 passes | add §11.1 | wip (gauge shift + crossings done; routing test owed) |
 
 ### WP2 — Stage 1 energy-zero correction (blocking before any Stage-1 result is interpreted)
@@ -343,3 +347,33 @@ Tier-2 route, which is the addendum's own stated default when a record fails any
 condition. No anchor is enshrined and no provenance is invented.
 
 **Stage 0 is complete** with 1.1 and 1.14 delivered by the parallel session.
+
+---
+
+## 8. Consolidation (2026-09-06)
+
+A second session implemented WP2, the launchers and everything running on b3 under an agreed
+split. It has been stopped and this session now owns all of it. Its worktree was clean and
+the shared stash empty at handover, so nothing was lost; every item below is committed.
+
+**Came across, and now owned here:**
+
+| Area | Files |
+|---|---|
+| Stage 1 objective | `mace/modules/defect_objective.py`, `tests/extensions/defect/test_energy_objective.py` |
+| Loss / trainer wiring | the objective's hooks in the loss and `mace/cli/run_train.py` |
+| Gauge wiring into the head | `defect_counting.py`, `defect_models.py`, `defect_protocol.py`, `tests/extensions/defect/test_gauge_wiring.py` |
+| Cache keys (1.14) | `mace/modules/defect_cache.py` — `model_fingerprint` / `result_key` |
+| Audit and recalibration | `defect-perovskite/stage1_audit.py`, `stage1_recalibrate.py`, `STAGE1_V8_1_AUDIT.md` |
+| Launchers | `defect-perovskite/queue_packed.sh`, `stage_b_recipe.sh`, `queue_stage1_audit.sh` |
+
+**Open threads inherited, not yet closed:**
+
+1. **The v6 golden compare under the gauge was never reported.** The stopped session said it
+   was re-running it (`--stage12` allow-list) and would report whether the Tier-1 routing
+   change altered the golden integers on the golden frames. It went quiet after `c7c0e34`
+   without reporting. **Treat this as unrun**, not as passed: it must be run here before any
+   Stage-1 number is read.
+2. Three of its bash pollers had been looping `until ! ssh b3 pgrep -f queue_protocol_smoke`
+   since 2026-09-02, waiting on a finished job. Killed on consolidation.
+3. Its WP2 items keep their tracker status; ownership is now here.
