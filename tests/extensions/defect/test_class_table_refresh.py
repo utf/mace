@@ -101,3 +101,27 @@ class TestTrainingTransient:
         from mace.tools.scripts_utils import extract_config_mace_model
 
         assert "uncounted_class_policy" not in extract_config_mace_model(model)
+
+
+class TestRefreshKeepsTheStage4Fields:
+    def test_the_pristine_reference_and_the_anchors_survive_a_refresh(self):
+        """Stage 4: the forward reads the constructor's pristine geometry from the table on
+        every epoch, so a refresh may not drop it -- and a table from before it was stored
+        acquires it on its first refresh."""
+        model = _model()
+        apply_harrison(model, model.atomic_numbers)
+        frames = _frames()
+        table = dc.ensure_class_table(model, frames, log=False)
+        assert "pristine_reference" in table and table.get("anchors")
+        before = dict(table["pristine_reference"])
+        summary = dc.refresh_class_table(model, frames, log=False)
+        after = summary["table"]
+        assert after["pristine_reference"] == before
+        assert after.get("anchors")
+        # A pre-Stage-4 table (no pristine_reference) gains it on the first refresh.
+        del after["pristine_reference"]
+        model.composition_classes = after
+        summary = dc.refresh_class_table(model, frames, log=False)
+        assert summary["table"]["pristine_reference"] == before
+        rec = dc.ClassRecord.from_dict(summary["table"]["classes"][table["pristine_key"]])
+        assert "correspondence" in rec.placement

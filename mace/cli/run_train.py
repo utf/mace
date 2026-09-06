@@ -867,7 +867,7 @@ def run(args) -> None:
             "c_shift_per_class": bool(getattr(args, "defect_c_shift_per_class", False)),
             "null_reference": str(getattr(args, "defect_null_reference", "") or ""),
             "madelung_range": str(getattr(args, "defect_madelung_range", "full")),
-        }, stage=2)
+        }, stage=None)
 
         if args.distributed:
             raise ValueError("the v8.1 pair sampler is single-process")

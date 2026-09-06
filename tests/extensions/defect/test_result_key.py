@@ -46,3 +46,26 @@ def test_every_field_changes_the_key():
     model.gauge = "periodic"
     model.functional["r_res"] = float(model.functional["r_res"]) * 1.5
     assert result_key(model, *_geom(VACANCY), "state-a") != k1
+
+
+def test_the_image_regime_its_evaluator_and_the_lift_enter_the_key():
+    """Stage 4 (addendum 3.5, 4.2, 6.3): the regime, the converged periodic evaluator and
+    the lift parameters are in the model fingerprint; a frame's lift record fingerprint
+    goes into the result key through `lift_extra`."""
+    from mace.modules.defect_cache import lift_extra
+    from mace.modules.defect_protocol import apply_harrison
+    from tests.extensions.defect.test_neutral_reference_skip import _model
+
+    legacy = _model()
+    unified = _model(image_functional="unified", madelung_range="off")
+    for m in (legacy, unified):
+        apply_harrison(m, m.atomic_numbers)
+    assert model_fingerprint(legacy)["boundary"] != model_fingerprint(unified)["boundary"]
+    # madelung_range differs too, so isolate the regime: same range, different regime.
+    legacy_off = _model(madelung_range="off")
+    apply_harrison(legacy_off, legacy_off.atomic_numbers)
+    assert model_fingerprint(legacy_off)["boundary"] != model_fingerprint(unified)["boundary"]
+    k = result_key(unified, *_geom(VACANCY), "state-a")
+    assert result_key(unified, *_geom(VACANCY), "state-a", extra=lift_extra(["deadbeef"])) != k
+    assert (result_key(unified, *_geom(VACANCY), "state-a", extra=lift_extra(["deadbeef"]))
+            != result_key(unified, *_geom(VACANCY), "state-a", extra=lift_extra(["cafebabe"])))

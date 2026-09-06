@@ -42,7 +42,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
-from typing import Dict, Iterable, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -106,12 +106,32 @@ def model_fingerprint(model) -> Dict[str, str]:
         "state_schema": STATE_SCHEMA_VERSION,
         "smearing": getattr(head, "smearing_family", None),
         "t_el": getattr(head, "t_el", None)})
+    # Stage 4 (addendum 3.5, 4.2, 6.3): the image regime, its converged periodic evaluator
+    # and -- because every term of the unified regime calls G_inf on the canonical lift --
+    # the lift algorithm and its registered parameters. The per-frame lift RECORD (centre,
+    # cut, moments, constructor hash) is a property of the frame and the class, reported by
+    # the forward as `boundary_lift_fingerprint`; a cached unified result must carry it in
+    # `result_key`'s `extra`, which `lift_extra` packages.
+    image_ewald = getattr(model, "image_ewald", None)
+    regime = getattr(model, "image_functional", "frontier_ff")
+    lift = None
+    if regime == "unified":
+        from mace.modules import defect_lift as dl
+
+        lift = {"algorithm": dl.LIFT_ALGORITHM, "eps_eta": dl.EPS_ETA,
+                "lambda_lift": dl.LAMBDA_LIFT, "r_lift": dl.R_LIFT, "z_min": dl.Z_MIN,
+                "d_clear": dl.D_CLEAR}
     boundary = _stable_json({
         "gauge": getattr(model, "gauge", "periodic"),
         "madelung_range": getattr(model, "madelung_range", "full"),
         "eps_inf": getattr(model, "madelung_eps_inf", None),
         "ewald": (repr(getattr(getattr(model, "frontier_ewald", None), "arguments", None))
                   if getattr(model, "frontier_ewald", None) is not None else None),
+        "image_functional": regime,
+        "image_ewald": (None if image_ewald is None else
+                        {"sigma": float(image_ewald.sigma), "dl": float(image_ewald.ewald.dl),
+                         "arguments": repr(getattr(image_ewald, "les_arguments", None))}),
+        "lift": lift,
         "potential_zero": "tin-foil, neutralising background, zero reciprocal mode removed"})
     functional = _stable_json(getattr(model, "functional", None))
     solver = _stable_json({"dtype": str(torch.get_default_dtype()),
@@ -127,6 +147,13 @@ def model_fingerprint(model) -> Dict[str, str]:
         "functional": hashlib.sha256(functional.encode()).hexdigest()[:16],
         "solver": hashlib.sha256(solver.encode()).hexdigest()[:16],
     }
+
+
+def lift_extra(lift_fingerprints: Sequence[Optional[str]]) -> Dict[str, Any]:
+    """The `extra` a cached unified-regime result must carry: the frame's lift record
+    fingerprint(s) as the forward reported them (`boundary_lift_fingerprint`). Addendum
+    4.2: 'part of every result cache key whose functional calls G_inf'."""
+    return {"lift_fingerprints": [None if f is None else str(f) for f in lift_fingerprints]}
 
 
 def result_key(model, atomic_numbers, positions, cell, state_digest: str,

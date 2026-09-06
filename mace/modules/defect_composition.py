@@ -890,6 +890,11 @@ def refresh_class_table(model, frames: Sequence, device=None, log: bool = True
             summary["refreshed"].append(key)
     for k in ("delta", "window", "smearing_width", "pristine_key"):
         old[k] = fresh[k]
+    # Stage 4: the constructor's pristine geometry is a property of the table, not of the
+    # head, so a table from before it was stored acquires it on the first refresh; one that
+    # has it keeps its own (the same first frame, by construction).
+    if fresh.get("pristine_reference") is not None:
+        old.setdefault("pristine_reference", fresh["pristine_reference"])
     if log:
         edges = {k: (round(r["vbm_al"], 3), round(r["cbm_al"], 3))
                  for k, r in old["classes"].items()}
@@ -1185,9 +1190,20 @@ def frame_static_densities(model, record: ClassRecord, pristine_frame, charges: 
                 f"{dd.SUPPORT_THRESHOLD}: the residual monopole would be delocalised "
                 "(addendum 4.1)")
         out["support"] = {"supported": True, "signal": signal}
-        out["lift"] = class_lift_record(record, transported, positions, cell,
-                                        out["scaled_pristine"], z0[pri_species.to(z0.device)],
-                                        charges, r_res)
+        from mace.modules.defect_lift import LiftError
+
+        try:
+            out["lift"] = class_lift_record(record, transported, positions, cell,
+                                            out["scaled_pristine"],
+                                            z0[pri_species.to(z0.device)], charges, r_res)
+        except LiftError as exc:
+            # Addendum 4.2: no unique branch means no isolated output -- and every term of
+            # the unified regime calls G_inf, so the state is unsupported, not evaluated.
+            # A charged PRISTINE frame lands here (zero topology, zero frozen departure).
+            raise UnsupportedStateError(
+                f"class {record.key}: the canonical lift has no defined branch ({exc}); "
+                "the unified functional calls G_inf on the lift, so this state is "
+                "unsupported (addendum 4.2)") from exc
     return out
 
 

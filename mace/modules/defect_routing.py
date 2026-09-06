@@ -147,7 +147,7 @@ class Stage2Router:
 # ------------------------------------------------------------------ the inherited contract
 
 
-def assert_inherited_contract(settings: Mapping[str, Any], stage: int = 2,
+def assert_inherited_contract(settings: Mapping[str, Any], stage: Optional[int] = 2,
                               reference_madelung_range: Optional[str] = None) -> Dict[str, Any]:
     """Refuse a Stage-2/3 run that does not inherit the Stage-1 regime.
 
@@ -163,8 +163,11 @@ def assert_inherited_contract(settings: Mapping[str, Any], stage: int = 2,
         madelung_range          = the Stage-1 selected arm, when one is given: "no new
                                  scalar range separation until Stage 4" (plan v8 section 5)
 
+    `stage` None means "a run under the v8.1 objective whose stage is not declared" (the
+    trainer's check): the same conditions, reported without a stage label.
+
     Returns the checked values so a manifest can record them."""
-    if int(stage) not in (2, 3):
+    if stage is not None and int(stage) not in (2, 3):
         raise ValueError(f"the inherited contract is Stage 2's and Stage 3's, not stage {stage}")
     problems: List[str] = []
     get = settings.get
@@ -193,8 +196,9 @@ def assert_inherited_contract(settings: Mapping[str, Any], stage: int = 2,
                             f"{reference_madelung_range!r}: no new scalar range separation "
                             "before Stage 4 (plan v8 section 5)")
     if problems:
-        raise ValueError(f"Stage {stage} does not inherit the Stage-1 regime:\n  - "
-                         + "\n  - ".join(problems))
+        who = (f"Stage {stage} does not inherit the Stage-1 regime" if stage is not None
+               else "this run violates the v8.1 objective's contract (addendum section 8)")
+        raise ValueError(f"{who}:\n  - " + "\n  - ".join(problems))
     return {k: get(k) for k in ("spectral_gauge", "energy_shape_weight", "energy_scale_eV",
                                  "total_energy_weight", "c_shift_per_class",
                                  "null_reference", "madelung_range")}

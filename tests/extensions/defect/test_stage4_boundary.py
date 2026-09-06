@@ -31,7 +31,7 @@ from mace.modules import defect_terms as dt
 from mace.modules.defect_cache import attach_frame_keys
 from mace.modules.defect_carriers import UnsupportedStateError
 from mace.modules.defect_context import ForwardContext
-from mace.modules.defect_lift import LiftError, clearance_report
+from mace.modules.defect_lift import clearance_report
 from mace.modules.defect_protocol import apply_harrison
 from tests.extensions.defect.test_composition_classes import _remove_cl
 from tests.extensions.defect.test_frontier_term import HOLE, NEUTRAL, PRISTINE, VACANCY, _frame
@@ -204,8 +204,9 @@ class TestGates:
         assert float(out["q_raw"]) == pytest.approx(0.0, abs=1e-10)
         # The pristine class's topology is zero everywhere and its frozen departure signal
         # is exactly zero (the class reference IS the pristine reference): the envelope is
-        # identically zero while the thermal density is not -- unsupported (addendum 4.2).
-        with pytest.raises(LiftError, match="identically zero|below z_min"):
+        # identically zero while the thermal density is not -- an UNSUPPORTED state, since
+        # every term of the regime calls G_inf on the lift (addendum 4.2; D17).
+        with pytest.raises(UnsupportedStateError, match="no defined branch"):
             dc.frame_static_densities(model, rec, None, z0[species], pos, cell, lift=True)
         # Against ANY branch the thermal background fills the buffers: nothing compact here.
         from mace.modules.defect_lift import build_lift

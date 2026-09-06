@@ -583,3 +583,30 @@ re-establish — the correspondence.
 Newton steps on an `n × m` Gaussian kernel) for every off-reference graph on every forward.
 Fine on the toy and for the diagnostic arm; measure the per-step cost on the 159-atom cells
 before committing six seeds to it.
+
+### D17 — a state with no lift branch is unsupported under the unified regime
+
+A charged **pristine** frame (a band carrier in a defect-free cell) has zero constructor
+topology and — because the pristine class's reference *is* the pristine reference — an
+exactly zero frozen departure signal, so its support envelope is identically zero while its
+thermal static density is not. Addendum §4.2: "if the mapped ζ is identically zero while any
+modeled density component is nonzero, the isolated lift is unsupported", and "a non-unique or
+unstable branch invalidates every output that calls G_∞". Every term of the unified regime
+calls `G_∞` on the lift, so the state is refused as `UnsupportedStateError` (the `LiftError`
+is wrapped in `frame_static_densities(lift=True)`), before any energy — in training too. This
+does not affect the runs in flight (legacy regime; and the dataset's charged strata are all
+V_Cl), but a Stage-4 arm fed a charged pristine frame will stop at that frame rather than
+contribute a tolerated zero. That is the intended reading of "unsupported".
+
+### Pre-launch checks for the Stage-4 arm (2026-09-06, after WP4.7)
+
+1. **GPU**: one unified forward with forces on the local A4000 — both terms on `cuda:0`,
+   finite forces, parameter gradient through `Z`. Passed.
+2. **Correspondence tolerance on the real data**: `MERGE·r_res = 0.5 Å` is now a hard
+   refusal. Surveyed over `dataset_pbe/train.xyz` with `arma_s1` (see the survey note below).
+3. **1.14 under G_∞**: `model_fingerprint` now carries `image_functional`, the converged
+   `image_ewald` (σ, dl) and the lift algorithm/parameters; a cached unified result must pass
+   the frame's `boundary_lift_fingerprint` through `defect_cache.lift_extra` (test added).
+4. **Refresh**: `refresh_class_table` keeps `pristine_reference` and `anchors`, and a
+   pre-Stage-4 table acquires the reference on its first refresh (test added).
+5. **Charged pristine frames**: D17.
