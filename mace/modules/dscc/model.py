@@ -248,6 +248,45 @@ class MACEDSCC(nn.Module):
         self.pristine_composition.copy_(counts / counts.sum() * min(sizes))
         return int(scalars.shape[0])
 
+    # ----------------------------------------------------------------- gap (plan 6)
+
+    def pristine_gap(self, data: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """`E_gap_model = LUMO - HOMO` at the exact valence count of the Hamiltonian
+        actually filled at `dq = 0` -- `H0` in Route A, `H0 - W` in Route B -- for each
+        graph of a pristine batch (the static cell for the regulariser, C2 ruled
+        static-lattice; thermal frames for the ensemble-mean diagnostic). Differentiable
+        in the head parameters through the eigenvalues (not eigenvectors)."""
+        num_graphs = int(data["ptr"].numel() - 1)
+        out = ScaleShiftMACE.forward(self.base, self._trunk_data(dict(data)), training=self.training,
+                                     compute_force=False)
+        scalars, vectors = self.features(out["node_feats"])
+        species = data["node_attrs"].argmax(dim=-1)
+        positions, cell = data["positions"], data["cell"].view(-1, 3, 3)
+        sender, receiver = data["edge_index"][0], data["edge_index"][1]
+        edge_graph = data["batch"][sender]
+        shifts = torch.einsum("ei,eij->ej", data["unit_shifts"].to(positions.dtype), cell[edge_graph])
+        edge_vector = positions[receiver] - positions[sender] + shifts
+        ptr = data["ptr"]
+        gaps = []
+        for g in range(num_graphs):
+            lo, hi = int(ptr[g]), int(ptr[g + 1])
+            nodes = slice(lo, hi)
+            e_mask = edge_graph == g
+            H = self.h0(scalars[nodes], vectors[nodes], species[nodes],
+                        data["edge_index"][:, e_mask] - lo, edge_vector[e_mask])
+            sp_g = species[nodes]
+            if self.route_b:
+                g_lr = gamma_lr(positions[nodes], cell[g], self.kernel.r_g, self.r_split,
+                                self.kernel.eps_inf, tol=self.kernel.tol)
+                W = host_potential(g_lr, centred_pattern(self.zstar()[sp_g]))
+                H = H - torch.diag(W.repeat_interleave(4))
+            numbers = [self.atomic_numbers[int(s_)] for s_ in sp_g.tolist()]
+            n_up, n_dn = S_REF.counts(neutral_count(numbers))
+            eps = torch.linalg.eigvalsh(H)
+            # Spin-independent H: the gap at the majority count (the larger fill).
+            gaps.append(eps[n_up] - eps[n_up - 1])
+        return torch.stack(gaps)
+
     # ----------------------------------------------------------------- forward
 
     def forward(self, data: Dict[str, torch.Tensor], training: bool = False,

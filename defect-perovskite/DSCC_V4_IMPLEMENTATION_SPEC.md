@@ -61,7 +61,7 @@ task list and the registers the plan's §10 rules require. Paths relative to the
 | `lambda_0`, `lambda_max`, `U_eff` init | 0.05, 2.0, `0.05 U_max[Z]` (`LAMBDA_0_DEFAULT`, `LAMBDA_MAX_DEFAULT`, `U_INIT_FRACTION`); bounded by `x_max sigmoid(raw)` | `model.py` | defaults 2026-09-06, to confirm before Phase 1 gate |
 | `r_g`, `r_split`, `q_cut`, `a_max`, `b_max`, `r_cut` | 1.0 Å, 2.5 Å, 4.5 Å, 1.0 eV, 1.0 eV, 10.0 Å | `kernels.KernelConfig`, `model.py`, `hamiltonian.py` | defaults 2026-09-06, to confirm |
 | Solver: `tol_q`, `tol_E`, `tol_c`, `n_max`, mixing, history, `tol_root`, `rho` ceiling, continuation steps | 1e-8 e, 1e-10 eV, 1e-7, 100, 0.3 (Anderson), 6, 1e-6, 0.9, 4 | `scf.ScfOptions` | defaults 2026-09-06, to confirm before Phase 1 gate |
-| `s_tol`, `z`, `n_min`, coverage bin width, out-of-fold base protocol id | — | plan §6 | to register before Phase 2 |
+| `s_tol`, `z`, `n_min`, coverage bin width, out-of-fold base protocol id | 0.05 eV/Å, 2.0, 3, 0.2 Å, `cf_base_4fold_seed0` (`admission.AdmissionConfig`) | plan §6 | defaults 2026-09-06, to confirm before Phase 2 results are opened |
 | Gap-regulariser convention | static-lattice or thermal-mean (C2) | plan §6 | before Phase 2 |
 | Benchmark hardware / batch / trajectory | — | plan §8 | before Phase 4 |
 | Arm thresholds | — | plan §7 | before each arm's results are opened |
@@ -214,7 +214,7 @@ Status: `todo` / `wip` / `done` / `blocked`.
 ### 3.2 Phase 1 — D-SCC forward and derivatives (plan §5)
 | # | Task | Status |
 |---|---|---|
-| P1.1 | Batched SCF loop (Anderson/Broyden, unmixed residual, `tol_q`/`tol_E`/`tol_c`, `n_max` cap + flag, `rho`) | per-graph loop done — `dscc/scf.py` (`solve_dscc`: Anderson, unmixed residual, cap flagged, `rho`, commutator, primary vs band); batching over equal-size frames: todo |
+| P1.1 | Batched SCF loop (Anderson/Broyden, unmixed residual, `tol_q`/`tol_E`/`tol_c`, `n_max` cap + flag, `rho`) | per-graph loop done — `dscc/scf.py` (`solve_dscc`: damped Newton on the exact Jacobian (D10) with Anderson fallback, unmixed residual, cap flagged, `rho`, commutator, primary vs band; implicit differentiation for training); cost at 79 atoms on 8 CPU threads ≈ 4.8 s/frame at the initialised head (many frames at the cap); batching over equal-size frames: deferred to the training-throughput pass (Phase 2), the per-graph loop is the reference |
 | P1.2 | Energy (band form vs primary functional to 1e-9 eV), HF forces, autodiff stress; neutral short-circuit (D5) | done — model `_charged_forward`: band form, HF cotangents `(H, dP)`, `(Gamma, -½ dq dqᵀ)`, strain-based stress; short-circuit bit-identical |
 | P1.3 | Route B switch (off by default); both regimes selectable | done — `route_b`, `initialise_route_b` (q0 from the reference fill, sum rule, `Z_MAX_FACTOR`), `kernel.regime` |
 | P1.4 | Root-rule harness: initialisations (i)–(iii), `tol_root`, symmetry-equivalent collapse | `scf.root_rule` (zero / continuation / warm, spread, `passed`); symmetry-equivalent collapse by identical observables: todo |
@@ -223,9 +223,9 @@ Status: `todo` / `wip` / `done` / `blocked`.
 ### 3.3 Phase 2 — training protocol (plan §6)
 | # | Task | Status |
 |---|---|---|
-| P2.1 | Energy admission per fold and size: coverage table, `s0 ± SE` (out-of-fold base), `sQ`; stored before results | todo |
+| P2.1 | Energy admission per fold and size: coverage table, `s0 ± SE` (out-of-fold base), `sQ`; stored before results | module done — `dscc/admission.py` (label-free `d` = flanking-Pb distance, coverage bins, `slope_with_se`, decision, record); out-of-fold residuals from the 4-fold `cf_base_f0..f3` (`dataset_cf/manifest.json`, seed 0: 1191 neutral defective frames, pristine in every fold): script running |
 | P2.2 | Objective: total-cell residuals, strata, `C_Q` profiling on admitted frames (closed form, quadratic loss), `L_gap` on the Hamiltonian actually filled at `dq = 0` on the static pristine cell (D8), Route B L2 | todo |
-| P2.2a | Static pristine cell: port the symmetrised site-median lattice construction into `dscc/` (D8); thermal-mean gap diagnostic | todo |
+| P2.2a | Static pristine cell: port the symmetrised site-median lattice construction into `dscc/` (D8); thermal-mean gap diagnostic | cell done — `dscc/static_cell.py` (global anchor-site registration + species-wise assignment + iterated median + group symmetrisation); on the 544 training pristine frames: 32 operations, cell [16.035, 16.076, 11.395] Å, thermal rms Cl 0.52 / Cs 0.45 / Pb 0.22 Å, symmetrisation shift 0.19 Å, last median pass 0.022 Å; saved `defect-perovskite/static_pristine_cell.json` (the dataset directory is a symlink outside the repository) (fingerprint cc78a367e345352d). Thermal-mean gap diagnostic: todo |
 | P2.3 | Loss-path audit (±1 eV injection, masks, units, restore; no validation/test/tiling frame in `C_Q`) | todo |
 | P2.4 | Fixed protocol frozen: splits, strata, weights, balance, six seeds, metrics, all §6/§7 thresholds | todo |
 | P2.5 | Leak readout `d(J* + C_Q)/dd` per size | todo |

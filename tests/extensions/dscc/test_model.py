@@ -270,3 +270,26 @@ class TestRouteB:
             assert float(out["forces"][atom, comp_]) == pytest.approx(-(e_plus - e_minus) / (2 * h), abs=3e-6)
         # The far-field force channel: forces on atoms far from the carrier are nonzero.
         assert torch.isfinite(out["forces"]).all()
+
+
+class TestGap:
+    def test_pristine_gap_is_the_frontier_difference_and_differentiable(self, model):
+        batch = _batch([PRISTINE, _frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])
+        gaps = model.pristine_gap(batch)
+        assert gaps.shape == (2,) and torch.isfinite(gaps).all()
+        # Against the explicit spectrum of the first graph.
+        from mace.modules.dscc.species import neutral_count, S_REF
+        ptr = batch["ptr"]
+        out = modules.ScaleShiftMACE.forward(model.base, model._trunk_data(dict(batch)), compute_force=False)
+        scalars, vectors = model.features(out["node_feats"])
+        species = batch["node_attrs"].argmax(-1)
+        pos, cell = batch["positions"], batch["cell"].view(-1, 3, 3)
+        ei = batch["edge_index"]; eg = batch["batch"][ei[0]]
+        ev = pos[ei[1]] - pos[ei[0]] + torch.einsum("ei,eij->ej", batch["unit_shifts"], cell[eg])
+        m = eg == 0; lo, hi = int(ptr[0]), int(ptr[1])
+        H = model.h0(scalars[lo:hi], vectors[lo:hi], species[lo:hi], ei[:, m] - lo, ev[m])
+        eps = torch.linalg.eigvalsh(H)
+        n_up, _ = S_REF.counts(neutral_count([17] * 24 + [55] * 8 + [82] * 8))
+        assert float(gaps[0]) == pytest.approx(float(eps[n_up] - eps[n_up - 1]), abs=1e-10)
+        (grad,) = torch.autograd.grad(gaps.sum(), model.h0.sk.eps0)
+        assert torch.isfinite(grad).all() and float(grad.abs().sum()) > 0
