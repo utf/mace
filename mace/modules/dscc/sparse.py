@@ -91,6 +91,37 @@ def inertia_below(H: sps.csr_matrix, sigma: float) -> Tuple[Inertia, spla.SuperL
     return Inertia(below=below, sigma=float(sigma), residual=residual), lu
 
 
+def mid_gap_sigma(H: sps.csr_matrix, n_occupied: int, tol: float = 1e-6) -> float:
+    """A shift inside the gap above the `n_occupied`-th level, by bisection on the inertia
+    (each step one sparse LDL^T): the certified way to place the window without any
+    eigenvalue in hand. Returns the midpoint of the bracket once the counts straddle."""
+    d = H.diagonal()
+    lo, hi = float(d.min()) - 50.0, float(d.max()) + 50.0
+    # Bracket: below(lo) = 0 < n_occupied <= below(hi) = n_orb.
+    for _ in range(80):
+        mid = 0.5 * (lo + hi)
+        below = inertia_below(H, mid)[0].below
+        if below < n_occupied:
+            lo = mid
+        else:
+            hi = mid
+        if hi - lo < tol:
+            break
+    # lo has < n_occupied levels below, hi has >= n_occupied: the n_occupied-th level sits in
+    # [lo, hi]; the gap above it is found by bracketing the (n_occupied + 1)-th level too.
+    lo2, hi2 = hi, float(d.max()) + 50.0
+    for _ in range(80):
+        mid = 0.5 * (lo2 + hi2)
+        below = inertia_below(H, mid)[0].below
+        if below < n_occupied + 1:
+            lo2 = mid
+        else:
+            hi2 = mid
+        if hi2 - lo2 < tol:
+            break
+    return 0.5 * (hi + lo2)          # between the HOMO (<= hi) and the LUMO (>= lo2)
+
+
 @dataclass
 class FrontierWindow:
     eps: np.ndarray            # eigenvalues in the window, ascending
@@ -133,17 +164,7 @@ def two_fillings_sparse(H: sps.csr_matrix, n_s: Tuple[int, int], n_ref: Tuple[in
     q = abs(sum(n_s) - sum(n_ref))
     k = int(q) + int(k_buffer)
     if sigma is None:
-        # A first window around the median of the diagonal, then re-centre on the gap between
-        # the reference count and the next level.
-        sigma0 = float(np.median(H.diagonal()))
-        eps0, _ = frontier_window(H, sigma0, k)
-        inertia0, _ = inertia_below(H, sigma0)
-        sigma = sigma0
-        for target in (n_ref[0],):
-            # levels below sigma0 = inertia0.below; index of the level 'target' relative to it
-            j = target - inertia0.below
-            if 0 <= j < len(eps0):
-                sigma = 0.5 * (eps0[j - 1] + eps0[j]) if j > 0 else float(eps0[0]) - 1.0
+        sigma = mid_gap_sigma(H, n_ref[0])
     inertia, lu = inertia_below(H, sigma)
     # The window grows until the certified tail bound is below `tail_tol` (the potential
     # of a converging SCF moves levels through the window edges).
@@ -303,3 +324,64 @@ def frontier_forces(h0_module, scalars: torch.Tensor, vectors: Optional[torch.Te
         if g is not None:
             total = total + g
     return -total
+
+
+# ------------------------------------------------------------------ model-level sparse inference
+
+def model_forward_sparse(model, data, k_buffer: int = K_BUFFER_DEFAULT, tol_q: float = 1e-8,
+                         n_max: int = 100, compute_force: bool = True):
+    """Inference (no training graph) of one charged graph through the sparse path: block-0
+    features, CSR `H0`, the dense Ewald kernels (the dense regime), the frontier-window
+    D-SCC solve, rank-k frontier forces plus the base's own forces. Route A or Route B'
+    (with `q0` from a full sparse... not available: Route B' needs the full reference
+    density, so it uses the dense fill up to `max_dense_atoms` and is refused beyond).
+    Returns `{"energy", "forces", "head_energy", "dq", "diagnostics"}`."""
+    from mace.modules.models import ScaleShiftMACE
+    from mace.modules.dscc.kernels import gamma_matrix, gamma_lr, host_potential, kernel_components
+    from mace.modules.dscc.species import S_REF, State, neutral_count, states_from_batch, N0
+
+    num_graphs = int(data["ptr"].numel() - 1)
+    assert num_graphs == 1, "one graph at a time on the sparse path"
+    state = states_from_batch(data["carrier_counts"].view(1, -1))[0]
+    positions = data["positions"].requires_grad_(True)
+    cell = data["cell"].view(3, 3)
+    base_out = ScaleShiftMACE.forward(model.base, model._trunk_data(dict(data)), compute_force=False)
+    node_feats = base_out["node_feats"]
+    base_forces = None
+    if compute_force:
+        # The base's own forces, keeping the graph alive for the frontier contraction below.
+        (g,) = torch.autograd.grad(base_out["energy"].sum(), positions, retain_graph=True)
+        base_forces = -g
+    scalars, vectors = model.features(node_feats)
+    species = data["node_attrs"].argmax(dim=-1)
+    ei = data["edge_index"]
+    ev = positions[ei[1]] - positions[ei[0]] + data["unit_shifts"].to(positions.dtype) @ cell
+    numbers = [model.atomic_numbers[int(x)] for x in species.tolist()]
+    n_ref = neutral_count(numbers)
+    n_s, n_r = state.counts(n_ref), S_REF.counts(n_ref)
+    H_csr = csr_hamiltonian(model.h0, scalars.detach(), vectors.detach() if vectors is not None else None, species, ei, ev.detach())
+    k_sr, k_lr = kernel_components(positions, cell, model.kernel)
+    gamma = gamma_matrix(k_sr, k_lr, model.lambda_dir(), model.u_eff()[species], model.kernel.eps_inf)
+    W = None
+    if model.route_b:
+        raise NotImplementedError("Route B' on the sparse path needs the full reference density (dense fill); "
+                                  "use the dense forward below the dense-regime size")
+    # sigma: mid-gap of the reference count, from a first window around the diagonal median
+    # (two_fillings_sparse does this when sigma is None).
+    if not model.coupling:
+        J, (psi, w), dq, window = two_fillings_sparse(H_csr, n_s, n_r, sigma=None, k_buffer=k_buffer, sigma_s=model.sigma_s)
+        head_energy = J
+        diagnostics = {"iterations": 1, "converged": True, "window": len(window.eps), "tail_bound_charge": window.tail_bound_charge}
+    else:
+        _, _, _, window0 = two_fillings_sparse(H_csr, n_s, n_r, sigma=None, k_buffer=k_buffer, sigma_s=model.sigma_s)
+        sol = solve_dscc_sparse(H_csr, gamma.detach(), n_s, n_r, window0.sigma, k_buffer, model.sigma_s, W, tol_q, n_max)
+        head_energy, dq, psi, w = sol["energy"], sol["dq"], sol["psi"], sol["w"]
+        diagnostics = {"iterations": sol["iterations"], "converged": sol["converged"], "window": len(sol["window"].eps),
+                       "tail_bound_charge": sol["window"].tail_bound_charge, "residual": sol["history"][-1]}
+    forces = None
+    if compute_force:
+        head_forces = frontier_forces(model.h0, scalars, vectors, species, ei, ev, positions, psi, w,
+                                      gamma if model.coupling else None, dq if model.coupling else None)
+        forces = base_forces.detach() + head_forces.detach()
+    energy = base_out["energy"].detach().reshape(()) + head_energy.detach() + model.c_q(state.Q)
+    return {"energy": energy, "forces": forces, "head_energy": head_energy.detach(), "dq": dq.detach(), "diagnostics": diagnostics}

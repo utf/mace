@@ -300,9 +300,9 @@ Status: `todo` / `wip` / `done` / `blocked`.
 ### 3.5 Phase 4 — ladder, sparse solver, benchmark (plan §8)
 | # | Task | Status |
 |---|---|---|
-| P4.1 | Tiling-ladder generator and report (`E(+1) - E(0)` vs `1/L`, `K_LR_ii`, active states, `dq` spread, zero total force) | todo |
-| P4.2 | Sparse path (CSR `H0`, SP2/LDL inertia, Chebyshev/LOBPCG, tail bounds, PME/FMM) | todo |
-| P4.3 | 2x benchmark per the registered definition | todo |
+| P4.1 | Tiling-ladder generator and report (`E(+1) - E(0)` vs `1/L`, `K_LR_ii`, active states, `dq` spread, zero total force) | script done — `defect-perovskite/dscc_ladder.py` (static-cell tilings, Madelung coefficient computed for the cell shape, dense below `--dense_max`, sparse above, dense/sparse agreement per cell); to run on the Arm-1 winner and the Arm-2+3 selection |
+| P4.2 | Sparse path (CSR `H0`, SP2/LDL inertia, Chebyshev/LOBPCG, tail bounds, PME/FMM) | frontier path done — `dscc/sparse.py`: CSR `H0` from the edge blocks; below-slice count by the LDLᵀ inertia of an unpivoted sparse LU (Sylvester; factorisation residual-checked); mid-gap shift by inertia bisection; window eigenpairs by shift-invert ARPACK to machine precision (residual-checked), `k = |Q| + k_buffer` (8) grown until the certified Fermi-tail bound on the omitted charge is ≤ 1e-8 e; frontier D-SCC solve (window quasi-Newton, Anderson fallback, unmixed residual); rank-k frontier forces by block cotangents. Dense/sparse agreement on the toy: energy 1e-7, forces 1e-6, dq 1e-7. **Not done:** PME/FMM (electrostatics stay the dense Ewald matrix: the dense regime is ≲ 5k atoms), Route B′ on the sparse path (needs the full reference density), the 159-atom real-frame agreement run and the ladder cells (after Arm 1) |
+| P4.3 | 2x benchmark per the registered definition | harness done — `defect-perovskite/dscc_benchmark.py` (per-frame energy + forces along a charged trajectory, warm-started, base included; median and p95 of the ratio); to run on the selected model on the named hardware |
 
 ### 3.6 Deletion sweep (plan §3, after the Phase 1 gates)
 - [ ] Tier-1/Tier-2 constructor and `u_al` (`defect_composition`, `defect_rank`, `defect_constructor_cache`, `defect_seed`)

@@ -72,3 +72,18 @@ def test_sparse_scf_and_frontier_forces_match_the_dense_model():
     base = ScaleShiftMACE.forward(m.base, m._trunk_data(dict(_batch([VACP]))), compute_force=True)["forces"]
     head_dense = dense["forces"] - base
     assert float((forces - head_dense).abs().max()) < 1e-6, float((forces - head_dense).abs().max())
+
+
+@pytest.mark.parametrize("coupling", [False, True])
+def test_model_forward_sparse_matches_dense(coupling):
+    from mace.modules.dscc.scf import ScfOptions
+    from tests.extensions.dscc.test_model import VACP, _batch, _coupled, model as _dense_fixture  # noqa: F401
+    m = _coupled(regime="B", route_b=False)
+    m.coupling = coupling
+    m.scf_options = ScfOptions(tol_q=1e-10, tol_E=1e-11, continuation_steps=0)
+    dense = m(_batch([VACP]), compute_force=True)
+    out = sp.model_forward_sparse(m, _batch([VACP]), k_buffer=12, tol_q=1e-10)
+    assert out["diagnostics"]["converged"]
+    assert float((out["energy"] - dense["energy"][0]).abs()) < 1e-7
+    assert float((out["forces"] - dense["forces"]).abs().max()) < 1e-6
+    assert float((out["dq"] - dense["dq"]).abs().max()) < 1e-7
