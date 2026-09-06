@@ -1,8 +1,9 @@
 """Plan v8 section 2.1, Stage 0 task 0.7: the composition-class constructor, Tier 1.
 
-Two layers, tested separately. The INTEGER layer (`tier1`, `align_edges`, `class_integers`,
+Two layers, tested separately. The INTEGER layer (`align_edges`, `class_integers`,
 `frame_counts`) is exercised on toy spectra whose expected integers are defined by the toy
-alone. The SPECTRUM layer is exercised on a Harrison-initialised counting head over cubic
+alone. The v8.1 rank-certified Tier-1 verifier itself is tested in `test_rank_verifier.py`;
+the VBM-proximity `tier1` it replaced has been deleted. The SPECTRUM layer is exercised on a Harrison-initialised counting head over cubic
 CsPbCl3 supercells -- the pristine class, V_Cl at 39 and 79 atoms -- where the plan's
 benchmark (V_Cl^0: Q_core = +1, n_e,maj = 1, q_F = -1; V_Cl^+: n_e = 0, q_F = 0) is asserted.
 An AST test fences the Tier 2 machinery inside the constructor module.
@@ -63,30 +64,6 @@ class TestIntegers:
         assert dc.class_integers((204, 204), (205, 204)) == ((1, 0), (0, 0), 1)
         assert dc.class_integers((208, 208), (208, 208)) == ((0, 0), (0, 0), 0)
         assert dc.class_integers((205, 205), (204, 204)) == ((0, 0), (1, 1), -2)
-
-    def test_tier1_counts_at_the_cut_and_flags_a_level_in_the_window(self):
-        vbm, delta = -7.0, 0.1
-        valence = np.linspace(-10.0, vbm, 50)
-        clean = np.concatenate([valence, [vbm + 3.0, vbm + 4.0]])
-        m, ambiguous, nearest = dc.tier1(clean, vbm, delta)
-        assert (m, ambiguous) == (50, False) and nearest == pytest.approx(-delta)
-        # A level inside +-window of the cut (window = delta / 2 by default).
-        for level in (vbm + delta - 0.04, vbm + delta + 0.04):
-            m, ambiguous, _ = dc.tier1(np.concatenate([clean, [level]]), vbm, delta)
-            assert ambiguous
-        # A frontier level just outside the window is counted as frontier, unflagged.
-        m, ambiguous, _ = dc.tier1(np.concatenate([valence, [vbm + delta + 0.06]]), vbm, delta)
-        assert (m, ambiguous) == (50, False)
-        # A valence level scattered slightly above VBM_al is still valence.
-        m, ambiguous, _ = dc.tier1(np.concatenate([valence, [vbm + 0.03]]), vbm, delta)
-        assert (m, ambiguous) == (51, False)
-
-    def test_a_level_exactly_on_the_window_edge_is_not_inside_it(self):
-        vbm, delta = -7.0, 0.1
-        spectrum = np.concatenate([np.linspace(-10.0, vbm, 50), [vbm + 4.0]])
-        # The pristine class's own VBM is at cut - delta, outside a window of delta / 2;
-        # and a window of exactly delta puts it ON the edge, which is not inside.
-        assert not dc.tier1(spectrum, vbm, delta, window=delta)[1]
 
     def test_the_alignment_recovers_a_rigid_shift_and_ignores_the_frontier(self):
         rng = np.random.default_rng(0)
@@ -154,8 +131,9 @@ class TestIntegers:
         n_pri = 40
         n_sigma = (n_pri + m, n_pri + m)   # both spins fill m frontier levels
         a = dc.align_edges(spectrum, n_sigma[0], pristine, n_pri)
-        m_vb, ambiguous, _ = dc.tier1(spectrum, a.vbm_al, delta)
-        assert (m_vb, ambiguous) == (40, False)
+        # The toy's valence rank is exact by construction (40 pristine valence levels),
+        # which is the only kind of rank the v8.1 verifier accepts without an anchor.
+        m_vb = n_pri
         n_e, n_h, q_core = dc.class_integers((m_vb, m_vb), n_sigma)
         assert n_e == (m, m) and n_h == (0, 0) and q_core == 2 * m
         rec = dc.ClassRecord(key="synthetic", n_atoms=0, reference_frame_key=0,
@@ -165,14 +143,6 @@ class TestIntegers:
                              gap_pristine=a.gap_pristine, delta=delta, nearest=0.0)
         neutral = StateBatch.from_counts(torch.zeros(1, 4))
         assert dc.frame_counts(rec, neutral, 0) == ((m, m), (0, 0), -2 * m)
-
-    def test_a_synthetic_class_with_a_level_in_the_window_triggers_tier_2(self):
-        vbm, delta = -5.0, 0.1
-        pristine = np.concatenate([np.linspace(-9.0, vbm, 40), [vbm + 3.0]])
-        spectrum = np.sort(np.concatenate([pristine, [vbm + delta + 0.02]]))
-        a = dc.align_edges(spectrum, 41, pristine, 40)
-        _, ambiguous, nearest = dc.tier1(spectrum, a.vbm_al, delta)
-        assert ambiguous and abs(nearest) < delta / 2
 
 
 # ------------------------------------------------------------------ the spectrum layer
@@ -248,15 +218,29 @@ class TestOnTheHarrisonHead:
         assert dc.frame_counts(rec, states, 1) == ((0, 0), (0, 0), 0)
 
     def test_v_cl_at_79_atoms_gives_the_same_integers(self, table):
-        """The class at the larger cell yields the same integers (plan section 7.1). On this
-        toy the vacancy pushes a valence level to VBM_al + 0.14 eV, inside the Tier 1 window,
-        so the class is Tier 2's; the integers are the 39-atom ones."""
+        """The larger cell yields the same integers (plan section 7.1).
+
+        Under the v8.1 verifier this is now reached by TRANSPORT, not by a second
+        continuation: the 39-atom class of the same homologous family has no anchor and so
+        runs Tier 2, and the 79-atom class then verifies the transported rank at Tier 1.
+        That is the design -- the expensive continuation runs once per family, and other
+        sizes are checked by the cheap verifier. The integers are what must not move.
+        """
+        small = dc.lookup_class(table, [17] * 23 + [55] * 8 + [82] * 8)
         rec = dc.lookup_class(table, [17] * 47 + [55] * 16 + [82] * 16)
         assert rec.tiling == (1, 1, 2)
         assert rec.counted, rec.reason
         assert rec.n_e == (1, 0) and rec.n_h == (0, 0) and rec.q_core == 1
-        assert rec.tier == 2 and "Tier 1" not in rec.reason
-        assert "a level within" in rec.tier1_reason
+
+        assert small.tier == 2, "the first size of a family has no anchor and must continue"
+        assert rec.tier == 1, rec.tier1_reason
+        assert "anchor" in rec.tier1_reason
+
+        # The raw rank is extensive and MUST differ between the two sizes, while the
+        # offset -- the part with physical content -- is invariant.
+        assert rec.m_vb != small.m_vb
+        assert rec.d_sigma == small.d_sigma
+        assert rec.q_core == small.q_core
 
     def test_the_larger_pristine_cell_is_aligned_against_the_tiled_reference(self, table):
         rec = dc.lookup_class(table, [17] * 48 + [55] * 16 + [82] * 16)
@@ -401,17 +385,33 @@ def _embed_removal(H0, site, deep=-14.0):
 
 
 class TestTier2OnTheHarrisonHead:
-    def test_v_cl_at_79_atoms_is_counted_at_tier_2_with_the_same_integers(self, table):
-        """The class Tier 1 hands on: one ghost Cl, four ghost gamma, M_VB = 204."""
-        rec = dc.lookup_class(table, [17] * 47 + [55] * 16 + [82] * 16)
+    def test_the_family_is_counted_at_tier_2_with_one_ghost_cl(self, table):
+        """Tier 2's continuation on the class that actually runs it.
+
+        Under the v8.1 verifier the FIRST size of a homologous family has no anchor and so
+        runs the continuation; later sizes are verified by transport. The assertions are
+        written size-independently -- one ghost Cl contributes four ghost orbitals at any
+        cell size, and the physical part of the transported subspace has exactly M_VB
+        eigenvalues -- so they keep testing the machinery rather than a routing outcome.
+        """
+        rec = dc.lookup_class(table, [17] * 23 + [55] * 8 + [82] * 8)
         assert rec.counted and rec.tier == 2, rec.reason
         assert rec.n_e == (1, 0) and rec.n_h == (0, 0) and rec.q_core == 1
-        assert rec.m_vb == (204, 204) and rec.n_sigma == (205, 204)
         assert rec.path_agreement and rec.schedule_agreement
         assert rec.correspondence["n_ghost"] == 1 and rec.correspondence["ghost_species"] == [17]
         assert rec.correspondence["n_added"] == 0 and rec.correspondence["n_substituted"] == 0
         gamma = np.asarray(rec.gamma)
-        assert (gamma > 1 - table["eta"]).sum() == 4 and (gamma < table["eta"]).sum() == 204
+        assert (gamma > 1 - table["eta"]).sum() == 4          # one Cl: s + p
+        assert (gamma < table["eta"]).sum() == rec.m_vb[0]    # the physical valence part
+
+    def test_the_transported_size_agrees_with_the_continued_one(self, table):
+        """The integers Tier 2 established must survive transport to the larger cell."""
+        small = dc.lookup_class(table, [17] * 23 + [55] * 8 + [82] * 8)
+        large = dc.lookup_class(table, [17] * 47 + [55] * 16 + [82] * 16)
+        assert large.counted, large.reason
+        assert large.n_e == small.n_e and large.n_h == small.n_h
+        assert large.q_core == small.q_core and large.d_sigma == small.d_sigma
+        assert large.m_vb == (204, 204) and large.n_sigma == (205, 204)
 
     def test_tier_2_reproduces_tier_1_on_the_39_atom_class_on_both_paths_and_schedules(
             self, harrison_model, frames):

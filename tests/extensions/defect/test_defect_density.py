@@ -185,7 +185,11 @@ class TestStatic:
         rattle), so the shifts need not coincide; the density residual at the density's own
         shift must be no worse than at the correspondence's, and both must be small."""
         rec = dc.lookup_class(table, [17] * 47 + [55] * 16 + [82] * 16)
-        assert rec.tier == 2
+        # The tier is irrelevant here: this test builds the site correspondence itself and
+        # needs only the record's tiling, perm and placement. (Under the v8.1 verifier this
+        # class is reached by transport at Tier 1, while the smaller class of the same
+        # family carries the continuation.)
+        assert rec.counted, rec.reason
         n1, p1, c1 = dc._frame_geometry(frames["vcl_79"], harrison_model)
         n0, p0, c0 = dc._frame_geometry(frames["pristine"], harrison_model)
         n0, p0, c0 = dc.tile_frame(n0, p0, c0, rec.tiling)

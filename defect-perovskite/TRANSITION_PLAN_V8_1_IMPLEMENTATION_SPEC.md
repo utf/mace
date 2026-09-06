@@ -105,7 +105,7 @@ Status: `todo` / `wip` / `done` / `blocked`. Keep this column current.
 | 1.2 | `defect_gauge.py`: `μ_g(θ)` from frozen pristine projector, rank-normalised, spin-summed | add §3.1 | done |
 | 1.3 | Enforce registered orthonormal representation; `H − μ_g S` path for generalised eigenproblem; forbid `μ_g I` in nonorthogonal basis | add §3.1 | done |
 | 1.4 | Subtract same `μ_g` from all aligned spectral edges; assert pristine projector keeps its separating gap | add §3.1 | done |
-| 1.5 | Replace `tier1()` with the rank-certified gap verifier (5 acceptance conditions) | add §3.2 | done |
+| 1.5 | Replace `tier1()` with the rank-certified gap verifier (5 acceptance conditions) | add §3.2 | done — wired into `build_class_table`; old `tier1()` deleted |
 | 1.6 | Pristine-rank transport `M_pred(L2) = M_acc(L1) + [M_pris(L2) − M_pris(L1)]` | add §3.2 | done |
 | 1.7 | `u_al` construction from independently ranked records + provenance hash; route to Tier 2 when uncertifiable | add §3.2 | done |
 | 1.8 | Signed-excess counts `d_σ`, `n_e,σ`, `n_h,σ`, `q_F`, `Q_core`; delete additive updates | add §3.3 | done |
@@ -293,3 +293,30 @@ the invariant partition to match exactly while the target partition need only sa
 registered *relations* (same composition difference, pristine rank scaling with the tiling
 volume). Exact geometry/cell/composition hashes are expected to differ between sizes and
 are never compared for equality.
+
+### D6 — the homology signature must be taken against the TILED pristine
+
+`homology_signature` first compared a class's composition against the *untiled* pristine
+key, which made the signature grow with the cell: a single Cl vacancy in a 2x cell read as
+`17+23,55+8,82+8` instead of `17-1`. No two sizes of one family would ever have matched, so
+the transport equation could never have fired and every class would have run Tier 2 forever
+— the failure would have looked like "the verifier never accepts" rather than like a bug in
+the signature. It now scales the pristine counts by the tiling volume.
+
+### D7 — records must be free of non-finite floats
+
+The class table is compared for equality after a pickle round-trip and after config
+extraction and rebuild. Those build fresh objects, and `NaN != NaN`, so one non-finite
+number anywhere in a record makes the table unequal to itself — presenting as a diff
+between two dicts that print identically. `_serialisable` maps non-finite floats to `None`
+("not measured"), and `nearest` is now always the finite consecutive gap at the accepted
+rank, for either tier.
+
+### D8 — the first size of a family pays for the continuation, later sizes do not
+
+A consequence of the verifier worth stating, because it changes observed routing: with no
+prior anchor, the smallest class of a homologous family runs Tier 2, and every other size
+is then verified at Tier 1 by transport. Previously all sizes ran Tier 1's VBM-proximity
+test. Several tests asserted the old outcome and have been retargeted to assert the
+integers (which must not move) and the routing (which now must differ between the first
+size and the rest).

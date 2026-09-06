@@ -49,6 +49,7 @@ identity q_F = Q_formal - Q_core holds by construction and is asserted anyway.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -61,6 +62,15 @@ from mace.modules.defect_carriers import (
     class_counts,
     counts_from_excess,
     signed_excess,
+)
+from mace.modules.defect_rank import (
+    DEFAULT_G_NUM,
+    RankAnchor,
+    RankRoutingError,
+    alignment_bound,
+    predict_rank,
+    select_anchor,
+    verify as verify_rank,
 )
 from mace.modules.defect_state import COUNT_FILL, StateBatch
 
@@ -185,32 +195,67 @@ def align_edges(spectrum: np.ndarray, n_occ: int, pristine: np.ndarray, n_pristi
                          gap_pristine=cbm - vbm)
 
 
-def tier1(spectrum: np.ndarray, vbm_al: float, delta: float, window: Optional[float] = None
-          ) -> Tuple[int, bool, float]:
-    """`(M_VB, ambiguous, nearest)`: levels at or below the cut `vbm_al + delta`, whether
-    any level lies strictly inside `+-window` of THE CUT, and the closest level's signed
-    distance from the cut. `window` defaults to `delta / 2`, the smearing width.
+def _serialisable(value: Any) -> Any:
+    """Replace non-finite floats with `None`, recursively.
 
-    INTERPRETATION OF RECORD. The plan's acceptance clause, "no eigenvalue lies within
-    +-delta of VBM_al", read literally excludes every class including the pristine one: the
-    valence edge IS at VBM_al by definition of the alignment, and every class cell's own
-    valence top scatters about it by a few meV (thermal frames) to a few tens of meV
-    (vacancy-perturbed cells). The operative condition is therefore that the COUNTING CUT
-    at VBM_al + delta falls in a spectral gap: levels at or below VBM_al + delta - window
-    are valence, levels at or above VBM_al + delta + window are frontier, and a level in
-    between makes the class ambiguous at Tier 1. With delta = 2 x smearing and window =
-    smearing, the ambiguous band is (VBM_al + Delta_s, VBM_al + 3 Delta_s): the margin
-    delta absorbs edge scatter, the window is one smearing width either side of the cut.
+    The class table is compared for equality after a pickle round-trip (and after config
+    extraction and rebuild). Those produce fresh objects, and `NaN != NaN`, so a single
+    non-finite number anywhere in a record makes the table unequal to itself -- with a
+    diff that shows two apparently identical dicts. `None` means "not measured", which is
+    what a NaN was being used to say anyway.
     """
-    spectrum = np.asarray(spectrum, dtype=np.float64)
-    window = 0.5 * float(delta) if window is None else float(window)
-    cut = float(vbm_al) + float(delta)
-    dist = spectrum - cut
-    m_vb = int((dist <= 0.0).sum())
-    nearest = float(dist[np.argmin(np.abs(dist))]) if spectrum.size else float("nan")
-    # Strictly inside the window, with a tolerance for the exact boundary.
-    ambiguous = bool((np.abs(dist) < window - BOUNDARY_TOL).any())
-    return m_vb, ambiguous, nearest
+    if isinstance(value, dict):
+        return {k: _serialisable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_serialisable(v) for v in value]
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def composition_counts(key: str) -> Dict[int, int]:
+    """`{Z: count}` from a class key like `17x47,55x16,82x16`."""
+    counts: Dict[int, int] = {}
+    for piece in str(key).split(","):
+        z, _, n = piece.partition("x")
+        counts[int(z)] = int(n)
+    return counts
+
+
+def homology_signature(key: str, pristine_key: str, tiling: Sequence[int] = (1, 1, 1)) -> str:
+    """The composition difference against the pristine reference TILED to this cell.
+
+    Label-free: arithmetic on two multisets of species counts, with no notion of "vacancy"
+    or "defect" anywhere.
+
+    The tiling factor is essential and not a detail. Differencing against the *untiled*
+    pristine key makes the signature grow with the cell -- a single Cl vacancy in a 2x cell
+    reads as `17+23,55+8,82+8` rather than `17-1` -- so no two sizes of one family would
+    ever match and the transport equation could never fire. The signature must be exactly
+    the size-invariant part of the composition.
+    """
+    volume = 1
+    for factor in tiling:
+        volume *= int(factor)
+    present, pristine = composition_counts(key), composition_counts(pristine_key)
+    diff = {z: present.get(z, 0) - pristine.get(z, 0) * volume
+            for z in sorted(set(present) | set(pristine))}
+    return ",".join(f"{z}{d:+d}" for z, d in diff.items() if d != 0) or "pristine"
+
+
+def precision_replicas(hamiltonian) -> List[np.ndarray]:
+    """Registered precision perturbation: the same H diagonalised at reduced precision.
+
+    Condition 4 of the verifier asks that the certified rank stay separated under the
+    registered perturbations. This is the cheap half of that -- it reuses an H that has
+    already been built, so it costs one extra eigensolve and no model forward. A
+    small-geometry replica is the other half and is opt-in through the constructor config,
+    because it needs a fresh forward per replica; whichever were applied is recorded on the
+    class so a record cannot claim more stability than it was tested for.
+    """
+    h = hamiltonian.detach().double()
+    return [np.sort(np.linalg.eigvalsh(h.cpu().numpy())),
+            np.sort(np.linalg.eigvalsh(h.float().cpu().numpy()).astype(np.float64))]
 
 
 def class_integers(m_vb: Sequence[int], n_sigma: Sequence[int]
@@ -260,6 +305,10 @@ class ClassRecord:
     # load; `refreshed` recomputes them from m_vb and n_sigma, which is exact.
     d_sigma: Tuple[int, int] = (0, 0)
     m_f: int = 0
+    # The Tier-1 verifier's own record (addendum 3.2/3.5): predicted and accepted rank,
+    # thresholds, gaps, window, u_al and its provenance, and every gate result. Stored so a
+    # class cannot claim more stability than it was actually tested for.
+    tier1_record: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         # d_sigma = n_e - n_h is an identity: the two counts are the positive and negative
@@ -547,7 +596,15 @@ def build_class_table(model, frames: Sequence, device="cpu", formula=None,
         n_ref = max(reference_fill(tiled[(1, 1, 1)]["n_total"]))
         cfg["e_sink"] = float(tiled[(1, 1, 1)]["spectrum"][n_ref]) + 50.0
     table["e_sink"] = float(cfg["e_sink"])
-    for key, fr in firsts.items():
+    # Accepted ranks accumulate as anchors, so Tier 1 can verify a later size by transport.
+    # Order matters: the pristine class is exact by electron count and must be ranked first,
+    # then defect classes smallest-first so a cheap small cell can anchor a large one. A
+    # family whose first size has no anchor routes to Tier 2, which is the intended cost.
+    anchors: List[RankAnchor] = []
+    calibration: List[Tuple[float, str]] = []
+    ordered = sorted(firsts.items(),
+                     key=lambda kv: (kv[0] != pristine_key, kv[1].num_nodes, kv[0]))
+    for key, fr in ordered:
         numbers, _, cell = _frame_geometry(fr, model)
         mapping = tiling_map(cell, pristine_cell, len(numbers), pristine_frame.num_nodes)
         if mapping is None:
@@ -572,27 +629,87 @@ def build_class_table(model, frames: Sequence, device="cpu", formula=None,
         # two edges differing by the quantile shift of one level, which is noise.
         n_pri = max(reference_fill(pri["n_total"]))
         aligned = align_edges(spec["spectrum"], max(n_sig), pri["spectrum"], n_pri, quantiles)
-        m_vb_one, ambiguous, nearest = tier1(spec["spectrum"], aligned.vbm_al, delta, window)
+        # ---------------------------------------------------------------- Tier 1 (v8.1)
+        # A rank-CERTIFIED gap verifier. The rank is never inferred from the spectrum: it
+        # is exact by electron count on the pristine class, or transported from an accepted
+        # anchor of the same homologous family by the pristine-rank increment. The old
+        # VBM-proximity test measured the density of the folded valence manifold, so it grew
+        # more likely to fail as cells grew with nothing physical changing.
+        homology = homology_signature(key, pristine_key, factors)
+        nearest = float("nan")
+        m_vb_one = 0
+        t1 = None
+        tier1_reason = ""
+        if key == pristine_key:
+            predicted = (max(n_sig), max(n_sig))
+        else:
+            try:
+                anchor = select_anchor(anchors, homology, (n_pri, n_pri))
+                predicted = predict_rank(anchor, (n_pri, n_pri))
+                tier1_reason = f"anchor {anchor.source} at {anchor.n_atoms} atoms"
+            except RankRoutingError as exc:
+                predicted = ()
+                tier1_reason = str(exc)
+
+        if predicted:
+            # u_al must come from records ranked INDEPENDENTLY of this bound. The pristine
+            # class is exact by electron count, so it seeds the envelope; a target may only
+            # contribute after its own independent acceptance, never to certify itself.
+            try:
+                bound = alignment_bound([r for r, _ in calibration] or [0.0],
+                                        [s for _, s in calibration] or ["pristine_exact"])
+                u_al = bound.value
+                provenance = bound.provenance_hash
+            except RankRoutingError as exc:
+                u_al, provenance = float("nan"), ""
+                tier1_reason = str(exc)
+            if np.isfinite(u_al):
+                t1 = verify_rank(
+                    spec["spectrum"], predicted, vbm_aligned=aligned.vbm_al,
+                    gap_host=aligned.gap_pristine, smearing=width, u_al=u_al,
+                    delta_search=cfg.get("delta_search"), g_num=cfg.get("g_num", DEFAULT_G_NUM),
+                    perturbed_spectra=precision_replicas(spec["H"]))
+                nearest = float(t1.gaps[0]) if t1.gaps else float("nan")
+
         gap_ok = aligned.gap_pristine >= 4.0 * width
         tier: Optional[int] = 1
         reason = ""
         extra: Dict[str, Any] = {}
+        if t1 is not None and t1.accepted:
+            m_vb_one = int(t1.m_vb[0])
         if not gap_ok:
             tier, reason = None, (f"pristine gap {aligned.gap_pristine:.3f} eV < 4 x smearing "
                                   f"{4 * width:.3f} eV")
-        elif ambiguous:
+        elif t1 is None or not t1.accepted:
+            tier1_reason = (t1.reason if t1 is not None else tier1_reason) or "no anchor"
             # Tier 2: the valence-subspace continuation from the tiled pristine.
             t2 = tier2(model, fr, pristine_frame, factors, perm, n_pri, pri["H"], spec["H"],
                        cfg, device=device, conduction_cut=aligned.cbm_al - delta)
             extra = dict(path_agreement=t2["path_agreement"],
                          schedule_agreement=t2["schedule_agreement"],
                          gamma=tuple(t2["gamma"]), correspondence=t2["correspondence"],
-                         tier1_reason=f"a level within +-{window:.3f} eV of the cut VBM_al + "
-                                      f"delta (nearest {nearest:+.3f} eV)")
+                         tier1_reason=tier1_reason)
             if t2["accepted"]:
                 tier, m_vb_one = 2, int(t2["m_vb"])
             else:
-                tier, reason = None, "Tier 1 ambiguous; Tier 2: " + t2["reason"]
+                tier, reason = None, "Tier 1 declined; Tier 2: " + t2["reason"]
+        if tier == 1:
+            # Record the Tier-1 provenance on ACCEPTANCE too, not only when it declines:
+            # the anchor it transported from and the gates it passed are what make the
+            # rank auditable later.
+            extra.setdefault("tier1_reason", tier1_reason)
+        if t1 is not None:
+            extra["tier1_record"] = _serialisable(
+                dict(t1.to_dict(), u_al_provenance=provenance, homology=homology,
+                     # A list, not a tuple: the table round-trips through JSON and pickle,
+                     # and a tuple would come back as a list and break table equality.
+                     perturbations=["precision_float32"]))
+        if m_vb_one:
+            # The spectral diagnostic at the accepted counting boundary, for either tier.
+            # Kept finite: see _serialisable on why a NaN here breaks table equality.
+            ordered_spec = np.sort(np.asarray(spec["spectrum"], dtype=np.float64))
+            if 0 < m_vb_one < ordered_spec.size:
+                nearest = float(ordered_spec[m_vb_one] - ordered_spec[m_vb_one - 1])
         m_vb = (m_vb_one, m_vb_one)
         accepted = tier is not None
         n_e, n_h, q_core = class_integers(m_vb, n_sig) if accepted else ((0, 0), (0, 0), 0)
@@ -605,6 +722,24 @@ def build_class_table(model, frames: Sequence, device="cpu", formula=None,
             gap_pristine=aligned.gap_pristine, delta=delta, nearest=nearest, tiling=factors,
             perm=perm, placement=placement, **extra)
         table["classes"][key] = record.to_dict()
+
+        if accepted:
+            # An accepted rank becomes an anchor for later sizes of the same family, and
+            # its top occupied level feeds the alignment envelope. Only ranks established
+            # independently of u_al may do so: exact-by-electron-count (pristine) or
+            # Tier-2-accepted. A Tier-1 acceptance was itself certified BY u_al, so it is
+            # deliberately not added to the calibration -- that would let the envelope
+            # grow to justify the acceptances it produced.
+            anchors.append(RankAnchor(
+                homology=homology, n_atoms=int(spec["n_atoms"]), m_vb=m_vb,
+                pristine_rank=(n_pri, n_pri),
+                source="pristine" if key == pristine_key else (
+                    "tier2" if tier == 2 else "certified"),
+                source_hash=f"{key}@{_frame_key_of(fr)}"))
+            if tier == 2 or key == pristine_key:
+                calibration.append((
+                    float(np.sort(np.asarray(spec["spectrum"]))[m_vb_one - 1] - aligned.vbm_al),
+                    f"{'pristine' if key == pristine_key else 'tier2'}_{spec['n_atoms']}"))
         if log:
             logging.info("Composition class %s (%d atoms, ref frame %d): %s", key,
                          record.n_atoms, record.reference_frame_key, describe(record))
