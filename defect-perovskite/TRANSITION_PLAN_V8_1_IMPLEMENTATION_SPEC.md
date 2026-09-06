@@ -112,7 +112,7 @@ Status: `todo` / `wip` / `done` / `blocked`. Keep this column current.
 | 1.9 | `m_F(S)` computed and stored in the class/state record | add §3.3 | done |
 | 1.10 | Require `Q_formal(S_ref) = 0` on the production path; nonzero reference retained as algebra-only test | add §3.3 | done (module; production wiring in 1.1) |
 | 1.11 | Split constructor cache: Tier-1 verifier key vs Tier-2 anchor key; invariant vs target field partitions; field-wise cross-size predicate | add §3.5 | done — `defect_constructor_cache.py` |
-| 1.12 | Migrate the existing 159-atom Tier-2 record into the anchor cache **only** if it reconstructs every key field and passes every Tier-2 gate | add §3.5 | blocked — needs the stored 159-atom Tier-2 raw log to reconstruct key fields |
+| 1.12 | Migrate the existing 159-atom Tier-2 record into the anchor cache **only** if it reconstructs every key field and passes every Tier-2 gate | add §3.5 | **declined** — see D9; no anchor enshrined, class takes the ordinary Tier-2 route |
 | 1.13 | Fix `q_raw` definition and its tests | add §4.1 | done — shorthand shown FALSE here, see D4 |
 | 1.14 | Extend every result cache key with geometry/cell, canonical state, checkpoint, constructor, boundary+potential-zero, occupation/smearing, solver-regime and (when `G_∞` is called) lift/support fingerprints | add §3.5, §6.3 | peer session (defect_cache.py) |
 | 1.15 | Tests: electron↔hole crossings; gauge shift invariance (`H → H + aI`); Tier-1 routing test asserting no Tier-2 eigensolve after Tier-1 passes | add §11.1 | wip (gauge shift + crossings done; routing test owed) |
@@ -146,8 +146,8 @@ Status: `todo` / `wip` / `done` / `blocked`. Keep this column current.
 
 | id | item | source | status |
 |---|---|---|---|
-| 4.1 | Smooth `g_res`: `a_i`, `ω_i` with `ε_Z`, `ε_ω`, `λ_d d_i`; `O(1/N_at)` fallback; finite derivatives as `δZ_i → 0` | add §4.1 | todo |
-| 4.2 | Support gate: nonzero `|Q_core − q_raw|` with sub-threshold departure signal ⇒ unsupported, not a silent monopole | add §4.1 | todo |
+| 4.1 | Smooth `g_res`: `a_i`, `ω_i` with `ε_Z`, `ε_ω`, `λ_d d_i`; `O(1/N_at)` fallback; finite derivatives as `δZ_i → 0` | add §4.1 | done |
+| 4.2 | Support gate: nonzero `|Q_core − q_raw|` with sub-threshold departure signal ⇒ unsupported, not a silent monopole | add §4.1 | done — `residual_support`, not yet enforced at the call site |
 | 4.3 | Covariant registration (co-translation, co-rotation, wrap, permutation, affine strain); discrete correspondence fixed per class | add §4.1 | todo |
 | 4.4 | `defect_lift.py`: constructor-topology branch envelope `ζ_lift`, circular moment, cut placement, integer image assignment fixed w.r.t. `P` | add §4.2 | todo |
 | 4.5 | Boundary-clearance and tail contract with certified `ε_ρ`, `ε_E`, `ε_F`, `ε_σ` bounds | add §4.2 | todo |
@@ -320,3 +320,26 @@ is then verified at Tier 1 by transport. Previously all sizes ran Tier 1's VBM-p
 test. Several tests asserted the old outcome and have been retargeted to assert the
 integers (which must not move) and the routing (which now must differ between the first
 size and the rest).
+
+### D9 — the 159-atom Tier-2 migration is declined
+
+The record exists, but not as a raw log: it is the `ClassRecord` inside a saved model's
+class table (`composition_classes['classes'][...]`, with table-level `e_sink`, `eta`,
+`dlambda`, `r_match`, `delta`, `window`, `quantiles`), and the numerical regime was numpy
+float64 `eigh` on CPU at code 7e155c9.
+
+The addendum permits migration without rerunning "only if its stored raw log reconstructs
+every invariant and target-specific key field, **including the exact geometry/cell** and
+numerical regime". It does not: `reference_frame_key` is a hash of the class's reference
+frame, and a geometry is not reconstructible from a hash. Identifying the frame by
+description ("the first 159-atom frame of `dataset_pbe/train.xyz` in file order") and then
+verifying it against the hash would be defensible, but it buys nothing here: the Tier-2
+continuation costs about 30 s of CPU, so the anchor cache saves no meaningful work, and
+enshrining an anchor whose provenance does not fully reconstruct is the larger risk. The
+cache exists to avoid expensive recomputation; this recomputation is not expensive.
+
+Decision, agreed with the parallel session: **declined**. The class takes the ordinary
+Tier-2 route, which is the addendum's own stated default when a record fails any acceptance
+condition. No anchor is enshrined and no provenance is invented.
+
+**Stage 0 is complete** with 1.1 and 1.14 delivered by the parallel session.

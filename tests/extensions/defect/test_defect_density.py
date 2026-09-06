@@ -336,3 +336,110 @@ class TestFrontier:
         n_e, n_h, q_f = dc.frame_counts_batch(table, numbers, state)
         assert n_e.tolist() == [[0, 0], [0, 0]] and n_h.tolist() == [[0, 0], [1, 0]]
         assert q_f.tolist() == [0, 1]
+
+
+class TestSmoothResidualShape:
+    """Addendum 4.1: g_res is smooth, everywhere defined, and its fallback vanishes with N."""
+
+    @staticmethod
+    def _raw(dz, cell_size=12.0, n_extra=0):
+        cell = _cell(cell_size)
+        n = len(dz) + n_extra
+        pos = torch.stack([torch.tensor([1.0 + 2.0 * i, 1.0, 1.0], dtype=torch.float64)
+                           for i in range(n)])
+        charges = torch.tensor(list(dz) + [0.0] * n_extra, dtype=torch.float64)
+        return dd.GaussianDensity(charges, pos, 1.0, cell), pos
+
+    def test_weights_are_normalised_for_any_input(self):
+        for dz in ([1.0, -1.0, 0.0], [0.0, 0.0, 0.0], [1e-14, 0.0, 0.0], [5.0, 0.0, 0.0]):
+            raw, pos = self._raw(dz)
+            omega, _ = dd.residual_weights(raw, pos, len(dz))
+            assert float(omega.sum()) == pytest.approx(1.0, abs=1e-12), dz
+            assert bool((omega >= 0).all()), dz
+
+    def test_all_zero_deviations_degrade_to_uniform_without_a_branch(self):
+        """The old code took a hard `if total <= 1e-12` branch onto a uniform BACKGROUND."""
+        raw, pos = self._raw([0.0, 0.0, 0.0, 0.0])
+        omega, a = dd.residual_weights(raw, pos, 4)
+        assert float(a.sum()) == pytest.approx(0.0, abs=1e-9)
+        assert torch.allclose(omega, torch.full_like(omega, 0.25), atol=1e-12)
+        # And g_res is a real charge list integrating to 1, not a uniform background.
+        g = dd.residual_shape(raw, pos, pos)
+        assert float(g.integral()) == pytest.approx(1.0, abs=1e-12)
+        assert g.background == 0.0
+
+    def test_the_weights_are_differentiable_where_the_deviation_vanishes(self):
+        """|dZ| has a kink at zero; the smoothed form must not."""
+        charges = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float64, requires_grad=True)
+        cell = _cell(12.0)
+        pos = torch.stack([torch.tensor([1.0 + 2.0 * i, 1.0, 1.0], dtype=torch.float64)
+                           for i in range(3)])
+        raw = dd.GaussianDensity(charges, pos, 1.0, cell)
+        omega, _ = dd.residual_weights(raw, pos, 3)
+        omega.sum().backward()
+        assert charges.grad is not None and torch.isfinite(charges.grad).all()
+
+    def test_the_uniform_fallback_fraction_vanishes_as_one_over_n(self):
+        """A finite delocalised fraction as the cell grows is the failure being removed."""
+        fractions = {}
+        for n_at in (10, 40, 160):
+            raw, pos = self._raw([1.0], cell_size=400.0, n_extra=n_at - 1)
+            _, a = dd.residual_weights(raw, pos, n_at)
+            floor = dd.EPS_OMEGA / n_at ** 2
+            fractions[n_at] = n_at * floor / float((a + floor).sum())
+        assert fractions[40] < fractions[10]
+        assert fractions[160] < fractions[40]
+        # O(1/N): a 16x larger cell has ~16x less fallback weight.
+        assert fractions[10] / fractions[160] == pytest.approx(16.0, rel=0.2)
+
+    def test_eps_must_be_positive(self):
+        raw, pos = self._raw([1.0, 0.0])
+        for bad in ({"eps_z": 0.0}, {"eps_omega": 0.0}, {"eps_z": -1e-6}):
+            with pytest.raises(ValueError, match="must be positive"):
+                dd.residual_weights(raw, pos, 2, **bad)
+
+    def test_the_departure_term_is_optional_and_nonnegative(self):
+        raw, pos = self._raw([0.0, 0.0, 0.0])
+        base, _ = dd.residual_weights(raw, pos, 3)
+        dep = torch.tensor([1.0, 0.0, 0.0], dtype=torch.float64)
+        with_dep, a = dd.residual_weights(raw, pos, 3, departure=dep, lambda_d=1.0)
+        assert torch.allclose(base, torch.full_like(base, 1 / 3), atol=1e-12)
+        assert float(with_dep[0]) > 0.9              # the departure now carries the weight
+        assert bool((a >= 0).all())
+        # lambda_d = 0 ignores it entirely.
+        off, _ = dd.residual_weights(raw, pos, 3, departure=dep, lambda_d=0.0)
+        assert torch.allclose(off, base, atol=1e-12)
+
+    def test_a_mismatched_departure_signal_is_refused(self):
+        raw, pos = self._raw([1.0, 0.0])
+        with pytest.raises(ValueError, match="departure signal"):
+            dd.residual_weights(raw, pos, 2, departure=torch.zeros(5, dtype=torch.float64),
+                                lambda_d=1.0)
+
+
+class TestResidualSupport:
+    """A non-zero residual monopole on a flat g_res is refused, not delocalised."""
+
+    @staticmethod
+    def _raw(dz):
+        cell = _cell(12.0)
+        pos = torch.stack([torch.tensor([1.0 + 2.0 * i, 1.0, 1.0], dtype=torch.float64)
+                           for i in range(len(dz))])
+        return dd.GaussianDensity(torch.tensor(dz, dtype=torch.float64), pos, 1.0, cell), pos
+
+    def test_a_real_departure_signal_supports_a_residual_charge(self):
+        raw, pos = self._raw([1.0, 0.0, 0.0])
+        ok, signal = dd.residual_support(raw, pos, 3, q_core=1, q_raw=0.0)
+        assert ok and signal > 0.5
+
+    def test_no_departure_signal_refuses_a_residual_charge(self):
+        raw, pos = self._raw([0.0, 0.0, 0.0])
+        ok, signal = dd.residual_support(raw, pos, 3, q_core=1, q_raw=0.0)
+        assert not ok
+        assert signal < dd.SUPPORT_THRESHOLD
+
+    def test_no_residual_charge_needs_no_signal(self):
+        """Nothing to place, so the shape is irrelevant and the state stays supported."""
+        raw, pos = self._raw([0.0, 0.0, 0.0])
+        ok, _ = dd.residual_support(raw, pos, 3, q_core=0, q_raw=0.0)
+        assert ok

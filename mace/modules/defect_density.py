@@ -12,7 +12,8 @@ scaled to zero" is a real continuity test rather than a grid quadrature.
     rho_static^raw  = rho_Z^present - rho_Z^pristine     a density difference; no assignment
     q_raw           = int rho_static^raw
                     = sum_{i in present} Z_i - sum_{j in pristine} Z0[s_j]
-    omega_i         = |dZ_i| / sum_j |dZ_j|,  g_res = sum_i omega_i g(r - R_i; r_res)
+    a_i             = sqrt(dZ_i^2 + eps_Z^2) - eps_Z + lambda_d d_i          (addendum 4.1)
+    omega_i         = (a_i + eps_w/N^2) / sum_j (a_j + eps_w/N^2),  g_res = sum_i omega_i g(..)
     rho_static^def  = rho_static^raw + (Q_core - q_raw) g_res          int = Q_core
 
 BOTH TERMS OF q_raw ARE WRITTEN OUT BECAUSE THE SHORTHAND IS FALSE HERE (addendum 4.1).
@@ -68,7 +69,7 @@ import torch
 
 __all__ = ["GaussianDensity", "DEFAULT_FUNCTIONAL", "functional_config", "static_present",
            "pristine_placed", "align_pristine", "static_raw", "local_net_charge",
-           "residual_shape", "static_def", "edge_projectors", "channel_densities",
+           "residual_shape", "residual_weights", "residual_support", "static_def", "edge_projectors", "channel_densities",
            "participation_fraction", "frontier_density", "defect_density"]
 
 ORB = 4   # orbitals per site, defect_counting.ORBITALS_PER_ATOM
@@ -90,6 +91,14 @@ DEFAULT_FUNCTIONAL: Dict[str, Any] = {
     "eps_h": 1.0e-6,      # SCF tolerance on ||[H, P]||, Stage 5
     "c_q_mode": "per_charge",  # C_Q: one constant per charge state, shared across sizes
 }
+
+
+# Addendum 4.1. eps_Z smooths |dZ| at zero; eps_omega is the size-vanishing uniform floor
+# that replaces the old zero-denominator branch; SUPPORT_THRESHOLD is the departure signal
+# below which a non-zero residual monopole is refused rather than delocalised.
+EPS_Z = 1e-6
+EPS_OMEGA = 1e-8
+SUPPORT_THRESHOLD = 1e-3
 
 
 def functional_config(overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -266,7 +275,10 @@ def local_net_charge(raw: GaussianDensity, centres: torch.Tensor) -> torch.Tenso
 
 
 def residual_shape(raw: GaussianDensity, present_positions: torch.Tensor,
-                   pristine_positions: torch.Tensor, merge: float = 0.5) -> GaussianDensity:
+                   pristine_positions: torch.Tensor, merge: float = 0.5,
+                   eps_z: float = EPS_Z, eps_omega: float = EPS_OMEGA,
+                   departure: Optional[torch.Tensor] = None,
+                   lambda_d: float = 0.0) -> GaussianDensity:
     """`g_res = sum_i omega_i g(r - R_i; r_res)`, `omega_i = |dZ_i| / sum_j |dZ_j|`, over the
     present atoms and the pristine sites (a vacancy's weight lives at its pristine site).
     Integral 1 by construction; zero weights everywhere fall back to a uniform background.
@@ -279,13 +291,74 @@ def residual_shape(raw: GaussianDensity, present_positions: torch.Tensor,
     d = _minimum_image(pristine_positions[:, None, :] - present_positions[None, :, :], raw.cell)
     near = (d.norm(dim=-1) < merge * raw.sigma).any(dim=1)
     centres = torch.cat([present_positions, pristine_positions[~near]])
-    dz = local_net_charge(raw, centres).abs()
-    total = dz.sum()
-    if float(total) <= 1e-12:
-        return GaussianDensity(torch.zeros(0, dtype=raw.charges.dtype, device=raw.charges.device),
-                               torch.zeros(0, 3, dtype=raw.centres.dtype, device=raw.centres.device),
-                               raw.sigma, raw.cell, background=1.0)
-    return GaussianDensity(dz / total, centres, raw.sigma, raw.cell)
+    weights, _ = residual_weights(raw, centres, present_positions.shape[0],
+                                  eps_z=eps_z, eps_omega=eps_omega,
+                                  departure=departure, lambda_d=lambda_d)
+    return GaussianDensity(weights, centres, raw.sigma, raw.cell)
+
+
+def residual_weights(raw: GaussianDensity, centres: torch.Tensor, n_at: int,
+                     eps_z: float = EPS_Z, eps_omega: float = EPS_OMEGA,
+                     departure: Optional[torch.Tensor] = None, lambda_d: float = 0.0
+                     ) -> Tuple[torch.Tensor, torch.Tensor]:
+    """`(omega, a)` -- the smooth residual weights and the departure signal they came from.
+
+    Addendum section 4.1 replaces `omega_i = |dZ_i| / sum_j |dZ_j|` and its zero-denominator
+    branch with
+
+        a_i     = sqrt(dZ_i^2 + eps_Z^2) - eps_Z + lambda_d d_i
+        omega_i = (a_i + eps_omega / N_at^2) / sum_j (a_j + eps_omega / N_at^2)
+
+    Two things this fixes. `|dZ|` has a kink at zero, so `g_res` and every derivative through
+    it were non-differentiable exactly where the learned deviations vanish -- which is the
+    pristine limit, the case that has to be smooth. And the old `if total <= 1e-12` fallback
+    was a discontinuous branch onto a *uniform background*: a cell that crossed that
+    threshold jumped from a localised residual to a fully delocalised one.
+
+    The `eps_omega / N_at^2` floor replaces the branch. It is always present, so there is no
+    branch to cross; `sum_i omega_i = 1` holds by construction for any input; and because
+    there are O(N_at) centres each carrying O(1/N_at^2), the total fallback weight is
+    O(1/N_at) and vanishes as the cell grows rather than leaving a finite delocalised
+    fraction. With every deviation zero it degrades to the uniform 1/N, which is the honest
+    answer when nothing distinguishes any site.
+
+    `departure` is the plan's optional `d_i >= 0`, a smooth bounded departure from the
+    pristine species environment; `lambda_d = 0` by default leaves it out entirely.
+    """
+    if eps_z <= 0.0 or eps_omega <= 0.0:
+        raise ValueError(f"eps_z and eps_omega must be positive, got {eps_z}, {eps_omega}")
+    dz = local_net_charge(raw, centres)
+    a = torch.sqrt(dz * dz + eps_z * eps_z) - eps_z
+    if departure is not None and lambda_d:
+        if departure.shape[0] != a.shape[0]:
+            raise ValueError(
+                f"departure signal has {departure.shape[0]} entries for {a.shape[0]} centres")
+        a = a + float(lambda_d) * departure.clamp_min(0.0)
+    floor = eps_omega / float(max(int(n_at), 1)) ** 2
+    numerator = a + floor
+    return numerator / numerator.sum(), a
+
+
+def residual_support(raw: GaussianDensity, centres: torch.Tensor, n_at: int,
+                     q_core: int, q_raw, threshold: float = SUPPORT_THRESHOLD,
+                     eps_z: float = EPS_Z, eps_omega: float = EPS_OMEGA,
+                     departure: Optional[torch.Tensor] = None, lambda_d: float = 0.0
+                     ) -> Tuple[bool, float]:
+    """`(supported, signal)` for the residual monopole (addendum section 4.1).
+
+    `rho_static^def` places `Q_core - q_raw` on `g_res`. If that is non-zero while the local
+    departure signal is below the registered threshold, `g_res` is essentially the uniform
+    fallback -- so the model would be putting a physical monopole through a numerical
+    tie-breaker, spread over the whole cell. That is reported as unsupported rather than
+    evaluated: a delocalised monopole is not a small error, it is a different physical claim.
+    """
+    _, a = residual_weights(raw, centres, n_at, eps_z=eps_z, eps_omega=eps_omega,
+                            departure=departure, lambda_d=lambda_d)
+    signal = float(a.sum())
+    residual_charge = abs(float(q_core) - float(q_raw))
+    if residual_charge <= threshold:
+        return True, signal          # nothing to place; the shape is irrelevant
+    return signal > threshold, signal
 
 
 def static_def(raw: GaussianDensity, g_res: GaussianDensity, q_core: int) -> GaussianDensity:
