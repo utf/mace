@@ -153,9 +153,9 @@ Status: `todo` / `wip` / `done` / `blocked`. Keep this column current.
 | 4.1 | Smooth `g_res`: `a_i`, `ω_i` with `ε_Z`, `ε_ω`, `λ_d d_i`; `O(1/N_at)` fallback; finite derivatives as `δZ_i → 0` | add §4.1 | done |
 | 4.2 | Support gate: nonzero `|Q_core − q_raw|` with sub-threshold departure signal ⇒ unsupported, not a silent monopole | add §4.1 | done — `residual_support`, not yet enforced at the call site |
 | 4.3 | Covariant registration (co-translation, co-rotation, wrap, permutation, affine strain); discrete correspondence fixed per class | add §4.1 | todo |
-| 4.4 | `defect_lift.py`: constructor-topology branch envelope `ζ_lift`, circular moment, cut placement, integer image assignment fixed w.r.t. `P` | add §4.2 | todo |
-| 4.5 | Boundary-clearance and tail contract with certified `ε_ρ`, `ε_E`, `ε_F`, `ε_σ` bounds | add §4.2 | todo |
-| 4.6 | `IsoOK` conjunctive predicate (6 clauses) with per-clause negative tests | add §4.2 | todo |
+| 4.4 | `defect_lift.py`: constructor-topology branch envelope `ζ_lift`, circular moment, cut placement, integer image assignment fixed w.r.t. `P` | add §4.2 | done — `defect_lift.py`, constructor-topology envelope + circular moment |
+| 4.5 | Boundary-clearance and tail contract with certified `ε_ρ`, `ε_E`, `ε_F`, `ε_σ` bounds | add §4.2 | done — `clearance_report`, absolute buffer mass |
+| 4.6 | `IsoOK` conjunctive predicate (6 clauses) with per-clause negative tests | add §4.2 | done — `iso_ok`, 8 clauses with per-clause negative tests |
 | 4.7 | Forward-only two-boundary diagnostic; retain `dP⁽⁰⁾/d(R,h)`; do **not** feed `δΦ/δP` back into `H` | add §8 Stage 4 | todo |
 | 4.8 | Remove any independent static image potential or pairwise image patch | add §8 Stage 4 | todo |
 
@@ -413,3 +413,15 @@ Two notes on method, because the first two attempts were wrong:
   from the pre record (`d_sigma`, `m_f`, `ambiguous`) -- schema additions from this
   programme, not value changes. It now separates "new since the pre record" from "changed",
   because conflating them would hide a real difference among the additions.
+
+### D10 — the unwrap is a minimum image about the support centre, not an offset from the cut
+
+Written first as "shift everything whose fractional offset from the cut exceeds the
+centre's", which splits a compact object across two images: a site just past the centre is
+more than half a cell from the cut and was shifted while its neighbour was not. The
+translation-continuity test caught it -- a rigid pair 0.48 A apart reported a separation of
+11.52 A, exactly one cell minus 0.48. The rule is `shift = -round(s - centre)`, which is the
+same statement as "cut half a cell away" but cannot separate neighbours.
+
+The lesson generalises: a branch rule should be expressed relative to the object being kept
+together, not relative to the boundary being avoided.
