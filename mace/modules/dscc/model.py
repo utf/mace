@@ -132,8 +132,9 @@ class MACEDSCC(nn.Module):
                 "coupling": self.coupling, "route_b": self.route_b, "r_split": self.r_split,
                 "lambda_max": self.lambda_max, "c_q_table": dict(self.c_q_table),
                 "calibration_record": self.calibration_record,
-                "coupling_mode": self.coupling_mode, "lambda_fixed": self.lambda_fixed,
-                "u_zero": self.u_zero, "init_from": self.init_from}
+                "coupling_mode": getattr(self, "coupling_mode", "full"),
+                "lambda_fixed": getattr(self, "lambda_fixed", None),
+                "u_zero": getattr(self, "u_zero", False), "init_from": getattr(self, "init_from", None)}
 
     def set_extra_state(self, state: Dict[str, Any]) -> None:
         self.kernel = KernelConfig(**state["kernel"])
@@ -153,13 +154,14 @@ class MACEDSCC(nn.Module):
     def lambda_dir(self) -> torch.Tensor:
         """`lambda_dir`: learned in `[0, lambda_max]`, or held at `lambda_fixed` (Arm 2+3
         couplings "LR-only" (0), "LR + U" (0) and "lambda_dir = 1 fixed")."""
-        if self.lambda_fixed is not None:
-            return torch.tensor(float(self.lambda_fixed), dtype=torch.float64, device=self.u_max.device)
+        fixed = getattr(self, "lambda_fixed", None)          # getattr: models pickled before Arm 2+3
+        if fixed is not None:
+            return torch.tensor(float(fixed), dtype=torch.float64, device=self.u_max.device)
         return self.lambda_max * torch.sigmoid(self.lambda_raw)
 
     def u_eff(self) -> torch.Tensor:
         """`U_eff[Z]` in `[0, U_max[Z]]`, or zero when `u_zero` (Arm 2+3 "LR-only")."""
-        if self.u_zero:
+        if getattr(self, "u_zero", False):
             return torch.zeros_like(self.u_max)
         return self.u_max * torch.sigmoid(self.u_raw)
 

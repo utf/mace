@@ -33,7 +33,7 @@ def main() -> None:
     torch.set_default_dtype(torch.float64)
     base = torch.load(args.base, weights_only=False, map_location="cpu").double()
     import ase.io
-    frame = [a for a in ase.io.read(f"{args.dataset}/train.xyz", "0:40") if int(a.info["cell_charge"]) != 0][0]
+    frame = [a for a in ase.io.read(f"{args.dataset}/train.xyz", ":") if int(a.info["cell_charge"]) != 0][0]
     frame.info.setdefault("carrier_counts", np.array([0, 0, 1, 0]))
     z_table = tools.AtomicNumberTable([17, 55, 82])
     for run in args.runs:
