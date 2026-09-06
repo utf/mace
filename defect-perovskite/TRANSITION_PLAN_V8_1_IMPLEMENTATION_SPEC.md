@@ -152,7 +152,7 @@ Status: `todo` / `wip` / `done` / `blocked`. Keep this column current.
 |---|---|---|---|
 | 4.1 | Smooth `g_res`: `a_i`, `ω_i` with `ε_Z`, `ε_ω`, `λ_d d_i`; `O(1/N_at)` fallback; finite derivatives as `δZ_i → 0` | add §4.1 | done |
 | 4.2 | Support gate: nonzero `|Q_core − q_raw|` with sub-threshold departure signal ⇒ unsupported, not a silent monopole | add §4.1 | done — `residual_support`, not yet enforced at the call site |
-| 4.3 | Covariant registration (co-translation, co-rotation, wrap, permutation, affine strain); discrete correspondence fixed per class | add §4.1 | todo |
+| 4.3 | Covariant registration (co-translation, co-rotation, wrap, permutation, affine strain); discrete correspondence fixed per class | add §4.1 | done — all five covariances pass; see D11 |
 | 4.4 | `defect_lift.py`: constructor-topology branch envelope `ζ_lift`, circular moment, cut placement, integer image assignment fixed w.r.t. `P` | add §4.2 | done — `defect_lift.py`, constructor-topology envelope + circular moment |
 | 4.5 | Boundary-clearance and tail contract with certified `ε_ρ`, `ε_E`, `ε_F`, `ε_σ` bounds | add §4.2 | done — `clearance_report`, absolute buffer mass |
 | 4.6 | `IsoOK` conjunctive predicate (6 clauses) with per-clause negative tests | add §4.2 | done — `iso_ok`, 8 clauses with per-clause negative tests |
@@ -425,3 +425,45 @@ same statement as "cut half a cell away" but cannot separate neighbours.
 
 The lesson generalises: a branch rule should be expressed relative to the object being kept
 together, not relative to the boundary being avoided.
+
+### D11 — rigid-translation covariance: RESOLVED by re-fitting the placement per frame
+
+Addendum 4.1: "Under a rigid translation or rotation, both densities co-transform
+identically." The implementation does **not** satisfy this for translation, and it is not an
+oversight on either side:
+
+* the pristine reference is placed by a fractional shift found **once per composition class**
+  by minimising `||rho_static^raw||^2` on the class reference frame, then reused by every
+  frame of the class;
+* that is deliberate. `defect_density`'s own docstring says the per-frame norm is reported
+  "so a frame recorded from a different origin is visible rather than silently a dipole
+  array". A cached placement is what makes a wrong-origin frame detectable.
+
+Measured: translating every atom of a V_Cl frame by a constant takes `||rho_static^raw||`
+from 0.144 to 1.406 -- a 10x jump for a transformation that is a symmetry of a periodic
+system. Rotation, periodic wrap, atom permutation and homogeneous strain all pass, because
+each carries the cell with it and the placement is fractional.
+
+**Resolution (user decision): do what the addendum asks.** `frame_static_densities` now
+re-fits the alignment per frame, seeded by the cached class shift, and all five covariances
+pass. Two things were tried and rejected on measurement first:
+
+1. **An origin proxy** -- correct the cached shift by the circular centroid of the present
+   atoms. It fails on bulk-like cells: the atoms tile the cell, so the circular mean has
+   near-zero magnitude and its angle is noise. It broke two pristine tests, and it is the
+   same degeneracy the isolated lift guards against with `z_min`.
+2. **A local re-minimisation** from the cached shift (damped Newton, then L-BFGS with a
+   strong-Wolfe line search). Better but still wrong: a translation of a fraction of a
+   lattice spacing crosses into a neighbouring basin, and the local search converged to
+   0.72 against the correct 0.14.
+
+What works is the **global** candidate search that `align_pristine` already implements,
+anchored on present atom 0 against every pristine site -- no species map needed, since
+wrong-species candidates simply rank out. The minimiser of `||rho_static^raw||^2`
+co-translates exactly with the atoms, so this is covariant by construction rather than by
+approximation.
+
+The cost is a per-frame alignment rather than a cached constant, which the addendum
+anticipates ("any continuous geometry-dependent alignment is fully differentiated"). The
+wrong-origin diagnostic is not lost: `||rho_static^raw||` is still reported per frame, and
+now measures a genuine mismatch rather than a bookkeeping offset.

@@ -26,11 +26,17 @@ number of order one electron. `test_defect_density.py` pins the difference of in
 
 PLACEMENT. The pristine reference is tiled (`defect_composition.tiling_map`) and put into
 the frame's actual cell through scaled coordinates, then shifted by a rigid translation.
-That translation is found ONCE per composition class by minimising `||rho_static^raw||^2`
-on the class reference frame -- an alignment of DENSITIES, label-free and with no site
-assignment in it -- and cached in the class record as a fractional shift (`placement`);
-every frame of the class reuses it, and `||rho_static^raw||` is reported per frame so a
-frame recorded from a different origin is visible rather than silently a dipole array.
+That translation is found by minimising `||rho_static^raw||^2` -- an alignment of
+DENSITIES, label-free and with no site assignment in it. The class record caches the shift
+fitted on the class reference frame (`placement`), and every frame RE-FITS from there
+(`frame_static_densities(realign=True)`).
+
+Re-fitting is what makes the placement covariant (addendum 4.1). Reusing the cached shift
+does not: translate every atom and the reference stays put, so a rigid translation -- a
+symmetry of a periodic system -- reads as a cell-wide array of dipoles. The re-fit uses the
+GLOBAL candidate search, not a local refinement, because a translation of a fraction of a
+lattice spacing crosses into a neighbouring basin where a local search converges to the
+wrong minimum. `||rho_static^raw||` is still reported per frame.
 
 dZ_i, THE LOCAL NET CHARGE. The plan's omega rule reads the per-site charge difference. At
 the density level, with no site correspondence, `dZ_i` is the raw density READ at each

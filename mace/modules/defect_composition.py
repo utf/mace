@@ -879,6 +879,20 @@ def tiled_pristine_scaled(model, pristine_frame, factors, perm
     return species, torch.tensor(scaled, dtype=torch.get_default_dtype())
 
 
+
+def _alignment_anchor(species: torch.Tensor, pri_species: torch.Tensor,
+                      zs: Sequence[int]) -> Tuple[int, int]:
+    """The species and present-atom index the density alignment is anchored on.
+
+    Deterministic and label-free: the heaviest species shared by the frame and the tiled
+    pristine reference, and its first present atom. Shared by the class-level placement and
+    the per-frame realignment so the two cannot drift apart.
+    """
+    shared = sorted(set(species.tolist()) & set(pri_species.tolist()))
+    anchor_species = max(shared, key=lambda i: zs[i])
+    return anchor_species, int(torch.nonzero(species == anchor_species).reshape(-1)[0])
+
+
 def pristine_placement(model, class_frame, pristine_frame, factors, perm,
                        r_res: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """The fractional shift placing the tiled pristine density in the class reference frame,
@@ -897,11 +911,11 @@ def pristine_placement(model, class_frame, pristine_frame, factors, perm,
     present = dd.static_present(z0.to(dtype)[species], torch.tensor(pos, dtype=dtype),
                                 torch.tensor(cell, dtype=dtype), r_res)
     pri_species, scaled = tiled_pristine_scaled(model, pristine_frame, factors, perm)
-    shared = sorted(set(species.tolist()) & set(pri_species.tolist()))
-    anchor_species = max(shared, key=lambda i: zs[i])
-    anchor = int(torch.nonzero(species == anchor_species).reshape(-1)[0])
+    anchor_species, anchor = _alignment_anchor(species, pri_species, zs)
     shift, residual = dd.align_pristine(present, z0.to(dtype)[pri_species], scaled,
                                         pri_species == anchor_species, anchor)
+    # The class shift is the STARTING point for every frame; `frame_static_densities`
+    # re-minimises from it so the placement co-transforms (addendum 4.1).
     return {"shift": [float(x) for x in shift], "residual_norm": residual, "r_res": r_res}
 
 
@@ -913,9 +927,10 @@ def _functional(model) -> Dict[str, Any]:
 
 def frame_static_densities(model, record: ClassRecord, pristine_frame, charges: torch.Tensor,
                            positions: torch.Tensor, cell: torch.Tensor,
-                           r_res: Optional[float] = None) -> Dict[str, Any]:
+                           r_res: Optional[float] = None,
+                           realign: bool = True) -> Dict[str, Any]:
     """`rho_Z^present`, `rho_Z^pristine`, `rho_static^raw`, `g_res` and `rho_static^def` for
-    one frame of `record`'s class, reusing the class placement. `charges` are the frame's
+    one frame of `record`'s class, re-minimising the placement from the class shift. `charges` are the frame's
     static charges `Z_i` (with any per-site deviation), `positions`/`cell` the frame's.
     Reports `||rho_static^raw||` so a frame from a different origin is visible."""
     from mace.modules import defect_density as dd
@@ -927,6 +942,23 @@ def frame_static_densities(model, record: ClassRecord, pristine_frame, charges: 
     present = dd.static_present(charges, positions, cell, r_res)
     pri_species, scaled = tiled_pristine_scaled(model, pristine_frame, record.tiling, record.perm)
     shift = torch.tensor(record.placement["shift"], dtype=positions.dtype, device=positions.device)
+    if realign:
+        # Addendum 4.1: the pristine reference must co-transform with the frame. A cached
+        # class shift does not -- translate every atom and the reference stays put, so a
+        # symmetry of a periodic system reads as a cell-wide array of dipoles.
+        #
+        # The alignment is therefore re-fitted per frame, and with the GLOBAL search, not a
+        # local refinement of the cached shift: a translation of a fraction of a lattice
+        # spacing crosses into another basin, where local refinement converges to the wrong
+        # minimum (measured: 0.72 against the correct 0.14). The candidate set is every
+        # pristine site for present atom 0, so no species map is needed here; wrong-species
+        # candidates simply score badly and are ranked out.
+        all_sites = torch.ones(scaled.shape[0], dtype=torch.bool, device=scaled.device)
+        shift, _ = dd.align_pristine(
+            present, z0[pri_species.to(z0.device)],
+            scaled.to(dtype=positions.dtype, device=positions.device),
+            all_sites, 0)
+        shift = shift.to(dtype=positions.dtype, device=positions.device)
     pristine = dd.pristine_placed(z0[pri_species.to(z0.device)],
                                   scaled.to(dtype=positions.dtype, device=positions.device),
                                   cell, shift, r_res)

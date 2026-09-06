@@ -443,3 +443,85 @@ class TestResidualSupport:
         raw, pos = self._raw([0.0, 0.0, 0.0])
         ok, _ = dd.residual_support(raw, pos, 3, q_core=0, q_raw=0.0)
         assert ok
+
+
+class TestRegistrationCovariance:
+    """Addendum 4.1: the pristine/defect registration must be covariant, not merely close.
+
+    `rho_static^raw` is a DIFFERENCE of two densities, so an origin convention that moves
+    one and not the other turns a vacancy into a cell-wide array of dipoles. These pin the
+    transformations under which the difference must be unchanged.
+    """
+
+    @staticmethod
+    def _raw_norm(model, rec, pristine_frame, charges, pos, cell):
+        out = dc.frame_static_densities(model, rec, pristine_frame, charges, pos, cell)
+        return float(out["raw_norm"]), float(out["q_raw"])
+
+    def test_rigid_translation(self, harrison_model, frames, table):
+        """Addendum 4.1: a rigid translation is a symmetry of a periodic system, so the
+        pristine reference must follow the frame rather than staying pinned."""
+        rec = dc.lookup_class(table, [17] * 23 + [55] * 8 + [82] * 8)
+        charges, pos, cell = _static_inputs(harrison_model, frames["vcl_39"])
+        base = self._raw_norm(harrison_model, rec, frames["pristine"], charges, pos, cell)
+        shift = torch.tensor([1.234, -0.567, 2.345], dtype=torch.float64)
+        moved = self._raw_norm(harrison_model, rec, frames["pristine"], charges,
+                               pos + shift, cell)
+        assert moved[0] == pytest.approx(base[0], rel=1e-8)
+        assert moved[1] == pytest.approx(base[1], abs=1e-10)
+
+    def test_rigid_rotation(self, harrison_model, frames, table):
+        rec = dc.lookup_class(table, [17] * 23 + [55] * 8 + [82] * 8)
+        charges, pos, cell = _static_inputs(harrison_model, frames["vcl_39"])
+        base = self._raw_norm(harrison_model, rec, frames["pristine"], charges, pos, cell)
+        theta = 0.37
+        c, s = math.cos(theta), math.sin(theta)
+        rot = torch.tensor([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=torch.float64)
+        turned = self._raw_norm(harrison_model, rec, frames["pristine"], charges,
+                                pos @ rot.T, cell @ rot.T)
+        assert turned[0] == pytest.approx(base[0], rel=1e-8)
+        assert turned[1] == pytest.approx(base[1], abs=1e-10)
+
+    def test_periodic_wrap(self, harrison_model, frames, table):
+        """Rewrapping atoms through the cell face may not change the difference."""
+        rec = dc.lookup_class(table, [17] * 23 + [55] * 8 + [82] * 8)
+        charges, pos, cell = _static_inputs(harrison_model, frames["vcl_39"])
+        base = self._raw_norm(harrison_model, rec, frames["pristine"], charges, pos, cell)
+        frac = pos @ torch.linalg.inv(cell)
+        wrapped = (frac % 1.0) @ cell
+        got = self._raw_norm(harrison_model, rec, frames["pristine"], charges, wrapped, cell)
+        assert got[0] == pytest.approx(base[0], rel=1e-8)
+
+    def test_atom_permutation(self, harrison_model, frames, table):
+        """A density difference cannot depend on the order atoms are listed in."""
+        rec = dc.lookup_class(table, [17] * 23 + [55] * 8 + [82] * 8)
+        charges, pos, cell = _static_inputs(harrison_model, frames["vcl_39"])
+        base = self._raw_norm(harrison_model, rec, frames["pristine"], charges, pos, cell)
+        g = torch.Generator().manual_seed(5)
+        perm = torch.randperm(pos.shape[0], generator=g)
+        got = self._raw_norm(harrison_model, rec, frames["pristine"], charges[perm],
+                             pos[perm], cell)
+        assert got[0] == pytest.approx(base[0], rel=1e-8)
+        assert got[1] == pytest.approx(base[1], abs=1e-10)
+
+    def test_homogeneous_strain_co_deforms_the_pristine_reference(self, harrison_model,
+                                                                  frames, table):
+        """The registered pristine FRACTIONAL coordinates stay fixed and follow the cell.
+
+        If the pristine reference were held in Cartesian coordinates, straining the cell
+        would slide every pristine site against its present partner and `q_raw` -- an exact
+        integer difference of charges -- would drift. This asserts it does not.
+        """
+        rec = dc.lookup_class(table, [17] * 23 + [55] * 8 + [82] * 8)
+        charges, pos, cell = _static_inputs(harrison_model, frames["vcl_39"])
+        base = self._raw_norm(harrison_model, rec, frames["pristine"], charges, pos, cell)
+        strain = torch.eye(3, dtype=torch.float64)
+        strain[0, 0] += 0.01
+        strain[1, 2] += 0.004
+        frac = pos @ torch.linalg.inv(cell)
+        got = self._raw_norm(harrison_model, rec, frames["pristine"], charges,
+                             frac @ (cell @ strain.T), cell @ strain.T)
+        # q_raw is a difference of charge sums: exactly invariant under any cell change.
+        assert got[1] == pytest.approx(base[1], abs=1e-10)
+        # The norm moves only by the smooth density response, not by a registration slip.
+        assert got[0] == pytest.approx(base[0], rel=0.05)
