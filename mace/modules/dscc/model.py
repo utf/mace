@@ -33,9 +33,10 @@ from mace.modules.models import ScaleShiftMACE
 from mace.modules.dscc.fill import SIGMA_S
 from mace.modules.dscc.hamiltonian import (A_MAX_DEFAULT, B_MAX_DEFAULT, H0, Q_CUT_DEFAULT,
                                            R_CUT_DEFAULT)
-from mace.modules.dscc.kernels import (KernelConfig, centred_pattern, gamma_lr, gamma_matrix,
-                                       host_potential, kernel_components, project_sum_rule)
-from mace.modules.dscc.scf import ScfOptions, ScfResult, solve_dscc, two_fillings
+from mace.modules.dscc.kernels import (KernelConfig, gamma_lr, gamma_matrix, host_potential,
+                                       kernel_components)
+from mace.modules.dscc.scf import (ScfOptions, ScfResult, continuation_solve, solve_dscc,
+                                   two_fillings)
 from mace.modules.dscc.species import (N0, S_REF, State, U_MAX_GFN1, neutral_count,
                                        states_from_batch)
 from mace.modules.dscc.fill import fill
@@ -44,8 +45,8 @@ from mace.modules.dscc.fill import fill
 LAMBDA_0_DEFAULT = 0.05
 LAMBDA_MAX_DEFAULT = 2.0
 U_INIT_FRACTION = 0.05          # U_eff starts at 5 % of its bound ("initialised small")
-R_SPLIT_DEFAULT = 2.5           # Route B, A (> r_g)
-Z_MAX_FACTOR = 2.0              # Route B: |Zstar_s| <= Z_MAX_FACTOR x max |init| (plan 2.5)
+R_SPLIT_DEFAULT = 2.5           # Route B', A (> r_g)
+S_MAX_DEFAULT = 2.0             # Route B': the single global scale s in [0, s_max], init 1 (v4.2)
 
 
 def block0_layout(base: nn.Module) -> Tuple[int, int, int]:
@@ -106,11 +107,13 @@ class MACEDSCC(nn.Module):
         logit = lambda x: float(torch.logit(torch.tensor(x, dtype=torch.float64)))  # noqa: E731
         self.lambda_raw = nn.Parameter(torch.tensor(logit(lambda_0 / lambda_max), dtype=torch.float64))
         self.u_raw = nn.Parameter(torch.full((n_el,), logit(U_INIT_FRACTION), dtype=torch.float64))
-        # Route B pattern: bounded deviation from a model-derived init (set in Phase 1).
-        self.zstar_raw = nn.Parameter(torch.zeros(n_el, dtype=torch.float64))
-        self.register_buffer("zstar_init", torch.zeros(n_el, dtype=torch.float64))
-        self.register_buffer("z_max", torch.tensor(1.0, dtype=torch.float64))
-        self.register_buffer("pristine_composition", torch.zeros(n_el, dtype=torch.float64))
+        # Route B' (v4.2): the static pattern is the reference-fill site charge q0(R) of
+        # H0(R) -- locally neutral by construction -- times ONE global scale s in
+        # [0, s_max], initialised at 1. Per-species scales are prohibited (they break local
+        # neutrality at the vacancy and bring the 1/L error back).
+        self.s_max = float(S_MAX_DEFAULT)
+        self.s_raw = nn.Parameter(torch.zeros((), dtype=torch.float64))       # s_max sigmoid(0) = 1
+        self.register_buffer("q0_pristine", torch.zeros(n_el, dtype=torch.float64))   # species means
         self.register_buffer("pristine_atoms", torch.tensor(0, dtype=torch.long))
         # C_Q: one constant per formal charge, with its record (plan section 6); both in
         # `extra_state`, so a checkpoint carries exactly what it was calibrated with.
@@ -161,50 +164,39 @@ class MACEDSCC(nn.Module):
         self.c_q_table = {int(q): float(v) for q, v in values.items() if int(q) != 0}
         self.calibration_record = dict(record)
 
-    def zstar(self) -> torch.Tensor:
-        """Route B: the per-species pattern, bounded by `z_max` and on the sum rule."""
-        return project_sum_rule(self.z_max * torch.tanh(self.zstar_raw), self.pristine_composition)
+    def pattern_scale(self) -> torch.Tensor:
+        """Route B': the single global scale `s = s_max sigmoid(s_raw)`, 1 at initialisation."""
+        return self.s_max * torch.sigmoid(self.s_raw)
 
-    @torch.no_grad()
-    def initialise_route_b(self, batches: Sequence[Dict[str, torch.Tensor]]) -> Dict[str, Any]:
-        """Plan 2.5: `Zstar_s <- species mean over the pristine cell of q0_i = n0[Z_i] -
-        sum_sigma Tr(Pi_i P_ref_sigma)` at `H = H0` with the current checkpoint, projected
-        onto the sum rule; bounds from the init magnitudes; the per-site `q0` reported."""
-        q0_all, species_all = [], []
-        for data in batches:
-            out = ScaleShiftMACE.forward(self.base, self._trunk_data(dict(data)), training=False,
-                                         compute_force=False)
-            scalars, vectors = self.features(out["node_feats"])
-            species = data["node_attrs"].argmax(dim=-1)
-            positions, cell = data["positions"], data["cell"].view(-1, 3, 3)
-            sender, receiver = data["edge_index"][0], data["edge_index"][1]
-            edge_graph = data["batch"][sender]
-            shifts = torch.einsum("ei,eij->ej", data["unit_shifts"].to(positions.dtype), cell[edge_graph])
-            edge_vector = positions[receiver] - positions[sender] + shifts
-            ptr = data["ptr"]
-            for g in range(int(ptr.numel() - 1)):
-                lo, hi = int(ptr[g]), int(ptr[g + 1])
-                nodes = slice(lo, hi)
-                e_mask = edge_graph == g
-                H = self.h0(scalars[nodes], vectors[nodes], species[nodes],
-                            data["edge_index"][:, e_mask] - lo, edge_vector[e_mask])
-                numbers = [self.atomic_numbers[int(s)] for s in species[nodes].tolist()]
-                n_up, n_dn = S_REF.counts(neutral_count(numbers))
-                eps, U = torch.linalg.eigh(H)
-                P = fill(H, float(n_up), self.sigma_s, (eps, U)).P + fill(H, float(n_dn), self.sigma_s, (eps, U)).P
-                occupied = torch.diagonal(P).reshape(-1, 4).sum(-1)
-                n0 = torch.tensor([float(N0[z]) for z in numbers], dtype=torch.float64, device=P.device)
-                q0_all.append(n0 - occupied)
-                species_all.append(species[nodes])
-        q0, sp = torch.cat(q0_all), torch.cat(species_all)
-        n_el = len(self.atomic_numbers)
-        mean = torch.stack([q0[sp == s].mean() if bool((sp == s).any()) else q0.new_zeros(()) for s in range(n_el)])
-        init = project_sum_rule(mean, self.pristine_composition)
-        z_max = Z_MAX_FACTOR * float(init.abs().max()) + 1e-6
-        self.z_max.fill_(z_max)
-        self.zstar_init.copy_(init)
-        self.zstar_raw.copy_(torch.atanh((init / z_max).clamp(-0.999, 0.999)))
-        return {"q0_sites": q0.cpu(), "species": sp.cpu(), "zstar_init": init.cpu(), "z_max": z_max}
+    def reference_charges(self, H: torch.Tensor, numbers: Sequence[int]) -> torch.Tensor:
+        """Route B' (v4.2): `q0_i = n0[Z_i] - sum_sigma Tr(Pi_i P_ref_sigma(H0))` at `H = H0`
+        -- NEVER at `H0 - V` -- attached to `H0` through the divided-difference backward, so
+        its geometry derivative (the mandatory `s dq^T Gamma_LR dq0/dR` force term, one
+        Frechet contraction) and its parameter derivative are on the graph. Sums to zero
+        exactly: the reference is neutral."""
+        n_up, n_dn = S_REF.counts(neutral_count(numbers))
+        with torch.no_grad():
+            spectrum = torch.linalg.eigh(H)
+        P = fill(H, float(n_up), self.sigma_s, spectrum).P + fill(H, float(n_dn), self.sigma_s, spectrum).P
+        occupied = torch.diagonal(P).reshape(-1, 4).sum(-1)
+        n0 = torch.tensor([float(N0[z]) for z in numbers], dtype=H.dtype, device=H.device)
+        return n0 - occupied
+
+    def compensation_cloud(self, q0: torch.Tensor, species: torch.Tensor, positions: torch.Tensor,
+                           cell: torch.Tensor) -> Dict[str, float]:
+        """v4.2 diagnostic: the extent `R_eff` of `q0 - q0_pristine` (the reference fill's
+        compensation of the missing ion): radius of gyration of |dq0| about its
+        minimum-image centroid, and the total |dq0|."""
+        dev = (q0 - self.q0_pristine[species]).detach()
+        w = dev.abs()
+        if float(w.sum()) < 1e-12:
+            return {"r_eff": 0.0, "total_abs": 0.0}
+        anchor = positions[int(w.argmax())]
+        d = positions.detach() - anchor
+        d = d - torch.round(d @ torch.linalg.inv(cell.detach())) @ cell.detach()
+        centroid = (w.unsqueeze(-1) * d).sum(0) / w.sum()
+        r2 = ((d - centroid) ** 2).sum(-1)
+        return {"r_eff": float(torch.sqrt((w * r2).sum() / w.sum())), "total_abs": float(w.sum())}
 
     # ----------------------------------------------------------------- base
 
@@ -244,8 +236,30 @@ class MACEDSCC(nn.Module):
         scalars, species_t = torch.cat(feats), torch.cat(species)
         self.h0.set_centre(scalars, species_t)
         self.pristine_atoms.fill_(min(sizes))
-        counts = torch.bincount(species_t, minlength=len(self.atomic_numbers)).to(torch.float64)
-        self.pristine_composition.copy_(counts / counts.sum() * min(sizes))
+        # Route B' diagnostic reference: the pristine q0 per species (with the centre set).
+        q0_all, sp_all = [], []
+        for data in batches:
+            out = ScaleShiftMACE.forward(self.base, self._trunk_data(dict(data)), training=False,
+                                         compute_force=False)
+            sc_, vec_ = self.features(out["node_feats"])
+            sp_ = data["node_attrs"].argmax(dim=-1)
+            positions, cell = data["positions"], data["cell"].view(-1, 3, 3)
+            sender, receiver = data["edge_index"][0], data["edge_index"][1]
+            edge_graph = data["batch"][sender]
+            shifts = torch.einsum("ei,eij->ej", data["unit_shifts"].to(positions.dtype), cell[edge_graph])
+            ev = positions[receiver] - positions[sender] + shifts
+            ptr = data["ptr"]
+            for g in range(int(ptr.numel() - 1)):
+                lo, hi = int(ptr[g]), int(ptr[g + 1])
+                e_mask = edge_graph == g
+                H = self.h0(sc_[lo:hi], vec_[lo:hi], sp_[lo:hi], data["edge_index"][:, e_mask] - lo, ev[e_mask])
+                numbers = [self.atomic_numbers[int(x)] for x in sp_[lo:hi].tolist()]
+                q0_all.append(self.reference_charges(H, numbers).detach())
+                sp_all.append(sp_[lo:hi])
+        q0, sp = torch.cat(q0_all), torch.cat(sp_all)
+        for s_ in range(len(self.atomic_numbers)):
+            if bool((sp == s_).any()):
+                self.q0_pristine[s_] = q0[sp == s_].mean()
         return int(scalars.shape[0])
 
     # ----------------------------------------------------------------- gap (plan 6)
@@ -275,12 +289,13 @@ class MACEDSCC(nn.Module):
             H = self.h0(scalars[nodes], vectors[nodes], species[nodes],
                         data["edge_index"][:, e_mask] - lo, edge_vector[e_mask])
             sp_g = species[nodes]
+            numbers = [self.atomic_numbers[int(s_)] for s_ in sp_g.tolist()]
             if self.route_b:
+                # v4.2: the gap regulariser acts on H0 - W with W from the pristine q0.
                 g_lr = gamma_lr(positions[nodes], cell[g], self.kernel.r_g, self.r_split,
                                 self.kernel.eps_inf, tol=self.kernel.tol)
-                W = host_potential(g_lr, centred_pattern(self.zstar()[sp_g]))
+                W = host_potential(g_lr, self.pattern_scale() * self.reference_charges(H, numbers))
                 H = H - torch.diag(W.repeat_interleave(4))
-            numbers = [self.atomic_numbers[int(s_)] for s_ in sp_g.tolist()]
             n_up, n_dn = S_REF.counts(neutral_count(numbers))
             eps = torch.linalg.eigvalsh(H)
             # Spin-independent H: the gap at the majority count (the larger fill).
@@ -291,7 +306,11 @@ class MACEDSCC(nn.Module):
 
     def forward(self, data: Dict[str, torch.Tensor], training: bool = False,
                 compute_force: bool = True, compute_stress: bool = False,
+                warm_start: Optional[Sequence[Optional[torch.Tensor]]] = None,
                 **_: Any) -> Dict[str, Optional[torch.Tensor]]:
+        """`warm_start`: per-graph `dq` to start the solve from (root-rule initialisation
+        iii, along a trajectory; also what a derivative check on a multi-branch landscape
+        needs to stay on one branch). Production uses the continuation (D11)."""
         num_graphs = int(data["ptr"].numel() - 1)
         states = states_from_batch(data["carrier_counts"].view(num_graphs, -1))
         if all(s.is_reference for s in states):
@@ -302,10 +321,11 @@ class MACEDSCC(nn.Module):
             out["energy_uncalibrated"] = out["energy"]
             out["short_circuit"] = True
             return out
-        return self._charged_forward(data, states, training, compute_force, compute_stress)
+        return self._charged_forward(data, states, training, compute_force, compute_stress, warm_start)
 
     def _charged_forward(self, data, states: Sequence[State], training: bool,
-                         compute_force: bool, compute_stress: bool):
+                         compute_force: bool, compute_stress: bool,
+                         warm_start: Optional[Sequence[Optional[torch.Tensor]]] = None):
         num_graphs = len(states)
         device = data["positions"].device
         batch = data["batch"]
@@ -359,19 +379,29 @@ class MACEDSCC(nn.Module):
                                      self.kernel.eps_inf)
                 W = None
                 if self.route_b:
+                    # Route B' (v4.2): W = Gamma_LR (s q0), q0 the reference fill of H0
+                    # itself, attached (its geometry derivative is in the force through the
+                    # (H, dP) cotangent below; a detached q0 would be non-conservative).
                     g_lr = gamma_lr(pos_g, cell_g, self.kernel.r_g, self.r_split, self.kernel.eps_inf,
                                     tol=self.kernel.tol)
-                    pattern = self.zstar()[sp_g]
-                    # `_uncentred_test` exists only for the negative tiling-ladder test of
-                    # plan section 5; an uncentred pattern in production is a bug (2.5).
-                    zbar = pattern if getattr(self, "_uncentred_test", False) else centred_pattern(pattern)
-                    W = host_potential(g_lr, zbar)
+                    q0 = self.reference_charges(H, numbers)
+                    W = host_potential(g_lr, self.pattern_scale() * q0)
+                    diagnostics.setdefault("q0_sum", []).append(float(q0.detach().sum()))
+                    diagnostics.setdefault("compensation_cloud", []).append(
+                        self.compensation_cloud(q0, sp_g, pos_g, cell_g))
                 # Training gradient through the fixed point: unrolled for Anderson, the
-                # implicit-function derivative for Newton (plan section 6).
+                # implicit-function derivative for Newton (plan section 6). D11: the
+                # production solve is the continuation from Phi = 0.
                 newton = self.scf_options.method == "newton"
-                res: ScfResult = solve_dscc(H, gamma, n_s, n_r, self.sigma_s, W, None,
-                                            self.scf_options, unroll=training and not newton,
-                                            implicit=training and newton)
+                start = None if warm_start is None else warm_start[g]
+                if start is not None:
+                    res: ScfResult = solve_dscc(H, gamma, n_s, n_r, self.sigma_s, W, start.detach(),
+                                                self.scf_options, unroll=training and not newton,
+                                                implicit=training and newton)
+                else:
+                    res = continuation_solve(H, gamma, n_s, n_r, self.sigma_s, W,
+                                             self.scf_options, unroll=training and not newton,
+                                             implicit=training and newton)
                 head_energy[g] = res.energy
                 dP_sym = 0.5 * (res.dP + res.dP.transpose(0, 1))
                 # Hellmann-Feynman (plan 2.7): -Tr(dP dH/dR) - 0.5 dq^T dGamma/dR dq, with

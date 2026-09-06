@@ -176,7 +176,11 @@ def _coupled(regime="A", route_b=False, seed=0):
     from mace.modules.dscc.scf import ScfOptions
     m = MACEDSCC(_base(seed), r_cut=R_CUT, directional=True, hidden=16, coupling=True,
                  route_b=route_b, kernel=KernelConfig(regime=regime, r_g=1.0, r_s=5.0),
-                 scf=ScfOptions(tol_q=1e-11, tol_E=1e-11))     # 1e-13 is below eigh's floor at 160 orbitals
+                 # 1e-13 is below eigh's floor at 160 orbitals. continuation_steps=0: the
+                 # toy has no bound state, and the Phi = 0 continuation (D11) lands on
+                 # different fixed-point branches for +-h displacements there; the derivative
+                 # gates need one consistent branch, which the zero start gives on this toy.
+                 scf=ScfOptions(tol_q=1e-11, tol_E=1e-11, continuation_steps=0))
     with torch.no_grad():
         m.h0.vector_mix.normal_(0.0, 0.3)
         m.h0.alpha.fill_(0.5)
@@ -185,8 +189,6 @@ def _coupled(regime="A", route_b=False, seed=0):
         m.u_raw.fill_(-1.0)
     pristine = _batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])
     m.set_pristine_centre([pristine])
-    if route_b:
-        m.initialise_route_b([pristine])
     return m
 
 
@@ -205,17 +207,19 @@ class TestCoupledHead:
 
     def test_forces_against_central_differences(self, coupled):
         out = coupled(_batch([VACP]), compute_force=True)
+        warm = [out["dq"].detach()]                    # one branch for the +-h solves
         h = 1e-4
         for atom, comp in ((1, 0), (9, 2), (30, 1)):
             plus, minus = VACP.copy(), VACP.copy()
             plus.positions[atom, comp] += h
             minus.positions[atom, comp] -= h
-            e_plus = float(coupled(_batch([plus]), compute_force=False)["energy"])
-            e_minus = float(coupled(_batch([minus]), compute_force=False)["energy"])
+            e_plus = float(coupled(_batch([plus]), compute_force=False, warm_start=warm)["energy"])
+            e_minus = float(coupled(_batch([minus]), compute_force=False, warm_start=warm)["energy"])
             assert float(out["forces"][atom, comp]) == pytest.approx(-(e_plus - e_minus) / (2 * h), abs=3e-6)
 
     def test_stress_against_strain_differences(self, coupled):
         out = coupled(_batch([VACP]), compute_force=False, compute_stress=True)
+        warm = [out["dq"].detach()]
         volume = VACP.get_volume()
         h = 1e-4
         for i, j in ((0, 0), (0, 2)):
@@ -224,7 +228,7 @@ class TestCoupledHead:
                 strained = VACP.copy()
                 eps = np.zeros((3, 3)); eps[i, j] = eps[j, i] = sign * h
                 strained.set_cell(np.array(VACP.get_cell()) @ (np.eye(3) + eps), scale_atoms=True)
-                e.append(float(coupled(_batch([strained]), compute_force=False)["energy"]))
+                e.append(float(coupled(_batch([strained]), compute_force=False, warm_start=warm)["energy"]))
             fd = (e[0] - e[1]) / (2 * h) / volume
             expected = float(out["stress"][0, i, j] + (out["stress"][0, j, i] if i != j else 0.0))
             assert expected == pytest.approx(fd, abs=1e-7)
@@ -250,26 +254,51 @@ class TestCoupledHead:
             assert float(coupled(_batch([other]), compute_force=False)["energy"]) == pytest.approx(e0, abs=1e-9)
 
 
-class TestRouteB:
-    def test_centred_pattern_and_forces(self):
-        m = _coupled(regime="A", route_b=True)
-        zbar_species = m.zstar()
-        comp = m.pristine_composition
-        assert float(zbar_species @ comp) == pytest.approx(0.0, abs=1e-12)
-        assert float(m.zstar_init.abs().max()) > 1e-3 and float(m.z_max) > 0
+class TestRouteBPrime:
+    """v4.2: the pattern is the reference-fill q0 of H0 (locally neutral), scaled by one
+    global s; its geometry derivative is in the force."""
+
+    def test_q0_is_neutral_and_forces_include_the_pattern_derivative(self):
+        m = _coupled(regime="B", route_b=True)
+        assert float(m.pattern_scale()) == pytest.approx(1.0)
         out = m(_batch([VACP]), compute_force=True)
-        assert out["diagnostics"]["converged"] == [True]
+        d = out["diagnostics"]
+        assert d["converged"] == [True]
+        assert abs(d["q0_sum"][0]) < 1e-10                     # sum_i q0_i = 0 exactly
+        assert d["compensation_cloud"][0]["r_eff"] >= 0.0
         assert float(out["dq"].sum()) == pytest.approx(1.0, abs=1e-12)
+        warm = [out["dq"].detach()]
         h = 1e-4
-        for atom, comp_ in ((2, 1), (15, 0)):
+        for atom, comp_ in ((2, 1), (15, 0), (30, 2)):
             plus, minus = VACP.copy(), VACP.copy()
             plus.positions[atom, comp_] += h
             minus.positions[atom, comp_] -= h
-            e_plus = float(m(_batch([plus]), compute_force=False)["energy"])
-            e_minus = float(m(_batch([minus]), compute_force=False)["energy"])
+            e_plus = float(m(_batch([plus]), compute_force=False, warm_start=warm)["energy"])
+            e_minus = float(m(_batch([minus]), compute_force=False, warm_start=warm)["energy"])
             assert float(out["forces"][atom, comp_]) == pytest.approx(-(e_plus - e_minus) / (2 * h), abs=3e-6)
-        # The far-field force channel: forces on atoms far from the carrier are nonzero.
-        assert torch.isfinite(out["forces"]).all()
+
+    def test_detached_pattern_would_be_non_conservative(self):
+        """The q0 geometry term is not small: dropping it moves a force by more than the
+        FD tolerance (so the test above genuinely covers it)."""
+        m = _coupled(regime="B", route_b=True)
+        out = m(_batch([VACP]), compute_force=True)
+        original = m.reference_charges
+        m.reference_charges = lambda H, numbers: original(H, numbers).detach()
+        try:
+            out_detached = m(_batch([VACP]), compute_force=True)
+        finally:
+            m.reference_charges = original
+        assert float((out["forces"] - out_detached["forces"]).abs().max()) > 1e-4
+        assert float((out["energy"] - out_detached["energy"]).abs()) < 1e-10   # energies agree
+
+    def test_pristine_gap_uses_h0_minus_w(self):
+        m = _coupled(regime="B", route_b=True)
+        batch = _batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])
+        gap_b = float(m.pristine_gap(batch))
+        m.route_b = False
+        gap_a = float(m.pristine_gap(batch))
+        m.route_b = True
+        assert abs(gap_b - gap_a) > 1e-6 and np.isfinite(gap_b)
 
 
 class TestGap:
@@ -293,3 +322,34 @@ class TestGap:
         assert float(gaps[0]) == pytest.approx(float(eps[n_up] - eps[n_up - 1]), abs=1e-10)
         (grad,) = torch.autograd.grad(gaps.sum(), model.h0.sk.eps0)
         assert torch.isfinite(grad).all() and float(grad.abs().sum()) > 0
+
+
+class TestLocalNeutralityGate:
+    def test_gate_runs_and_the_species_pattern_fails_it(self):
+        """The toy H0 has no bound state, so its q0 cloud is not compact and the positive
+        gate is reported, not asserted (it is read on the trained Arm-1 H0, v4.2); the
+        registered negative test -- species pattern, centred or not -- must fail."""
+        from ase import Atoms
+        from mace.modules.dscc import ladder as ld
+        m = _coupled(regime="B", route_b=True)
+        unit = Atoms("CsPbCl3", scaled_positions=[[0, 0, 0], [0.5, 0.5, 0.5], [0.5, 0.5, 0.0],
+                                                  [0.5, 0.0, 0.5], [0.0, 0.5, 0.5]],
+                     cell=np.eye(3) * 5.6, pbc=True)
+        out = ld.local_neutrality_gate(m, unit, [(2, 2, 2), (3, 3, 3)], Z_TABLE, R_CUT, _batch)
+        assert set(out["slopes"]) == {"q0", "species_centred", "species_uncentred"}
+        assert all(np.isfinite(v) for v in out["slopes"].values())
+        assert out["negative_test_passed"]
+        assert isinstance(out["passed"], bool)
+
+
+class TestContinuation:
+    def test_production_continuation_path_runs_and_conserves_charge(self):
+        from mace.modules.dscc.scf import ScfOptions
+        m = _coupled(regime="B", route_b=True)
+        m.scf_options = ScfOptions(tol_q=1e-9, tol_E=1e-10, continuation_steps=4)
+        out = m(_batch([VACP]), compute_force=True)
+        d = out["diagnostics"]
+        assert d["converged"] == [True] and d["iterations"][0] >= 4
+        assert float(out["dq"].sum()) == pytest.approx(1.0, abs=1e-12)
+        assert torch.isfinite(out["forces"]).all()
+

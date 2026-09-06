@@ -340,3 +340,36 @@ def _newton_step(res: torch.Tensor, jac: torch.Tensor) -> torch.Tensor:
     """`delta` with `(I - J) delta = res` for the fixed point of `dq -> dq_new(dq)`."""
     n = res.shape[0]
     return torch.linalg.solve(torch.eye(n, dtype=res.dtype, device=res.device) - jac, res)
+
+
+def continuation_solve(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[int, int],
+                       n_ref: Tuple[int, int], sigma_s: float = SIGMA_S,
+                       W: Optional[torch.Tensor] = None, options: Optional[ScfOptions] = None,
+                       unroll: bool = False, implicit: bool = False) -> ScfResult:
+    """D11 / v4.2 (C5): the production per-frame solve with Phi on starts from the Phi = 0
+    two-fillings solution and ramps `Gamma` and `W` together from zero in
+    `continuation_steps` warm-started solves; the last (full coupling) is the solution and
+    the only one carrying the training gradient. Its `history` and `iterations` are the
+    totals over the ramp."""
+    opt = options or ScfOptions()
+    if int(opt.continuation_steps) <= 0:
+        # No continuation registered: the zero start (root-rule initialisation i).
+        return solve_dscc(H0, gamma, n_s, n_ref, sigma_s, W, None, opt, unroll=unroll, implicit=implicit)
+    steps = int(opt.continuation_steps)
+    dq = two_fillings(H0, n_s, n_ref, sigma_s).dq.detach()
+    total_iterations, history = 0, []
+    result: Optional[ScfResult] = None
+    for k in range(1, steps + 1):
+        frac = k / steps
+        last = k == steps
+        result = solve_dscc(H0, frac * gamma, n_s, n_ref, sigma_s,
+                            None if W is None else frac * W, dq, opt,
+                            unroll=unroll and last, implicit=implicit and last)
+        dq = result.dq.detach()
+        total_iterations += result.iterations
+        history.extend(result.history)
+    assert result is not None
+    result.iterations = total_iterations
+    result.history = history
+    return result
+
