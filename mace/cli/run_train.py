@@ -853,6 +853,21 @@ def run(args) -> None:
         # are stamped on the frames here, before any loader exists, and the manifest that
         # freezes them is written before training starts.
         from mace.modules import defect_objective as _obj
+        from mace.modules.defect_routing import assert_inherited_contract as _inherit
+
+        # Addendum section 8, Stages 2 and 3: under the v8.1 objective no run may restore
+        # a trainable per-size constant or the neutral-null admission rule, and the gauge
+        # is not optional. Checked here, before any loader or model exists, so a recipe
+        # that flips one of them back on cannot start.
+        _inherit({
+            "spectral_gauge": bool(getattr(args, "defect_spectral_gauge", True)),
+            "energy_shape_weight": float(args.defect_energy_shape_weight),
+            "energy_scale_eV": float(getattr(args, "defect_energy_scale", 1.0)),
+            "total_energy_weight": float(getattr(args, "total_energy_weight", 0.0) or 0.0),
+            "c_shift_per_class": bool(getattr(args, "defect_c_shift_per_class", False)),
+            "null_reference": str(getattr(args, "defect_null_reference", "") or ""),
+            "madelung_range": str(getattr(args, "defect_madelung_range", "full")),
+        }, stage=2)
 
         if args.distributed:
             raise ValueError("the v8.1 pair sampler is single-process")

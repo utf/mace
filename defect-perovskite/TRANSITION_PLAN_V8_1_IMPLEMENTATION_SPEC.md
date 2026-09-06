@@ -137,14 +137,14 @@ Status: `todo` / `wip` / `done` / `blocked`. Keep this column current.
 | 2.10 | Retire the same-size-neutral-null admission rule; keep neutral-null availability as a diagnostic | add §8 | done |
 | 2.11 | Stage separation test: Stages 1–4 contain no production `C_Q`; Stages 5–6 contain no nuisance `c_g*` | add §11.1 | done — stage-separation test |
 | 2.12 | Freeze energy scale, strata, weights, force/energy balance, pair rule and tolerances **before** opening corrected retraining results | add §8 | done — pre-registered manifest (8eb00f0) |
-| 2.13 | Retrain the Stage-1 reference under the corrected gauge and objective (wave-packed) | add §8 | RUNNING — 6 seeds, b3 GPUs 4-7, 2/GPU (s14a_s1..s6) |
+| 2.13 | Retrain the Stage-1 reference under the corrected gauge and objective (wave-packed) | add §8 | RUNNING — 6 seeds, b3 GPUs 4-7, 2/GPU (s14a_s1..s6); all six past epoch 4 at 11:21, ~25 min/epoch, 24 epochs |
 
 ### WP3 — Stage 2
 
 | id | item | source | status |
 |---|---|---|---|
-| 3.1 | Exhaustive routing A / B / C / D, including the criterion-1-only failure (outcome D) | add §8 | todo |
-| 3.2 | Inherit gauge-fixed Hamiltonian and total-eV objective; forbid per-size constants | add §8 | todo |
+| 3.1 | Exhaustive routing A / B / C / D, including the criterion-1-only failure (outcome D) | add §8 | done — `defect_routing.route` (total on the 16 verdict vectors; enumerated by test), `Stage2Router` (outcome C's single registered bound release, then stop), driver `stage2_route.py` |
+| 3.2 | Inherit gauge-fixed Hamiltonian and total-eV objective; forbid per-size constants | add §8 | done — `assert_inherited_contract` checked by `run_train` whenever the v8.1 objective is on (gauge on, total-eV shape term, no per-atom total term, no per-class c, no null file, the Stage-1 scalar-range arm); recipe `stage23_v81_run` refuses the two retired knobs |
 
 ### WP4 — Stage 4
 

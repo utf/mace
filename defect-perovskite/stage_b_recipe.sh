@@ -63,3 +63,17 @@ stage_v81_run () {
     DEFECT_C_SHIFT_PER_CLASS=False \
     stage_b_run "$gpu" "$seed" "$name" "$mode" "$threads"
 }
+
+# Stages 2 and 3 (addendum section 8): the Stage-1 regime inherited BY CONSTRUCTION -- the
+# same wrapper, with the Stage-1 selected scalar-range arm passed explicitly and the two
+# retired knobs refused rather than defaulted. The trainer re-checks the same contract
+# (mace.modules.defect_routing.assert_inherited_contract) before it starts.
+#   stage23_v81_run <gpu> <seed> <name> <stage1_selected_madelung_range> [threads]
+stage23_v81_run () {
+    local gpu="$1" seed="$2" name="$3" mode="$4" threads="${5:-8}"
+    [ -n "$mode" ] || { echo "ABORT: stage23_v81_run needs the Stage-1 selected madelung_range (no new scalar range separation before Stage 4)"; return 1; }
+    [ -z "${DEFECT_C_SHIFT_PER_CLASS:-}" ] || [ "${DEFECT_C_SHIFT_PER_CLASS}" = "False" ] || { echo "ABORT: DEFECT_C_SHIFT_PER_CLASS=$DEFECT_C_SHIFT_PER_CLASS -- no stage may restore a trainable per-size constant"; return 1; }
+    [ -z "${DEFECT_NULL_REFERENCE:-}" ] || { echo "ABORT: DEFECT_NULL_REFERENCE is set -- the neutral-null admission rule is retired"; return 1; }
+    stage_v81_run "$gpu" "$seed" "$name" "$mode" "$threads"
+}
+
