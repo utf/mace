@@ -2297,3 +2297,13 @@ routing, and claim corrections should be adopted immediately.
   alpha sums to one. The gauge changes nothing but the constant, as the addendum requires.
   The v6 golden of record cannot isolate this change (it also spans Stage 1.3's Madelung
   range work); the Stage 1 golden is captured at the corrected retrain's selected reference.
+- The corrected recipe end to end (2026-09-06, `v81smoke_s1`, one epoch on b3's CPUs, 16
+  threads): gauge registered on the training path (mu_g = -17.1376 eV on the freshly
+  built model), two strata stamped (928 and 16 frames, W_g = 1 each), the pair loader in
+  force (12 graphs per batch), the manifest written, the c-shift calibration retired, the
+  epoch completed (10 s per step in the CPU profile; 42 min for the epoch with validation)
+  and the model saved. The term's per-epoch mean and stamped-batch count are logged from
+  commit f8b71d9 on (the epoch hook's "Energy shape:" line, one epoch behind); the
+  two-epoch smoke `v81smoke2_s1` is the first run to carry that line. The pair graphs are
+  also gated out of the size hinge and the gap term (0fa46f9), which read no weight
+  before; the manifest note above holds for every term.
