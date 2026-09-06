@@ -2307,3 +2307,13 @@ routing, and claim corrections should be adopted immediately.
   two-epoch smoke `v81smoke2_s1` is the first run to carry that line. The pair graphs are
   also gated out of the size hinge and the gap term (0fa46f9), which read no weight
   before; the manifest note above holds for every term.
+- `v81smoke2_s1` (two epochs, CPU, from 0fa46f9): "Energy shape: epoch 0  shape 0.01606
+  over 328 stamped steps (80 unstamped calls, evaluation batches included)". Every training
+  step of the epoch was a stamped pair batch (328 x 8 base graphs = the training set; the
+  80 unstamped calls are the two validation passes of 40 batches), and the term's mean at
+  weight 0.5 is 0.016, i.e. a raw pair term of 0.03 eV^2 against the 0.09 eV^2 the
+  manifest anticipated from the saved seeds' within-stratum RMS -- the same order, on an
+  epoch-0 model. The gauge is re-evaluated under the live head on the frozen pristine cell
+  every forward, so mu_g moves with the head's parameters (-17.1376 at epoch 0, -16.8783 at
+  epoch 1 as Z drifted to -0.980/+0.971/+1.969); the reference geometry and its trunk
+  features are what is frozen.
