@@ -2,7 +2,7 @@
 # v8.1 addendum section 8: the loss-path audit of a completed Stage-1 run, inside the run's
 # own recipe (queue_stage_b.sh's environment, arm `full`), with the training loop replaced
 # by `stage1_audit.py`. One GPU, one process.
-#   RUN=s13ra_s1 SEED=1 GPU=4 CKPT_EPOCH=20 bash queue_stage1_audit.sh
+#   RUN=s13ra_s1 SEED=1 GPU=4 CKPT_EPOCH=20 bash queue_stage1_audit.sh   (DEVICE=cpu when CUDA is down)
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "${HERE}/.." && pwd)"
@@ -10,6 +10,7 @@ R=$HOME/runs
 export PYTHONPATH="$HERE:$REPO" PATH="$HOME/micromamba/envs/py13/bin:$PATH"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}" MKL_NUM_THREADS="${MKL_NUM_THREADS:-8}"
 RUN="${RUN:-s13ra_s1}"; SEED="${SEED:-1}"; GPU="${GPU:-4}"; CKPT_EPOCH="${CKPT_EPOCH:-20}"
+DEVICE="${DEVICE:-cuda}"   # cpu when the node's CUDA is down: the audit is float64 either way
 REPLAY_STEPS="${REPLAY_STEPS:-0}"
 NAME="audit_${RUN}"
 DATA="${DATA:-$HERE/dataset_pbe}"
@@ -35,7 +36,7 @@ AUDIT_REPLAY_STEPS="$REPLAY_STEPS" AUDIT_DRAWS_BEFORE_EPOCH0=4 AUDIT_DRAWS_DONE=
 NAME="$NAME" WORK_DIR="$R/$NAME" DATA_DIR="$DATA" MACE_REPO="$REPO" \
 CUDA_VISIBLE_DEVICES="$GPU" \
 MAX_NUM_EPOCHS=24 NUM_CHANNELS=128 MAX_L=1 NUM_RADIAL_BASIS=8 R_MAX=5.0 \
-BATCH_SIZE=8 VALID_BATCH_SIZE=8 DEVICE=cuda DEFAULT_DTYPE=float64 \
+BATCH_SIZE=8 VALID_BATCH_SIZE=8 DEVICE="$DEVICE" DEFAULT_DTYPE=float64 \
 EVAL_INTERVAL=4 USE_EMA=False PATIENCE=250 SEED="$SEED" ENABLE_CUEQ=False \
 LR=0.005 BASE_LR_FACTOR=0.0 DEFECT_BASE_INIT="$BASE" \
 DEFECT_SPECTRAL_HEAD=True DEFECT_COUNTING_HEAD=True DEFECT_SPECTRAL_R_CUT=10.0 \
