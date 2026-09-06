@@ -239,6 +239,17 @@ the frozen base as a plain `ScaleShiftMACE` (same hyperparameters, `use_reduced_
 equal to the `MACEDefect` object's parent forward to 0.0 (energy) / 1e-16 (forces) on real
 frames; it is what survives the deletion sweep (the old pickle needs the deleted modules).
 
+**Phase-4 gate results on the Arm-1 winner `full_s0` (2026-09-07 00:20, before the Arm-1
+decision is opened; Φ = 0, Route A).** Dense vs sparse (frontier window `|Q| + 8` states):
+real 79-atom frames ΔE 2e-10 meV, ΔF 2e-11 meV/Å, Δdq 1e-14; real 159-atom frames ΔE
+1e-9 meV, ΔF ≤ 9e-10 meV/Å (window 18, certified tail ≤ 5e-12 e); static-cell ladder
+80/159/319/639 atoms ΔF ≤ 4e-13 eV/Å on every cell (window 9–36). Sparse costs 2–4× the
+dense at these sizes (the dense regime), as expected. `E(+1) − E(0)` on the ladder:
+7.994 / 7.984 / 7.923 / 7.916 eV (the 2×2×1 slab has α = 1.56 against 2.72 for the
+near-cubic cells — the Madelung coefficient is now computed per cell shape and the 1/L fit
+restricted to one shape class); with Φ = 0 the head carries no electrostatics, so the
+1/L test is read on the coupled models.
+
 ## 3. Task list
 
 Status: `todo` / `wip` / `done` / `blocked`.
