@@ -2262,3 +2262,25 @@ routing, and claim corrections should be adopted immediately.
   until the loss-path audit and saved-checkpoint recalibration of Section 8 are done.
 - Training waves are packed to use the GPUs efficiently: up to two runs per GPU on GPUs 4–7
   only. (On 2026-09-06 GPU 6 reports an "Unknown Error" from nvidia-smi and is unavailable.)
+- 2026-09-06, later: CUDA is down node-wide on b3 (`torch.cuda.is_available()` is False for
+  every visible device after the GPU 6 fault; NVML fails; no sudo on the node). Every check
+  since -- the loss-path audit, the recalibration of the six saved seeds, the one-epoch
+  smoke of the corrected recipe -- ran on b3's CPUs. The packed launcher
+  (`queue_packed.sh`, healthy-GPU probe, two runs per GPU on 4-7, OMP cap) and the corrected
+  recipe (`stage_v81_run`) are written and committed but unexercised on a GPU; the Stage 1
+  retrain waits for a GPU reset or reboot by an administrator.
+- The Section 8 pair batches: every training batch is the ordinary shuffled sweep of 8 plus
+  2 registered pairs (12 graphs). The pair graphs enter ONLY the shape term -- their loader
+  weight is zeroed and the base graphs' columns rescaled so that the force, base and gap
+  terms on the 12-graph batch equal their values on the 8 base graphs alone (pinned by
+  `test_pair_graphs_enter_no_other_term_and_the_base_terms_are_stage_b_exact`). Without
+  this, half the pair draws (equal W_g) would have come from the 16-frame stratum and each
+  159-atom charged frame would have entered the force terms some forty times per epoch at
+  the two-size upweight. Validation batches carry no pairs and score no shape term; the
+  held-out shape diagnostic is `stage1_recalibrate.py`'s centred within-stratum RMS. The
+  within-stratum member weight w_i is the loader `weight` column (1.0 on every frame of
+  this dataset), not the Stage B OOD w_E, which no term reads under this objective.
+- Expected cost: a 12-graph batch carries on average about two 159-atom graphs on the
+  per-graph eigensolve path where an 8-graph batch carried 0.14, so the step time of the
+  corrected recipe is budgeted at two to three times Stage B's; the packed waves are sized
+  for that before any finish time is quoted.
