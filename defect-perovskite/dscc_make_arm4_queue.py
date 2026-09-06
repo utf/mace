@@ -17,7 +17,7 @@ regime, route, mode = args.selected.split("_", 2)
 rb = 1 if route == "Bp" else 0
 lines = []
 for seed in range(args.seeds):
-    init = f"{args.winners}/dscc_arm1_full_s{seed}/model.pt"
+    init = f"{args.winners}/dscc_arm1_full_s{seed}/h0_state.pt"
     common = (f"--seed {seed} --fold {seed % 4} --epochs {args.epochs} --directional 1 --regime {regime} "
               f"--init_from {init} --coupling 1 --coupling_mode {mode} --route_b 0")
     lines.append(f"dscc_arm4_matched_s{seed}|{common} --fscc matched")

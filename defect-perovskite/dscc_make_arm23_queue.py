@@ -18,7 +18,7 @@ args = ap.parse_args()
 routes = tuple(args.routes.split(","))
 lines = []
 for seed in range(args.seeds):
-    init = f"{args.winners}/dscc_arm1_full_s{seed}/model.pt"
+    init = f"{args.winners}/dscc_arm1_full_s{seed}/h0_state.pt"      # the converted H0 state (sweep-safe)
     common = f"--seed {seed} --fold {seed % 4} --epochs {args.epochs} --directional 1 --regime B --init_from {init}"
     for route in routes:
         rb = 1 if route == "Bp" else 0

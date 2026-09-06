@@ -38,7 +38,8 @@ def main() -> None:
     ap.add_argument("--regime", default="B")
     ap.add_argument("--gap_weight", type=float, default=1.0)
     ap.add_argument("--device", default="cuda")
-    ap.add_argument("--base", default="/home/alex/runs/aprime_prod/aprime_prod.model")
+    ap.add_argument("--base", default="/home/alex/runs/aprime_prod/aprime_prod_base.pt",
+                    help="the frozen base as a plain ScaleShiftMACE (re-saved from aprime_prod.model, equal to 1e-16)")
     ap.add_argument("--dataset", default=str(HERE / "dataset_pbe"))
     ap.add_argument("--cf_dir", default=str(HERE / "dataset_cf"))
     ap.add_argument("--run_dir", required=True)

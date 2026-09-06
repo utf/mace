@@ -270,6 +270,14 @@ before the Arm-1 decision is opened).**
   ablation (route A, 6 seeds). Route B′ stays available if a later `H0` compacts the
   compensation (or a compact-pattern variant is ruled).
 
+**Coupled-path cost on the GPU (2026-09-07 00:34, A4000, `full` coupling from the Arm-1
+`full_s0` H0, 48 frames + 16-frame single-valuedness check + 12 held frames in 63 s):**
+≈ 0.9 s/frame → ~12 min per 785-frame epoch alone; three per b3 GPU ≈ 30 min/epoch →
+30 epochs ≈ 15 h per run, 36 Route-A runs over 11 slots ≈ 2.5 days. Observed at the same
+time: the per-epoch single-valuedness check failed on **6 of 16** frames (continuation vs
+zero start) with the trained `H0` at the initial coupling — the registered ceiling is 0.10;
+Arm 2+3 will read this fraction per epoch.
+
 ## 3. Task list
 
 Status: `todo` / `wip` / `done` / `blocked`.

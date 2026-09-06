@@ -183,11 +183,17 @@ class MACEDSCC(nn.Module):
 
     def load_h0_from(self, path: str) -> None:
         """Arm 2+3 start from the Arm-1 winner: the trained `H0` (parameters and pristine
-        centre) of a saved `MACEDSCC`; the coupling learnables keep their registered inits."""
-        other = torch.load(path, weights_only=False, map_location=self.u_max.device)
-        self.h0.load_state_dict(other.h0.state_dict())
-        self.q0_pristine.copy_(other.q0_pristine)
-        self.pristine_atoms.copy_(other.pristine_atoms)
+        centre) from a saved `MACEDSCC` or from its `h0_state.pt` (a plain state dict, the
+        form that survives the deletion sweep); the coupling learnables keep their inits."""
+        obj = torch.load(path, weights_only=False, map_location=self.u_max.device)
+        if isinstance(obj, dict) and "h0" in obj:
+            self.h0.load_state_dict(obj["h0"])
+            self.q0_pristine.copy_(obj["q0_pristine"].to(self.q0_pristine.device))
+            self.pristine_atoms.copy_(obj["pristine_atoms"].to(self.pristine_atoms.device))
+        else:
+            self.h0.load_state_dict(obj.h0.state_dict())
+            self.q0_pristine.copy_(obj.q0_pristine)
+            self.pristine_atoms.copy_(obj.pristine_atoms)
         self.init_from = str(path)
 
     def c_q(self, q: int) -> torch.Tensor:
