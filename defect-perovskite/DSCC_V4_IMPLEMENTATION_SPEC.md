@@ -70,6 +70,7 @@ task list and the registers the plan's §10 rules require. Paths relative to the
 | Training defaults (`train.TrainConfig`) | epochs 60, lr 2e-3 (Adam), batch 4 (size-grouped), force weight 1, gap weight 1 eV⁻², grad clip 10, eval every 5, single-valued subsample 16 / ceiling 0.10, outer fold = seed mod 4 for the six seeds | `dscc/train.py` | defaults 2026-09-07, registered before Arm-1 results are opened |
 | Arm-1 thresholds | (i) stop ≤ 1/6 seeds (`|tanh g| ≥ 0.98` on > 50 % of frames); (ii) flanking `|bQ|` > 3× bulk spread and control loses ≥ 30 % of the level-vs-bond slope; (iii) Cl `eps_sigma − eps_pi < 0`; (iv) `N_eff` seed spread halves at ≤ force RMSE, saturation < 50 % | `dscc/arm1.py` | registered 2026-09-07, before results are opened |
 | Arm-2+3 thresholds (registered 2026-09-07 before any Arm-2+3 result is opened) | Entry: bound-state precondition on the Arm-1 winner (`Delta_c` 0.5 eV, `N_loc` 4, ≥ 95 %); Route B′ arms additionally the local-neutrality ladder gate (5 % of Madelung, species pattern fails). Selection (joint over route × coupling, regime B): held-out charged force RMSE and the 159-atom energy-shape prediction error (v4.2) must beat the best competitor by more than `max(tau_phys, tau_noise)` with `tau_phys` = 3 meV/Å (forces) / 15 meV/Å (159-atom shape slope), `tau_noise` = the six-seed standard error; localisation stability = seed spread of `N_eff` (p50 over held-out charged frames) ≤ 0.5; root rule passed on the per-epoch subsample with failing fraction ≤ 0.10 and SCF within `n_max` = 100 on ≥ 99 % of training frames (final epoch); `f_SR` ≤ 0.5 (floor: at most half the intra-carrier interaction in the short-range component); Route B′ additionally: the 4–8 Å far-field shell residual improves beyond `tau_noise`, `s` inside `[0.1, 1.9]` (unsaturated), tiling-ladder `1/L` coefficient within 5 % of Madelung. Regime-A ablation excluded from selection, reported with `m_sw` (floor 0.05) and the flanking-Pb fraction. `r_s` sensitivity of `Phi_cc` reported. | `dscc/arm23.py` (to write) | registered 2026-09-07 |
+| Arm-2+3 epochs | 30 (Arm 1: 60). Rationale, registered 2026-09-07 before any Arm-2+3 result: the runs start from the converged Arm-1 `H0`; the coupling learnables are three scalars per species plus `lambda_dir` and `s`; a coupled epoch costs ~5–8× an Arm-1 epoch (measured: 2.35 s/frame CPU batched vs 0.28; the double backward through the fills is 60 %) | tracker | registered 2026-09-07 |
 | Arm-4 thresholds | — | plan §7 | before Arm-4 results are opened |
 
 ### 2.2 Decisions
@@ -223,6 +224,19 @@ full 39–46 meV/Å, control 43–46 meV/Å (initialised 96). The earlier "no bo
 initialisation" finding was on the V_Cl⁺ geometries (flanking Pb far apart); on the
 neutral-vacancy geometries the initial `H0` already splits a dimer state 283 meV off the
 CBM, which is why the precondition is defined on those frames.
+
+**Coupled-path cost (2026-09-07, CPU 8 threads, 4 real frames, trained `H0`):** per-graph
+2.9 s/frame; batched solver 2.35 s/frame (forward 0.65 s/frame: 16–17 Newton iterations over
+the 4-step continuation, one batched `eigh` per iteration; the training backward — implicit
+derivative, divided-difference backward through the fills, block-0 double backward — is
+60 % of the step). With the untrained `H0` (no bound state) the same path took 25 s/frame,
+the solver backtracking through the degenerate manifold — the bound-state precondition is
+also a throughput precondition.
+
+**Base checkpoint re-saved (2026-09-07):** `/home/alex/runs/aprime_prod/aprime_prod_base.pt` is
+the frozen base as a plain `ScaleShiftMACE` (same hyperparameters, `use_reduced_cg=False`),
+equal to the `MACEDefect` object's parent forward to 0.0 (energy) / 1e-16 (forces) on real
+frames; it is what survives the deletion sweep (the old pickle needs the deleted modules).
 
 ## 3. Task list
 
