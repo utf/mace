@@ -166,6 +166,7 @@ class Trainer:
         self.base_cache: Dict[int, Tuple[torch.Tensor, torch.Tensor]] = {}
         if self.cfg.cache_base:
             self._fill_base_cache(self.train_idx + self.held_idx)
+        self.write_record()
 
     def _fill_base_cache(self, indices: Sequence[int]) -> None:
         from mace.modules.models import ScaleShiftMACE
@@ -188,6 +189,9 @@ class Trainer:
         batch["dscc_base_energy"] = torch.stack([self.base_cache[i][0] for i in frame_indices]).to(self.device)
         batch["dscc_base_forces"] = torch.cat([self.base_cache[i][1] for i in frame_indices]).to(self.device)
         return batch
+
+    def write_record(self) -> None:
+        """The run record (every registered number, strata, folds), written before training."""
         record = {"config": asdict(self.cfg), "strata": self.strata_record, "n_train": len(self.train_idx),
                   "n_held": len(self.held_idx), "fold_of": {str(k): v for k, v in self.fold_of.items()},
                   "model_extra_state": self.model.get_extra_state()}
