@@ -128,3 +128,31 @@ class TestNewton:
         assert newton.iterations <= 8 and newton.iterations < anderson.iterations
         assert float((newton.dq - anderson.dq).abs().max()) < 1e-9
         assert abs(float(newton.energy - anderson.energy)) < 1e-10
+
+
+class TestImplicitDifferentiation:
+    def test_response_gradient_matches_unrolled_and_finite_differences(self):
+        """A NON-stationary observable of the fixed point, `Tr(dP* B)`, differentiated
+        w.r.t. a Hamiltonian parameter: implicit (Newton) == unrolled (Anderson) == FD."""
+        H0, gamma, _, _, _ = _toy(seed=9)
+        g = torch.Generator().manual_seed(10)
+        B = torch.randn(H0.shape[0], H0.shape[0], generator=g); B = 0.5 * (B + B.T)
+        Bd = torch.randn(H0.shape[0], H0.shape[0], generator=g); Bd = 0.05 * (Bd + Bd.T)
+        tight = dict(tol_q=1e-12, tol_E=1e-14)
+
+        def observable(theta, method, train):
+            res = scf.solve_dscc(H0 + theta * Bd, gamma, N_S, N_REF,
+                                 options=scf.ScfOptions(method=method, **tight),
+                                 unroll=train and method == "anderson", implicit=train and method == "newton")
+            return (res.dP * B).sum()
+
+        theta = torch.zeros((), requires_grad=True)
+        (g_impl,) = torch.autograd.grad(observable(theta, "newton", True), theta)
+        (g_unrolled,) = torch.autograd.grad(observable(theta, "anderson", True), theta)
+        (g_envelope,) = torch.autograd.grad(observable(theta, "newton", False), theta)
+        h = 1e-4
+        fd = (float(observable(torch.tensor(h), "newton", False)) - float(observable(torch.tensor(-h), "newton", False))) / (2 * h)
+        assert float(g_impl) == pytest.approx(fd, abs=1e-5, rel=1e-5)
+        assert float(g_unrolled) == pytest.approx(fd, abs=1e-5, rel=1e-5)
+        # Without the fixed-point derivative the response is missing: a different number.
+        assert abs(float(g_envelope) - fd) > 1e-3 * max(1.0, abs(fd))

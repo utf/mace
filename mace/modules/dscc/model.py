@@ -327,8 +327,12 @@ class MACEDSCC(nn.Module):
                     # plan section 5; an uncentred pattern in production is a bug (2.5).
                     zbar = pattern if getattr(self, "_uncentred_test", False) else centred_pattern(pattern)
                     W = host_potential(g_lr, zbar)
+                # Training gradient through the fixed point: unrolled for Anderson, the
+                # implicit-function derivative for Newton (plan section 6).
+                newton = self.scf_options.method == "newton"
                 res: ScfResult = solve_dscc(H, gamma, n_s, n_r, self.sigma_s, W, None,
-                                            self.scf_options, unroll=training)
+                                            self.scf_options, unroll=training and not newton,
+                                            implicit=training and newton)
                 head_energy[g] = res.energy
                 dP_sym = 0.5 * (res.dP + res.dP.transpose(0, 1))
                 # Hellmann-Feynman (plan 2.7): -Tr(dP dH/dR) - 0.5 dq^T dGamma/dR dq, with

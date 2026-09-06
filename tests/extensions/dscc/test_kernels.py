@@ -177,3 +177,60 @@ class TestAmendmentDiagnostics:
         out = kn.flanking_pb_fraction(positions[keep], cell, [numbers[i] for i in keep], cfg)
         assert out["n_flanking_pb"] == 2 and out["n_flanking_bonds"] == 10
         assert out["flanking_beyond_r_d1"] == 0.0 and out["other_beyond_r_d1"] == 0.0
+
+
+class TestRouteBLadder:
+    """Plan section 5 (Route B tiling-ladder gate) at the kernel level, with a FIXED
+    localised carrier (the toy head cannot bind one). MEASURED, against the plan's
+    expectation: a per-species pattern on the present ions of a vacancy cell leaves a LOCAL
+    net charge at the vacancy (the missing ion), and centring only spreads its
+    compensation uniformly over the cell -- an O(1/L^3) change. The carrier's images
+    interact with that local charge, so `Phi_cc + E_SF` carries `-alpha_M C Q z_d /
+    (eps_inf L)` on top of the physical `-alpha_M C Q^2 / (2 eps_inf L)`, centred or not.
+    Only a pattern that is neutral LOCALLY (the compensating charge at the vacancy, as the
+    model's own reference-fill charges are) keeps the Madelung slope."""
+
+    @staticmethod
+    def _ladder(pattern_fn):
+        from mace.modules.dscc import ladder as ld
+        eps_inf, r_g, r_split = 4.0, 1.0, 2.5
+        zstar = torch.tensor([-0.5, 0.7, 0.8])            # per species [Cl, Cs, Pb], on the sum rule
+        lengths, values = [], []
+        for n in (2, 3, 4):
+            pos, cell, numbers = _perovskite(reps=(n, n, n))
+            vacancy = 2                                     # a Cl of the first sub-cell
+            keep = [i for i in range(len(numbers)) if i != vacancy]
+            pos_v, numbers_v = pos[keep], [numbers[i] for i in keep]
+            species = torch.tensor([[17, 55, 82].index(z) for z in numbers_v])
+            dq = torch.zeros(len(numbers_v)); dq[int(torch.nonzero(species == 2).reshape(-1)[0])] = 1.0
+            cfg = kn.KernelConfig(regime="B", r_g=r_g, r_s=5.0, eps_inf=eps_inf)
+            k_sr, k_lr = kn.kernel_components(pos_v, cell, cfg)
+            gamma = kn.gamma_matrix(k_sr, k_lr, torch.tensor(0.5), torch.zeros(len(numbers_v)), eps_inf)
+            # The pattern may include a charge at the (empty) vacancy site: append it as a
+            # carrier-free site of the Ewald matrix.
+            pattern, extra_pos, extra_charge = pattern_fn(zstar[species], pos[vacancy], species)
+            all_pos = torch.cat([pos_v, extra_pos]) if extra_pos is not None else pos_v
+            all_pattern = torch.cat([pattern, extra_charge]) if extra_pos is not None else pattern
+            g_lr = kn.gamma_lr(all_pos, cell, r_g, r_split, eps_inf)
+            W = (g_lr @ all_pattern)[:len(numbers_v)]
+            values.append(float(kn.phi_cc(gamma, dq) + dq @ W))
+            lengths.append(float(cell[0, 0]))
+        _, slope = ld.fit_one_over_l(lengths, values)
+        return slope, ld.madelung_slope(eps_inf)
+
+    def test_species_pattern_carries_the_missing_ion_cross_term_centred_or_not(self):
+        s_centred, madelung = self._ladder(lambda z, r_v, sp: (kn.centred_pattern(z), None, None))
+        s_uncentred, _ = self._ladder(lambda z, r_v, sp: (z, None, None))
+        # Both deviate from the Madelung slope (-5.11 eV.A) by the cross term with the local
+        # missing-ion charge (Zstar_Cl = -0.5 here): measured -8.59 centred, -9.79 uncentred
+        # against the (1 + 2 z_d) = 2x prediction -10.2; the difference between the two is
+        # the uniform sheet's potential, small on a long ladder but 1.2 eV.A on this short one.
+        assert abs(s_centred - madelung) > 0.3 * abs(madelung), (s_centred, madelung)
+        assert abs(s_uncentred - madelung) > 0.3 * abs(madelung), (s_uncentred, madelung)
+
+    def test_locally_neutral_pattern_keeps_the_madelung_slope(self):
+        """The species pattern plus the missing ion's own charge put back at the vacancy
+        site (what the reference-fill charges do by construction): neutral locally."""
+        s_neutral, madelung = self._ladder(
+            lambda z, r_v, sp: (z, r_v.reshape(1, 3), torch.tensor([-0.5])))
+        assert s_neutral == pytest.approx(madelung, rel=0.05), (s_neutral, madelung)

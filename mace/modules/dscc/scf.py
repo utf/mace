@@ -90,6 +90,8 @@ class ScfResult:
     rho: float                      # contraction ratio over the last unmixed residuals
     history: List[float]
     fills: Tuple[FillResult, FillResult, FillResult, FillResult]
+    newton_steps: int = 0
+    anderson_steps: int = 0
 
 
 def site_potential_matrix(V: torch.Tensor) -> torch.Tensor:
@@ -137,7 +139,8 @@ def _anderson(dq_hist: List[torch.Tensor], res_hist: List[torch.Tensor], mixing:
 def solve_dscc(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[int, int],
                n_ref: Tuple[int, int], sigma_s: float = SIGMA_S,
                W: Optional[torch.Tensor] = None, dq0: Optional[torch.Tensor] = None,
-               options: Optional[ScfOptions] = None, unroll: bool = False) -> ScfResult:
+               options: Optional[ScfOptions] = None, unroll: bool = False,
+               implicit: bool = False) -> ScfResult:
     """The stationary point of the D-SCC functional (plan section 2.6).
 
     Iterates `V = Gamma dq + W`, `H = H0 - sum_i V_i Pi_i`, four fills, `dq_new`, with the
@@ -156,6 +159,7 @@ def solve_dscc(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[int, int],
     energy_prev: Optional[float] = None
     converged = False
     iterations = 0
+    newton_steps = anderson_steps = 0
     delta_energy = float("inf")
     context = torch.enable_grad() if unroll else torch.no_grad()
     with context:
@@ -173,29 +177,51 @@ def solve_dscc(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[int, int],
             if r_norm < opt.tol_q and delta_energy < opt.tol_E:
                 converged = True
                 break
+            dq_hist.append(dq)
+            res_hist.append(res)
+            if len(dq_hist) > opt.history:
+                dq_hist.pop(0)
+                res_hist.pop(0)
+            accepted = False
             if opt.method == "newton":
                 jac = hole_response(H, n_s, n_ref, sigma_s, spectrum=(sol.fills[0].eps, sol.fills[0].U)) @ gamma
                 step = _newton_step(res.detach(), jac.detach())
                 # Damped: halve the step while the unmixed residual grows (the map is
-                # strongly non-linear where levels are nearly degenerate on the smearing scale).
+                # strongly non-linear where levels are nearly degenerate on the smearing
+                # scale); if no damping helps, the Anderson step on the history is taken
+                # instead, so the solver is never worse than Anderson on that iteration.
                 scale = 1.0
                 for _ in range(opt.max_backtrack):
                     trial = dq + scale * step
                     V_t = gamma @ trial + (W if W is not None else 0.0)
                     r_t = two_fillings(H0 - site_potential_matrix(V_t), n_s, n_ref, sigma_s).dq - trial
                     if float(r_t.detach().abs().max()) < r_norm:
+                        accepted = True
                         break
                     scale *= 0.5
-                dq = dq + scale * step
-            else:
-                dq_hist.append(dq)
-                res_hist.append(res)
-                if len(dq_hist) > opt.history:
-                    dq_hist.pop(0)
-                    res_hist.pop(0)
+                if accepted:
+                    dq = dq + scale * step
+                    newton_steps += 1
+            if not accepted:
                 dq = _anderson(dq_hist, res_hist, opt.mixing)
+                anderson_steps += 1
     # The attached pass at the fixed point (or the last iterate, flagged).
-    dq_star = dq if unroll else dq.detach()
+    if implicit and not unroll:
+        # dq* = g(dq*, theta): d dq*/d theta = (I - J)^{-1} dg/d theta (implicit-function
+        # theorem, exact for a converged solve). One attached evaluation of g at the
+        # detached fixed point supplies dg/d theta; the hook on its output applies
+        # (I - J^T)^{-1} to whatever cotangent arrives from downstream. One extra fill
+        # instead of the whole unrolled history.
+        dq_leaf = dq.detach().clone().requires_grad_(True)
+        V1 = gamma @ dq_leaf + (W if W is not None else 0.0)
+        sol1 = two_fillings(H0 - site_potential_matrix(V1), n_s, n_ref, sigma_s)
+        jac = hole_response((H0 - site_potential_matrix(V1)).detach(), n_s, n_ref, sigma_s,
+                            spectrum=(sol1.fills[0].eps, sol1.fills[0].U)) @ gamma.detach()
+        A_T = (torch.eye(n_atoms, dtype=H0.dtype, device=H0.device) - jac).transpose(0, 1)
+        dq_star = sol1.dq
+        dq_star.register_hook(lambda c: torch.linalg.solve(A_T, c))
+    else:
+        dq_star = dq if unroll else dq.detach()
     V = gamma @ dq_star + (W if W is not None else 0.0)
     H = H0 - site_potential_matrix(V)
     sol = two_fillings(H, n_s, n_ref, sigma_s)
@@ -213,7 +239,8 @@ def solve_dscc(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[int, int],
     return ScfResult(energy=energy, energy_primary=energy_primary, dP=sol.dP, dq=sol.dq,
                      V=V.detach(), iterations=iterations, converged=converged,
                      residual=residual, delta_energy=delta_energy, commutator=commutator,
-                     rho=rho, history=history, fills=sol.fills)
+                     rho=rho, history=history, fills=sol.fills,
+                     newton_steps=newton_steps, anderson_steps=anderson_steps)
 
 
 def root_rule(H0: torch.Tensor, gamma_full: torch.Tensor, gamma_zero: torch.Tensor,
