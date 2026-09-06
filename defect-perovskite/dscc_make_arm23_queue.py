@@ -13,18 +13,20 @@ ap.add_argument("--out", required=True)
 ap.add_argument("--epochs", type=int, default=60)
 ap.add_argument("--seeds", type=int, default=6)
 ap.add_argument("--ablation", type=int, default=1)
+ap.add_argument("--routes", default="A", help="A, Bp or A,Bp (Route B' only after its ladder gate passes)")
 args = ap.parse_args()
+routes = tuple(args.routes.split(","))
 lines = []
 for seed in range(args.seeds):
     init = f"{args.winners}/dscc_arm1_full_s{seed}/model.pt"
     common = f"--seed {seed} --fold {seed % 4} --epochs {args.epochs} --directional 1 --regime B --init_from {init}"
-    for route in ("A", "Bp"):
+    for route in routes:
         rb = 1 if route == "Bp" else 0
         lines.append(f"dscc_arm23_B_{route}_phi0_s{seed}|{common} --coupling 0 --route_b {rb}")
         for mode in ("lr_only", "lr_u", "full", "lambda1"):
             lines.append(f"dscc_arm23_B_{route}_{mode}_s{seed}|{common} --coupling 1 --coupling_mode {mode} --route_b {rb}")
     if args.ablation:
-        for route in ("A", "Bp"):
+        for route in routes:
             rb = 1 if route == "Bp" else 0
             lines.append(f"dscc_arm23_A_{route}_full_s{seed}|{common.replace('--regime B', '--regime A')} --coupling 1 --coupling_mode full --route_b {rb}")
 Path(args.out).write_text("\n".join(lines) + "\n")

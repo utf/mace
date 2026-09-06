@@ -250,6 +250,26 @@ near-cubic cells — the Madelung coefficient is now computed per cell shape and
 restricted to one shape class); with Φ = 0 the head carries no electrostatics, so the
 1/L test is read on the coupled models.
 
+**Arm-2+3 entry gates on the trained Arm-1 winners (2026-09-07 00:40; `full_s0..s3`,
+before the Arm-1 decision is opened).**
+* Bound-state precondition (`Delta_c` 0.5 eV, `N_loc` 4, ≥ 95 % of the 1191 neutral-vacancy
+  frames): **passes on all four** — 96.1 / 96.3 / 97.2 / 96.8 %, HOMO separation p50
+  814–876 meV, `N_eff` p50 2.2–2.5.
+* Local-neutrality ladder gate (cubic CsPbCl3 ladder, fixed unit carrier on a flanking Pb,
+  the model's `q0` pattern vs the species pattern): **fails on all four** — the `1/L` slope of
+  `Phi_cc + E_SF` is 53–65 % off Madelung on the 2/3/4 ladder and still 51 % on the
+  4/5/6 ladder (22–34 Å); the species pattern (centred/uncentred) fails too (negative
+  test passes). Diagnosis (split against the cubic pristine cell's own `q0`): `Phi_cc` alone
+  carries the Madelung slope; the missing ion's Mulliken charge (+0.36–0.46) is compensated by
+  the reference fill only over ~10 Å (net compensation −0.03 within 5 Å, −0.12…−0.45 within
+  8 Å, complete at 12 Å; `R_eff` 8–11 Å) — a neutral but extended distribution whose
+  interaction with the carrier's images is not in the `1/L` regime at these cells and differs
+  by ~0.1 eV between 79- and 159-atom-sized cells, an error no `C_Q` absorbs. **Route B′
+  arms are therefore not opened** (v4.2: "re-run on the trained Arm-1 `H0` before any Route
+  B′ arm opens"); Arm 2+3 runs Route A: 5 configurations × 6 seeds, plus the regime-A
+  ablation (route A, 6 seeds). Route B′ stays available if a later `H0` compacts the
+  compensation (or a compact-pattern variant is ruled).
+
 ## 3. Task list
 
 Status: `todo` / `wip` / `done` / `blocked`.
