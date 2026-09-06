@@ -79,7 +79,7 @@ def outer_folds(frames, metas: Sequence[dd.FrameMeta], cf_dir: str, n_folds: int
     files, charged frames by a seeded geometry-group split, pristine frames in no fold
     (they train everywhere)."""
     import ase.io
-    from mace.modules.defect_cache import frame_key
+    from mace.modules.dscc.legacy import frame_key
     fold_of: Dict[int, int] = {}
     keys = {int(frame_key(a.get_atomic_numbers(), a.get_positions(), np.array(a.get_cell()))): i
             for i, a in enumerate(frames)}

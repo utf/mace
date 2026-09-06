@@ -20,7 +20,7 @@ from typing import Optional, Sequence, Union
 
 import torch
 
-from mace.modules import defect_counting as _cnt
+from mace.modules.dscc import legacy as _cnt
 
 # Registered 2026-09-06 (plan section 11).
 SIGMA_S = 0.05

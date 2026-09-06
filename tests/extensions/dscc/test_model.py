@@ -282,12 +282,13 @@ class TestRouteBPrime:
         FD tolerance (so the test above genuinely covers it)."""
         m = _coupled(regime="B", route_b=True)
         out = m(_batch([VACP]), compute_force=True)
-        original = m.reference_charges
+        original, original_b = m.reference_charges, m.reference_charges_batched
         m.reference_charges = lambda H, numbers: original(H, numbers).detach()
+        m.reference_charges_batched = lambda H, n0, a, b: original_b(H, n0, a, b).detach()
         try:
             out_detached = m(_batch([VACP]), compute_force=True)
         finally:
-            m.reference_charges = original
+            m.reference_charges, m.reference_charges_batched = original, original_b
         assert float((out["forces"] - out_detached["forces"]).abs().max()) > 1e-4
         assert float((out["energy"] - out_detached["energy"]).abs()) < 1e-10   # energies agree
 

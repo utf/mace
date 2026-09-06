@@ -16,7 +16,7 @@ import numpy as np
 import torch
 
 from mace import data as mace_data
-from mace.modules.defect_cache import frame_key
+from mace.modules.dscc.legacy import frame_key
 from mace.modules.dscc.species import State, neutral_count, state_from_carrier_counts
 
 CELL_CONVENTION = "vasp_background"      # registered (plan section 11)

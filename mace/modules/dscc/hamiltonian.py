@@ -30,8 +30,7 @@ from typing import Optional, Sequence
 import torch
 from torch import nn
 
-from mace.modules.defect_counting import (ORBITALS_PER_ATOM, SlaterKosterH,
-                                          harrison_initialise)
+from mace.modules.dscc.legacy import ORBITALS_PER_ATOM, SlaterKosterH, harrison_initialise
 
 # Registered defaults (plan section 11: to register before use). `r_cut` is the old head's
 # 10 A; `q_cut` reaches the first shell and the Cs neighbours (Pb-Cl 2.8, Cs-Cl 3.5-4.1 A).

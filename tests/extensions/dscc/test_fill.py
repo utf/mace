@@ -75,7 +75,7 @@ class TestFill:
             assert float(res.F_band[i]) == pytest.approx(float(single.F_band), abs=1e-12)
 
     def test_non_gaussian_setting_and_float32_are_refused(self):
-        from mace.modules import defect_counting as cnt
+        from mace.modules.dscc import legacy as cnt
         with pytest.raises(TypeError):
             fl.fill(_random_h(4, 6).float(), 2.0)
         previous = cnt.use_smearing("fermi", 0.05)
