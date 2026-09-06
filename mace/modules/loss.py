@@ -839,6 +839,13 @@ class DefectLoss(torch.nn.Module):
             if self.energy_pair_slots < 1:
                 raise ValueError("energy_shape_weight > 0 needs energy_pair_slots >= 1")
         self.last_energy_shape_value = 0.0
+        # Per-epoch accumulators, read and reset by the trainer's epoch hook: the sum of
+        # the term over the stamped batches, how many batches were stamped and how many
+        # were not. A pair loader that silently stopped stamping would show up as zero
+        # stamped steps rather than as a term that is quietly zero.
+        self.energy_shape_epoch_sum = 0.0
+        self.energy_shape_steps_scored = 0
+        self.energy_shape_steps_unscored = 0
         # Stoichiometry in the model's own species order, e.g. (3, 1, 1) for CsPbCl3 with
         # the AtomicNumberTable sorted (Cl, Cs, Pb). Only the RATIO is used, so the same
         # numbers describe every supercell of the host.
@@ -977,6 +984,8 @@ class DefectLoss(torch.nn.Module):
         if slots is None:
             # Not a pair batch (validation, or any plain loader): the term is not scored.
             # The held-out shape diagnostic is the recalibration tool's, on whole strata.
+            if torch.is_grad_enabled():   # a training step, not evaluation
+                self.energy_shape_steps_unscored += 1
             return zero
         if int(slots) != self.energy_pair_slots:
             raise ValueError(f"the batch carries {int(slots)} pair slots, the loss expects "
@@ -996,7 +1005,19 @@ class DefectLoss(torch.nn.Module):
             raise ValueError("a pair slot holds a frame with no charged-energy residual")
         term = self.energy_shape_weight * sampled_pair_term(xi_pairs)
         self.last_energy_shape_value = float(term.detach())
+        self.energy_shape_epoch_sum += self.last_energy_shape_value
+        self.energy_shape_steps_scored += 1
         return term
+
+    def energy_shape_epoch_report(self) -> str:
+        """The epoch's mean shape term over the stamped batches, and the counts; resets."""
+        n, m = self.energy_shape_steps_scored, self.energy_shape_steps_unscored
+        mean = self.energy_shape_epoch_sum / n if n else float("nan")
+        text = f"shape {mean:.5f} over {n} stamped steps ({m} unstamped)"
+        self.energy_shape_epoch_sum = 0.0
+        self.energy_shape_steps_scored = 0
+        self.energy_shape_steps_unscored = 0
+        return text
 
     def size_threshold(
         self,

@@ -1554,6 +1554,13 @@ def run(args) -> None:
                         parts.append("Z " + " ".join(f"{v:+.3f}"
                                                      for v in z.z.detach().tolist()))
                     logging.info("Gauge: epoch %d  %s", epoch, "  ".join(parts))
+                    # The shape term of the PREVIOUS epoch's steps (this hook runs before
+                    # the epoch's own), with the stamped-batch count that proves the pair
+                    # loader was in force.
+                    if float(getattr(loss_fn, "energy_shape_weight", 0.0) or 0.0) > 0 \
+                            and epoch > 0:
+                        logging.info("Energy shape: epoch %d  %s", epoch - 1,
+                                     loss_fn.energy_shape_epoch_report())
 
             # Bandwidth anneal. This runs in epoch_hook rather than post_eval_hook because
             # it must be in place BEFORE the epoch's gradient steps, not chosen after them.
