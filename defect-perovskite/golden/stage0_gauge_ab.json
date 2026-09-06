@@ -2,7 +2,7 @@
  "mu_g": -17.28434506388195,
  "floor": 1e-09,
  "model": "/home/alex/runs/arma_models/arma_s1.model",
- "git_sha": "f362a0ca359a137903ce2787637321fe6f730063",
+ "git_sha": "f8b71d956d202ebee3772df817246dcd1655f575",
  "accepted": true,
  "failures": [],
  "records": {

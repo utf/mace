@@ -900,12 +900,15 @@ def run(args) -> None:
             extra={"delta_forces_weight": float(args.delta_forces_weight),
                    "total_energy_weight": float(args.total_energy_weight),
                    "delta_energy_weight": float(args.delta_energy_weight),
-                   "seed": int(args.seed), "batch_size": int(args.batch_size),
+                   "batch_size": int(args.batch_size),
                    "member_weight_column": "weight (the loader weight; not the OOD w_E)",
                    "pair_graphs": "weight 0 in every term but the shape term; base "
                                   "columns rescaled so the other terms equal their "
                                   "values on the base graphs alone (PairBatchCollater)",
                    "validation": "plain loader; the shape term is not scored there"})
+        # The seed is recorded beside the hash, not under it: six seeds of one regime
+        # share one manifest hash.
+        _manifest["seed"] = int(args.seed)
         os.makedirs(args.work_dir, exist_ok=True)
         with open(os.path.join(args.work_dir, f"{args.name}_objective_manifest.json"), "w",
                   encoding="utf-8") as _h:

@@ -1013,7 +1013,8 @@ class DefectLoss(torch.nn.Module):
         """The epoch's mean shape term over the stamped batches, and the counts; resets."""
         n, m = self.energy_shape_steps_scored, self.energy_shape_steps_unscored
         mean = self.energy_shape_epoch_sum / n if n else float("nan")
-        text = f"shape {mean:.5f} over {n} stamped steps ({m} unstamped)"
+        text = (f"shape {mean:.5f} over {n} stamped steps ({m} unstamped calls, evaluation "
+                f"batches included)")
         self.energy_shape_epoch_sum = 0.0
         self.energy_shape_steps_scored = 0
         self.energy_shape_steps_unscored = 0
@@ -1136,7 +1137,10 @@ class DefectLoss(torch.nn.Module):
             ratio=self.size_ratio,
         )
         counts = ref["carrier_counts"].view(num_graphs, -1)
-        live = counts > 0
+        # A graph of weight zero (the v8.1 pair slots) is not live: it must reach neither
+        # the contrast EMA nor the hinge, or the pair draws would over-represent their
+        # stratum in a term that is not theirs.
+        live = (counts > 0) & (ref.weight.view(-1, 1) > 0)
 
         # The threshold is detached by construction, so smoothing it across batches costs
         # nothing and stops it chasing per-batch noise in |c|.
@@ -1218,7 +1222,10 @@ class DefectLoss(torch.nn.Module):
         # anything looser only admits near-misses -- which is what a vacancy is.
         units = counts.sum(dim=-1) / target.sum()
         expected = units.unsqueeze(-1) * target.unsqueeze(0)
-        return (counts - expected).abs().max(dim=-1).values < 1e-3
+        mask = (counts - expected).abs().max(dim=-1).values < 1e-3
+        # ... and carried by a graph of non-zero weight: the v8.1 pair slots enter no term
+        # but the shape term, this one included.
+        return mask & (ref.weight.view(-1) > 0)
 
     def gap_penalty(
         self, ref: Batch, pred: TensorDict, ddp: Optional[bool] = None

@@ -255,21 +255,27 @@ def test_pair_graphs_enter_no_other_term_and_the_base_terms_are_stage_b_exact():
         return {"energy": b.energy + e_noise[:g], "base_energy": b.base_energy + 0.2,
                 "delta_energy": torch.zeros(g),
                 "forces": b.forces + f_noise[:n], "base_forces": b.base_forces + f_noise[:n],
-                "delta_forces": torch.zeros(n, 3), "correction_energy": torch.zeros(g)}
+                "delta_forces": torch.zeros(n, 3), "correction_energy": torch.zeros(g),
+                # the gap term reads a per-graph gap on the stoichiometric graphs; every
+                # toy frame is stoichiometric by composition, so without the weight gate
+                # the pair graphs would enter it
+                "logit_gap": (2.4 + gap_noise[:g]).unsqueeze(-1)}
 
     f_noise = torch.randn(int(b_both.num_nodes), 3)
     e_noise = torch.randn(int(b_both.num_graphs))
+    gap_noise = torch.randn(int(b_both.num_graphs))
     # the base graphs come first in both batches, so the same noise lands on the same atoms
     assert bool((b_both.forces[:n_base] == b_base.forces).all())
-    stage_b = DefectLoss(energy_weight=1.0, forces_weight=10.0, delta_energy_weight=0.0,
-                         delta_forces_weight=10.0, total_energy_weight=0.0)
-    v81 = DefectLoss(energy_weight=1.0, forces_weight=10.0, delta_energy_weight=0.0,
-                     delta_forces_weight=10.0, total_energy_weight=0.0,
-                     energy_shape_weight=0.5, energy_pair_slots=2)
+    common = dict(energy_weight=1.0, forces_weight=10.0, delta_energy_weight=0.0,
+                  delta_forces_weight=10.0, total_energy_weight=0.0,
+                  gap_weight=1.0, e_gap=2.4, gap_composition=(2.0, 1.0, 1.0))
+    stage_b = DefectLoss(**common)
+    v81 = DefectLoss(**common, energy_shape_weight=0.5, energy_pair_slots=2)
     ref_value = float(stage_b(b_base, pred_for(b_base)))
     full = float(v81(b_both, pred_for(b_both)))
     shape = v81.last_energy_shape_value
     assert shape > 0.0
+    assert stage_b.gap_steps_with_term == 1 and v81.gap_steps_with_term == 1
     assert full - shape == pytest.approx(ref_value, rel=1e-10)
 
 
