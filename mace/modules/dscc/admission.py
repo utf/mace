@@ -31,7 +31,7 @@ def collective_coordinate(positions: torch.Tensor, cell: torch.Tensor, numbers: 
                           ) -> Optional[float]:
     """`d`: the minimum-image distance between the two flanking Pb (first shell of five
     Cl); None when the frame has no vacancy (0 such Pb) or an ambiguous one (not 2)."""
-    z = torch.as_tensor([int(x) for x in numbers])
+    z = torch.as_tensor([int(x) for x in numbers], device=positions.device)
     r = minimum_image_distances(positions.detach(), cell.detach())
     pb = torch.nonzero(z == cation).reshape(-1)
     cl = torch.nonzero(z == anion).reshape(-1)

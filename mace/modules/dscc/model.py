@@ -313,6 +313,13 @@ class MACEDSCC(nn.Module):
         needs to stay on one branch). Production uses the continuation (D11)."""
         num_graphs = int(data["ptr"].numel() - 1)
         states = states_from_batch(data["carrier_counts"].view(num_graphs, -1))
+        # Forces and stress are derivatives: they need autograd even inside a no_grad
+        # evaluation (as the base's own forward does).
+        with torch.set_grad_enabled(torch.is_grad_enabled() or compute_force or compute_stress):
+            return self._dispatch(data, states, training, compute_force, compute_stress, warm_start)
+
+    def _dispatch(self, data, states, training, compute_force, compute_stress, warm_start):
+        num_graphs = len(states)
         if all(s.is_reference for s in states):
             # D5: never enter the head at S_ref -- the base's outputs, bit-identically.
             out = ScaleShiftMACE.forward(self.base, self._trunk_data(dict(data)), training=training,

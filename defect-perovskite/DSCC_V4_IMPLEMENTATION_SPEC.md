@@ -67,7 +67,9 @@ task list and the registers the plan's §10 rules require. Paths relative to the
 | `s_tol`, `z`, `n_min`, coverage bin width, out-of-fold base protocol id | 0.05 eV/Å, 2.0, 3, 0.2 Å, `cf_base_4fold_seed0` (`admission.AdmissionConfig`) | plan §6 | defaults 2026-09-06, to confirm before Phase 2 results are opened |
 | Gap-regulariser convention | static-lattice or thermal-mean (C2) | plan §6 | before Phase 2 |
 | Benchmark hardware / batch / trajectory | — | plan §8 | before Phase 4 |
-| Arm thresholds | — | plan §7 | before each arm's results are opened |
+| Training defaults (`train.TrainConfig`) | epochs 60, lr 2e-3 (Adam), batch 4 (size-grouped), force weight 1, gap weight 1 eV⁻², grad clip 10, eval every 5, single-valued subsample 16 / ceiling 0.10, outer fold = seed mod 4 for the six seeds | `dscc/train.py` | defaults 2026-09-07, registered before Arm-1 results are opened |
+| Arm-1 thresholds | (i) stop ≤ 1/6 seeds (`|tanh g| ≥ 0.98` on > 50 % of frames); (ii) flanking `|bQ|` > 3× bulk spread and control loses ≥ 30 % of the level-vs-bond slope; (iii) Cl `eps_sigma − eps_pi < 0`; (iv) `N_eff` seed spread halves at ≤ force RMSE, saturation < 50 % | `dscc/arm1.py` | registered 2026-09-07, before results are opened |
+| Arm thresholds (2+3, 4) | — | plan §7 | before each arm's results are opened |
 
 ### 2.2 Decisions
 
@@ -249,14 +251,15 @@ Status: `todo` / `wip` / `done` / `blocked`.
 | P2.1 | Energy admission per fold and size: coverage table, `s0 ± SE` (out-of-fold base), `sQ`; stored before results | module done — `dscc/admission.py` (label-free `d` = flanking-Pb distance, coverage bins, `slope_with_se`, decision, record); tables built (`defect-perovskite/dscc_admission_tables.json`, `dscc_base_residuals.json`; 4 outer folds; out-of-fold null from `cf_base_f0..f3` on their `null_oof` frames, 298/298/298/297): **no size admitted under the registered defaults — C7** |
 | P2.2 | Objective (v4.2): forces at every size, no energy term; strata weights on the force loss; `L_gap` on the Hamiltonian actually filled at `dq = 0` on the static pristine cell (D8); `C_Q` outside the loss (V2.3); Route B′ has no pattern regulariser (no learnable pattern) | todo |
 | P2.2a | Static pristine cell: port the symmetrised site-median lattice construction into `dscc/` (D8); thermal-mean gap diagnostic | cell done — `dscc/static_cell.py` (global anchor-site registration + species-wise assignment + iterated median + group symmetrisation); on the 544 training pristine frames: 32 operations, cell [16.035, 16.076, 11.395] Å, thermal rms Cl 0.52 / Cs 0.45 / Pb 0.22 Å, symmetrisation shift 0.19 Å, last median pass 0.022 Å; saved `defect-perovskite/static_pristine_cell.json` (the dataset directory is a symlink outside the repository) (fingerprint cc78a367e345352d). Thermal-mean gap diagnostic: todo |
-| P2.3 | Loss-path audit (±1 eV injection, masks, units, restore; no validation/test/tiling frame in `C_Q`) | todo |
+| P2.2b | Trainer (`dscc/train.py`, launcher `defect-perovskite/dscc_train.py`): forces-only loss with frozen stratum totals, gap regulariser on the static cell, per-epoch single-valuedness subsample (C5), shell-resolved held-out force RMSE (0–2, 2–4, 4–6, 6–8, > 8 Å from the flanking-Pb midpoint), run record with every registered number; outer folds = cross-fit folds for neutral frames + seeded group split for charged frames; pristine frames train everywhere | code done; smoke run: see log |
+| P2.3 | Loss-path audit (v4.2: no energy term — the audit reduces to the force path: masks, units, weights, restore; `C_Q` post hoc never sees validation/test/tiling frames) | todo |
 | P2.4 | Fixed protocol frozen: splits, strata, weights, balance, six seeds, metrics, all §6/§7 thresholds | todo |
 | P2.5 | Leak readout `d(J* + C_Q)/dd` per size | todo |
 
 ### 3.4 Phase 3 — arms (plan §7)
 | # | Task | Status |
 |---|---|---|
-| P3.1 | Arm 1: full `H0` vs scalar-only control, `Phi = 0`, Route A; thresholds (i)–(iv) registered before opening | todo |
+| P3.1 | Arm 1: full `H0` vs scalar-only control, `Phi = 0`, Route A; thresholds (i)–(iv) registered before opening | diagnostics done — `dscc/arm1.py` (`run_diagnostics`, `summarise`, `decide`: stop fraction from the flanking-pair `pp_sigma` modulation at its bound on > 50 % of frames; tensor ratio > 3; control loses ≥ 30 % of the level-vs-bond slope; Cl splitting sign registered NEGATIVE (`eps_sigma − eps_pi < 0`, the axial cation field lowers p_sigma); participation spread halves at ≤ force RMSE without saturation (`|tanh| ≥ 0.98` on < 50 % of coefficients)); routing A/D/C/B. Runs: todo |
 | P3.2 | Arm 2+3 (v4.1 layout): regime B — route {A, B} × coupling {LR-only; LR+U; full; λ=1 fixed} + Φ=0 per route = 10 configurations × 6 seeds; regime-A ablation: full coupling × 2 routes × 6 seeds, excluded from selection; thresholds registered; forecasts §2.10 checked | todo |
 | P3.3 | Arm 4: matched-kernel and full-kernel F-SCC comparators; decision (1)–(6) | todo |
 
