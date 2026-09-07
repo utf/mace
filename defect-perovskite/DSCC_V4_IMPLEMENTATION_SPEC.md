@@ -278,6 +278,19 @@ time: the per-epoch single-valuedness check failed on **6 of 16** frames (contin
 zero start) with the trained `H0` at the initial coupling — the registered ceiling is 0.10;
 Arm 2+3 will read this fraction per epoch.
 
+**Arm 1 — preliminary reading (2026-09-07 01:00, 11 of 12 runs; `ctrl_s5` still training;
+the decision is opened on the final twelve-run report).** Held-out charged force RMSE, full
+`H0`: 41–47 meV/Å (s0–s5), scalar-only control: ~50–56 (initialised head 96). Criteria: (i)
+`pp` stop fraction 0/6 — pass; (ii) flanking-Pb tensor ratio 10.3 (geometric, see the note
+above) but the control loses only **10 %** of the level-vs-bond slope (threshold ≥ 30 %) —
+**fail**; (iii) Cl `ε_σ − ε_π` −40 to −155 meV, negative on every seed — pass; (iv) `N_eff`
+seed spread 0.094 (full) vs 0.259 (control), halved at better force quality, no saturation —
+pass. Routing: 3 of 4 → **D (conditional)**: Arm 2+3 opens on the full `H0` winners with the
+(ii) outcome recorded — the scalar-only head reproduces most of the level-vs-bond response,
+so the directional block's contribution is in the force quality and the localisation
+stability, not in that slope. Thermal ensemble-mean gap of the pristine frames 2.30–2.44 eV
+(static cell held at 2.40).
+
 ## 3. Task list
 
 Status: `todo` / `wip` / `done` / `blocked`.
