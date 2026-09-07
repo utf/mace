@@ -18,6 +18,8 @@ import numpy as np
 import torch
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+from dscc_spike_log import spikes_of                      # noqa: E402
 sys.path.insert(0, str(HERE.parent))
 
 from mace import tools                                                              # noqa: E402
@@ -55,6 +57,7 @@ def main() -> None:
             continue
         rec = json.load(open(run / "run_record.json")); cfg = rec["config"]
         hist = json.load(open(run / "history.json"))
+        spikes = spikes_of(run)                       # v4.3: loss-spike events logged, not acted on
         held = json.load(open(run / "held_final.json"))
         model_path = run / ("model_dscc.pt" if (run / "model_dscc.pt").exists() else "model.pt")
         model = torch.load(model_path, weights_only=False, map_location=args.device).to(args.device).eval()
@@ -92,11 +95,12 @@ def main() -> None:
                  "shape_slope_err": shape_err, "c_q": cq, "n_eff_p50": float(np.median(n_effs)) if n_effs else float("nan"),
                  "sv_fraction": float(sv.get("fraction", 0.0)), "converged_fraction": 1.0 - unconv / max(len(sample), 1),
                  "f_sr": float(np.median(f_srs)) if f_srs else None, "s": last.get("s"), "lambda_dir": last.get("lambda_dir"),
-                 "u_eff": last.get("u_eff"), "epochs": len(hist)}
+                 "u_eff": last.get("u_eff"), "epochs": len(hist), "spikes": spikes}
         per_run[run.name] = entry
         key = f"{info['regime']}_{info['route']}_{info['mode']}"
         by_config[key].append(entry)
-        print(run.name, json.dumps({k: entry[k] for k in ("force_rmse", "shape_slope_err", "n_eff_p50", "sv_fraction", "converged_fraction", "f_sr", "lambda_dir", "s")}), flush=True)
+        print(run.name, json.dumps({k: entry[k] for k in ("force_rmse", "shape_slope_err", "n_eff_p50", "sv_fraction", "converged_fraction", "f_sr", "lambda_dir", "s")}),
+              "spikes", len(spikes["spikes"]), flush=True)
     configs = []
     for key, entries in by_config.items():
         regime, route, mode = key.split("_", 2)
