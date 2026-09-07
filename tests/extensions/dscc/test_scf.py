@@ -156,3 +156,59 @@ class TestImplicitDifferentiation:
         assert float(g_unrolled) == pytest.approx(fd, abs=1e-5, rel=1e-5)
         # Without the fixed-point derivative the response is missing: a different number.
         assert abs(float(g_envelope) - fd) > 1e-3 * max(1.0, abs(fd))
+
+
+class TestV45Solver:
+    """v4.5: Levenberg-Marquardt damping, the tangent predictor and warm starts reach the
+    fixed points of the backtracking solver (physics, tolerances unchanged); the batched
+    solver is the per-graph one, graph by graph; `tol_c` holds at convergence."""
+
+    @staticmethod
+    def _opts(**kw):
+        return scf.ScfOptions(tol_q=1e-11, tol_E=1e-13, **kw)
+
+    @pytest.mark.parametrize("seed", [0, 8, 11])
+    def test_lm_and_backtracking_reach_the_same_fixed_point(self, seed):
+        H0, gamma, _, _, _ = _toy(seed=seed)
+        lm = scf.solve_dscc(H0, gamma, N_S, N_REF, options=self._opts(damping="lm"))
+        bt = scf.solve_dscc(H0, gamma, N_S, N_REF, options=self._opts(damping="backtrack"))
+        assert lm.converged and bt.converged
+        assert float((lm.dq - bt.dq).abs().max()) < 1e-9
+        assert abs(float(lm.energy - bt.energy)) < 1e-10
+        assert lm.commutator < scf.ScfOptions().tol_c
+        assert lm.iterations <= bt.iterations + 1
+
+    def test_predictor_reaches_the_same_fixed_point_in_no_more_iterations(self):
+        H0, gamma, _, _, _ = _toy(seed=8)
+        with_p = scf.continuation_solve(H0, gamma, N_S, N_REF, options=self._opts(predictor=True))
+        without = scf.continuation_solve(H0, gamma, N_S, N_REF, options=self._opts(predictor=False))
+        assert with_p.converged and without.converged
+        assert float((with_p.dq - without.dq).abs().max()) < 1e-9
+        assert with_p.iterations <= without.iterations
+
+    def test_warm_start_reaches_the_continuation_fixed_point(self):
+        H0, gamma, _, _, _ = _toy(seed=8)
+        cont = scf.continuation_solve(H0, gamma, N_S, N_REF, options=self._opts())
+        stale = cont.dq.detach() + 0.05 * torch.randn(N_ATOMS, generator=torch.Generator().manual_seed(3))
+        warm = scf.solve_dscc(H0, gamma, N_S, N_REF, dq0=stale, options=self._opts())
+        assert warm.converged and float((warm.dq - cont.dq).abs().max()) < scf.ScfOptions().tol_root
+        assert warm.iterations < cont.iterations
+
+    def test_batched_lm_solver_matches_per_graph(self):
+        toys = [_toy(seed=s) for s in (0, 8)]
+        H0 = torch.stack([t[0] for t in toys])
+        gamma = torch.stack([t[1] for t in toys])
+        n_s = (torch.tensor([N_S[0]] * 2), torch.tensor([N_S[1]] * 2))
+        n_ref = (torch.tensor([N_REF[0]] * 2), torch.tensor([N_REF[1]] * 2))
+        opts = self._opts()
+        b = scf.solve_dscc_batched(H0, gamma, n_s, n_ref, options=opts)
+        c = scf.continuation_solve_batched(H0, gamma, n_s, n_ref, options=opts)
+        for k, (H, G, *_) in enumerate(toys):
+            p = scf.solve_dscc(H, G, N_S, N_REF, options=opts)
+            assert b.converged[k] and float((b.dq[k] - p.dq).abs().max()) < 1e-10
+            assert b.iterations[k] == p.iterations
+            assert b.rho[k] == pytest.approx(p.rho, rel=0.05, abs=1e-3) and b.rho[k] < 1.0
+            assert b.commutator[k] < opts.tol_c
+            pc = scf.continuation_solve(H, G, N_S, N_REF, options=opts)
+            assert c.converged[k] and float((c.dq[k] - pc.dq).abs().max()) < 1e-10
+            assert c.iterations[k] == pc.iterations

@@ -8,7 +8,7 @@ site charge difference `dq_i = -Tr(Pi_i dP)` (which sums to `Q` exactly).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
@@ -71,7 +71,27 @@ class ScfOptions:
     rho_ceiling: float = 0.9     # contraction ratio ceiling
     continuation_steps: int = 4  # registered schedule: s = k / steps, k = 1..steps
     method: str = "newton"       # "newton" (exact response Jacobian, damped) or "anderson"
-    max_backtrack: int = 6       # Newton: halvings of the step when the residual grows
+    max_backtrack: int = 6       # Newton, damping "backtrack": halvings of the step when the residual grows
+    # v4.5: Levenberg-Marquardt damping (no trial re-diagonalisations) and the tangent
+    # predictor between continuation stages. Solver engineering: the fixed points, the
+    # tolerances and the gradients are unchanged; "backtrack" / predictor=False is the
+    # pre-v4.5 solver, kept for the gate.
+    damping: str = "newton"      # "newton": damped Newton, the step judged by the NEXT iteration's fill (v4.5,
+                                 # no trial re-diagonalisation); "lm": Levenberg-Marquardt; "backtrack": pre-v4.5
+    # The tangent predictor between continuation stages is implemented and selectable but
+    # OFF by default: on the hard 159-atom class its start is hair-trigger sensitive (a stage
+    # exhausted `n_max` in two of four otherwise identical runs) for a saving of about one
+    # iteration in fifteen on first visits only (gate, 2026-09-07; tracker C9).
+    predictor: bool = False      # continuation: first-order (tangent) predictor of the next stage's dq
+    predictor_trust: float = 1.0 # the predicted change is capped at this multiple of the previous stage's change
+    lm_mu0: float = 1e-6         # LM: initial damping, relative to diag(A^T A) (Newton's step to 1e-6)
+    lm_mu_min: float = 1e-12     # LM: floor of the damping (quadratic convergence near the fixed point)
+    lm_up: float = 100.0         # LM: damping factor on a rejected step (1e-6 -> 1 in three rejections)
+    lm_down: float = 0.1         # LM: damping factor on an accepted step
+    lm_max_reject: int = 4       # consecutive rejections before the Anderson step on the history
+
+
+_TRACE = False   # debugging: print the per-graph solver's iterations
 
 
 class ScfError(RuntimeError):
@@ -95,6 +115,7 @@ class ScfResult:
     fills: Tuple[FillResult, FillResult, FillResult, FillResult]
     newton_steps: int = 0
     anderson_steps: int = 0
+    n_fills: int = 0                # diagonalisations spent (iterations + rejected deferred steps)
 
 
 def site_potential_matrix(V: torch.Tensor) -> torch.Tensor:
@@ -164,50 +185,106 @@ def solve_dscc(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[int, int],
     iterations = 0
     newton_steps = anderson_steps = 0
     delta_energy = float("inf")
+    lm = opt.method == "newton" and opt.damping == "lm"
+    deferred = opt.method == "newton" and opt.damping in ("lm", "newton")
+    mu = float(opt.lm_mu0)
+    alpha = 1.0         # damped Newton: the step fraction (halved on a rejection, back to 1 on an acceptance)
+    rejects = 0
+    pending = None      # deferred damping: the accepted iterate a step was taken from -- (dq, res, r_norm, r2, jac, energy)
+    n_fills = 0
     context = torch.enable_grad() if unroll else torch.no_grad()
     with context:
-        for k in range(opt.n_max):
-            iterations = k + 1
+        # `n_max` bounds the ACCEPTED iterates (as before v4.5, when every pass was one);
+        # a deferred step's rejected fill costs a diagonalisation but not an iteration.
+        for _pass in range(opt.n_max * (1 + max(opt.max_backtrack, opt.lm_max_reject))):
+            if iterations >= opt.n_max:
+                break
+            n_fills += 1
             V = gamma @ dq + (W if W is not None else 0.0)
             H = H0 - site_potential_matrix(V)
             sol = two_fillings(H, n_s, n_ref, sigma_s)
             res = sol.dq - dq
             r_norm = float(res.detach().abs().max())
-            history.append(r_norm)
+            # The norm that judges a deferred step: the max-norm for damped Newton (the
+            # pre-v4.5 backtracking test, so the iterates are the same), the 2-norm for LM.
+            r2 = float(res.detach().norm()) if lm else r_norm
             energy_k = float(sol.energy.detach() - 0.5 * dq.detach() @ gamma.detach() @ dq.detach())
             delta_energy = abs(energy_k - energy_prev) if energy_prev is not None else float("inf")
-            energy_prev = energy_k
-            if r_norm < opt.tol_q and delta_energy < opt.tol_E:
+            if (r_norm < opt.tol_q and delta_energy < opt.tol_E
+                    and _commutator_norm(H0, gamma, W, sol) < opt.tol_c):
+                history.append(r_norm)
+                iterations += 1
                 converged = True
                 break
-            dq_hist.append(dq)
-            res_hist.append(res)
-            if len(dq_hist) > opt.history:
-                dq_hist.pop(0)
-                res_hist.pop(0)
+            jac: Optional[torch.Tensor] = None
+            if _TRACE:
+                print(f"    scf it={iterations} fills={n_fills} r={r_norm:.3e} r2={r2:.3e} dE={delta_energy:.1e} mu={mu:.1e} alpha={alpha:.3f} rejects={rejects} "
+                      f"{'REJECT' if (deferred and pending is not None and r2 >= pending[3]) else 'accept'}", flush=True)
+            if deferred and pending is not None and r2 >= pending[3]:
+                # Rejected (the residual's 2-norm grew): back to the accepted iterate and ITS
+                # Jacobian, with more damping -- a halved step (damped Newton) or a larger
+                # `mu` (LM). The fill just done is the only cost; no trial re-diagonalisation.
+                dq, res, r_norm, r2, jac, energy_k = pending
+                if lm:
+                    mu *= opt.lm_up
+                else:
+                    alpha *= 0.5
+                rejects += 1
+            else:
+                if deferred and pending is not None:
+                    mu = max(mu * opt.lm_down, opt.lm_mu_min)
+                    alpha = 1.0
+                    rejects = 0
+                iterations += 1
+                energy_prev = energy_k
+                history.append(r_norm)
+                dq_hist.append(dq)
+                res_hist.append(res)
+                if len(dq_hist) > opt.history:
+                    dq_hist.pop(0)
+                    res_hist.pop(0)
             accepted = False
-            if opt.method == "newton":
-                jac = hole_response(H, n_s, n_ref, sigma_s, spectrum=(sol.fills[0].eps, sol.fills[0].U)) @ gamma
-                step = _newton_step(res.detach(), jac.detach())
-                # Damped: halve the step while the unmixed residual grows (the map is
-                # strongly non-linear where levels are nearly degenerate on the smearing
-                # scale); if no damping helps, the Anderson step on the history is taken
-                # instead, so the solver is never worse than Anderson on that iteration.
-                scale = 1.0
-                for _ in range(opt.max_backtrack):
-                    trial = dq + scale * step
-                    V_t = gamma @ trial + (W if W is not None else 0.0)
-                    r_t = two_fillings(H0 - site_potential_matrix(V_t), n_s, n_ref, sigma_s).dq - trial
-                    if float(r_t.detach().abs().max()) < r_norm:
-                        accepted = True
-                        break
-                    scale *= 0.5
-                if accepted:
-                    dq = dq + scale * step
+            max_reject = opt.lm_max_reject if lm else opt.max_backtrack
+            if opt.method == "newton" and not (deferred and rejects >= max_reject):
+                if jac is None:
+                    jac = hole_response(H, n_s, n_ref, sigma_s, spectrum=(sol.fills[0].eps, sol.fills[0].U)) @ gamma
+                if deferred:
+                    # v4.5: the step is taken and judged by the next iteration's residual --
+                    # the fill it needs anyway. Damped Newton halves the step on a rejection
+                    # (the pre-v4.5 backtracking sequence, without re-diagonalising the
+                    # accepted point); LM raises the damping instead.
+                    step = _lm_step(res.detach(), jac.detach(), mu) if lm else alpha * _newton_step(res.detach(), jac.detach())
+                    pending = (dq, res, r_norm, r2, jac, energy_k)
+                    dq = dq + step
                     newton_steps += 1
+                    accepted = True
+                else:
+                    step = _newton_step(res.detach(), jac.detach())
+                    # Damped: halve the step while the unmixed residual grows (the map is
+                    # strongly non-linear where levels are nearly degenerate on the smearing
+                    # scale); if no damping helps, the Anderson step on the history is taken
+                    # instead, so the solver is never worse than Anderson on that iteration.
+                    scale = 1.0
+                    for _ in range(opt.max_backtrack):
+                        trial = dq + scale * step
+                        V_t = gamma @ trial + (W if W is not None else 0.0)
+                        r_t = two_fillings(H0 - site_potential_matrix(V_t), n_s, n_ref, sigma_s).dq - trial
+                        if float(r_t.detach().abs().max()) < r_norm:
+                            accepted = True
+                            break
+                        scale *= 0.5
+                    if accepted:
+                        dq = dq + scale * step
+                        newton_steps += 1
             if not accepted:
+                # Anderson on the accepted history (the fallback after `lm_max_reject`
+                # consecutive LM rejections, or a failed backtracking search); not judged.
                 dq = _anderson(dq_hist, res_hist, opt.mixing)
                 anderson_steps += 1
+                pending = None
+                rejects = 0
+                mu = float(opt.lm_mu0)
+                alpha = 1.0
     # The attached pass at the fixed point (or the last iterate, flagged).
     if implicit and not unroll:
         # dq* = g(dq*, theta): d dq*/d theta = (I - J)^{-1} dg/d theta (implicit-function
@@ -243,7 +320,7 @@ def solve_dscc(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[int, int],
                      V=V.detach(), iterations=iterations, converged=converged,
                      residual=residual, delta_energy=delta_energy, commutator=commutator,
                      rho=rho, history=history, fills=sol.fills,
-                     newton_steps=newton_steps, anderson_steps=anderson_steps)
+                     newton_steps=newton_steps, anderson_steps=anderson_steps, n_fills=n_fills)
 
 
 def root_rule(H0: torch.Tensor, gamma_full: torch.Tensor, gamma_zero: torch.Tensor,
@@ -345,6 +422,55 @@ def _newton_step(res: torch.Tensor, jac: torch.Tensor) -> torch.Tensor:
     return torch.linalg.solve(torch.eye(n, dtype=res.dtype, device=res.device) - jac, res)
 
 
+def _lm_step(res: torch.Tensor, jac: torch.Tensor, mu) -> torch.Tensor:
+    """Levenberg-Marquardt step for `R(dq) = dq_new(dq) - dq`, `A = dR/ddq = -(I - J)`:
+    `(A^T A + mu diag(A^T A)) delta = A^T res` (Marquardt scaling) -- Newton's step at
+    `mu -> 0`, a short step along `A^T res` at large `mu`. Batched over leading dims."""
+    n = res.shape[-1]
+    A = torch.eye(n, dtype=res.dtype, device=res.device) - jac
+    AtA = A.transpose(-1, -2) @ A
+    D = torch.diagonal(AtA, dim1=-2, dim2=-1)
+    mu_t = torch.as_tensor(mu, dtype=res.dtype, device=res.device)
+    if mu_t.dim() > 0:
+        mu_t = mu_t.unsqueeze(-1)
+    rhs = (A.transpose(-1, -2) @ res.unsqueeze(-1)).squeeze(-1)
+    return torch.linalg.solve(AtA + torch.diag_embed(mu_t * D), rhs.unsqueeze(-1)).squeeze(-1)
+
+
+def _commutator_norm(H0: torch.Tensor, gamma: torch.Tensor, W: Optional[torch.Tensor],
+                     sol: TwoFillings) -> float:
+    """`|[H(dq_new), P_S]|` (Frobenius): the state's majority density against the
+    Hamiltonian its own charges produce -- the plan's `tol_c` test."""
+    P_s = sol.fills[0].P.detach()
+    H_next = (H0 - site_potential_matrix(gamma @ sol.dq.detach() + (W if W is not None else 0.0))).detach()
+    return float((H_next @ P_s - P_s @ H_next).norm())
+
+
+def _commutator_norm_batched(H0: torch.Tensor, gamma: torch.Tensor, W: Optional[torch.Tensor],
+                             sol: TwoFillings) -> torch.Tensor:
+    P_s = sol.fills[0].P.detach()
+    V = torch.einsum("bij,bj->bi", gamma, sol.dq.detach()) + (W if W is not None else 0.0)
+    H_next = (H0 - torch.diag_embed(V.repeat_interleave(ORBITALS, dim=-1))).detach()
+    return (H_next @ P_s - P_s @ H_next).flatten(1).norm(dim=-1)
+
+
+def tangent(H0: torch.Tensor, gamma: torch.Tensor, W: Optional[torch.Tensor], dq: torch.Tensor,
+            n_s: Tuple[int, int], n_ref: Tuple[int, int], sigma_s: float, s: float,
+            spectrum: Tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
+    """`d dq*/ds` at the fixed point of the continuation stage `s` (`V = s (Gamma dq + W)`),
+    by the implicit function theorem on `R(dq, s) = dq_new(s (Gamma dq + W)) - dq = 0`:
+    `d dq/ds = (I - s M Gamma)^{-1} M (Gamma dq + W)`, `M` the hole response at that
+    stage's Hamiltonian (its spectrum is known: no eigendecomposition). The v4.5 tangent
+    predictor starts the next stage at `dq + (s' - s) d dq/ds`."""
+    with torch.no_grad():
+        V_full = gamma @ dq + (W if W is not None else 0.0)
+        H = H0 - site_potential_matrix(s * V_full)
+        M = hole_response(H, n_s, n_ref, sigma_s, spectrum=spectrum)
+        n = dq.shape[-1]
+        A = torch.eye(n, dtype=dq.dtype, device=dq.device) - s * (M @ gamma)
+        return torch.linalg.solve(A, M @ V_full)
+
+
 def continuation_solve(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[int, int],
                        n_ref: Tuple[int, int], sigma_s: float = SIGMA_S,
                        W: Optional[torch.Tensor] = None, options: Optional[ScfOptions] = None,
@@ -359,20 +485,43 @@ def continuation_solve(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[int, in
         # No continuation registered: the zero start (root-rule initialisation i).
         return solve_dscc(H0, gamma, n_s, n_ref, sigma_s, W, None, opt, unroll=unroll, implicit=implicit)
     steps = int(opt.continuation_steps)
-    dq = two_fillings(H0, n_s, n_ref, sigma_s).dq.detach()
-    total_iterations, history = 0, []
+    sol0 = two_fillings(H0, n_s, n_ref, sigma_s)
+    dq = sol0.dq.detach()
+    spectrum = (sol0.fills[0].eps.detach(), sol0.fills[0].U.detach())
+    s_prev = 0.0
+    total_iterations, total_fills, history = 0, 0, []
     result: Optional[ScfResult] = None
+    dq_before = None          # the previous stage's start, for the trust cap
     for k in range(1, steps + 1):
         frac = k / steps
         last = k == steps
+        start = dq
+        if opt.predictor and dq_before is not None:
+            # v4.5 tangent predictor: first order in the stage length from the previous
+            # stage's fixed point (its spectrum is in hand; no eigendecomposition). The
+            # predicted change is capped at `predictor_trust` times the previous stage's
+            # actual change: at a near-degenerate frontier the response, and with it the
+            # tangent, is large, and an overshot start costs more than it saves.
+            delta = (frac - s_prev) * tangent(H0.detach(), gamma.detach(), None if W is None else W.detach(),
+                                              dq, n_s, n_ref, sigma_s, s_prev, spectrum)
+            cap = opt.predictor_trust * float((dq - dq_before).abs().max())
+            size = float(delta.abs().max())
+            if size > cap:
+                delta = delta * (cap / size)
+            start = dq + delta
+        dq_before = start
         result = solve_dscc(H0, frac * gamma, n_s, n_ref, sigma_s,
-                            None if W is None else frac * W, dq, opt,
+                            None if W is None else frac * W, start, opt,
                             unroll=unroll and last, implicit=implicit and last)
         dq = result.dq.detach()
+        spectrum = (result.fills[0].eps.detach(), result.fills[0].U.detach())
+        s_prev = frac
         total_iterations += result.iterations
+        total_fills += result.n_fills
         history.extend(result.history)
     assert result is not None
     result.iterations = total_iterations
+    result.n_fills = total_fills
     result.history = history
     return result
 
@@ -393,6 +542,7 @@ class BatchedScfResult:
     commutator: List[float]
     rho: List[float]
     fills: Tuple[FillResult, FillResult, FillResult, FillResult]
+    n_fills: List[int] = field(default_factory=list)   # diagonalisations spent per graph
 
 
 def _batched_fillings(H0: torch.Tensor, gamma: torch.Tensor, W: Optional[torch.Tensor],
@@ -402,13 +552,169 @@ def _batched_fillings(H0: torch.Tensor, gamma: torch.Tensor, W: Optional[torch.T
     return two_fillings(H, n_s, n_ref, sigma_s)
 
 
+def _batched_fixed_point(H0: torch.Tensor, gamma: torch.Tensor, W: Optional[torch.Tensor], dq: torch.Tensor,
+                         n_s, n_ref, sigma_s: float, implicit: bool, iterations: torch.Tensor,
+                         converged: torch.Tensor, hist: List[List[float]],
+                         n_fills: Optional[torch.Tensor] = None) -> BatchedScfResult:
+    """The attached pass at the (per graph) fixed point `dq`, the implicit-function hook
+    when asked, and the diagnostics -- shared by the LM and the backtracking loops."""
+    B, n_atoms = dq.shape
+    if implicit:
+        dq_leaf = dq.detach().clone().requires_grad_(True)
+        sol1 = _batched_fillings(H0, gamma, W, dq_leaf, n_s, n_ref, sigma_s)
+        A_T = torch.zeros(B, n_atoms, n_atoms, dtype=H0.dtype, device=H0.device)
+        for b in range(B):
+            V_b = (gamma[b] @ dq_leaf[b] + (W[b] if W is not None else 0.0)).detach()
+            H_b = (H0[b] - site_potential_matrix(V_b)).detach()
+            jac = hole_response(H_b, (int(n_s[0][b]), int(n_s[1][b])), (int(n_ref[0][b]), int(n_ref[1][b])),
+                                sigma_s, spectrum=(sol1.fills[0].eps[b], sol1.fills[0].U[b])) @ gamma[b].detach()
+            A_T[b] = (torch.eye(n_atoms, dtype=H0.dtype, device=H0.device) - jac).transpose(0, 1)
+        dq_star = sol1.dq
+        dq_star.register_hook(lambda c: torch.linalg.solve(A_T, c.unsqueeze(-1)).squeeze(-1))
+    else:
+        dq_star = dq.detach()
+    V = torch.einsum("bij,bj->bi", gamma, dq_star) + (W if W is not None else 0.0)
+    H = H0 - torch.diag_embed(V.repeat_interleave(ORBITALS, dim=-1))
+    sol = two_fillings(H, n_s, n_ref, sigma_s)
+    residual = (sol.dq.detach() - dq_star.detach()).abs().amax(dim=-1)
+    energy = sol.energy - 0.5 * torch.einsum("bi,bij,bj->b", dq_star, gamma, dq_star)
+    primary = []
+    commutator = []
+    for b in range(B):
+        one = TwoFillings(energy=sol.energy[b], dP=sol.dP[b], dq=sol.dq[b],
+                          fills=tuple(FillResult(P=f.P[b], mu=f.mu[b], eps=f.eps[b], U=f.U[b], f=f.f[b],
+                                                 F_band=f.F_band[b], entropy=f.entropy[b]) for f in sol.fills))
+        primary.append(primary_functional(H0[b], gamma[b], one, None if W is None else W[b]))
+        P_s = sol.fills[0].P[b].detach()
+        H_next = (H0[b] - site_potential_matrix(gamma[b] @ sol.dq[b].detach() + (W[b] if W is not None else 0.0))).detach()
+        commutator.append(float((H_next @ P_s - P_s @ H_next).norm()))
+    rho = []
+    for b in range(B):
+        # Each graph's history is its own accepted residuals up to ITS convergence.
+        tail = [x for x in hist[b] if x > 0][-4:]
+        rho.append(float(tail[-1] / tail[-2]) if len(tail) >= 2 else 0.0)
+    return BatchedScfResult(energy=energy, energy_primary=torch.stack(primary), dP=sol.dP, dq=sol.dq,
+                            V=V.detach(), iterations=iterations.tolist(), converged=converged.tolist(),
+                            residual=residual.tolist(), commutator=commutator, rho=rho, fills=sol.fills,
+                            n_fills=(iterations if n_fills is None else n_fills).tolist())
+
+
 def solve_dscc_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[torch.Tensor, torch.Tensor],
                        n_ref: Tuple[torch.Tensor, torch.Tensor], sigma_s: float = SIGMA_S,
                        W: Optional[torch.Tensor] = None, dq0: Optional[torch.Tensor] = None,
                        options: Optional[ScfOptions] = None, implicit: bool = False) -> BatchedScfResult:
     """`solve_dscc` for a batch of EQUAL-SIZED graphs at once: `H0 [B, 4n, 4n]`, `gamma
     [B, N, N]`, per-graph counts. One batched `eigh` and fill per iteration; the damped
-    Newton step, its backtracking, the Anderson fallback on the graph's own history and
+    Newton step (v4.5: judged by the next iteration's residual, no trial
+    re-diagonalisation; LM when selected), its damping, the Anderson fallback on the graph's own
+    history and the convergence test (`tol_q`, `tol_E`, `tol_c`) are per graph (masked) --
+    the reference solver's algorithm, graph by graph. `implicit` attaches the
+    implicit-function derivative at the fixed point (as `solve_dscc`)."""
+    opt = options or ScfOptions()
+    if opt.method != "newton":
+        raise ValueError("the batched solver is the Newton solver")
+    if opt.damping == "backtrack":
+        return _solve_dscc_batched_backtrack(H0, gamma, n_s, n_ref, sigma_s, W, dq0, opt, implicit)
+    B, dim = H0.shape[0], H0.shape[-1]
+    n_atoms = dim // ORBITALS
+    lm = opt.damping == "lm"
+    max_reject = opt.lm_max_reject if lm else opt.max_backtrack
+    dq = (torch.zeros(B, n_atoms, dtype=H0.dtype, device=H0.device) if dq0 is None else dq0.to(H0.dtype))
+    converged = torch.zeros(B, dtype=torch.bool, device=H0.device)
+    iterations = torch.zeros(B, dtype=torch.long, device=H0.device)
+    energy_prev = torch.full((B,), float("nan"), dtype=H0.dtype, device=H0.device)
+    hist: List[List[float]] = [[] for _ in range(B)]
+    alpha = torch.ones(B, dtype=H0.dtype, device=H0.device)
+    eye = torch.eye(n_atoms, dtype=H0.dtype, device=H0.device)
+    n_fills = torch.zeros(B, dtype=torch.long, device=H0.device)
+    dq_hist: List[List[torch.Tensor]] = [[] for _ in range(B)]
+    res_hist: List[List[torch.Tensor]] = [[] for _ in range(B)]
+    counts = [((int(n_s[0][b]), int(n_s[1][b])), (int(n_ref[0][b]), int(n_ref[1][b]))) for b in range(B)]
+    mu = torch.full((B,), float(opt.lm_mu0), dtype=H0.dtype, device=H0.device)
+    rejects = torch.zeros(B, dtype=torch.long, device=H0.device)
+    jac = torch.zeros(B, n_atoms, n_atoms, dtype=H0.dtype, device=H0.device)
+    pending = torch.zeros(B, dtype=torch.bool, device=H0.device)
+    dq_prev, res_prev = dq.clone(), torch.zeros_like(dq)
+    r_prev = torch.full((B,), float("inf"), dtype=H0.dtype, device=H0.device)
+    r2_prev = torch.full((B,), float("inf"), dtype=H0.dtype, device=H0.device)
+    with torch.no_grad():
+        # `n_max` bounds each graph's ACCEPTED iterates (the pre-v4.5 meaning); rejected
+        # deferred steps cost fills, not iterations. A graph at the cap is left unconverged.
+        for _pass in range(opt.n_max * (1 + max_reject)):
+            live = (~converged) & (iterations < opt.n_max)
+            if not bool(live.any()):
+                break
+            n_fills = n_fills + live.long()
+            sol = _batched_fillings(H0, gamma, W, dq, n_s, n_ref, sigma_s)
+            res = sol.dq - dq                                                     # [B, N]
+            r_norm = res.abs().amax(dim=-1)
+            r2 = res.norm(dim=-1) if lm else r_norm                               # judges the deferred steps
+            energy_k = sol.energy - 0.5 * torch.einsum("bi,bij,bj->b", dq, gamma, dq)
+            d_energy = (energy_k - energy_prev).abs()                             # nan on the first pass: not converged
+            cand = live & (r_norm < opt.tol_q) & (d_energy < opt.tol_E)
+            newly = cand & (_commutator_norm_batched(H0, gamma, W, sol) < opt.tol_c) if bool(cand.any()) else cand
+            for b in torch.nonzero(newly).reshape(-1).tolist():
+                hist[b].append(float(r_norm[b]))
+            iterations = torch.where(newly, iterations + 1, iterations)
+            converged = converged | newly
+            active = live & ~newly
+            if not bool(active.any()):
+                continue
+            # LM: judge the pending steps by this residual. Rejected graphs return to their
+            # accepted iterate (and its Jacobian) with more damping; accepted ones relax it.
+            worse = pending & active & (r2 >= r2_prev)
+            if _TRACE:
+                print(f"    scfb it={iterations.tolist()} fills={n_fills.tolist()} r={[f'{x:.2e}' for x in r_norm.tolist()]} mu={[f'{x:.0e}' for x in mu.tolist()]} "
+                      f"rej={rejects.tolist()} worse={worse.tolist()} dE={[f'{x:.0e}' for x in d_energy.tolist()]}", flush=True)
+            if bool(worse.any()):
+                dq = torch.where(worse.unsqueeze(-1), dq_prev, dq)
+                res = torch.where(worse.unsqueeze(-1), res_prev, res)
+                r_norm = torch.where(worse, r_prev, r_norm)
+                r2 = torch.where(worse, r2_prev, r2)
+                mu = torch.where(worse, mu * opt.lm_up, mu)
+                alpha = torch.where(worse, 0.5 * alpha, alpha)
+                rejects = torch.where(worse, rejects + 1, rejects)
+            accepted = pending & active & ~worse
+            mu = torch.where(accepted, (mu * opt.lm_down).clamp_min(opt.lm_mu_min), mu)
+            alpha = torch.where(accepted, torch.ones_like(alpha), alpha)
+            rejects = torch.where(accepted, torch.zeros_like(rejects), rejects)
+            fresh = active & ~worse                                               # accepted or first pass
+            iterations = torch.where(fresh, iterations + 1, iterations)
+            energy_prev = torch.where(fresh, energy_k, energy_prev)
+            eps, U = sol.fills[0].eps, sol.fills[0].U
+            for b in torch.nonzero(fresh).reshape(-1).tolist():
+                hist[b].append(float(r_norm[b]))
+                dq_hist[b].append(dq[b])
+                res_hist[b].append(res[b])
+                if len(dq_hist[b]) > opt.history:
+                    dq_hist[b].pop(0)
+                    res_hist[b].pop(0)
+                V_b = gamma[b] @ dq[b] + (W[b] if W is not None else 0.0)
+                H_b = H0[b] - site_potential_matrix(V_b)
+                jac[b] = hole_response(H_b, counts[b][0], counts[b][1], sigma_s, spectrum=(eps[b], U[b])) @ gamma[b]
+            if lm:
+                step = _lm_step(res, jac, mu)
+            else:
+                step = alpha.unsqueeze(-1) * torch.linalg.solve(eye - jac, res.unsqueeze(-1)).squeeze(-1)
+            new_dq = dq + step
+            fallback = active & (rejects >= max_reject)
+            for b in torch.nonzero(fallback).reshape(-1).tolist():
+                new_dq[b] = _anderson(dq_hist[b], res_hist[b], opt.mixing)
+            mu = torch.where(fallback, torch.full_like(mu, float(opt.lm_mu0)), mu)
+            alpha = torch.where(fallback, torch.ones_like(alpha), alpha)
+            rejects = torch.where(fallback, torch.zeros_like(rejects), rejects)
+            dq_prev, res_prev, r_prev, r2_prev = dq, res, r_norm, r2
+            pending = active & ~fallback                                          # Anderson steps are not judged
+            dq = torch.where(active.unsqueeze(-1), new_dq, dq)
+    return _batched_fixed_point(H0, gamma, W, dq, n_s, n_ref, sigma_s, implicit, iterations, converged, hist, n_fills)
+
+
+def _solve_dscc_batched_backtrack(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[torch.Tensor, torch.Tensor],
+                       n_ref: Tuple[torch.Tensor, torch.Tensor], sigma_s: float = SIGMA_S,
+                       W: Optional[torch.Tensor] = None, dq0: Optional[torch.Tensor] = None,
+                       options: Optional[ScfOptions] = None, implicit: bool = False) -> BatchedScfResult:
+    """The pre-v4.5 batched loop (`damping = "backtrack"`; kept for the gate): one batched
+    `eigh` and fill per iteration; the damped Newton step, its backtracking, the Anderson fallback on the graph's own history and
     the convergence test are per graph (masked) -- the reference solver's algorithm, graph
     by graph (an earlier version fell back to a plain damped step, which stalled on a
     159-atom frame the reference solver converges in 40 iterations). `implicit` attaches
@@ -467,47 +773,10 @@ def solve_dscc_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[torch.T
                 fallback_dq[b] = _anderson(dq_hist[b], res_hist[b], opt.mixing)
             dq = torch.where((active & accepted).unsqueeze(-1), newton_dq,
                              torch.where(active.unsqueeze(-1), fallback_dq, dq))
-    # Attached pass at the fixed point (per graph implicit derivative when asked).
-    if implicit:
-        dq_leaf = dq.detach().clone().requires_grad_(True)
-        sol1 = _batched_fillings(H0, gamma, W, dq_leaf, n_s, n_ref, sigma_s)
-        A_T = torch.zeros(B, n_atoms, n_atoms, dtype=H0.dtype, device=H0.device)
-        for b in range(B):
-            V_b = (gamma[b] @ dq_leaf[b] + (W[b] if W is not None else 0.0)).detach()
-            H_b = (H0[b] - site_potential_matrix(V_b)).detach()
-            jac = hole_response(H_b, (int(n_s[0][b]), int(n_s[1][b])), (int(n_ref[0][b]), int(n_ref[1][b])),
-                                sigma_s, spectrum=(sol1.fills[0].eps[b], sol1.fills[0].U[b])) @ gamma[b].detach()
-            A_T[b] = (torch.eye(n_atoms, dtype=H0.dtype, device=H0.device) - jac).transpose(0, 1)
-        dq_star = sol1.dq
-        dq_star.register_hook(lambda c: torch.linalg.solve(A_T, c.unsqueeze(-1)).squeeze(-1))
-    else:
-        dq_star = dq.detach()
-    V = torch.einsum("bij,bj->bi", gamma, dq_star) + (W if W is not None else 0.0)
-    H = H0 - torch.diag_embed(V.repeat_interleave(ORBITALS, dim=-1))
-    sol = two_fillings(H, n_s, n_ref, sigma_s)
-    residual = (sol.dq.detach() - dq_star.detach()).abs().amax(dim=-1)
-    energy = sol.energy - 0.5 * torch.einsum("bi,bij,bj->b", dq_star, gamma, dq_star)
-    primary = []
-    commutator = []
-    for b in range(B):
-        one = TwoFillings(energy=sol.energy[b], dP=sol.dP[b], dq=sol.dq[b],
-                          fills=tuple(FillResult(P=f.P[b], mu=f.mu[b], eps=f.eps[b], U=f.U[b], f=f.f[b],
-                                                 F_band=f.F_band[b], entropy=f.entropy[b]) for f in sol.fills))
-        primary.append(primary_functional(H0[b], gamma[b], one, None if W is None else W[b]))
-        P_s = sol.fills[0].P[b].detach()
-        H_next = (H0[b] - site_potential_matrix(gamma[b] @ sol.dq[b].detach() + (W[b] if W is not None else 0.0))).detach()
-        commutator.append(float((H_next @ P_s - P_s @ H_next).norm()))
-    hist = torch.stack(history, dim=0)                                            # [K, B]
-    rho = []
-    for b in range(B):
-        # Each graph's history ends at ITS convergence (a converged graph's residual is
-        # frozen and would repeat in later iterations, reading as rho = 1).
-        own = hist[:int(iterations[b]), b] if int(iterations[b]) > 0 else hist[:, b]
-        tail = [float(x) for x in own.tolist() if x > 0][-4:]
-        rho.append(float(tail[-1] / tail[-2]) if len(tail) >= 2 else 0.0)
-    return BatchedScfResult(energy=energy, energy_primary=torch.stack(primary), dP=sol.dP, dq=sol.dq,
-                            V=V.detach(), iterations=iterations.tolist(), converged=converged.tolist(),
-                            residual=residual.tolist(), commutator=commutator, rho=rho, fills=sol.fills)
+    hist_lists = [[float(x) for x in torch.stack(history, dim=0)[:int(iterations[b]), b].tolist()] for b in range(B)]
+    return _batched_fixed_point(H0, gamma, W, dq, n_s, n_ref, sigma_s, implicit, iterations, converged, hist_lists)
+
+
 
 
 def continuation_solve_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s, n_ref, sigma_s: float = SIGMA_S,
@@ -519,15 +788,40 @@ def continuation_solve_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s, n_ref
     if int(opt.continuation_steps) <= 0:
         return solve_dscc_batched(H0, gamma, n_s, n_ref, sigma_s, W, None, opt, implicit=implicit)
     steps = int(opt.continuation_steps)
-    dq = two_fillings(H0, n_s, n_ref, sigma_s).dq.detach()
+    B = H0.shape[0]
+    sol0 = two_fillings(H0, n_s, n_ref, sigma_s)
+    dq = sol0.dq.detach()
+    eps, U = sol0.fills[0].eps.detach(), sol0.fills[0].U.detach()
+    s_prev = 0.0
     total = None
+    fills_total = None
     result = None
+    dq_before = None
     for k in range(1, steps + 1):
         frac = k / steps
+        start = dq
+        if opt.predictor and dq_before is not None:
+            # v4.5 tangent predictor, per graph from the previous stage's spectrum, capped
+            # at `predictor_trust` times the graph's previous change (see `continuation_solve`).
+            start = dq.clone()
+            for b in range(B):
+                delta = (frac - s_prev) * tangent(
+                    H0[b].detach(), gamma[b].detach(), None if W is None else W[b].detach(), dq[b],
+                    (int(n_s[0][b]), int(n_s[1][b])), (int(n_ref[0][b]), int(n_ref[1][b])), sigma_s, s_prev, (eps[b], U[b]))
+                cap = opt.predictor_trust * float((dq[b] - dq_before[b]).abs().max())
+                size = float(delta.abs().max())
+                if size > cap:
+                    delta = delta * (cap / size)
+                start[b] = dq[b] + delta
+        dq_before = start
         result = solve_dscc_batched(H0, frac * gamma, n_s, n_ref, sigma_s, None if W is None else frac * W,
-                                    dq, opt, implicit=implicit and k == steps)
+                                    start, opt, implicit=implicit and k == steps)
         dq = result.dq.detach()
+        eps, U = result.fills[0].eps.detach(), result.fills[0].U.detach()
+        s_prev = frac
         total = result.iterations if total is None else [a + b for a, b in zip(total, result.iterations)]
+        fills_total = result.n_fills if fills_total is None else [a + b for a, b in zip(fills_total, result.n_fills)]
     assert result is not None
     result.iterations = total
+    result.n_fills = fills_total
     return result

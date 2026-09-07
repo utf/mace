@@ -55,8 +55,9 @@ class TrainConfig:
     directional: bool = True          # False: the scalar-only control
     regime: str = "B"
     stratum_weights: Dict[str, float] = field(default_factory=dict)   # frozen per stratum key
-    single_valued_subsample: int = 16     # frames per epoch (coupling on)
-    single_valued_ceiling: float = 0.10   # failing fraction that fails the arm
+    single_valued_subsample: int = 16     # pre-v4.5: frames per epoch (coupling on); superseded by the fraction
+    single_valued_ceiling: float = 0.10   # failing fraction that fails the arm (registered ceiling)
+    warm_check_fraction: float = 0.05     # v4.5: per-epoch subsample re-run by continuation against the warm start
     eval_every: int = 5
     grad_clip: float = 10.0
     cache_base: bool = True           # E_base/F_base cached per frame; block 0 recomputed
@@ -145,6 +146,12 @@ class Trainer:
                               for key, v in strata.items()}
         self.static_batch = None
         self.log: List[Dict[str, object]] = []
+        # v4.5: the converged `dq` of every frame visited in this arm (CPU), the warm start
+        # of its later visits; a frame the check fails, or an unconverged solve, is dropped
+        # from the store and starts again from the continuation.
+        self.dq_store: Dict[int, torch.Tensor] = {}
+        self.check_rng = np.random.default_rng(cfg.seed + 7)
+        self.sv_ceiling_exceeded_epochs: List[int] = []
 
     # ------------------------------------------------------------ data
 
@@ -197,12 +204,39 @@ class Trainer:
                   "model_extra_state": self.model.get_extra_state()}
         json.dump(record, open(self.run_dir / "run_record.json", "w"), indent=1, default=str)
 
+    # ------------------------------------------------------------ v4.5 warm starts
+
+    def _warm_starts(self, frame_indices: Sequence[int]) -> Optional[List[Optional[torch.Tensor]]]:
+        """Per-graph stored `dq` (None on a first visit); None altogether without coupling."""
+        if not self.cfg.coupling:
+            return None
+        starts = [self.dq_store.get(int(i)) for i in frame_indices]
+        if all(w is None for w in starts):
+            return None
+        return [None if w is None else w.to(self.device) for w in starts]
+
+    def _store(self, out: Dict[str, object], batch: Dict[str, torch.Tensor], frame_indices: Sequence[int]) -> None:
+        """Keep the converged solutions of this pass; forget the unconverged ones."""
+        if not self.cfg.coupling or out.get("dq") is None:
+            return
+        ptr = batch["ptr"]
+        conv = out.get("diagnostics", {}).get("converged", [])
+        dq = out["dq"].detach().cpu()
+        for g, i in enumerate(frame_indices):
+            lo, hi = int(ptr[g]), int(ptr[g + 1])
+            if g < len(conv) and conv[g] is True:
+                self.dq_store[int(i)] = dq[lo:hi].clone()
+            else:
+                self.dq_store.pop(int(i), None)
+
     # ------------------------------------------------------------ steps
 
     def step(self, batch, frame_indices: Sequence[int], optimizer) -> Dict[str, float]:
         self.model.train()
         optimizer.zero_grad(set_to_none=True)
-        out = self.model(self._attach_base(batch, frame_indices), training=True, compute_force=True)
+        out = self.model(self._attach_base(batch, frame_indices), training=True, compute_force=True,
+                         warm_start=self._warm_starts(frame_indices))
+        self._store(out, batch, frame_indices)
         weights = torch.tensor([self.frame_weight[i] for i in frame_indices], dtype=torch.float64,
                                device=self.device)
         l_force = force_loss(out, batch, weights)
@@ -216,7 +250,10 @@ class Trainer:
         diag = out.get("diagnostics", {})
         conv = diag.get("converged", [])
         return {"loss": float(loss), "force": float(l_force), "gap": float(gap[0]),
-                "unconverged": int(sum(1 for c in conv if c is False))}
+                "unconverged": int(sum(1 for c in conv if c is False)),
+                "scf_iterations": int(sum(diag.get("iterations", []))),
+                "scf_fills": int(sum(diag.get("fills", []))),
+                "warm": int(bool(diag.get("warm_started", False)))}
 
     def evaluate(self, indices: Sequence[int], tag: str) -> Dict[str, object]:
         """Force RMSE (eV/A) overall and by distance shell from the vacancy (label-free:
@@ -230,8 +267,11 @@ class Trainer:
         k = 0
         for b in loader:
             batch = to_device(b, self.device)
+            n_graphs = int(batch["ptr"].numel() - 1)
+            batch_frames = [indices[k + g] for g in range(n_graphs)]
             with torch.no_grad():
-                out = self.model(batch, compute_force=True)
+                out = self.model(batch, compute_force=True, warm_start=self._warm_starts(batch_frames))
+            self._store(out, batch, batch_frames)
             out = {k: (v.detach() if torch.is_tensor(v) else v) for k, v in out.items()}
             diff = ((out["forces"] - batch["forces"]) ** 2).sum(-1)
             sq += float(diff.sum()); n_atoms += int(diff.numel())
@@ -261,24 +301,59 @@ class Trainer:
         report = {"tag": tag, "force_rmse": float(np.sqrt(sq / max(n_atoms, 1))),
                   "shell_rmse": {f"{a_}-{b_}": (float(np.sqrt(v[0] / v[1])) if v[1] else None) for (a_, b_), v in shells.items()},
                   "energies": energies}
+        if self.cfg.coupling and indices:
+            # v4.5: the held-out warm starts are checked on the registered fraction too.
+            size = max(1, int(round(self.cfg.warm_check_fraction * len(indices))))
+            sample = self.check_rng.choice(list(indices), size=min(size, len(indices)), replace=False).tolist()
+            report["single_valued"] = self.warm_check(sample)
         return report
 
-    def single_valuedness(self, indices: Sequence[int]) -> Dict[str, object]:
-        """C5: the root rule on a subsample (zero / continuation / warm from the production
-        solution); the failing fraction is logged and compared with the ceiling."""
+    def warm_check(self, indices: Sequence[int]) -> Dict[str, object]:
+        """v4.5 (C5): on the registered subsample the full continuation is re-run and
+        compared with the warm-started solution from the stored `dq`
+        (`|dq_warm - dq_cont| < tol_root`, both converged); a frame without a stored `dq`
+        (its first epoch, or dropped since) is checked in the v4.2 form, continuation
+        against the zero start. Batched by size; failing frames leave the store. The
+        failing fraction is logged and compared with the registered ceiling."""
         if not self.cfg.coupling or not indices:
-            return {"checked": 0, "failed": 0, "fraction": 0.0}
+            return {"checked": 0, "failed": 0, "fraction": 0.0, "failed_frames": [], "warm": 0, "zero": 0}
         self.model.eval()
-        failed = []
+        tol_root = self.model.scf_options.tol_root
+        failed, n_warm, n_zero = [], 0, 0
+        by_size: Dict[int, List[int]] = {}
         for i in indices:
-            batch = to_device(next(iter(torch_geometric.dataloader.DataLoader(self._dataset([i]), batch_size=1))), self.device)
-            with torch.no_grad():
-                out = self.model(batch, compute_force=False)                      # production: continuation
-                alt = self.model(batch, compute_force=False, warm_start=[torch.zeros_like(out["dq"])])   # (i) zero start
-            if float((alt["dq"] - out["dq"]).abs().max()) > self.model.scf_options.tol_root or not out["diagnostics"]["converged"][0]:
-                failed.append(int(i))
+            by_size.setdefault(len(self.frames[i]), []).append(int(i))
+        for group in by_size.values():
+            for start in range(0, len(group), self.cfg.batch_size):
+                chunk = group[start:start + self.cfg.batch_size]
+                batch = to_device(next(iter(torch_geometric.dataloader.DataLoader(self._dataset(chunk), batch_size=len(chunk)))), self.device)
+                ptr = batch["ptr"]
+                with torch.no_grad():
+                    cont = self.model(batch, compute_force=False)                 # the full continuation
+                    stored = [self.dq_store.get(i) for i in chunk]
+                    alt_start = [torch.zeros(int(ptr[g + 1] - ptr[g]), dtype=torch.float64) if w is None else w
+                                 for g, w in enumerate(stored)]
+                    alt = self.model(batch, compute_force=False, warm_start=[w.to(self.device) for w in alt_start])
+                dq_c, dq_a = cont["dq"].detach().cpu(), alt["dq"].detach().cpu()
+                for g, i in enumerate(chunk):
+                    lo, hi = int(ptr[g]), int(ptr[g + 1])
+                    if stored[g] is None:
+                        n_zero += 1
+                    else:
+                        n_warm += 1
+                    ok = (cont["diagnostics"]["converged"][g] is True and alt["diagnostics"]["converged"][g] is True
+                          and float((dq_a[lo:hi] - dq_c[lo:hi]).abs().max()) < tol_root)
+                    if ok:
+                        self.dq_store[i] = dq_c[lo:hi].clone()
+                    else:
+                        failed.append(i)
+                        self.dq_store.pop(i, None)
         return {"checked": len(indices), "failed": len(failed), "fraction": len(failed) / len(indices),
-                "failed_frames": failed}
+                "failed_frames": failed, "warm": n_warm, "zero": n_zero}
+
+    def single_valuedness(self, indices: Sequence[int]) -> Dict[str, object]:
+        """Pre-v4.5 name of the check (kept for callers)."""
+        return self.warm_check(indices)
 
     # ------------------------------------------------------------ loop
 
@@ -295,14 +370,17 @@ class Trainer:
         for epoch in range(cfg.epochs):
             sampler.set_epoch(epoch)
             t0 = time.time()
-            stats = {"loss": 0.0, "force": 0.0, "gap": 0.0, "unconverged": 0, "n": 0}
-            # C5 (v4.2): single-valuedness on a registered subsample at the start of the
-            # epoch; frames that fail are dropped from this epoch's steps, the fraction logged.
+            stats = {"loss": 0.0, "force": 0.0, "gap": 0.0, "unconverged": 0, "n": 0, "scf_iterations": 0, "scf_fills": 0, "warm": 0}
+            # C5 (v4.2 / v4.5): the registered subsample at the start of the epoch -- the
+            # warm start against the full continuation (zero start against the continuation
+            # for frames without a stored dq, i.e. every frame in epoch 0); frames that fail
+            # are dropped from this epoch's steps and from the store, the fraction logged.
             dropped = set()
             sv_pre = None
             if cfg.coupling:
-                sample = rng.choice(self.train_idx, size=min(cfg.single_valued_subsample, len(self.train_idx)), replace=False).tolist()
-                sv_pre = self.single_valuedness(sample)
+                size = max(1, int(round(cfg.warm_check_fraction * len(self.train_idx))))
+                sample = rng.choice(self.train_idx, size=min(size, len(self.train_idx)), replace=False).tolist()
+                sv_pre = self.warm_check(sample)
                 dropped = set(sv_pre.get("failed_frames", []))
             for local_batch in sampler:
                 local_batch = [j for j in local_batch if self.train_idx[j] not in dropped]
@@ -311,25 +389,35 @@ class Trainer:
                 batch = to_device(torch_geometric.dataloader.Batch.from_data_list([ds[j] for j in local_batch]), self.device)
                 frame_indices = [self.train_idx[j] for j in local_batch]
                 s = self.step(batch, frame_indices, optimizer)
-                for key in ("loss", "force", "unconverged"):
+                for key in ("loss", "force", "unconverged", "scf_iterations", "scf_fills", "warm"):
                     stats[key] += s[key]
                 stats["gap"] = s["gap"]; stats["n"] += 1
             sv = sv_pre
             entry = {"epoch": epoch, "loss": stats["loss"] / max(stats["n"], 1), "force": stats["force"] / max(stats["n"], 1),
                      "gap": stats["gap"], "unconverged": stats["unconverged"], "single_valued": sv,
+                     "scf_iterations_per_batch": stats["scf_iterations"] / max(stats["n"], 1),
+                     "scf_fills_per_batch": stats["scf_fills"] / max(stats["n"], 1),
+                     "warm_batches": stats["warm"], "batches": stats["n"],
                      "lambda_dir": float(self.model.lambda_dir()), "u_eff": self.model.u_eff().detach().cpu().tolist(),
                      "s": float(self.model.pattern_scale()), "time": time.time() - t0}
+            if sv is not None and sv["fraction"] > cfg.single_valued_ceiling:
+                self.sv_ceiling_exceeded_epochs.append(epoch)
+            entry["sv_ceiling_exceeded"] = bool(sv is not None and sv["fraction"] > cfg.single_valued_ceiling)
             if (epoch + 1) % cfg.eval_every == 0 or epoch == cfg.epochs - 1:
                 entry["held"] = {k: v for k, v in self.evaluate(self.held_idx, "held").items() if k != "energies"}
             history.append(entry)
-            logging.info("epoch %d loss %.4e force %.4e gap %.3f unconv %d sv %s lambda %.3f s %.3f held %s (%.0fs)",
+            logging.info("epoch %d loss %.4e force %.4e gap %.3f unconv %d sv %s scf/batch %.1f fills/batch %.1f warm %d/%d lambda %.3f s %.3f held %s (%.0fs)",
                          epoch, entry["loss"], entry["force"], entry["gap"], entry["unconverged"], sv,
+                         entry["scf_iterations_per_batch"], entry["scf_fills_per_batch"], entry["warm_batches"], entry["batches"],
                          entry["lambda_dir"], entry["s"], entry.get("held", {}).get("force_rmse"), entry["time"])
             json.dump(history, open(self.run_dir / "history.json", "w"), indent=1, default=str)
             torch.save(self.model, self.run_dir / "model.pt")
             if sv is not None and sv["fraction"] > cfg.single_valued_ceiling:
                 logging.warning("single-valuedness failing fraction %.3f exceeds the ceiling %.3f", sv["fraction"], cfg.single_valued_ceiling)
         final = self.evaluate(self.held_idx, "held_final")
+        # v4.5: "failure fails the arm" -- the run-level flag the report reads.
+        final["sv_ceiling_exceeded_epochs"] = list(self.sv_ceiling_exceeded_epochs)
+        final["arm_failed_single_valuedness"] = bool(self.sv_ceiling_exceeded_epochs)
         json.dump(final, open(self.run_dir / "held_final.json", "w"), indent=1, default=str)
         torch.save(self.model, self.run_dir / "model.pt")
         return {"history": history, "held_final": {k: v for k, v in final.items() if k != "energies"}}

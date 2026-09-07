@@ -37,7 +37,7 @@ from mace.modules.dscc.ewald import gradient_of_contraction
 from mace.modules.dscc.kernels import (KernelConfig, gamma_lr, gamma_matrix, gamma_pair_derivative, host_potential,
                                        kernel_components, kernel_pair_gradients)
 from mace.modules.dscc.scf import (ScfOptions, ScfResult, continuation_solve, continuation_solve_batched,
-                                   solve_dscc, two_fillings)
+                                   solve_dscc, solve_dscc_batched, two_fillings)
 from mace.modules.dscc.species import (N0, S_REF, State, U_MAX_GFN1, neutral_count,
                                        states_from_batch)
 from mace.modules.dscc.fill import fill
@@ -472,8 +472,14 @@ class MACEDSCC(nn.Module):
         dq_all = torch.zeros(positions.shape[0], dtype=torch.float64, device=device)
         diagnostics: Dict[str, List[Any]] = {"dq_sum": [], "n_atoms": []}
         sizes = (ptr[1:] - ptr[:-1])
+        # v4.5 warm starts: a batch whose graphs ALL carry a stored `dq` takes the batched
+        # warm-started solve; none -> the batched continuation; a mixture -> per graph.
+        if warm_start is not None and all(w is None for w in warm_start):
+            warm_start = None
+        starts = (torch.stack([w.detach().to(device) for w in warm_start])
+                  if warm_start is not None and all(w is not None for w in warm_start) else None)
         uniform = (all(not s_.is_reference for s_ in states) and bool((sizes == sizes[0]).all())
-                   and warm_start is None and not getattr(self, "fscc", ""))
+                   and (warm_start is None or starts is not None) and not getattr(self, "fscc", ""))
         if uniform:
             # Equal sizes, no reference graph: one [B, 4n, 4n] Hamiltonian, batched fills
             # (and the batched solver when the coupling is on), block-diagonal cotangents --
@@ -516,8 +522,13 @@ class MACEDSCC(nn.Module):
                     W = torch.einsum("bij,bj->bi", torch.stack(Ws), self.pattern_scale() * q0)
                     diagnostics["q0_sum"] = q0.detach().sum(-1).cpu().tolist()
                     diagnostics["compensation_cloud"] = [self.compensation_cloud(q0[g], sp_b[g], pos_b[g], cell[g]) for g in range(num_graphs)]
-                res = continuation_solve_batched(H, gamma, counts_s, counts_r, self.sigma_s, W, self.scf_options,
-                                                 implicit=training and self.scf_options.method == "newton")
+                if starts is not None:
+                    res = solve_dscc_batched(H, gamma, counts_s, counts_r, self.sigma_s, W, starts, self.scf_options,
+                                             implicit=training and self.scf_options.method == "newton")
+                else:
+                    res = continuation_solve_batched(H, gamma, counts_s, counts_r, self.sigma_s, W, self.scf_options,
+                                                     implicit=training and self.scf_options.method == "newton")
+                diagnostics["warm_started"] = starts is not None
                 head_energy = res.energy
                 dq_fixed = res.dq.detach()
                 dP_sym = 0.5 * (res.dP + res.dP.transpose(-1, -2))
@@ -537,7 +548,7 @@ class MACEDSCC(nn.Module):
                     cotangent_terms.append((H_sc, dP_sym))
                     cotangent_terms.append((gamma, -0.5 * res.dq.unsqueeze(-1) * res.dq.unsqueeze(-2)))
                 dq_all = res.dq.reshape(-1)
-                for key, values in (("iterations", res.iterations), ("converged", res.converged),
+                for key, values in (("iterations", res.iterations), ("fills", res.n_fills), ("converged", res.converged),
                                     ("residual", res.residual), ("commutator", res.commutator), ("rho", res.rho),
                                     ("band_minus_primary", (res.energy.detach() - res.energy_primary).cpu().tolist())):
                     diagnostics[key] = list(values)
@@ -656,7 +667,7 @@ class MACEDSCC(nn.Module):
                     # (the cotangent keeps dq's graph for the training gradient; the
                     # gradient is differentiable in grad_outputs under create_graph)
                 dq_all[nodes] = res.dq
-                for key, value in (("iterations", res.iterations), ("converged", res.converged),
+                for key, value in (("iterations", res.iterations), ("fills", res.n_fills), ("converged", res.converged),
                                    ("residual", res.residual), ("commutator", res.commutator),
                                    ("rho", res.rho), ("delta_energy", res.delta_energy),
                                    ("band_minus_primary", float(res.energy.detach() - res.energy_primary))):

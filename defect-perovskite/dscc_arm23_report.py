@@ -90,10 +90,16 @@ def main() -> None:
         cq = calibration.profile_c_q(1, d159, r159, d_oof, r_oof) if (d159 and d_oof) else None
         shape_err = abs(cq["shape_residual_slope"]) if cq and np.isfinite(cq.get("shape_residual_slope", float("nan"))) else float("nan")
         last = hist[-1]
-        sv = last.get("single_valued") or {}
+        # v4.5: the check's failing fraction is read at its WORST epoch ("failure fails the
+        # arm"), and the run-level flag written by the trainer is carried.
+        sv_fractions = [float((e.get("single_valued") or {}).get("fraction", 0.0)) for e in hist]
+        sv_max = max(sv_fractions) if sv_fractions else 0.0
         entry = {"config": info, "force_rmse": held["force_rmse"], "shell_rmse": held["shell_rmse"],
                  "shape_slope_err": shape_err, "c_q": cq, "n_eff_p50": float(np.median(n_effs)) if n_effs else float("nan"),
-                 "sv_fraction": float(sv.get("fraction", 0.0)), "converged_fraction": 1.0 - unconv / max(len(sample), 1),
+                 "sv_fraction": sv_max, "sv_fraction_last": sv_fractions[-1] if sv_fractions else 0.0,
+                 "arm_failed_single_valuedness": bool(held.get("arm_failed_single_valuedness", False)),
+                 "sv_ceiling_exceeded_epochs": held.get("sv_ceiling_exceeded_epochs", []),
+                 "converged_fraction": 1.0 - unconv / max(len(sample), 1),
                  "f_sr": float(np.median(f_srs)) if f_srs else None, "s": last.get("s"), "lambda_dir": last.get("lambda_dir"),
                  "u_eff": last.get("u_eff"), "epochs": len(hist), "spikes": spikes}
         per_run[run.name] = entry

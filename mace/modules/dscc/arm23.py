@@ -42,7 +42,7 @@ class ConfigSummary:
     force_rmse: List[float]                 # held-out charged force RMSE per seed, eV/A
     shape_slope_err: List[float]            # |159-atom shape residual slope| after C_Q, eV/A
     n_eff_p50: List[float]
-    sv_fraction: List[float]                # final-epoch single-valuedness failing fraction
+    sv_fraction: List[float]                # worst-epoch failing fraction of the single-valuedness check (v4.5)
     converged_fraction: List[float]
     f_sr: List[float] = field(default_factory=list)
     far_field_4_8: List[float] = field(default_factory=list)

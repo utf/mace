@@ -554,7 +554,8 @@ class TestPairForcePath:
         # the batch's last iteration read rho = 1 from its frozen residual).
         assert out["diagnostics"]["iterations"] == diag["iterations"]
         for rb, rp in zip(out["diagnostics"]["rho"], diag["rho"]):
-            assert rb == pytest.approx(rp, rel=0.05) and rb < 0.9     # (residual-tail ratios at 1e-11)
+            # Residual-tail ratios at the 1e-11 level: the same order, and no frozen 1.00.
+            assert rb == pytest.approx(rp, rel=0.5, abs=1e-3) and rb < 0.9
         for gb, gp in zip(g_batched, gs):
             if gb is None and gp is None:
                 continue
