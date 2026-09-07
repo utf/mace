@@ -564,7 +564,10 @@ class MACEDSCC(nn.Module):
             if self.coupling and getattr(self, "fscc", ""):
                 # Arm 4: two independent full-SCC solves with absolute charges (plan 2.9).
                 pos_g, cell_g, sp_g = positions[nodes], cell[g], species[nodes]
-                k_sr, k_lr = kernel_components(pos_g, cell_g, self.kernel)
+                use_pairs_f = (create and compute_force and not compute_stress
+                               and getattr(self, "gamma_force_mode", "pairs") == "pairs")
+                with torch.set_grad_enabled(not use_pairs_f):        # as the D-SCC branches
+                    k_sr, k_lr = kernel_components(pos_g, cell_g, self.kernel)
                 if self.fscc == "matched":
                     gamma_f = gamma_matrix(k_sr, k_lr, self.lambda_dir(), self.u_eff()[sp_g], self.kernel.eps_inf)
                 else:                                              # full kernel: E_PBC / eps + diag(U)
@@ -575,8 +578,18 @@ class MACEDSCC(nn.Module):
                 # HF at fixed P_X and Dq_X per state: -Tr(P dH0/dR) - 1/2 Dq^T dGamma/dR Dq, S minus ref.
                 dP = 0.5 * ((st.P - rf.P) + (st.P - rf.P).transpose(0, 1))
                 cotangent_terms.append((H, dP))
-                cotangent_terms.append((gamma_f, 0.5 * (st.dq.unsqueeze(-1) * st.dq.unsqueeze(0)
-                                                        - rf.dq.unsqueeze(-1) * rf.dq.unsqueeze(0))))
+                A_f = 0.5 * (st.dq.unsqueeze(-1) * st.dq.unsqueeze(0) - rf.dq.unsqueeze(-1) * rf.dq.unsqueeze(0))
+                if use_pairs_f:
+                    # The kernel term's force from the pair derivatives (see the D-SCC branch):
+                    # Gamma_F is linear in the components, with lambda_dir (matched) or 1 (full).
+                    d_sr, d_lr = kernel_pair_gradients(pos_g, cell_g, self.kernel)
+                    lam_f = self.lambda_dir() if self.fscc == "matched" else torch.ones((), dtype=H.dtype, device=device)
+                    gamma_p = gamma_pair_derivative(d_sr, d_lr, lam_f, self.kernel.eps_inf)
+                    if pair_grad is None:
+                        pair_grad = torch.zeros_like(positions)
+                    pair_grad = pair_grad.index_add(0, torch.arange(lo, hi, device=device), gradient_of_contraction(A_f, gamma_p))
+                else:
+                    cotangent_terms.append((gamma_f, A_f))
                 dq_all[nodes] = st.dq - rf.dq
                 for key, value in (("iterations", st.iterations + rf.iterations), ("converged", st.converged and rf.converged),
                                    ("residual", max(st.residual, rf.residual)),

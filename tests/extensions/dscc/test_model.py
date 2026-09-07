@@ -530,3 +530,27 @@ class TestPairForcePath:
                 continue
             assert float((gb - gp).abs().max()) <= 1e-7 * max(float(gp.abs().max()), 1e-6) + 1e-12
 
+
+class TestFsccPairForcePath:
+    @pytest.mark.parametrize("kind", ["matched", "full"])
+    def test_training_forces_and_gradients_match_the_cotangent_route(self, kind):
+        m = _coupled(regime="B")
+        m.fscc = kind
+        batch = _batch([VACP])
+        ref = m(dict(batch), compute_force=True)
+        params = [p for p in m.parameters() if p.requires_grad]
+        torch.manual_seed(5)
+        target = ref["forces"].detach() + 0.01 * torch.randn_like(ref["forces"])
+        grads = {}
+        for mode in ("pairs", "autograd"):
+            m.gamma_force_mode = mode
+            out = m(dict(batch), training=True, compute_force=True)
+            assert float((out["forces"] - ref["forces"]).abs().max()) < 1e-9, mode
+            grads[mode] = torch.autograd.grad(((out["forces"] - target) ** 2).sum(), params, allow_unused=True)
+        m.gamma_force_mode = "pairs"
+        for gp, ga in zip(grads["pairs"], grads["autograd"]):
+            if gp is None and ga is None:
+                continue
+            assert gp is not None and ga is not None
+            assert float((gp - ga).abs().max()) <= 1e-8 * max(float(ga.abs().max()), 1e-6) + 1e-12
+
