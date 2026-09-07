@@ -79,14 +79,6 @@ def create_error_table(
             "MAE F / meV / A",
             "relative F MAE %",
         ]
-    elif table_type == "DefectRMSE":
-        table.field_names = [
-            "config_type",
-            "RMSE E / meV / atom",
-            "RMSE F / meV / A",
-            "RMSE dE / meV",
-            "RMSE dF / meV / A",
-        ]
     elif table_type == "DipoleRMSE":
         table.field_names = [
             "config_type",
@@ -136,7 +128,8 @@ def create_error_table(
         torch.cuda.empty_cache()
         if log_wandb:
             wandb_log_dict = {
-                name + "_final_rmse_e_per_atom": metrics["rmse_e_per_atom"]
+                name
+                + "_final_rmse_e_per_atom": metrics["rmse_e_per_atom"]
                 * 1e3,  # meV / atom
                 name + "_final_rmse_f": metrics["rmse_f"] * 1e3,  # meV / A
                 name + "_final_rel_rmse_f": metrics["rel_rmse_f"],
@@ -228,16 +221,6 @@ def create_error_table(
                     f"{metrics['mae_e_per_atom'] * 1000:8.1f}",
                     f"{metrics['mae_f'] * 1000:8.1f}",
                     f"{metrics['rel_mae_f']:8.2f}",
-                ]
-            )
-        elif table_type == "DefectRMSE":
-            table.add_row(
-                [
-                    name,
-                    f"{metrics['rmse_e_per_atom'] * 1000:8.1f}",
-                    f"{metrics['rmse_f'] * 1000:8.1f}",
-                    f"{metrics['rmse_delta_e'] * 1000:8.1f}",
-                    f"{metrics['rmse_delta_f'] * 1000:8.1f}",
                 ]
             )
         elif table_type == "DipoleRMSE":

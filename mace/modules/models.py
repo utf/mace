@@ -14,11 +14,7 @@ from e3nn.util.jit import compile_mode
 from mace.modules.embeddings import GenericJointEmbedding
 from mace.modules.radial import ZBLBasis
 from mace.tools.scatter import scatter_mean, scatter_sum
-from mace.tools.torch_tools import (
-    get_change_of_basis,
-    spherical_to_cartesian,
-    to_high_precision,
-)
+from mace.tools.torch_tools import get_change_of_basis, spherical_to_cartesian
 
 from .blocks import (
     AtomicEnergiesBlock,
@@ -582,9 +578,7 @@ class ScaleShiftMACE(MACE):
         inter_e = scatter_sum(node_inter_es, data["batch"], dim=-1, dim_size=num_graphs)
 
         total_energy = e0 + inter_e
-        node_energy = to_high_precision(node_e0.clone()) + to_high_precision(
-            node_inter_es.clone()
-        )
+        node_energy = node_e0.clone().double() + node_inter_es.clone().double()
 
         forces, virials, stress, hessian, edge_forces, _ = get_outputs(
             energy=inter_e,

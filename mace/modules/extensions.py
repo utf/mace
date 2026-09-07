@@ -39,7 +39,6 @@ from mace.modules.wrapper_ops import (
     TransposeIrrepsLayoutWrapper,
 )
 from mace.tools.scatter import scatter_mean, scatter_sum
-from mace.tools.torch_tools import to_high_precision
 
 from .blocks import (
     AtomicEnergiesBlock,
@@ -258,9 +257,7 @@ class MACELES(ScaleShiftMACE):
         inter_e = scatter_sum(node_inter_es, data["batch"], dim=-1, dim_size=num_graphs)
 
         total_energy = e0 + inter_e
-        node_energy = to_high_precision(node_e0.clone()) + to_high_precision(
-            node_inter_es.clone()
-        )
+        node_energy = node_e0.clone().double() + node_inter_es.clone().double()
 
         les_q = torch.sum(torch.stack(node_qs_list, dim=1), dim=1)
         les_result = self.les(
@@ -983,8 +980,7 @@ class PolarMACE(ScaleShiftMACE):
 
         return {
             "energy": total_energy,
-            "node_energy": to_high_precision(node_e0.clone())
-            + to_high_precision(node_inter_es.clone()),
+            "node_energy": node_e0.clone().double() + node_inter_es.clone().double(),
             "interaction_energy": inter_e,
             "forces": forces,
             "edge_forces": edge_forces,

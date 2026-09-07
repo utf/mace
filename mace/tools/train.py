@@ -23,11 +23,9 @@ from torch_ema import ExponentialMovingAverage
 from torchmetrics import Metric
 
 from mace.cli.visualise_train import TrainingPlotter
-from mace.modules.defect_size import size_extensivity_probe
 
 from . import torch_geometric
 from .checkpoint import CheckpointHandler, CheckpointState
-from .scatter import scatter_mean, scatter_sum
 from .torch_tools import to_numpy
 from .utils import (
     MetricsLogger,
@@ -153,81 +151,6 @@ def valid_err_log(
         logging.info(
             f"{inintial_phrase}: head: {valid_loader_name}, loss={valid_loss:8.8f}, RMSE_E_per_atom={error_e:8.2f} meV, RMSE_F={error_f:8.2f} meV / A, RMSE_Mu_per_atom={error_mu:8.2f} mDebye",
         )
-    elif log_errors == "DefectRMSE":
-        error_e = eval_metrics["rmse_e_per_atom"] * 1e3
-        error_f = eval_metrics["rmse_f"] * 1e3
-        # The charge-state difference metrics are the headline observables, but they are
-        # absent when a loader happens to hold no paired frames at all, so report rather
-        # than raise: a validation split with no pairs is a legitimate configuration.
-        delta_e = eval_metrics.get("rmse_delta_e")
-        delta_f = eval_metrics.get("rmse_delta_f")
-        delta_e_str = f"{delta_e * 1e3:8.2f} meV" if delta_e is not None else "     n/a"
-        delta_f_str = (
-            f"{delta_f * 1e3:8.2f} meV / A" if delta_f is not None else "     n/a"
-        )
-        logging.info(
-            f"{inintial_phrase}: head: {valid_loader_name}, loss={valid_loss:8.8f}, "
-            f"RMSE_E_per_atom={error_e:8.2f} meV, RMSE_F={error_f:8.2f} meV / A, "
-            f"RMSE_dE={delta_e_str}, RMSE_dF={delta_f_str}",
-        )
-        # Shape diagnostics, per carrier channel. Kept on a separate line because they
-        # are vectors, and logged every epoch because the interesting transition -- the
-        # attention leaving the uniform state -- is sharp and easy to miss between
-        # checkpoints. mean(u) is the level mode: it is unidentified unless the gauge
-        # penalty is on, and watching it drift is the free diagnostic for that.
-        def _fmt(key: str, scale: float = 1.0, fmt: str = "6.3f") -> Optional[str]:
-            values = eval_metrics.get(key)
-            if values is None:
-                return None
-            return "[" + " ".join(f"{v * scale:{fmt}}" for v in values) + "]"
-
-        parts = [
-            (name, _fmt(key, scale))
-            for name, key, scale in (
-                ("partic", "defect_participation", 1.0),
-                ("mean_u", "defect_u_mean", 1.0),
-                ("std_u", "defect_u_std", 1.0),
-                ("gap_l", "defect_logit_gap", 1.0),
-                # Under the tie this is a binding energy in eV, not a logit scale.
-                ("delta_u", "defect_delta_u", 1.0),
-                # gap with the seed off: what MLP_l is holding up on its own.
-                ("gap_int", "defect_gap_intrinsic", 1.0),
-                # Share of attention an R-fold larger cell would capture; ~0 is the goal.
-                ("size_f", "defect_size_f", 1.0),
-                # The log-ratio the term actually descends, its threshold, and whether the
-                # constraint is binding. x alone says nothing without x*.
-                ("size_x", "defect_size_x", 1.0),
-                ("size_x*", "defect_size_threshold", 1.0),
-                ("size_viol", "defect_size_violation", 1.0),
-                ("|c|", "defect_size_contrast", 1.0),
-                ("clamped", "defect_logit_clamped", 1.0),
-                ("gauge_u", "defect_gauge_u", 1.0),
-            )
-        ]
-        parts = [(name, text) for name, text in parts if text is not None]
-        share = eval_metrics.get("defect_size_share")
-        if share is not None:
-            # Scalar, not per channel: the calibration target the plan states is a single
-            # ratio against the delta-energy term.
-            parts.append(("size/dE", f"{share:.3f}"))
-        exempt = eval_metrics.get("defect_size_exempt")
-        if exempt is not None:
-            parts.append(("exempt", f"{exempt:.0f}"))
-        if parts:
-            logging.info(
-                f"{inintial_phrase}: carrier channels (e_maj e_min h_maj h_min): "
-                + ", ".join(f"{name}={text}" for name, text in parts)
-            )
-    else:
-        # Every branch above is conditional, so an unrecognised error_table -- or a
-        # recognised one whose metrics are missing -- used to emit nothing at all for the
-        # epoch. Falling back to the loss keeps training observable in that case.
-        logging.info(
-            f"{inintial_phrase}: head: {valid_loader_name}, loss={valid_loss:8.8f}",
-        )
-        logging.debug(
-            f"no per-epoch error format matched for error_table '{log_errors}'"
-        )
 
 
 def train(
@@ -257,9 +180,6 @@ def train(
     train_sampler: Optional[DistributedSampler] = None,
     rank: Optional[int] = 0,
     data_aug_magmom: Optional[bool] = False,
-    epoch_hook: Optional[Any] = None,
-    post_eval_hook: Optional[Any] = None,
-    post_step_hook: Optional[Any] = None,
 ):
     lowest_loss = np.inf
     valid_loss = np.inf
@@ -302,12 +222,6 @@ def train(
         train_loader = create_random_rotation_loader(train_loader)
 
     while epoch < max_num_epochs:
-        # Fires at the top of every epoch, before any gradient step of that epoch. Used
-        # by MACEDefect to seed MLP_u once the trunk has warmed up: the seed target is a
-        # function of the trunk features, which carry nothing at initialisation.
-        if epoch_hook is not None:
-            epoch_hook(epoch, model)
-
         # LR scheduler and SWA update
         if swa is None or epoch < swa.start:
             if epoch > start_epoch:
@@ -345,7 +259,6 @@ def train(
             distributed=distributed,
             distributed_model=distributed_model,
             rank=rank,
-            post_step_hook=post_step_hook,
         )
         if distributed:
             torch.distributed.barrier()
@@ -379,12 +292,6 @@ def train(
                             epoch,
                             valid_loader_name,
                         )
-                        # Decisions that depend on how the epoch actually went -- the
-                        # two-timescale base release and its rollback guard -- run here,
-                        # with the validation metrics in hand. epoch_hook fires before any
-                        # gradient step and cannot see them.
-                        if post_eval_hook is not None:
-                            post_eval_hook(epoch, model, optimizer, eval_metrics)
                         if log_wandb:
                             wandb_log_dict[valid_loader_name] = {
                                 "epoch": epoch,
@@ -470,7 +377,6 @@ def train_one_epoch(
     distributed: bool,
     distributed_model: Optional[DistributedDataParallel] = None,
     rank: Optional[int] = 0,
-    post_step_hook: Optional[Any] = None,
 ) -> None:
     model_to_train = model if distributed_model is None else distributed_model
 
@@ -502,7 +408,6 @@ def train_one_epoch(
                 output_args=output_args,
                 max_grad_norm=max_grad_norm,
                 device=device,
-                post_step_hook=post_step_hook,
             )
             opt_metrics["mode"] = "opt"
             opt_metrics["epoch"] = epoch
@@ -519,7 +424,6 @@ def take_step(
     output_args: Dict[str, bool],
     max_grad_norm: Optional[float],
     device: torch.device,
-    post_step_hook: Optional[Any] = None,
 ) -> Tuple[float, Dict[str, Any]]:
     start_time = time.time()
     batch = batch.to(device)
@@ -545,12 +449,6 @@ def take_step(
 
     loss = closure()
     optimizer.step()
-    # AFTER the optimiser and BEFORE the EMA. The projection the counting head needs (Z back
-    # onto the pristine composition hyperplane) constrains the parameters, so it has to run on
-    # the values the optimiser just wrote; running it after the EMA update would average a
-    # shadow copy of the unprojected weights into the model that gets evaluated.
-    if post_step_hook is not None:
-        post_step_hook(model)
 
     if ema is not None:
         ema.update()
@@ -749,65 +647,8 @@ class MACELoss(Metric):
         self.add_state("MagFs", default=[], dist_reduce_fx="cat")
         self.add_state("delta_MagFs", default=[], dist_reduce_fx="cat")
 
-        # Charge-state differences (MACEDefect). These are the headline observables:
-        # fixed-geometry charge-state differences are free of base-model error.
-        self.add_state(
-            "defect_dE_computed", default=torch.tensor(0.0), dist_reduce_fx="sum"
-        )
-        self.add_state("defect_delta_es", default=[], dist_reduce_fx="cat")
-        self.add_state(
-            "defect_dF_computed", default=torch.tensor(0.0), dist_reduce_fx="sum"
-        )
-        self.add_state("defect_delta_fs", default=[], dist_reduce_fx="cat")
-        # Per-carrier-channel shape diagnostics, on frames that actually carry carriers.
-        # These are what say *how* the correction is being represented rather than how
-        # accurate it is: a uniform attention scoring well means the fit is riding on the
-        # level of u, which is a different model from a localised carrier.
-        self.add_state(
-            "defect_shape_computed", default=torch.tensor(0.0), dist_reduce_fx="sum"
-        )
-        self.add_state("defect_participation", default=[], dist_reduce_fx="cat")
-        self.add_state("defect_alpha_vec", default=[], dist_reduce_fx="cat")
-        self.add_state("defect_u_mean", default=[], dist_reduce_fx="cat")
-        self.add_state("defect_u_std", default=[], dist_reduce_fx="cat")
-        self.add_state("defect_logit_gap", default=[], dist_reduce_fx="cat")
-        self.add_state("defect_delta_u", default=[], dist_reduce_fx="cat")
-        self.add_state("defect_gap_intrinsic", default=[], dist_reduce_fx="cat")
-        # Size-extensivity monitor. Logged every epoch whether or not the hinge is on:
-        # it is label-free, costs a few medians, and it is the only quantity that says
-        # whether the correction will survive a larger cell. `size_f` is the share of the
-        # attention an R-fold larger cell would take, `size_drift` the resulting energy
-        # error in eV, `logit_clamped` the fraction of logits pinned at the clamp bound --
-        # which receive no gradient, so a run can stall there without any other sign.
-        self.add_state("defect_size_f", default=[], dist_reduce_fx="cat")
-        self.add_state("defect_size_x", default=[], dist_reduce_fx="cat")
-        self.add_state("defect_size_threshold", default=[], dist_reduce_fx="cat")
-        self.add_state("defect_size_violation", default=[], dist_reduce_fx="cat")
-        self.add_state("defect_size_contrast", default=[], dist_reduce_fx="cat")
-        self.add_state("defect_logit_clamped", default=[], dist_reduce_fx="cat")
-        # How often the |c| <= tol exemption fires. Frequent firing means contrast has
-        # collapsed, which is a finding about the fit rather than a nuisance.
-        self.add_state("defect_size_exempt", default=torch.tensor(0.0), dist_reduce_fx="sum")
-        # Pooled u at the training counters on pristine cells: the level-mode diagnostic
-        # of stage D-opt, which says whether the gauge is drifting even with the penalty
-        # off. Empty unless gauge counters were configured on the model.
-        self.add_state("defect_gauge_u", default=[], dist_reduce_fx="cat")
-        # Realised share of the objective taken by the size hinge. The plan asks for
-        # lambda_size calibrated to ~5-10% of the delta-energy loss, and for the achieved
-        # ratio to be logged rather than the intended one -- they diverge as the fit moves.
-        self.add_state("defect_size_total", default=torch.tensor(0.0), dist_reduce_fx="sum")
-        self.add_state("defect_delta_total", default=torch.tensor(0.0), dist_reduce_fx="sum")
-
     def update(self, batch, output):  # pylint: disable=arguments-differ
         loss = self.loss_fn(pred=output, ref=batch)
-        # Accumulate the two terms separately and divide once at the end. Averaging
-        # per-batch ratios instead lets a single batch holding no paired frames -- where
-        # L_delta is legitimately ~0 -- dominate the mean; observed at 1e31, which is
-        # useless for the calibration the ratio exists to serve.
-        self.defect_size_total += float(getattr(self.loss_fn, "last_size_value", 0.0))
-        self.defect_delta_total += float(
-            getattr(self.loss_fn, "last_delta_energy_value", 0.0)
-        )
         self.total_loss += loss
         self.num_data += batch.num_graphs
 
@@ -840,142 +681,6 @@ class MACELoss(Metric):
                 batch.magforces_weight,
                 spread_atoms=True,
             )
-        if output.get("delta_energy") is not None and hasattr(batch, "delta_energy"):
-            mask = batch.delta_energy_weight > 0
-            if bool(mask.any()):
-                self.defect_delta_es.append(
-                    (batch.delta_energy - output["delta_energy"])[mask]
-                )
-                self.defect_dE_computed += float(mask.sum())
-        if output.get("delta_forces") is not None and hasattr(batch, "delta_forces"):
-            node_mask = torch.repeat_interleave(
-                batch.delta_forces_weight > 0, batch.ptr[1:] - batch.ptr[:-1]
-            )
-            if bool(node_mask.any()):
-                self.defect_delta_fs.append(
-                    (batch.delta_forces - output["delta_forces"])[node_mask]
-                )
-                self.defect_dF_computed += float(node_mask.sum())
-        if output.get("carrier_alpha") is not None:
-            alpha = output["carrier_alpha"]  # [n_nodes, 4]
-            readouts = output["carrier_readouts"]  # [n_nodes, 4]
-            num_graphs = int(batch.num_graphs)
-            index = batch.batch
-            # Participation ratio 1 / sum_i alpha_i^2: equals the atom count for a
-            # uniform field and 1 for a fully localised one.
-            inverse = scatter_sum(
-                alpha * alpha, index, dim=0, dim_size=num_graphs
-            ).clamp_min(1e-30)
-            participation = 1.0 / inverse
-            mean_u = scatter_mean(readouts, index, dim=0, dim_size=num_graphs)
-            mean_u_sq = scatter_mean(readouts * readouts, index, dim=0, dim_size=num_graphs)
-            std_u = (mean_u_sq - mean_u * mean_u).clamp_min(0.0).sqrt()
-
-            carriers = batch.carrier_counts.view(num_graphs, -1).sum(dim=-1) > 0
-            if bool(carriers.any()):
-                self.defect_participation.append(participation[carriers])
-                # The attention on the active channel, flattened over the carrier-bearing
-                # frames of this batch. The base-release guard compares it against the
-                # release epoch to detect the carrier moving -- which needs no knowledge of
-                # where the defect is, only that the state is not where it was.
-                counts_g = batch.carrier_counts.view(num_graphs, -1)
-                active = counts_g.abs().argmax(dim=-1)
-                node_active = active[index]
-                alpha_active = alpha.gather(
-                    1, node_active.unsqueeze(-1)).squeeze(-1)
-                keep_nodes = carriers[index]
-                self.defect_alpha_vec.append(alpha_active[keep_nodes].detach())
-                self.defect_u_mean.append(mean_u[carriers])
-                self.defect_u_std.append(std_u[carriers])
-                gap = output.get("logit_gap")
-                if gap is not None:
-                    self.defect_logit_gap.append(gap.view(num_graphs, -1)[carriers])
-                delta_u = output.get("delta_u")
-                if delta_u is not None:
-                    self.defect_delta_u.append(delta_u.view(num_graphs, -1)[carriers])
-                intrinsic = output.get("logit_gap_intrinsic")
-                if intrinsic is not None:
-                    self.defect_gap_intrinsic.append(
-                        intrinsic.view(num_graphs, -1)[carriers]
-                    )
-                # Size-extensivity monitor, computed whatever the hinge weight is. The
-                # ratio is read off the loss rather than kept here, so the number logged
-                # is by construction the one the penalty is using.
-                logits = output.get("carrier_logits")
-                ratio = float(getattr(self.loss_fn, "size_ratio", 0.0))
-                if logits is not None and ratio > 1.0:
-                    with torch.no_grad():
-                        probe = size_extensivity_probe(
-                            logits=logits,
-                            readouts=readouts,
-                            alpha=alpha,
-                            batch=index,
-                            node_attrs=batch.node_attrs,
-                            num_graphs=num_graphs,
-                            ratio=ratio,
-                        )
-                        # The SAME delocalisation mask the loss uses. Calling
-                        # size_threshold without it reports the un-guarded path, so
-                        # size_x*, size_viol and exempt would describe a constraint the
-                        # loss is not applying -- diagnostics that disagree with the term
-                        # they are meant to monitor are worse than none.
-                        inverse = scatter_sum(
-                            alpha * alpha, index, dim=0, dim_size=num_graphs
-                        ).clamp_min(1e-30)
-                        sizes = scatter_sum(
-                            torch.ones_like(alpha[:, :1]),
-                            index,
-                            dim=0,
-                            dim_size=num_graphs,
-                        ).clamp_min(1.0)
-                        floor = torch.clamp(
-                            sizes * float(
-                                getattr(
-                                    self.loss_fn, "size_delocalised_fraction", 0.05
-                                )
-                            ),
-                            min=float(
-                                getattr(
-                                    self.loss_fn, "size_delocalised_min_atoms", 8.0
-                                )
-                            ),
-                        )
-                        threshold = self.loss_fn.size_threshold(
-                            batch.carrier_counts.view(num_graphs, -1),
-                            delocalised=((1.0 / inverse) > floor).any(dim=0),
-                        )
-                        # Violation is what the term actually descends; x and x* alone do
-                        # not say whether the constraint is binding. Masked by n_c > 0 as
-                        # well as by the exemption, or a dead channel reports a large
-                        # violation the loss is in fact ignoring -- which is exactly what
-                        # this line looked like before the mask was added.
-                        channel_live = batch.carrier_counts.view(num_graphs, -1) > 0
-                        violation = torch.where(
-                            torch.isfinite(threshold) & channel_live,
-                            (probe.x - threshold).clamp_min(0.0),
-                            torch.zeros_like(probe.x),
-                        )
-                    self.defect_size_f.append(probe.f[carriers])
-                    self.defect_size_x.append(probe.x[carriers])
-                    self.defect_size_threshold.append(
-                        torch.where(
-                            torch.isfinite(threshold),
-                            threshold,
-                            torch.full_like(threshold, float("nan")),
-                        )[carriers]
-                    )
-                    self.defect_size_violation.append(violation[carriers])
-                    self.defect_size_contrast.append(probe.contrast.abs()[carriers])
-                    self.defect_logit_clamped.append(probe.clamped[carriers])
-                    self.defect_size_exempt += float(
-                        (~torch.isfinite(threshold))[carriers].sum()
-                    )
-                self.defect_shape_computed += float(carriers.sum())
-            # The gauge probe is the mirror image: it lives on the *pristine* frames,
-            # where band-edge referencing pins the pooled readout to zero.
-            gauge = output.get("gauge_mean_u")
-            if gauge is not None and bool((~carriers).any()):
-                self.defect_gauge_u.append(gauge[~carriers].mean(dim=1))
         if output.get("stress") is not None and batch.stress is not None:
             self.delta_stress.append(batch.stress - output["stress"])
             self.stress_computed += filter_nonzero_weight(
@@ -1069,73 +774,6 @@ class MACELoss(Metric):
             aux["rmse_magf"] = compute_rmse(delta_MagFs)
             aux["rel_rmse_magf"] = compute_rel_rmse(delta_MagFs, MagFs)
             aux["q95_magf"] = compute_q95(delta_MagFs)
-        if self.defect_dE_computed:
-            defect_delta_es = self.convert(self.defect_delta_es)
-            aux["mae_delta_e"] = compute_mae(defect_delta_es)
-            aux["rmse_delta_e"] = compute_rmse(defect_delta_es)
-            aux["q95_delta_e"] = compute_q95(defect_delta_es)
-        if self.defect_dF_computed:
-            defect_delta_fs = self.convert(self.defect_delta_fs)
-            aux["mae_delta_f"] = compute_mae(defect_delta_fs)
-            aux["rmse_delta_f"] = compute_rmse(defect_delta_fs)
-        if self.defect_alpha_vec:
-            aux["defect_alpha_vec"] = torch.cat(
-                [v.detach().reshape(-1) for v in self.defect_alpha_vec], dim=0)
-        if self.defect_shape_computed and self.defect_participation:
-            part = torch.cat([p.detach() for p in self.defect_participation], dim=0)
-            pooled_part = part.mean(dim=0)
-            # Active channel vs the mean of the rest. The inactive channels carry n_c = 0,
-            # get no gradient through dE_SR, and so act as a free per-run baseline for "what
-            # does an unsupervised channel look like on this cell". A ratio near 1 means
-            # supervision has produced no structure the unsupervised channels lack.
-            if pooled_part.numel() >= 2:
-                active_idx = int(torch.argmin(pooled_part))
-                mask = torch.ones_like(pooled_part, dtype=torch.bool)
-                mask[active_idx] = False
-                null_mean = float(pooled_part[mask].mean())
-                aux["defect_n_eff"] = float(pooled_part[active_idx])
-                aux["defect_null_ratio"] = (
-                    float(pooled_part[active_idx]) / null_mean if null_mean > 0 else None)
-        if self.defect_shape_computed:
-            # Averaged over carrier-bearing frames, kept per channel: the channels are
-            # not interchangeable, and in a dataset where one channel is never occupied
-            # a pooled number would hide that entirely.
-            for name, state in (
-                ("participation", self.defect_participation),
-                ("u_mean", self.defect_u_mean),
-                ("u_std", self.defect_u_std),
-                ("logit_gap", self.defect_logit_gap),
-                ("delta_u", self.defect_delta_u),
-                ("gap_intrinsic", self.defect_gap_intrinsic),
-                ("size_f", self.defect_size_f),
-                ("size_x", self.defect_size_x),
-                ("size_threshold", self.defect_size_threshold),
-                ("size_violation", self.defect_size_violation),
-                ("size_contrast", self.defect_size_contrast),
-                ("logit_clamped", self.defect_logit_clamped),
-            ):
-                if not state:
-                    continue
-                stacked = torch.cat([item.detach() for item in state], dim=0)
-                # nanmean: the threshold is NaN-filled on exempt channels, and a plain
-                # mean would let one exempt frame poison the whole column.
-                pooled = (
-                    torch.nanmean(stacked, dim=0)
-                    if name == "size_threshold"
-                    else stacked.mean(dim=0)
-                )
-                aux[f"defect_{name}"] = pooled.cpu().tolist()
-        # Gauge lives on pristine frames, so it is gated separately -- a batch can hold
-        # carrier-bearing frames and no pristine ones, or the reverse.
-        if self.defect_gauge_u:
-            stacked = torch.cat([item.detach() for item in self.defect_gauge_u], dim=0)
-            aux["defect_gauge_u"] = stacked.mean(dim=0).cpu().tolist()
-        if float(self.defect_size_total) > 0.0:
-            aux["defect_size_share"] = float(self.defect_size_total) / max(
-                float(self.defect_delta_total), 1e-30
-            )
-        if self.defect_shape_computed:
-            aux["defect_size_exempt"] = float(self.defect_size_exempt)
         if self.stress_computed:
             delta_stress = self.convert(self.delta_stress)
             aux["mae_stress"] = compute_mae(delta_stress)

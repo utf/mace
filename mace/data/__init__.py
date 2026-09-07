@@ -1,21 +1,4 @@
 from .atomic_data import AtomicData
-from . import defects
-from .defects import (
-    BandEdges,
-    canonicalise_config_counters,
-    canonicalise_counts,
-    enumerate_counts,
-    collect_band_edge_registry,
-    load_band_edges,
-    lookup_band_edges,
-    net_charge,
-    log_gauge_identifiability,
-    prepare_defect_configurations,
-    report_gauge_identifiability,
-    spin_magnetisation,
-    swap_spin_channels,
-    validate_counts,
-)
 from .hdf5_dataset import HDF5Dataset, dataset_from_sharded_hdf5
 from .lmdb_dataset import LMDBDataset
 from .neighborhood import get_neighborhood
@@ -58,19 +41,4 @@ __all__ = [
     "update_keyspec_from_kwargs",
     "LMDBDataset",
     "build_fake_padding_graph",
-    "BandEdges",
-    "defects",
-    "canonicalise_config_counters",
-    "canonicalise_counts",
-    "collect_band_edge_registry",
-    "lookup_band_edges",
-    "enumerate_counts",
-    "load_band_edges",
-    "net_charge",
-    "log_gauge_identifiability",
-    "prepare_defect_configurations",
-    "report_gauge_identifiability",
-    "spin_magnetisation",
-    "swap_spin_channels",
-    "validate_counts",
 ]

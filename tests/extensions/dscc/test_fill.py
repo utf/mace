@@ -87,7 +87,7 @@ class TestFill:
 
 
 def test_newton_chemical_potential_matches_bisection_to_the_floor():
-    from mace.modules import defect_counting as cnt
+    from mace.modules.dscc import legacy as cnt                   # the retained find_mu (verbatim copy)
     for seed, n, scale in ((0, 5.0, 1.0), (1, 4.0, 0.05), (2, 7.0, 3.0)):
         H = _random_h(12, seed, scale=scale)
         eps = torch.linalg.eigvalsh(H)

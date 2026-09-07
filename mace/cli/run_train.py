@@ -9,11 +9,9 @@ import glob
 import json
 import logging
 import os
-
-import numpy as np
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional
 
 import torch.distributed
 from e3nn.util import jit
@@ -88,36 +86,6 @@ def main() -> None:
     run(args)
 
 
-
-def model_gauge_fingerprint(model) -> str:
-    """The gauge record's content hash, or 'none' (plan v8.1 section 3.1)."""
-    rec = getattr(model, "gauge_record", None)
-    if not rec:
-        return "none"
-    from mace.modules.defect_gauge import GaugeRecord
-
-    return GaugeRecord.from_dict(rec).fingerprint
-
-
-def graph_cutoff(args) -> float:
-    """Radius the neighbour graph is built at.
-
-    Normally r_max. With the spectral head this must be the CARRIER Hamiltonian's range,
-    which is longer: the two Pb that share the hole sit a median 5.32 A apart and are bridged
-    in bulk by the atom that is now the vacancy, so at r_max = 5.0 they have no edge in 64% of
-    frames and the correct two-site state cannot be represented at all.
-
-    The trunk is filtered back to r_max in MACEDefect.forward, so it sees exactly the graph it
-    always did -- and would even without the filter, since the radial cutoff sends anything
-    beyond r_max to zero. The filter only avoids paying for the extra edges.
-    """
-    if not getattr(args, "defect_spectral_head", False):
-        return float(args.r_max)
-    explicit = float(getattr(args, "defect_spectral_r_cut", 0.0) or 0.0)
-    if explicit > 0:
-        return max(float(args.r_max), explicit)
-    return float(args.r_max) * int(args.num_interactions)
-
 def run(args) -> None:
     """
     This script runs the training/fine tuning for mace
@@ -128,12 +96,6 @@ def run(args) -> None:
     # default keyspec to update using heads dictionary
     args.key_specification = KeySpecification()
     update_keyspec_from_kwargs(args.key_specification, vars(args))
-
-    # Per-host supercell band edges, used to reference charged-cell energy labels.
-    # Per-frame e_cbm_cell / e_vbm_cell keys override this table where present.
-    band_edges = None
-    if getattr(args, "band_edges_file", None) is not None:
-        band_edges = data.load_band_edges(args.band_edges_file)
 
     if args.device == "xpu":
         try:
@@ -283,9 +245,9 @@ def run(args) -> None:
                 )
             args.multiheads_finetuning = False
         if args.multiheads_finetuning:
-            assert args.E0s != "average", (
-                "average atomic energies cannot be used for multiheads finetuning"
-            )
+            assert (
+                args.E0s != "average"
+            ), "average atomic energies cannot be used for multiheads finetuning"
             if not args.force_mh_ft_lr:
                 logging.info(
                     "Multihead finetuning mode, setting learning rate to 0.0001 and EMA to True. To use a different learning rate, set --force_mh_ft_lr=True."
@@ -385,9 +347,9 @@ def run(args) -> None:
             ["matpes_r2scan"],
             ["omat"],
         ):
-            assert head_config.head_name == "pt_head", (
-                "Only pt_head should use mp as train_file"
-            )
+            assert (
+                head_config.head_name == "pt_head"
+            ), "Only pt_head should use mp as train_file"
             logging.info(
                 f"Using filtered Materials Project data for replay ({args.num_samples_pt}, {args.filter_type_pt}, {args.subselect_pt}). "
                 "You can also construct a different subset using `fine_tuning_select.py` script."
@@ -430,7 +392,6 @@ def run(args) -> None:
                     and head_config.head_name == "pt_head"
                 ),
                 prefix=args.name,
-                band_edges=band_edges,
             )
             head_config.collections = SubsetCollection(
                 train=collections.train,
@@ -682,7 +643,7 @@ def run(args) -> None:
             if apply_pseudolabels_to_pt_head_configs(
                 foundation_model=model_foundation,
                 pt_head_config=head_config,
-                r_max=graph_cutoff(args),
+                r_max=args.r_max,
                 device=device,
                 batch_size=args.batch_size,
                 force_stress=args.pseudolabel_replay_compute_stress,
@@ -697,14 +658,7 @@ def run(args) -> None:
         if ase_files:
             dataset = load_dataset_for_path(
             file_path=ase_files,
-            # graph_cutoff, NOT r_max. With the spectral head the carrier Hamiltonian is
-            # longer-ranged than the trunk, and the trunk is filtered back to r_max inside
-            # the model. Building the TRAINING graph at r_max instead left the two
-            # vacancy-sharing Pb -- median 5.4 A apart -- with no edge in 0/40 frames, so the
-            # two-site state the R2 screen was looking for could not be represented at all.
-            # graph_cutoff was previously applied only to the valid-file FALLBACK path, which
-            # runs with an explicit valid_file never executes.
-            r_max=graph_cutoff(args),
+            r_max=args.r_max,
             z_table=z_table,
             head_config=head_config,
             heads=heads,
@@ -716,7 +670,7 @@ def run(args) -> None:
         for file in non_ase_files:
             dataset = load_dataset_for_path(
             file_path=file,
-            r_max=graph_cutoff(args),
+            r_max=args.r_max,
             z_table=z_table,
             head_config=head_config,
             heads=heads,
@@ -738,7 +692,7 @@ def run(args) -> None:
             if valid_ase_files:
                 valid_dataset = load_dataset_for_path(
                     file_path=valid_ase_files,
-                    r_max=graph_cutoff(args),
+                    r_max=args.r_max,
                     z_table=z_table,
                     head_config=head_config,
                     heads=heads,
@@ -749,7 +703,7 @@ def run(args) -> None:
             for valid_file in valid_non_ase_files:
                 valid_dataset = load_dataset_for_path(
                 file_path=valid_file,
-                r_max=graph_cutoff(args),
+                r_max=args.r_max,
                 z_table=z_table,
                 head_config=head_config,
                 heads=heads,
@@ -766,7 +720,7 @@ def run(args) -> None:
         if head_config.valid_file is None and head_config.collections.valid:
             valid_sets[head_config.head_name] = [
                 data.AtomicData.from_config(
-                    config, z_table=z_table, cutoff=graph_cutoff(args), heads=heads
+                    config, z_table=z_table, cutoff=args.r_max, heads=heads
                 )
                 for config in head_config.collections.valid
             ]
@@ -815,155 +769,21 @@ def run(args) -> None:
             )
             valid_samplers[head] = valid_sampler
 
-    # Speed-cycle spec section 1.1: batches of one atom count, so the counting head can
-    # solve the whole batch as one [B, 4n, 4n] eigenproblem. Refused under `--distributed`
-    # rather than silently ignored -- a DistributedSampler and a batch sampler are two ways
-    # to decide the same thing, and combining them would drop or duplicate frames.
-    # Standing rule 1: eps_inf is a per-host INPUT and has no default. The Madelung term
-    # divides by it, so a missing value would silently become 4.0 -- this host's number --
-    # on any other host.
-    if bool(getattr(args, "defect_madelung_on_site", False)) and float(
-            getattr(args, "defect_madelung_eps_inf", 0.0) or 0.0) <= 0.0:
-        raise ValueError(
-            "--defect_madelung_on_site divides the site potential by eps_inf and has no "
-            "default for it: pass --defect_madelung_eps_inf. 4.0 is CsPbCl3's value and "
-            "standing rule 1 forbids a per-host constant living in a default.")
-    grouped = bool(getattr(args, "defect_size_grouped_batches", False))
-    if grouped and args.distributed:
-        raise ValueError(
-            "--defect_size_grouped_batches and --distributed both own the sampler; run the "
-            "grouped batches single-process, or extend the sampler to shard by rank")
-    if grouped:
-        from mace.data.size_sampler import SizeGroupedBatchSampler, frame_sizes
-
-        batch_sampler = SizeGroupedBatchSampler(
-            frame_sizes(train_set), batch_size=args.batch_size, shuffle=True,
-            drop_last=False,
-            generator=torch.Generator().manual_seed(args.seed))
-        logging.info("Size-grouped training batches: %s", batch_sampler.describe())
-        train_loader = torch_geometric.dataloader.DataLoader(
-            dataset=train_set,
-            batch_sampler=batch_sampler,
-            pin_memory=args.pin_memory,
-            num_workers=args.num_workers,
-        )
-    elif float(getattr(args, "defect_energy_shape_weight", 0.0) or 0.0) > 0:
-        # PLAN v8.1 SECTION 8: the registered pair sampler. Every batch is the ordinary
-        # shuffled sweep plus `defect_energy_pair_slots` within-stratum pairs; the strata
-        # are stamped on the frames here, before any loader exists, and the manifest that
-        # freezes them is written before training starts.
-        from mace.modules import defect_objective as _obj
-        from mace.modules.defect_routing import assert_inherited_contract as _inherit
-
-        # Addendum section 8, Stages 2 and 3: under the v8.1 objective no run may restore
-        # a trainable per-size constant or the neutral-null admission rule, and the gauge
-        # is not optional. Checked here, before any loader or model exists, so a recipe
-        # that flips one of them back on cannot start.
-        _inherit({
-            "spectral_gauge": bool(getattr(args, "defect_spectral_gauge", True)),
-            "energy_shape_weight": float(args.defect_energy_shape_weight),
-            "energy_scale_eV": float(getattr(args, "defect_energy_scale", 1.0)),
-            "total_energy_weight": float(getattr(args, "total_energy_weight", 0.0) or 0.0),
-            "c_shift_per_class": bool(getattr(args, "defect_c_shift_per_class", False)),
-            "null_reference": str(getattr(args, "defect_null_reference", "") or ""),
-            "madelung_range": str(getattr(args, "defect_madelung_range", "full")),
-        }, stage=None)
-
-        if args.distributed:
-            raise ValueError("the v8.1 pair sampler is single-process")
-        _weights = None
-        if str(getattr(args, "defect_energy_strata_json", "") or ""):
-            with open(args.defect_energy_strata_json, encoding="utf-8") as _h:
-                _weights = {str(k): float(v) for k, v in json.load(_h).items()}
-        # The loader is built before the model exists, so the pristine size is read off
-        # the training set by the host's composition (a per-host input, standing rule 1).
-        from mace.data.two_size import pristine_cell_atoms as _pca
-
-        _comp_text = (getattr(args, "defect_madelung_composition", None)
-                      or getattr(args, "defect_gap_composition", None))
-        if not _comp_text:
-            raise ValueError("--defect_energy_shape_weight needs the host composition "
-                             "(--defect_madelung_composition or --defect_gap_composition) "
-                             "to key the size strata")
-        _comp = ([float(x) for x in str(_comp_text).split(",")]
-                 if isinstance(_comp_text, str) else [float(x) for x in _comp_text])
-        _pristine_atoms = int(_pca(train_set, _comp))
-        if _pristine_atoms <= 0:
-            raise ValueError("no stoichiometric frame in the training set: the size strata "
-                             "have no pristine cell to key on")
-        strata_table = _obj.assign_strata(
-            train_set, z_table, host=str(getattr(args, "defect_energy_host", "host")),
-            pristine_atoms=_pristine_atoms, weights=_weights)
-        for _vset in valid_sets.values():
-            _obj.assign_strata(_vset, z_table, host=str(getattr(args, "defect_energy_host",
-                                                                 "host")),
-                               pristine_atoms=_pristine_atoms, weights=_weights, log=False)
-        pair_sampler = _obj.WithinStratumPairSampler(
-            len(train_set), batch_size=args.batch_size, table=strata_table,
-            n_pair_slots=int(getattr(args, "defect_energy_pair_slots", 0) or 0),
-            generator=torch.Generator().manual_seed(args.seed),
-            drop_last=not args.lbfgs)
-        train_loader = _obj.pair_loader(
-            train_set, pair_sampler, pin_memory=args.pin_memory,
-            num_workers=args.num_workers)
-        _manifest = _obj.manifest(
-            strata_table, _obj.ObjectiveStage.NUISANCE,
-            energy_shape_weight=float(args.defect_energy_shape_weight),
-            forces_weight=float(args.forces_weight),
-            n_pair_slots=int(args.defect_energy_pair_slots),
-            tolerances={"energy_scale_eV": float(getattr(args, "defect_energy_scale", 1.0))},
-            extra={"delta_forces_weight": float(args.delta_forces_weight),
-                   "total_energy_weight": float(args.total_energy_weight),
-                   "delta_energy_weight": float(args.delta_energy_weight),
-                   "batch_size": int(args.batch_size),
-                   "member_weight_column": "weight (the loader weight; not the OOD w_E)",
-                   "pair_graphs": "weight 0 in every term but the shape term; base "
-                                  "columns rescaled so the other terms equal their "
-                                  "values on the base graphs alone (PairBatchCollater)",
-                   "validation": "plain loader; the shape term is not scored there"})
-        # The seed is recorded beside the hash, not under it: six seeds of one regime
-        # share one manifest hash.
-        _manifest["seed"] = int(args.seed)
-        os.makedirs(args.work_dir, exist_ok=True)
-        with open(os.path.join(args.work_dir, f"{args.name}_objective_manifest.json"), "w",
-                  encoding="utf-8") as _h:
-            json.dump(_manifest, _h, indent=1)
-        logging.info("v8.1 energy-shape objective: %d strata (%s), %d pair slots per batch, "
-                     "manifest hash %s", len(strata_table.strata),
-                     ", ".join(f"{k}: n={len(s.members)} W={s.weight:g}"
-                               for k, s in strata_table.strata.items()),
-                     int(args.defect_energy_pair_slots), _manifest["hash"])
-    else:
-        train_loader = torch_geometric.dataloader.DataLoader(
-            dataset=train_set,
-            batch_size=args.batch_size,
-            sampler=train_sampler,
-            shuffle=(train_sampler is None),
-            drop_last=(train_sampler is None and not args.lbfgs),
-            pin_memory=args.pin_memory,
-            num_workers=args.num_workers,
-            generator=torch.Generator().manual_seed(args.seed),
-        )
+    train_loader = torch_geometric.dataloader.DataLoader(
+        dataset=train_set,
+        batch_size=args.batch_size,
+        sampler=train_sampler,
+        shuffle=(train_sampler is None),
+        drop_last=(train_sampler is None and not args.lbfgs),
+        pin_memory=args.pin_memory,
+        num_workers=args.num_workers,
+        generator=torch.Generator().manual_seed(args.seed),
+    )
 
     valid_loaders = {heads[i]: None for i in range(len(heads))}
     if not isinstance(valid_sets, dict):
         valid_sets = {"Default": valid_sets}
     for head, valid_set in valid_sets.items():
-        if grouped:
-            # Evaluation order carries no information, and validation is part of the epoch
-            # time, so it is grouped too -- without shuffling, so the reported losses are
-            # over the same frames in the same order every epoch.
-            from mace.data.size_sampler import SizeGroupedBatchSampler, frame_sizes
-
-            valid_loaders[head] = torch_geometric.dataloader.DataLoader(
-                dataset=valid_set,
-                batch_sampler=SizeGroupedBatchSampler(
-                    frame_sizes(valid_set), batch_size=args.valid_batch_size,
-                    shuffle=False, drop_last=False),
-                pin_memory=args.pin_memory,
-                num_workers=args.num_workers,
-            )
-            continue
         valid_loaders[head] = torch_geometric.dataloader.DataLoader(
             dataset=valid_set,
             batch_size=args.valid_batch_size,
@@ -978,203 +798,9 @@ def run(args) -> None:
     loss_fn = get_loss_fn(args, dipole_only, args.compute_dipole)
     args.avg_num_neighbors = get_avg_num_neighbors(head_configs, args, train_loader, device)
 
-    # COUNT NEIGHBOURS AT r_max, NOT AT THE GRAPH CUTOFF. `avg_num_neighbors` divides every
-    # message in the trunk, and the trunk's messages only run over edges inside `r_max`. With
-    # the carrier head the loader builds its graph at the CARRIER cutoff instead -- 10 A here
-    # against r_max 5.0 -- so the count comes back about eight times too large and every
-    # message is divided by eight times too much.
-    #
-    # Measured, not estimated: the Stage-A base was trained without the head and has 14.08; a
-    # run with the head on the same data computes 112.5. For a Stage-B run
-    # `load_stage_a_base` now repairs this by inheriting the checkpoint's value, but a
-    # from-scratch arm has no checkpoint to inherit from -- so without this the staging
-    # control would differ from the staged arm in trunk normalisation, which has nothing to do
-    # with staging. Rescaling by the edge-count ratio keeps one number and one code path.
-    if (getattr(args, "defect_spectral_head", False)
-            and float(graph_cutoff(args)) > float(args.r_max)
-            and all(h.compute_avg_num_neighbors for h in head_configs)):
-        from mace.modules.defect_reach import count_edges_within
-
-        # Over several batches, not one. The from-scratch arm has no checkpoint to inherit a
-        # normalisation from, so this ratio IS its trunk normalisation, and one batch of eight
-        # frames is a sample of a dataset property. On the first measurement a single batch
-        # gave 13.93 against Stage A's 14.08 -- 1.1% out, which is the sampling error and not
-        # a disagreement, but it is an avoidable asymmetry between the two arms when the only
-        # thing they are meant to differ in is staging.
-        wide = narrow = 0
-        for k, probe in enumerate(train_loader):
-            if k >= 20:
-                break
-            w, n = count_edges_within(probe, float(args.r_max))
-            wide += w
-            narrow += n
-        if wide > 0:
-            ratio = float(narrow) / float(wide)
-            rescaled = float(args.avg_num_neighbors) * ratio
-            logging.warning(
-                "avg_num_neighbors was computed on the %.1f A carrier graph (%.2f); the "
-                "trunk only passes messages inside r_max = %.1f A, so it is rescaled by the "
-                "edge-count ratio %.4f (%d of %d edges over %d batches) to %.2f. Dividing "
-                "every message by the carrier-graph count would be about %.1fx too much.",
-                float(graph_cutoff(args)), float(args.avg_num_neighbors),
-                float(args.r_max), ratio, narrow, wide, min(k + 1, 20), rescaled,
-                1.0 / max(ratio, 1e-9))
-            args.avg_num_neighbors = rescaled
-
     # Model
     model, output_args = configure_model(args, train_loader, atomic_energies, model_foundation, heads, z_table, head_configs)
     model.to(device)
-
-    # Stage B (component S): start from a converged, frozen base so the correction is not
-    # racing the base for the same signal. Loading the weights and zeroing their learning
-    # rate are separate switches, and only the pair gives Stage B -- warn rather than let a
-    # half-configured run look like a staged one.
-    if getattr(args, "defect_base_init", None):
-        from mace.modules.defect_stage import load_stage_a_base
-
-        if model.__class__.__name__ != "MACEDefect":
-            raise RuntimeError("--defect_base_init only applies to MACEDefect")
-        load_stage_a_base(model, args.defect_base_init, device=device)
-        if float(getattr(args, "base_lr_factor", 1.0)) != 0.0:
-            logging.warning(
-                "--defect_base_init was given but --base_lr_factor is "
-                f"{getattr(args, 'base_lr_factor', 1.0)}, not 0.0, so the loaded base will "
-                "drift during training. That is a warm start, not Stage B.")
-
-    # ------------------------------------------------------------------ Stage-3 protocol
-    #
-    # The five things every Stage-3 result in this programme was produced with, and which
-    # the production trainer did not have: Harrison initialisation, c-shift calibration,
-    # linear warmup, the initialisation gate, and the head-only trainable mask. They live in
-    # mace.modules.defect_protocol and defect-perovskite/stage_run.py calls the SAME
-    # functions, so the two drivers cannot drift -- which is the only sense in which "the
-    # joint run comes from config" can be true.
-    #
-    # This half (initialisation and the mask) runs before the optimiser is built, because
-    # requires_grad decides which parameter groups exist. The other half (c-shift, the gate,
-    # warmup and the post-step projection) needs the data loaders and runs further down.
-    protocol_on = bool(getattr(args, "defect_protocol", False))
-    if protocol_on:
-        from mace.modules import defect_protocol
-
-        if model.__class__.__name__ != "MACEDefect":
-            raise RuntimeError("--defect_protocol only applies to MACEDefect")
-        if getattr(model, "spectral", None) is None:
-            raise RuntimeError(
-                "--defect_protocol needs a carrier head; pass --defect_spectral_head and "
-                "--defect_counting_head")
-        # Speed-cycle spec section 2.3: no bond length is passed in any more. The Harrison
-        # scale and the hopping envelope share one anchor, `r_cov(s) + r_cov(s')` from the
-        # universal covalent-radius table, so the head cannot be initialised at one
-        # separation and evaluated against another -- and the per-host 2.861 A that used to
-        # be a required command-line number is gone.
-        harrison_applied = defect_protocol.apply_harrison(model, model.atomic_numbers)
-        anchors = getattr(getattr(model.spectral, "h", None), "d_ref_pair", None)
-        logging.info(
-            "Stage-3 protocol: Harrison initialisation at the covalent-radius anchors "
-            "%s -> %s",
-            "unavailable" if anchors is None else
-            [round(float(v), 3) for v in anchors.reshape(-1)],
-            "applied" if harrison_applied else "NOT APPLIED")
-
-        # The on-site correction channel starts at exactly zero output when asked. What it
-        # removes is a measured global gauge -- a near-uniform +0.27 eV on every atom, which
-        # contributes no force and so is invisible to a forces-only objective. Starting from
-        # zero means whatever the joint run's energy loss puts there was put there, not
-        # inherited from a random draw and then frozen in by a flat direction.
-        if bool(getattr(args, "defect_protocol_zero_on_site", False)):
-            if defect_protocol.zero_on_site_correction(model):
-                logging.info(
-                    "Stage-3 protocol: on-site correction zero-initialised (the +0.27 eV "
-                    "uniform gauge removed at step 0)")
-            else:
-                logging.warning(
-                    "Stage-3 protocol: --defect_protocol_zero_on_site was given but no "
-                    "on-site correction layer was found; NOTHING was zeroed.")
-
-        freeze_z = bool(getattr(args, "defect_protocol_freeze_z", False))
-        if bool(getattr(args, "defect_protocol_head_only", False)):
-            frozen = 0
-            for name, param in model.named_parameters():
-                keep = defect_protocol.trainable_mask(name, freeze_z=freeze_z)
-                param.requires_grad_(keep)
-                frozen += int(not keep)
-            logging.info(
-                f"Stage-3 protocol: head-only, {frozen} parameter tensors frozen"
-                + (", Z pinned" if freeze_z else ""))
-        elif freeze_z:
-            for name, param in model.named_parameters():
-                if name.startswith("madelung."):
-                    param.requires_grad_(False)
-            logging.info("Stage-3 protocol: Z pinned at its initialisation")
-        # Plan v8 section 3: the long-range branch is always frozen at its eps_inf-only
-        # values. The head-only mask above marks its MLPs trainable (they are correction
-        # parameters), so it is re-pinned here, AFTER the mask.
-        if getattr(model, "use_long_range", False):
-            model._apply_long_range_policy()
-            logging.info("Long-range branch frozen at its eps_inf-only values (plan v8)")
-
-    if model.__class__.__name__ == "MACEDefect":
-        # Ship the band edges that referenced the labels with the model, so inference
-        # can undo the referencing with exactly the constants training used rather than
-        # with re-derived ones (plan section 7.2).
-        registry: Dict[str, Dict[str, float]] = {}
-        for head_config in head_configs:
-            collections = getattr(head_config, "collections", None)
-            if collections is None:
-                continue
-            registry.update(data.collect_band_edge_registry(collections.train))
-        model.band_edge_registry = registry
-        # Counter vectors the level-mode gauge probe is evaluated at (stage D-opt). Taken
-        # from the training set rather than configured, so the penalty constrains exactly
-        # the directions the data actually populates; n = 0 is excluded because its
-        # correction is identically zero and constrains nothing.
-        #
-        # Populated whether or not the penalty is switched on, because stage D-opt asks
-        # for mean(u^c) every epoch regardless: it is the free diagnostic that says
-        # whether the level mode is drifting, and it is worth nothing if it only exists
-        # once you already suspected a problem. `--defect_gauge_weight` gates the loss
-        # term alone.
-        observed: List[Tuple[int, ...]] = []
-        for head_config in head_configs:
-            collections = getattr(head_config, "collections", None)
-            if collections is None:
-                continue
-            for config in collections.train:
-                counts = config.properties.get("carrier_counts")
-                if counts is None:
-                    continue
-                flat = counts.tolist() if hasattr(counts, "tolist") else counts
-                vector = tuple(int(v) for v in flat)
-                if sum(vector) > 0 and vector not in observed:
-                    observed.append(vector)
-        if observed:
-            model.register_buffer(
-                "gauge_counters",
-                torch.as_tensor(observed, dtype=torch.long, device=device),
-                persistent=True,
-            )
-            state = (
-                f"penalty at weight {args.defect_gauge_weight}"
-                if float(args.defect_gauge_weight) > 0.0
-                else "diagnostic only, penalty off"
-            )
-            logging.info(
-                f"Level-mode gauge probe on {len(observed)} counter vector(s) "
-                f"{observed} -- {state}"
-            )
-        elif float(args.defect_gauge_weight) > 0.0:
-            logging.warning(
-                "--defect_gauge_weight > 0 but no carrier-bearing counters were "
-                "found in the training set; the gauge penalty will be inert"
-            )
-        if registry:
-            logging.info(f"Recorded band edges for {len(registry)} (host, size) pairs")
-        else:
-            logging.warning(
-                "No band edges recorded with the model; inference will need them "
-                "supplied explicitly to report raw-scale energies"
-            )
 
     if args.lora:
         lora_rank = args.lora_rank
@@ -1210,43 +836,6 @@ def run(args) -> None:
     logging.info(loss_fn)
 
     # Cueq and OEQ conversion
-    if model.__class__.__name__ == "MACEDefect":
-        # cuEquivariance is verified against e3nn for the short-range model: energies
-        # agree to 9e-14 and forces to 2e-16 in float64 (test_defect_cueq.py). The
-        # correction heads are plain dense MLPs, so nothing there is converted; the gain
-        # is entirely in the trunk, which is where the time goes.
-        if args.enable_oeq:
-            raise NotImplementedError(
-                "OpenEquivariance conversion of MACEDefect is untested; use "
-                "--enable_cueq=True instead"
-            )
-        # cuEq conversion with the long-range branch was blocked as untested. It is now
-        # verified -- see defect-example/verify_cueq_long_range.py, which is the
-        # regression test for this and should be re-run if the conversion changes.
-        #
-        # The block was protecting against something real. The conversion rebuilds the
-        # model from `extract_config_mace_model`, so a constructor argument missing from
-        # that extractor silently reverts to its default. `freeze_amplitude` was missing
-        # and defaults to False, so converting a frozen-amplitude model handed back a
-        # *trainable* screening amplitude -- which then reads as a fitted screening
-        # constant rather than the input gauge it is. That extractor now captures it (with
-        # `high_precision_softmax`, `zero_u_init` and `correction_trunk`, which were also
-        # missing but happen to equal their defaults everywhere).
-        #
-        # Measured on a real long-range model after that fix: amplitude bit-identical and
-        # still frozen, E_LR still contributing, energies exact and forces agreeing to
-        # 6e-6 eV/A -- float32 summation-order noise.
-        if args.enable_cueq and getattr(model, "use_long_range", False):
-            logging.info(
-                "cuEquivariance with use_long_range=True: verified equivalent to e3nn "
-                "for MACEDefect, including the frozen screening amplitude"
-            )
-        if args.enable_cueq:
-            logging.info(
-                "cuEquivariance pays off with width: measured 2.4x at 128 channels / "
-                "max_L=1, but 0.85x (a slowdown) at 8 channels, where kernel overhead "
-                "dominates. Benchmark before using it for small debug runs."
-            )
     if args.enable_cueq and args.enable_oeq:
         logging.warning(
             "Both CUEQ and OEQ are enabled, using CUEQ for training. "
@@ -1262,7 +851,6 @@ def run(args) -> None:
             "PolarMACE",
             "MagneticScaleShiftMACE",
             "AtomicDielectricMACE",
-            "MACEDefect",
         ]
         model = run_e3nn_to_cueq(deepcopy(model), device=device)
     if args.enable_oeq:
@@ -1410,669 +998,6 @@ def run(args) -> None:
                 "Please install it to use XPU device."
             )
 
-    # The novelty descriptor's scale constants are dataset statistics and must be fixed
-    # before the first forward: under logit seeding s_hat is an input, so they are part
-    # of the model definition and are saved as buffers.
-    if model.__class__.__name__ == "MACEDefect" and getattr(model, "logit_seed", False):
-        from mace.modules.defect_seed import calibrate_novelty
-
-        calibrate_novelty(model=model, data_loader=train_loader, device=device)
-
-    defect_seed_hook = None
-    # Decision 21: the frames the class table is built over, filled below once the loaders
-    # exist; the epoch hook refreshes the table's alignment from them.
-    class_table_frames: Dict[str, Any] = {}
-    anneal_seed = (
-        model.__class__.__name__ == "MACEDefect"
-        and getattr(model, "logit_seed", False)
-        and getattr(args, "defect_seed_anneal", False)
-    )
-    if anneal_seed:
-        from mace.modules.defect_seed import anneal_logit_seed
-
-        gamma_init = model.logit_seed_gamma.detach().clone()
-        # The schedule owns gamma outright while annealing. Left trainable, the optimizer
-        # moves it after each epoch's update and the ratchet then locks in whatever it
-        # did -- observed ending at [0.0, -0.0013, 0.0, -0.092], i.e. a live and
-        # SIGN-FLIPPED bias that pushes attention away from novel atoms. The whole point
-        # of the anneal is that the converged model is bias-free, so gamma cannot also be
-        # a free parameter.
-        model.logit_seed_gamma.requires_grad_(False)
-
-    if model.__class__.__name__ == "MACEDefect":
-
-        def defect_seed_hook(epoch: int, current_model) -> None:
-            # Stage-3 linear warmup, applied to the learning rate BEFORE the epoch's
-            # gradient steps. The counting head's correction is eV-scale at step 0, so the
-            # first steps see gradients three orders larger than the converged ones and a
-            # seed can be thrown somewhere it cannot return from -- observed, not supposed.
-            #
-            # WHY AN OVERLAY AND NOT A SECOND SCHEDULER. The run's own scheduler is
-            # ReduceLROnPlateau or ExponentialLR and both write param_group['lr'] directly,
-            # so a second scheduler would have two objects owning one field. Worse, this
-            # hook fires BEFORE lr_scheduler.step(): writing an absolute rate here would let
-            # ExponentialLR compound its decay on top of the warmup and then have the next
-            # epoch's write discard it, quietly costing the run gamma^warm of its schedule.
-            #
-            # So the warmup is a pure multiplicative overlay that is REMOVED before it is
-            # re-applied. The scheduler owns the trajectory throughout; the overlay only
-            # scales whatever it currently says. At epoch == warm the factor is 1.0, so the
-            # overlay comes off and is never put back.
-            warm = int(getattr(args, "defect_protocol_warmup", 0) or 0)
-            if protocol_on and warm > 0 and epoch <= warm:
-                from mace.modules.defect_protocol import warmup_factor
-
-                previous = getattr(defect_seed_hook, "_warmup_factor", 1.0)
-                factor = warmup_factor(epoch, warm)
-                for group in optimizer.param_groups:
-                    group["lr"] = float(group["lr"]) / previous * factor
-                defect_seed_hook._warmup_factor = factor
-                if epoch < warm:
-                    logging.info(f"Stage-3 warmup: epoch {epoch}, lr x{factor:.3f}")
-                if epoch == start_epoch and start_epoch > 0:
-                    # Audit only, not a fix. Resuming mid-warmup starts the overlay at 1.0
-                    # while the checkpointed rate still carries the old factor, so the
-                    # remaining warmup epochs are double-scaled. Logged so a resumed run's
-                    # schedule is readable from its own log rather than inferred.
-                    logging.warning(
-                        f"Stage-3 warmup: RESUMED at epoch {start_epoch} inside the "
-                        f"{warm}-epoch warmup. The overlay restarts from 1.0 while the "
-                        f"checkpointed lr still carries the previous factor, so the "
-                        f"remaining warmup epochs are scaled twice. Audit only.")
-
-
-            # Decision 21: re-align the class table to the head as it is now (the integers
-            # stay), every epoch after the first; a class uncounted at initialisation is
-            # counted here once the head has a gap.
-            if class_table_frames.get("frames") and int(epoch) > int(start_epoch):
-                from mace.modules import defect_composition as _dcomp
-
-                _target = getattr(current_model, "module", current_model)
-                _summary = _dcomp.refresh_class_table(
-                    _target, class_table_frames["frames"], device=device)
-                _target.class_constructor["e_sink"] = _target.composition_classes["e_sink"]
-                if _summary.get("adopted"):
-                    logging.info("Composition classes: newly counted at epoch %d: %s",
-                                 int(epoch), _summary["adopted"])
-
-            # The **absolute** epoch, taken from the trainer. A counter local to the loss
-            # would restart at zero on every resume and silently re-serve the size-hinge
-            # warmup -- the same shape of bug as the gamma anneal restarting from scratch.
-            loss_fn.current_epoch = int(epoch)
-            # The model needs it too: the long-range branch is gated on the same absolute
-            # epoch, and it must reach the module that is actually being trained.
-            target = getattr(current_model, "module", current_model)
-            if hasattr(target, "current_epoch"):
-                with torch.no_grad():
-                    target.current_epoch.fill_(int(epoch))
-            # Gauge visibility. `c_shift` and the mean on-site correction are the two
-            # directions a forces-only objective cannot see -- both move the whole spectrum
-            # and neither changes a force -- so they are logged every epoch rather than
-            # inspected once at the end, when a drift is already baked in.
-            if bool(getattr(args, "defect_neutral_size_upweight_energy", False)):
-                from mace.data.two_size import realised_shares as _shares
-
-                s = _shares(train_set, population="neutral",
-                            size_threshold=large_threshold)
-                logging.info("Realised neutral large-cell shares: epoch %d "
-                             "realised_share_E %.4f realised_share_F %.4f",
-                             epoch, s["energy"], s["forces"])
-            if float(getattr(args, "defect_charged_energy_share", 0.0) or 0.0) > 0:
-                from mace.data.two_size import realised_shares as _shares
-
-                # With standing rule 2 in force the 79-atom charged energies carry
-                # zero weight, so `realised_share_E` is 1.000 BY CONSTRUCTION: the only
-                # charged energies left are the large cells'. Logged anyway, because a
-                # number that is 1.000 for a stated reason is evidence and a number that is
-                # 1.000 for an unnoticed reason is the bug this line exists to catch.
-                s = _shares(train_set, population="charged",
-                            size_threshold=large_threshold)
-                logging.info("Realised charged large-cell shares: epoch %d "
-                             "realised_share_E %.4f realised_share_F %.4f",
-                             epoch, s["energy"], s["forces"])
-            if base_cache_rng is not None and getattr(target, "_base_cache", None) is not None:
-                from mace.modules import defect_cache as _dc
-
-                drift = _dc.check_drift(target, train_set, device, base_cache_rng)
-                if drift:
-                    logging.info("Base cache drift guard: epoch %d frame %d (%d atoms) "
-                                 "|dE| %.2e eV  max|dF| %.2e eV/A",
-                                 epoch, drift["frame"], drift["n_atoms"],
-                                 drift["d_energy"], drift["d_forces"])
-            if protocol_on:
-                head = getattr(target, "spectral", None)
-                if head is not None:
-                    parts = []
-                    if getattr(head, "c_shift", None) is not None:
-                        parts.append(f"c_shift {float(head.c_shift):+.4f}")
-                    rec = getattr(target, "gauge_record", None)
-                    if rec is not None:
-                        parts.append(f"mu_g {float(rec['mu_g']):+.4f}")
-                    table = getattr(head, "c_shift_table", None)
-                    if table is not None and float(table.detach().abs().sum()) > 0:
-                        nz = table.detach().cpu()
-                        rows = [(i, j, float(nz[i, j])) for i in range(nz.shape[0])
-                                for j in range(nz.shape[1]) if nz[i, j] != 0]
-                        parts.append("c_table " + " ".join(
-                            f"({i},{j}){v:+.4f}" for i, j, v in rows))
-                    resid = getattr(target, "_lr_neutrality_residual", None)
-                    if resid is not None:
-                        parts.append(f"lr_neutral_resid {float(resid):.3e}")
-                    site = getattr(getattr(head, "h", None), "site", None)
-                    if site is not None:
-                        last = [m for m in site.modules()
-                                if isinstance(m, torch.nn.Linear)]
-                        if last:
-                            parts.append(f"|W_site| {float(last[-1].weight.abs().mean()):.5f}")
-                            if last[-1].bias is not None:
-                                parts.append(
-                                    f"b_site {float(last[-1].bias.mean()):+.5f}")
-                    z = getattr(target, "madelung", None)
-                    if z is not None and hasattr(z, "z"):
-                        parts.append("Z " + " ".join(f"{v:+.3f}"
-                                                     for v in z.z.detach().tolist()))
-                    logging.info("Gauge: epoch %d  %s", epoch, "  ".join(parts))
-                    # The shape term of the PREVIOUS epoch's steps (this hook runs before
-                    # the epoch's own), with the stamped-batch count that proves the pair
-                    # loader was in force.
-                    if float(getattr(loss_fn, "energy_shape_weight", 0.0) or 0.0) > 0 \
-                            and epoch > 0:
-                        logging.info("Energy shape: epoch %d  %s", epoch - 1,
-                                     loss_fn.energy_shape_epoch_report())
-
-            # Bandwidth anneal. This runs in epoch_hook rather than post_eval_hook because
-            # it must be in place BEFORE the epoch's gradient steps, not chosen after them.
-            #
-            # The flag was declared, passed by the launcher and documented, but nothing ever
-            # wrote hop_scale, so it stayed at the 1.0 it is registered with and the anneal
-            # arm was identical to the plain arm. Every unit test set hop_scale by hand, so
-            # the head's behaviour was covered while the schedule that drives it was not.
-            s0 = float(getattr(args, "defect_spectral_anneal_s0", 0.0) or 0.0)
-            spectral = getattr(target, "spectral", None)
-            if s0 > 0 and spectral is not None and hasattr(spectral, "hop_scale"):
-                from mace.modules.defect_spectral import bandwidth_scale
-
-                span = int(getattr(args, "defect_spectral_anneal_epochs", 20))
-                scale = bandwidth_scale(epoch, s0, span)
-                with torch.no_grad():
-                    spectral.hop_scale.fill_(scale)
-                if epoch <= span:
-                    logging.info(
-                        f"Bandwidth anneal: epoch {epoch}, hop_scale {scale:.4f} "
-                        f"(s0={s0}, over {span} epochs)")
-
-            if not anneal_seed:
-                return
-            report = anneal_logit_seed(
-                model=current_model,
-                data_loader=train_loader,
-                device=device,
-                epoch=epoch,
-                zero_by_epoch=args.defect_seed_anneal_epochs,
-                gamma_init=gamma_init,
-                gate=args.defect_seed_gate,
-                max_drop=args.defect_seed_max_drop,
-            )
-            if report:
-                # gap_site and the raw gap are logged TOGETHER, permanently. The pair is
-                # the diagnostic: a raw gap of 24.5 at epoch 1 alongside a gap_site near
-                # zero is a species ordering, not a found defect, and reading only the raw
-                # gap is what retired the seed into a collapsed attention.
-                extra = ""
-                if "gap_site" in report:
-                    extra = (
-                        f", gap_site={report['gap_site']}"
-                        f" (seeded {report['gap_site_seeded']})"
-                    )
-                logging.info(
-                    f"Epoch {epoch}: logit-seed anneal gamma={report['gamma']}, "
-                    f"intrinsic gap={report['gap_intrinsic']}{extra}"
-                )
-
-    # Section 10: record the settings *with the model*, not only in the checkpoint args.
-    # The args cover a restart; they do not travel with the artifact someone is handed,
-    # and these values define the cell-size range the correction is valid over, which
-    # should be readable off the model wherever it is used.
-    if model.__class__.__name__ == "MACEDefect":
-        model.size_extensivity_settings = {
-            "size_ratio": float(args.defect_size_ratio),
-            "size_tol": float(args.defect_size_tol),
-            "size_weight": float(args.defect_size_weight),
-            "size_warmup_epochs": int(args.defect_size_warmup_epochs),
-            "gauge_weight": float(args.defect_gauge_weight),
-        }
-
-    # The hook fires at the top of each epoch, but `train` evaluates the validation set
-    # once before the loop begins. Without this, that first evaluation on a resumed run
-    # would report a loss missing the size term while every later one includes it.
-    if hasattr(loss_fn, "current_epoch"):
-        loss_fn.current_epoch = int(start_epoch)
-    _target = getattr(model, "module", model)
-    if hasattr(_target, "current_epoch"):
-        with torch.no_grad():
-            _target.current_epoch.fill_(int(start_epoch))
-
-
-    # Two-timescale base (plan T4): frozen while attention settles, then released slowly,
-    # with a LABEL-FREE rollback guard. Built only when a release epoch is configured, so
-    # every other run is untouched.
-    base_release = None
-    if int(getattr(args, "defect_base_release_epoch", 0)) > 0:
-        from mace.modules.defect_release import BaseRelease
-
-        base_release = BaseRelease(
-            model, optimizer,
-            release_epoch=int(args.defect_base_release_epoch),
-            release_factor=float(args.defect_base_release_factor),
-        )
-        logging.info(
-            f"Base release scheduled at epoch {args.defect_base_release_epoch} "
-            f"with factor {args.defect_base_release_factor}")
-
-    def _release_hook(epoch, _model, _opt, eval_metrics):
-        """Release and guard, on label-free diagnostics only.
-
-        alpha_overlap is computed by the model's own diagnostics against the attention
-        recorded at the release epoch; n_eff and the active/null channel ratio come from the
-        same per-epoch carrier metrics that are already logged. None of them needs the
-        vacancy assignment.
-        """
-        if base_release is None:
-            return
-        state = {}
-        for key, name in (("defect_n_eff", "n_eff"),
-                          ("defect_null_ratio", "null_ratio")):
-            value = eval_metrics.get(key)
-            if value is not None:
-                state[name] = float(value)
-
-        # alpha_overlap: cosine similarity between the current attention over the validation
-        # set and the attention at the release epoch. The vector bookkeeping lives here so
-        # BaseRelease keeps a float-only interface; the reference is captured on the first
-        # call at or after the release epoch, which is the same epoch BaseRelease snapshots
-        # the base weights.
-        vec = eval_metrics.get("defect_alpha_vec")
-        if vec is not None:
-            vec = vec.detach().reshape(-1).float()
-            ref = getattr(_release_hook, "_alpha_ref", None)
-            if ref is not None and ref.numel() == vec.numel():
-                denom = float(ref.norm() * vec.norm())
-                if denom > 0:
-                    state["alpha_overlap"] = float((ref @ vec) / denom)
-            if ref is None and epoch >= int(args.defect_base_release_epoch):
-                _release_hook._alpha_ref = vec.clone()
-
-        base_release.on_epoch_start(epoch, base_lr=float(args.lr), state=state)
-        base_release.on_epoch_end(epoch, state=state)
-
-    # Two-size upweight, applied to the dataset the loss iterates. Placed here, next to the
-    # reach assertion, because both are properties of the data the optimiser actually sees --
-    # the class of thing this project has repeatedly got wrong by configuring somewhere else.
-    realised_shares = {}
-    # Standing rule 1: "a large cell" is two pristine cells or more, not 100 atoms. The
-    # pristine size is read off the training set by COMPOSITION -- the same selector the
-    # centre uses -- so the threshold follows the host instead of being one.
-    _comp = getattr(getattr(model, "madelung", None), "composition", None)
-    large_threshold = 100
-    if _comp is not None:
-        from mace.data.two_size import large_cell_threshold, pristine_cell_atoms
-
-        _n_pristine = pristine_cell_atoms(train_set, [float(x) for x in _comp])
-        large_threshold = large_cell_threshold(_n_pristine)
-        logging.info("Size classes: pristine cell %d atoms -> large-cell threshold %d "
-                     "(retired constant: 100)", _n_pristine, large_threshold)
-    if float(getattr(args, "defect_two_size_upweight", 0.0) or 0.0) > 0:
-        from mace.data.two_size import apply_two_size_upweight
-
-        factor, share = apply_two_size_upweight(
-            train_set, target_share=float(args.defect_two_size_upweight),
-            size_threshold=large_threshold)
-        realised_shares["charged_large"] = share
-        logging.info(
-            f"Two-size upweight: factor {factor:.2f}, realised charged-force-loss share "
-            f"{share:.1%} (target {float(args.defect_two_size_upweight):.0%})")
-
-    # The NEUTRAL large cells get the same treatment, and separately. They are the base
-    # branch's only direct constraint at large d -- the rest of the neutral set stops around
-    # 6.0 A, and above that the base extrapolates, which is the measured +0.132 eV/A error in
-    # the carrier-free 79-atom residual. In the joint run the base is no longer frozen, so
-    # this is what lets it LEARN that region instead of leaving the correction to absorb the
-    # difference, which is exactly the leakage the adoption rule tests for.
-    if float(getattr(args, "defect_neutral_size_upweight", 0.0) or 0.0) > 0:
-        from mace.data.two_size import apply_neutral_size_upweight, apply_size_upweight
-
-        if bool(getattr(args, "defect_neutral_size_upweight_energy", False)):
-            # Stage A' section 1: the same target in the energy loss AND the force loss.
-            both = apply_size_upweight(
-                train_set, population="neutral",
-                target_share=float(args.defect_neutral_size_upweight),
-                size_threshold=large_threshold, channels=("energy", "forces"))
-            realised_shares["neutral_large_E"] = both["energy"][1]
-            realised_shares["neutral_large_F"] = both["forces"][1]
-            logging.info(
-                f"Neutral size upweight, both channels: energy factor {both['energy'][0]:.2f} "
-                f"-> share {both['energy'][1]:.1%}; forces factor {both['forces'][0]:.2f} "
-                f"-> share {both['forces'][1]:.1%} (target "
-                f"{float(args.defect_neutral_size_upweight):.0%})")
-        else:
-            factor, share = apply_neutral_size_upweight(
-                train_set, target_share=float(args.defect_neutral_size_upweight),
-                size_threshold=large_threshold)
-            realised_shares["neutral_large"] = share
-            logging.info(
-                f"Neutral two-size upweight: factor {factor:.2f}, realised neutral-force-loss "
-                f"share {share:.1%} (target "
-                f"{float(args.defect_neutral_size_upweight):.0%})")
-    # Speed-cycle standing rule 2: charged ENERGIES enter the loss only for size classes
-    # that have a neutral null. Forces enter for every charged frame. Applied BEFORE the
-    # share below, because the share is a share of the loss actually minimised and a class
-    # with zero energy weight must not be counted into it.
-    if str(getattr(args, "defect_null_reference", "") or ""):
-        from mace.data.two_size import gate_charged_energies_by_null, nulled_sizes_from
-
-        with open(args.defect_null_reference, encoding="utf-8") as handle:
-            payload = json.load(handle)
-        nulled = nulled_sizes_from(payload)
-        if not nulled:
-            raise RuntimeError(
-                f"the null file {args.defect_null_reference} admits no size class: every "
-                "charged energy would be dropped and the head would train on forces alone. "
-                "A file with no bracketed null is a missing measurement, not a null.")
-        kept, dropped, per_size = gate_charged_energies_by_null(train_set, nulled)
-        logging.info(
-            "Null-gated charged energies: sizes with a neutral null %s; kept %d charged "
-            "frames' energies, dropped %d. Per size: %s",
-            nulled, kept, dropped, json.dumps(per_size, sort_keys=True))
-    elif float(getattr(args, "defect_charged_energy_share", 0.0) or 0.0) > 0:
-        raise RuntimeError(
-            "--defect_charged_energy_share puts charged energies in the loss, and standing "
-            "rule 2 admits them only for a size class with a neutral null. Pass "
-            "--defect_null_reference with the file that establishes which classes those "
-            "are, or set the share to zero.")
-    if float(getattr(args, "defect_charged_energy_share", 0.0) or 0.0) > 0:
-        from mace.data.two_size import apply_size_upweight
-
-        ce = apply_size_upweight(
-            train_set, population="charged",
-            target_share=float(args.defect_charged_energy_share),
-            size_threshold=large_threshold, channels=("energy",))
-        realised_shares["charged_large_E"] = ce["energy"][1]
-        logging.info(f"Charged energy share: factor {ce['energy'][0]:.2f} -> realised "
-                     f"{ce['energy'][1]:.1%} (target "
-                     f"{float(args.defect_charged_energy_share):.0%})")
-    if realised_shares:
-        logging.info("Realised large-cell shares: %s", json.dumps(
-            {k: round(v, 4) for k, v in realised_shares.items()}, sort_keys=True))
-
-    # ------------------------------------------- Stage-3 protocol, the data-dependent half
-    #
-    # c-shift, the initialisation gate, warmup and the post-step projection. Everything here
-    # runs on the loss's OWN loader, for the same reason the reach assertion below does: a
-    # calibration performed on a differently-built batch is a calibration for a run that is
-    # not happening.
-    # ------------------------------------------------ Stage A' section 2.1: the centre
-    if getattr(model, "on_site_centred", False):
-        from mace.modules.defect_cache import attach_frame_keys  # noqa: F401  (same module family)
-
-        # A stoichiometric frame, selected by COMPOSITION and never by a label: the pristine
-        # ratio is the Madelung composition the model already carries.
-        comp = getattr(model.madelung, "composition", None) if getattr(
-            model, "madelung", None) is not None else None
-        if comp is None:
-            raise RuntimeError("--defect_on_site_centred needs --defect_madelung_composition "
-                               "to recognise a pristine frame by composition")
-        comp = torch.as_tensor([float(x) for x in comp])
-        comp = comp / comp.sum()
-        chosen = []
-        for d in train_set:
-            counts = d.node_attrs.sum(dim=0)
-            if torch.allclose(counts / counts.sum(), comp.to(counts.dtype), atol=1e-6):
-                chosen.append(d)
-        if not chosen:
-            raise RuntimeError("no stoichiometric frame in the training set to centre on")
-        # EVERY stoichiometric training frame, not the first: the pristine frames are
-        # thermal snapshots, and one frame's species means would carry its distortion into
-        # every corr_i. The mean over the population is the pristine environment.
-        n_atoms_centre = model.collect_pristine_centre(
-            torch_geometric.dataloader.DataLoader(chosen, batch_size=8), device=device)
-        logging.info("Centred on-site correction: pristine centre set from %d stoichiometric "
-                     "training frames, %d atoms (block-0 feature means per species, norms %s)",
-                     len(chosen), n_atoms_centre,
-                     [round(float(v), 3) for v in model.pristine_block0_mean.norm(dim=1)])
-
-    # ------------------------------------------------ Plan v8 section 2.1: the class table
-    #
-    # The composition-class integers are established ONCE, before training, on the head as
-    # initialised (after Harrison), over every composition the loaders hold. They are cached
-    # on the model and travel with the checkpoint; Stage 4 recomputes them after training
-    # (`verify_class_table`) and any that moved is a failed invariance, not a re-fit.
-    if (model.__class__.__name__ == "MACEDefect"
-            and getattr(model, "spectral", None) is not None
-            and hasattr(model.spectral, "valence")
-            and getattr(model, "madelung", None) is None):
-        logging.warning("Composition classes: the model carries no Madelung composition, so "
-                        "no pristine formula is known; no class table is built and the "
-                        "isolated gauge is unavailable for this run")
-    elif (model.__class__.__name__ == "MACEDefect"
-            and getattr(model, "spectral", None) is not None
-            and hasattr(model.spectral, "valence")):
-        from mace.modules import defect_composition
-        from mace.modules.defect_cache import attach_frame_keys as _attach_keys
-
-        class_frames = list(train_set)
-        for _vset in valid_sets.values():
-            class_frames.extend(list(_vset))
-        _attach_keys(class_frames, z_table=z_table)
-        model.composition_classes = defect_composition.build_class_table(
-            model, class_frames, device=device)
-        class_table_frames["frames"] = class_frames
-        # Decision 21: inside the training session an uncounted class is a transient (the
-        # table is refreshed every epoch); the base-cache build and the validation passes
-        # run evaluation forwards, so the policy is set on the model, not per call.
-        model.uncounted_class_policy = "zero"
-        # PLAN v8.1 SECTION 3.1: the spectral gauge, registered on the table's pristine
-        # frame; the table's edges are re-aligned under it (the integers are kept).
-        if bool(getattr(args, "defect_spectral_gauge", True)):
-            from mace.modules.defect_models import establish_spectral_gauge
-
-            gauge_record = establish_spectral_gauge(model, class_frames, device=device)
-            logging.info("Spectral gauge: mu_g = %+.6f eV, fingerprint %s",
-                         gauge_record["mu_g"], model_gauge_fingerprint(model))
-        # Every non-parameter float is a number in the saved config: the resolved sink too.
-        model.class_constructor["e_sink"] = model.composition_classes["e_sink"]
-        n_counted = sum(1 for r in model.composition_classes["classes"].values()
-                        if r["tier"] is not None)
-        logging.info("Composition classes: %d classes, %d counted at Tier 1, %d uncounted",
-                     len(model.composition_classes["classes"]), n_counted,
-                     len(model.composition_classes["classes"]) - n_counted)
-
-    # ------------------------------------------------ Stage A' section 2.5: precision, cache
-    #
-    # The mixed policy keeps the DATA in float64 (labels at float32 lose ~5e-5 eV on a
-    # 500 eV cell, which is not the loss's precision) and casts only the trunk down, so the
-    # process default must be float64 for it to mean what it says.
-    if (model.__class__.__name__ == "MACEDefect"
-            and getattr(model, "precision_policy", "uniform") == "mixed"
-            and torch.get_default_dtype() != torch.float64):
-        raise RuntimeError(
-            "--defect_precision_policy mixed needs --default_dtype float64: the policy casts "
-            "the trunk to float32 and keeps everything else, data included, at float64")
-    base_cache_rng = None
-    if bool(getattr(args, "defect_base_cache", False)):
-        from mace.modules import defect_cache
-
-        if model.__class__.__name__ != "MACEDefect":
-            raise RuntimeError("--defect_base_cache only applies to MACEDefect")
-        # Later-block invariant readouts feed only the (detached) long-range charges; they
-        # are cached, so they must not train. Freeze them before the cacheability check.
-        for i, ro in enumerate(model.defect_feature_readouts):
-            if i > 0:
-                for p in ro.parameters():
-                    p.requires_grad_(False)
-        defect_cache.require_cacheable(model)
-        n_keys = defect_cache.attach_frame_keys(train_set, z_table=z_table)
-        for _head, _vset in valid_sets.items():
-            n_keys += defect_cache.attach_frame_keys(_vset, z_table=z_table)
-        logging.info("Base cache: frame keys attached to %d frames", n_keys)
-        probe_batch = next(iter(train_loader))
-        table_before, wall_before = defect_cache.profile_step(
-            model, loss_fn, probe_batch, device, output_args)
-        logging.info("Profile, full forward (one training step, mean of 3): %.3f s/step\n%s",
-                     wall_before, table_before)
-        cache_dir = str(getattr(args, "defect_base_cache_dir", "") or args.checkpoints_dir)
-        os.makedirs(cache_dir, exist_ok=True)
-        digest = defect_cache.base_checksum(model)
-        cache_path = os.path.join(cache_dir, f"{args.name}_basecache_{digest.hex()[:12]}.pt")
-        cache = defect_cache.build_base_cache(
-            model, [train_loader] + list(valid_loaders.values()), device, path=cache_path)
-        model.set_base_cache(cache)
-        table_after, wall_after = defect_cache.profile_step(
-            model, loss_fn, probe_batch, device, output_args)
-        logging.info("Profile, cached forward (one training step, mean of 3): %.3f s/step "
-                     "(%.2fx)\n%s", wall_after, wall_before / max(wall_after, 1e-9),
-                     table_after)
-        base_cache_rng = np.random.default_rng(int(args.seed))
-
-    protocol_post_step = None
-    if protocol_on:
-        from mace.modules import defect_protocol
-        from mace.modules.defect_counting import VALENCE
-
-        init_batch = next(iter(train_loader)).to(device)
-        # EVERY charged frame the loader holds, in one pass -- not the first batch. `c` is the
-        # head's energy zero, set once from data, so a value that depends on which frames the
-        # shuffle put first is a run-to-run difference with no physical content. The
-        # degenerate case is worse: a first batch that happens to be all neutral skips the
-        # calibration entirely, which is what the production smoke hit on a cross-fit fold.
-        c_table_summary = None
-        if getattr(model.spectral, "c_shift_table", None) is None:
-            # PLAN v8.1 (addendum sections 3.1 and 8): no energy constant lives in H. The
-            # Stage 1-4 energy zero is the analytically profiled nuisance intercept of the
-            # objective; nothing is calibrated onto the levels.
-            c, c_n = None, 0
-            logging.info("Stage-3 protocol: c-shift calibration RETIRED (plan v8.1): the head "
-                         "carries no energy constant; the objective profiles the intercepts")
-        elif bool(getattr(args, "defect_c_shift_per_class", False)):
-            c_table_summary = defect_protocol.calibrate_c_shift_table_over_loader(
-                model, train_loader, device)
-            c = None if not c_table_summary else float(
-                sum(m for m, _ in c_table_summary.values()) / len(c_table_summary))
-            c_n = sum(n for _, n in c_table_summary.values())
-            for (cc, ss), (med, n) in sorted(c_table_summary.items()):
-                logging.info("Stage-3 protocol: c-shift table (charge class %d, size class "
-                             "%d): %+.4f eV over %d charged frames", cc, ss, med, n)
-            if c is not None:
-                c_n_scalar = c_n
-        else:
-            c, c_n = defect_protocol.calibrate_c_shift_over_loader(model, train_loader,
-                                                                   device)
-        if c is None and getattr(model.spectral, "c_shift_table", None) is None:
-            pass
-        elif c is None:
-            # NOT silently zero. Delta_n = 0 on every frame makes the ratio undefined, and a
-            # 0.0 written here would be indistinguishable from a calibration that happened.
-            logging.warning(
-                "Stage-3 protocol: c-shift NOT calibrated -- NO frame in the training set "
-                "carries a net carrier, so Delta_n = 0 everywhere and the ratio is undefined. "
-                "The head starts at c = 0, which is a choice this run did not make "
-                "deliberately; the protocol summary records c_shift_calibrated: false.")
-        elif c_table_summary is not None:
-            logging.info(f"Stage-3 protocol: c-shift TABLE calibrated over {c_n} charged "
-                         f"frames (per (charge, size) class; scalar c_shift left at 0)")
-        else:
-            with torch.no_grad():
-                model.spectral.c_shift.fill_(float(c))
-            logging.info(f"Stage-3 protocol: c-shift calibrated to {c:+.4f} eV over "
-                         f"{c_n} charged frames (whole training set, shuffle-independent)")
-
-        # The initialisation gate, on a PRISTINE spectrum: bands, not atoms. Reported rather
-        # than enforced -- a trip is a statement about the initialisation that the run's
-        # record should carry, and stopping here would discard a run for a diagnostic.
-        e_gap = float(getattr(args, "defect_e_gap", 0.0) or 0.0)
-        composition = getattr(args, "defect_gap_composition", None)
-        if e_gap > 0 and composition is not None:
-            # THE GATE NEEDS A PRISTINE CELL, AND THE FIRST BATCH NEED NOT HOLD ONE.
-            # Under the size-grouped sampler of section 1.1 the first batch is one size
-            # group, and 1985 of 2560 training frames are charged 79-atom cells -- so the
-            # gate went UNSCORED, which is a silent regression from a speed change. The
-            # batch is therefore BUILT from stoichiometric frames rather than hoped for.
-            gate_batch = init_batch
-            mask = loss_fn.stoichiometric_mask(gate_batch) \
-                if hasattr(loss_fn, "stoichiometric_mask") else None
-            if (mask is None or not bool(mask.any())) and hasattr(
-                    loss_fn, "stoichiometric_mask"):
-                for candidate in train_loader:
-                    candidate = candidate.to(device)
-                    m = loss_fn.stoichiometric_mask(candidate)
-                    if m is not None and bool(m.any()):
-                        gate_batch, mask = candidate, m
-                        logging.info(
-                            "Stage-3 protocol: the first batch carries no stoichiometric "
-                            "cell (size-grouped sampler); the gate is scored on the first "
-                            "batch that does.")
-                        break
-            gate = None
-            if mask is not None and bool(mask.any()):
-                which = int(torch.nonzero(mask.reshape(-1))[0])
-                nodes = gate_batch.batch == which
-                internals: Dict[str, Any] = {}
-                head = model.spectral
-                original = head.forward
-
-                def _capture(*a, **k):
-                    k["internals"] = internals
-                    return original(*a, **k)
-
-                head.forward = _capture
-                try:
-                    with torch.no_grad():
-                        model(gate_batch.to_dict(), training=False, compute_force=False)
-                finally:
-                    head.forward = original
-                lam = internals.get("lam")
-                if lam is not None:
-                    v = lam[which, 0]
-                    v = v[v < 500.0]
-                    # Doubly-occupied count for THAT graph's own composition, recovered
-                    # from the one-hot species through the model's own atomic-number table
-                    # rather than from a constant.
-                    zs = model.atomic_numbers[
-                        gate_batch.node_attrs[nodes].argmax(dim=-1)].tolist()
-                    n_el = sum(VALENCE[int(z)] for z in zs) / 2.0
-                    gate = defect_protocol.initialisation_report(v, n_el, e_gap)
-            if gate is None:
-                logging.warning(
-                    "Stage-3 protocol: initialisation gate UNSCORED -- no batch in "
-                    "the training loader carries a stoichiometric cell. Do not read that "
-                    "as a pass.")
-            else:
-                logging.info(
-                    f"Stage-3 protocol: init gate edges "
-                    f"{gate['edge_spacing_below']:.3f}/{gate['edge_spacing_above']:.3f} eV "
-                    f"(need <= {0.5 * e_gap:.2f}), bandwidth {gate['bandwidth']:.2f} eV "
-                    f"(need >= {2 * e_gap:.2f}) -> "
-                    f"{'PASS' if gate['passed'] else 'TRIP'}")
-
-        protocol_post_step = defect_protocol.post_step
-        logging.info("Stage-3 protocol: %s", json.dumps(defect_protocol.protocol_summary(
-            stage=3, e_gap=e_gap,
-            w_gap=float(getattr(args, "defect_gap_weight", 0.0) or 0.0),
-            warmup=int(getattr(args, "defect_protocol_warmup", 5)),
-            clip=float(args.clip_grad or 0.0),
-            freeze_z=bool(getattr(args, "defect_protocol_freeze_z", False)),
-            model=model, c_shift=c, c_shift_n_frames=c_n,
-            harrison_applied=harrison_applied), sort_keys=True))
-
-    # Reach assertion on the LOSS'S OWN loader, not a reimplementation of it. graph_cutoff
-    # was previously verified only where it was not used, and the resulting 5 A graph -- in
-    # which the two vacancy-sharing Pb have no edge -- voided a 20-seed screen. A check that
-    # runs on a different code path than the loss is worse than none, because it passes.
-    if getattr(args, "defect_spectral_head", False):
-        from mace.modules.defect_reach import assert_carrier_reach
-
-        assert_carrier_reach(next(iter(train_loader)), float(args.r_max),
-                             graph_cutoff(args))
-
     tools.train(
         model=model,
         loss_fn=loss_fn,
@@ -2100,9 +1025,6 @@ def run(args) -> None:
         train_sampler=train_sampler,
         rank=rank,
         data_aug_magmom=args.data_aug_magmom,
-        epoch_hook=defect_seed_hook,
-        post_eval_hook=_release_hook,
-        post_step_hook=protocol_post_step,
     )
 
     logging.info("")
@@ -2133,7 +1055,7 @@ def run(args) -> None:
             for name, subset in head_config.collections.tests:
                 test_sets[head_config.head_name + "_" + name] = [
                     data.AtomicData.from_config(
-                        config, z_table=z_table, cutoff=graph_cutoff(args), heads=heads
+                        config, z_table=z_table, cutoff=args.r_max, heads=heads
                     )
                     for config in subset
                 ]
@@ -2143,14 +1065,14 @@ def run(args) -> None:
                 for test_file in test_files:
                     name = os.path.splitext(os.path.basename(test_file))[0]
                     test_sets[name] = data.HDF5Dataset(
-                        test_file, r_max=graph_cutoff(args), z_table=z_table, heads=heads, head=head_config.head_name
+                        test_file, r_max=args.r_max, z_table=z_table, heads=heads, head=head_config.head_name
                     )
             else:
                 test_folders = glob(head_config.test_dir + "/*")
                 for folder in test_folders:
                     name = os.path.splitext(os.path.basename(test_file))[0]
                     test_sets[name] = data.dataset_from_sharded_hdf5(
-                        folder, r_max=graph_cutoff(args), z_table=z_table, heads=heads, head=head_config.head_name
+                        folder, r_max=args.r_max, z_table=z_table, heads=heads, head=head_config.head_name
                     )
         for test_name, test_set in test_sets.items():
             test_sampler = None
@@ -2207,22 +1129,7 @@ def run(args) -> None:
             else:
                 model_path = Path(args.checkpoints_dir) / (tag + ".model")
             logging.info(f"Saving model to {model_path}")
-            # Decision 21: the table's alignment was last refreshed at the start of the final
-            # epoch; the model that is saved gets one more refresh on the head as trained,
-            # so its projector edges are the ones an evaluation of this model needs.
-            if class_table_frames.get("frames") and getattr(model, "composition_classes", None):
-                from mace.modules import defect_composition as _dcomp
-
-                _final = _dcomp.refresh_class_table(model, class_table_frames["frames"],
-                                                    device=device)
-                model.class_constructor["e_sink"] = model.composition_classes["e_sink"]
-                if _final.get("still_uncounted"):
-                    logging.warning("Composition classes still uncounted on the trained head: "
-                                    "%s -- the saved model refuses their charged frames",
-                                    _final["still_uncounted"])
             model_to_save = deepcopy(model)
-            if hasattr(model_to_save, "uncounted_class_policy"):
-                model_to_save.uncounted_class_policy = "refuse"
             if args.lora:
                 logging.info("Merging LoRA weights into base model")
                 merge_lora_weights(model_to_save)

@@ -343,7 +343,7 @@ registered decay of the learning rate to 2e-4 over the last 20 epochs (or readin
 epoch-averaged final checkpoint). The repeat runs the identical protocol (constant lr 2e-3,
 60 epochs, final checkpoint read): a repeat with a changed protocol is not a repeat.
 
-**Registered before the repeat is launched (2026-09-07 02:30):** the route-C repeat is both
+**Registered before the repeat is launched (2026-09-07 01:50):** the route-C repeat is both
 arms on fresh seeds 6–11 (outer fold = seed mod 4), the identical protocol, the same
 report script and thresholds; the decision is read on the repeat's own six seeds with the
 corrected table; the combined twelve-seed reading is reported for information only. If (ii)
@@ -351,7 +351,13 @@ or (iii) fails on the repeat: **stop** — Arm 2+3 stays closed and the outcome 
 user. If both pass: route by the table on the repeat (A/D: Arm 2+3 opens on the repeat's
 full-`H0` seeds that pass the bound-state precondition; B: stop and investigate
 identifiability). Identical-code check before launch: one epoch of the full s0 configuration
-on the launch commit reproduces the archived epoch-0 loss (recorded below at launch).
+on the launch commit (`5bd1683`) reproduces the archived epoch-0 loss exactly (6.8488e-05,
+force 5.1701e-05; the training path is untouched by the routing fix and the merged
+inference backward). **Launched 2026-09-07 01:54 (b3, GPUs 4/5/7, three per GPU:
+`full/ctrl_s6`, `full/ctrl_s7`, `full/ctrl_s8`, `full/ctrl_s9`, `full_s10`) and 02:00
+(local A4000, two at a time from a snapshot of the launch commit at
+`~/runs/dscc_src_arm1r`: `ctrl_s10`, `full_s11`, then `ctrl_s11`).** Queue logs
+`~/runs/queue_arm1r_{b3,local}.log`; run logs `~/runs/dscc_arm1_*_s{6..11}.log`.
 
 ## 3. Task list
 
@@ -420,16 +426,22 @@ Status: `todo` / `wip` / `done` / `blocked`.
 | P4.3 | 2x benchmark per the registered definition | harness done — `defect-perovskite/dscc_benchmark.py` (per-frame energy + forces along a charged trajectory, warm-started, base included; median and p95 of the ratio). **Run 2026-09-07 on the local A4000 (idle), `dscc_arm1_full_s0` (Φ = 0), warm-started along one charged trajectory, after merging the inference backward into one autograd pass (E_base + the Hellmann–Feynman contraction; identical numbers, tests): 79 atoms base 41.9 ms / model 82.9 ms, ratio median 1.98, p95 2.36 (40 frames); 159 atoms 73.2 / 141.0 ms, median 1.92, p95 5.66 (16 frames; the p95 is the slowest frame). Median within 2×, p95 not → fails the registered criterion as it stands** (`~/runs/dscc/benchmark_merged_{79,159}.json`). A first run at 01:35 overlapped the final report on the same GPU and is discarded (medians 2.4–2.5, p95 up to 9). The floor is the base's full forward inside the model (the head needs block 0 attached and E_base is needed anyway); the p95 tail is to be profiled per frame (graph build at the head's 10 Å cutoff) before the selected coupled model is benchmarked |
 
 ### 3.6 Deletion sweep (plan §3, after the Phase 1 gates)
-- [ ] Tier-1/Tier-2 constructor and `u_al` (`defect_composition`, `defect_rank`, `defect_constructor_cache`, `defect_seed`)
-- [ ] static density, residual monopole, covariant registration (`defect_density`, registration in `defect_composition`)
-- [ ] spectral windows, `r_+` matrix functions, channel normalisation, localisation switches, `rho_img` (`defect_windows`, `defect_frontier`, `defect_image`, `defect_spectral*`)
-- [ ] canonical lift, branch/cut/tail certificates, `IsoOK` (`defect_lift`)
-- [ ] separate `Phi_SF`/`Phi_img` objects (`defect_boundary`, `defect_image`)
-- [ ] spectral-gauge record (`defect_gauge`)
-- [ ] nuisance intercepts (`defect_objective.profile_intercepts`)
-- [ ] energy-term registry (`defect_terms`)
-- [ ] induced-polarisation stage; isolated-boundary outputs
-- [ ] their tests, launcher flags and docs
+Done 2026-09-07 02:20 (while the Arm-1 repeat trains from its own snapshot; b3 is synced
+and its stale copies removed after the repeat finishes). Method: every core file the v8
+programme had modified is restored to the pre-defect upstream commit `050b791` (the
+branch base; all 420 branch commits are the programme's own, no upstream merge among
+them), every module and test the programme added is removed, the dscc package and its
+suite are the only additions that stay.
+- [x] Tier-1/Tier-2 constructor and `u_al` (`defect_composition`, `defect_rank`, `defect_constructor_cache`, `defect_seed`)
+- [x] static density, residual monopole, covariant registration (`defect_density`, registration in `defect_composition`)
+- [x] spectral windows, `r_+` matrix functions, channel normalisation, localisation switches, `rho_img` (`defect_windows`, `defect_frontier`, `defect_image`, `defect_spectral*`)
+- [x] canonical lift, branch/cut/tail certificates, `IsoOK` (`defect_lift`)
+- [x] separate `Phi_SF`/`Phi_img` objects (`defect_boundary`, `defect_image`)
+- [x] spectral-gauge record (`defect_gauge`)
+- [x] nuisance intercepts (`defect_objective.profile_intercepts`)
+- [x] energy-term registry (`defect_terms`)
+- [x] induced-polarisation stage; isolated-boundary outputs
+- [x] their tests, launcher flags and docs: removed `mace/modules/defect_*.py` (30 modules), `mace/data/{defects,two_size,dilution,size_sampler}.py`, `mace/modules/latent_ewald.py` (the LES oracle test now calls the `les` package directly), `tests/extensions/defect/` and the 38 programme tests under `tests/unit` and `tests/workflows`, the programme's top-level plans/diagnoses/scripts; restored `run_train.py`, `arg_parser.py`, `tools/train.py`, `model_script_utils.py`, `scripts_utils.py`, `loss.py`, `calculators/mace.py`, `data/{__init__,atomic_data,utils}.py`, `modules/{__init__,models,extensions}.py`, `tools/{default_keys,finetuning_utils,tables_utils,torch_tools}.py` (4092 programme lines). Kept: the dscc package (`mace/modules/dscc/`, imports only upstream `ScaleShiftMACE`, `AtomicData.from_config` with its extra-property pass-through, `prepare_graph`, `tools`), `defect-perovskite/` as the programme's record (67 of its 124 old analysis scripts import deleted modules and are archival, not runnable), the two size-extensivity notes at the top level (uncommitted edits), and the untracked `mace/modules/defect_size.py` (never committed; not touched). Verification: `import mace` and the dscc launcher/scripts on the stripped tree; the dscc suite and the upstream unit tests (results in the commit message).
 
 ## 4. History note (v8 programme, closed 2026-09-06)
 

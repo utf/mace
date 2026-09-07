@@ -6,7 +6,6 @@
 
 import argparse
 import ast
-import copy
 import dataclasses
 import json
 import logging
@@ -22,7 +21,6 @@ from torch.optim.swa_utils import SWALR, AveragedModel
 
 from mace import data, modules, tools
 from mace.data import KeySpecification
-from mace.tools import torch_geometric
 from mace.tools.train import SWAContainer
 
 
@@ -60,7 +58,6 @@ def get_dataset_from_xyz(
     head_name: str = "Default",
     no_data_ok: bool = False,
     prefix: Optional[str] = None,
-    band_edges: Optional[Dict[str, Any]] = None,
 ) -> Tuple[SubsetCollection, Optional[Dict[int, float]]]:
     """
     Load training, validation, and test datasets from xyz files.
@@ -78,8 +75,6 @@ def get_dataset_from_xyz(
         keep_isolated_atoms: Whether to keep isolated atoms in the dataset
         head_name: Name of the head for multi-head models
         no_data_ok: accept files that have no energy/force/stress data
-        band_edges: per-host supercell band edges used to reference charged-cell
-            energy labels (MACEDefect)
 
     Returns:
         Tuple containing:
@@ -119,7 +114,6 @@ def get_dataset_from_xyz(
             keep_isolated_atoms=keep_isolated_atoms,
             head_name=head_name,
             no_data_ok=no_data_ok,
-            band_edges=band_edges,
         )
         all_train_configs.extend(train_configs)
 
@@ -133,7 +127,7 @@ def get_dataset_from_xyz(
                 atomic_energies_values[element].append(energy)
                 atomic_energies_counts[element] += 1
 
-        log_dataset_contents(train_configs, f"Training set {i + 1}/{len(train_paths)}")
+        log_dataset_contents(train_configs, f"Training set {i+1}/{len(train_paths)}")
 
     # Log total training set info
     log_dataset_contents(all_train_configs, "Total Training set")
@@ -147,11 +141,10 @@ def get_dataset_from_xyz(
                 key_specification=key_specification,
                 extract_atomic_energies=False,
                 head_name=head_name,
-                band_edges=band_edges,
             )
             all_valid_configs.extend(valid_configs)
             log_dataset_contents(
-                valid_configs, f"Validation set {i + 1}/{len(valid_paths)}"
+                valid_configs, f"Validation set {i+1}/{len(valid_paths)}"
             )
 
         # Log total validation set info
@@ -176,11 +169,10 @@ def get_dataset_from_xyz(
                 key_specification=key_specification,
                 extract_atomic_energies=False,
                 head_name=head_name,
-                band_edges=band_edges,
             )
             all_test_configs.extend(test_configs)
 
-            log_dataset_contents(test_configs, f"Test set {i + 1}/{len(test_paths)}")
+            log_dataset_contents(test_configs, f"Test set {i+1}/{len(test_paths)}")
 
         # Create list of tuples (config_type, list(Atoms))
         test_configs_by_type = data.test_config_types(all_test_configs)
@@ -239,13 +231,12 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
     if model.__class__.__name__ not in [
         "ScaleShiftMACE",
         "MACELES",
-        "MACEDefect",
         "PolarMACE",
         "MagneticScaleShiftMACE",
         "AtomicDielectricMACE",
     ]:
         return {
-            "error": "Model is not a ScaleShiftMACE, MACELES, MACEDefect, PolarMACE, MagneticScaleShiftMACE, or AtomicDielectricMACE model"
+            "error": "Model is not a ScaleShiftMACE, MACELES, PolarMACE, MagneticScaleShiftMACE, or AtomicDielectricMACE model"
         }
 
     def radial_to_name(radial_type):
@@ -352,176 +343,8 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
     if hasattr(model, "scale_shift"):
         config["atomic_inter_scale"] = scale.cpu().numpy()
         config["atomic_inter_shift"] = shift.cpu().numpy()
-    if model.__class__.__name__ in ["ScaleShiftMACE", "MACELES", "MACEDefect"]:
+    if model.__class__.__name__ in ["ScaleShiftMACE", "MACELES"]:
         config["MLP_irreps"] = o3.Irreps(f"{mlp_scalars_per_head}x0e")
-    if model.__class__.__name__ == "MACEDefect":
-        config["carrier_feature_dim"] = int(model.carrier_feature_dim)
-        config["counter_embedding_dim"] = int(model.counter_embedding_dim)
-        config["carrier_mlp_hidden"] = int(model.carrier_mlp_hidden)
-        config["share_logits_across_spin"] = bool(model.share_logits_across_spin)
-        config["alpha_mode"] = str(getattr(model, "alpha_mode", "logits"))
-        config["logit_seed_gamma"] = (
-            float(model.logit_seed_gamma.detach().abs().max())
-            if getattr(model, "logit_seed", False)
-            else 0.0
-        )
-        config["beta"] = float(getattr(model, "beta", 10.0))
-        config["use_long_range"] = bool(model.use_long_range)
-        config["eps_inf_init"] = float(model.eps_inf_init)
-        config["les_arguments"] = model.les_arguments
-        # The conversion rebuilds the model from this config
-        # (``source_model.__class__(**config)``), so any constructor argument missing here
-        # silently reverts to its default in the converted model.
-        #
-        # Only ``freeze_amplitude`` actually diverged in practice: it defaults to False
-        # while stage E passes True, so converting a frozen-amplitude model produced a
-        # *trainable* screening amplitude, which then reads as a fitted screening constant
-        # instead of the input gauge it is meant to be. Same silent failure as the earlier
-        # freeze_amplitude wiring bug, arriving by a different route -- and it is the
-        # reason cuEq conversion was blocked for long-range models.
-        #
-        # The other three are no-ops today and are captured so they cannot become the next
-        # instance of this: ``high_precision_softmax`` and ``zero_u_init`` already equal
-        # their defaults everywhere, and ``correction_trunk`` raises for any value but
-        # "shared".
-        config["freeze_amplitude"] = bool(getattr(model, "freeze_amplitude", False))
-        config["use_polarisation"] = bool(getattr(model, "use_polarisation", True))
-        config["host_charge_detached"] = bool(
-            getattr(model, "host_charge_detached", False)
-        )
-        config["pol_gate"] = bool(getattr(model, "pol_gate", False))
-        config["pol_gate_lambda"] = float(getattr(model, "pol_gate_lambda", 6.0))
-        config["pol_gate_hops"] = int(getattr(model, "pol_gate_hops", 2))
-        config["host_carrier_coupling"] = bool(
-            getattr(model, "host_carrier_coupling", True)
-        )
-        config["carrier_self_isolated"] = bool(
-            getattr(model, "carrier_self_isolated", False)
-        )
-        config["lr_start_epoch"] = int(getattr(model, "lr_start_epoch", 0))
-        # Read from the pooling block: MACEDefect forwards this to the submodule without
-        # keeping a copy, so a getattr on the model would silently read the default back
-        # and the round trip would look fine while losing the setting.
-        config["high_precision_softmax"] = bool(
-            getattr(model.carrier_pooling, "high_precision_softmax", True)
-        )
-        config["zero_u_init"] = bool(getattr(model, "zero_u_init", True))
-        config["correction_trunk"] = str(getattr(model, "correction_trunk", "shared"))
-        # The spectral head. Omitting these would rebuild a spectral arm as an ATTENTION
-        # model -- no shape mismatch to catch it, since the two heads have different
-        # parameters entirely, so the load would drop the Hamiltonian and silently restore
-        # the softmax the arm exists to replace.
-        config["spectral_head"] = bool(getattr(model, "spectral_head", False))
-        # getattr on the HEAD, not plain access: the counting head wears the SpectralOutput
-        # interface but has no `smearing` and no `t_min` -- it is a Fermi fill at `t_el`, not
-        # a Gaussian broadening of six states. Plain access raised AttributeError and made a
-        # Stage-3 model impossible to round-trip through this extractor at all, which is to
-        # say impossible to save and reload through the production path. Found by the
-        # section-3 bit-identity gate on its first run.
-        if getattr(model, "spectral", None) is not None:
-            config["spectral_num_states"] = int(getattr(model.spectral, "num_states", 6))
-            config["spectral_smearing"] = float(
-                getattr(model.spectral, "smearing", 0.020))
-        # Explicit, not recomputed from the default: a converted model must keep the range it
-        # was trained with even if the default changes, and the trunk filter keys off it.
-        config["spectral_r_cut"] = float(getattr(model, "spectral_r_cut", 0.0))
-        config["spectral_decay"] = bool(getattr(model, "spectral_decay", False))
-        config["spectral_first_shell"] = bool(
-            getattr(model, "spectral_first_shell", False))
-        # V3. Recorded here on the day the head was written, not when a from-scratch run
-        # first needs it: this extractor is the layer that has twice dropped a flag that was
-        # correct everywhere else, and a saved V3 model rebuilt through this config as a plain
-        # H3 head would be a different Hamiltonian wearing the same checkpoint name.
-        config["spectral_local"] = bool(getattr(model, "spectral_local", False))
-        config["spectral_r_couple"] = float(getattr(model, "spectral_r_couple", 0.0))
-        # The carrier sign convention travels with the checkpoint. A single-manifold head
-        # rebuilt through this config as a four-manifold one would minimise for the hole as
-        # well as the electron -- the exact error this mode exists to fix -- with no shape
-        # clash to catch it.
-        config["spectral_single_manifold"] = bool(
-            getattr(model, "spectral_single_manifold", False))
-        # sigma and the gauge penalty were omitted here while being correctly wired
-        # everywhere else, so training had them ON and the SAVED model -- rebuilt from
-        # this config during the cuEq conversion -- silently had them OFF. Every
-        # downstream score would have been of a different model than the one trained.
-        config["spectral_sigma"] = bool(getattr(model, "spectral_sigma", False))
-        config["spectral_gauge_penalty"] = bool(
-            getattr(model, "spectral_gauge_penalty", False))
-        # Edit 1. Carried through the round trip for the same reason the spectral flags are:
-        # a rebuilt model that quietly loses the Madelung term is a different model, and the
-        # cuEq conversion performs exactly that round trip at the end of every run.
-        config["counting_head"] = bool(getattr(model, "counting_head", False))
-        config["counting_t_el"] = float(getattr(model, "counting_t_el", 0.05))
-        # The bounded-element half-widths and the smearing family travel with the checkpoint.
-        # gamma was widened from 1.0 to 3.0 after the saturation audit, and a model rebuilt
-        # through this config at the old value would have every chlorine pinned again --
-        # silently, since nothing about a saturated tanh raises an error.
-        config["counting_on_site_range"] = float(
-            getattr(model, "counting_on_site_range", 3.0))
-        config["counting_hop_range"] = float(getattr(model, "counting_hop_range", 0.5))
-        config["counting_smearing_family"] = str(
-            getattr(model, "counting_smearing_family", "gaussian"))
-        # The radial envelope is a config knob, not a constant, because the two families
-        # are a live experimental choice. Reading it off the HEAD rather than the model
-        # attribute would be safer still, but the head is not always present at this point;
-        # the pre-seed read-back closes that by building and interrogating the object.
-        config["counting_envelope"] = str(getattr(model, "counting_envelope", "exp"))
-        config["counting_decay_length"] = float(
-            getattr(model, "counting_decay_length", 1.0))
-        config["counting_hop_form"] = str(getattr(model, "counting_hop_form", "linear"))
-        config["counting_hop_log_beta"] = float(
-            getattr(model, "counting_hop_log_beta", 1.0986122886681098))
-        # Stage A' spec section 5.1: the new knobs travel from the day they exist. A rebuilt
-        # model that silently reverts any of these is a different model: fixed decay lengths
-        # where four were learned, a long-range density that carries gradient where it was
-        # detached, a head at float32 where it ran at float64.
-        config["counting_decay_learned"] = bool(
-            getattr(model, "counting_decay_learned", False))
-        config["counting_decay_log_beta"] = float(
-            getattr(model, "counting_decay_log_beta", 0.6931471805599453))
-        config["precision_policy"] = str(getattr(model, "precision_policy", "uniform"))
-        config["on_site_centred"] = bool(getattr(model, "on_site_centred", False))
-        # Speed-cycle spec sections 2.1 and 2.2.
-        config["counting_centre_form"] = str(
-            getattr(model, "counting_centre_form", "argument"))
-        config["madelung_site_zeta"] = float(getattr(model, "madelung_site_zeta", 0.0))
-        config["madelung_on_site"] = bool(getattr(model, "madelung_on_site", False))
-        config["madelung_eps_inf"] = float(getattr(model, "madelung_eps_inf", 4.0))
-        config["madelung_range"] = str(getattr(model, "madelung_range", "full"))
-        config["image_functional"] = str(getattr(model, "image_functional", "frontier_ff"))
-        # Plan v8 section 2.1: the occupation policy and S_ref are config. A model pickled
-        # before they existed ran the count fill against the neutral reference, which is
-        # what the defaults say.
-        config["occupation_policy"] = str(getattr(model, "occupation_policy", "count_fill"))
-        ref = getattr(model, "reference_state", None)
-        config["reference_state"] = None if ref is None else dict(ref)
-        # Section 2.6: the gauge flag.
-        config["gauge"] = str(getattr(model, "gauge", "periodic"))
-        # Section 2.1: the cached class integers and the edge-count margin.
-        classes = getattr(model, "composition_classes", None)
-        config["composition_classes"] = None if classes is None else copy.deepcopy(classes)
-        ctor = getattr(model, "class_constructor", None)
-        config["class_constructor"] = None if ctor is None else dict(ctor)
-        functional = getattr(model, "functional", None)
-        config["functional"] = None if functional is None else copy.deepcopy(functional)
-        if getattr(model, "madelung", None) is not None:
-            config["madelung_composition"] = [
-                float(x) for x in model.madelung.composition]
-            # The LEARNED charges, not the nominal initialisation. Rebuilding with z_init
-            # unset would restore Z = 0 and then the state-dict load would have to carry it;
-            # it does, but a config that describes a different starting model than the one
-            # saved is precisely the drift this extractor keeps being caught by.
-            config["madelung_z_init"] = [float(x) for x in model.madelung.z.detach()]
-        if getattr(model, "spectral", None) is not None:
-            config["spectral_t_min"] = float(getattr(model.spectral, "t_min", 0.02))
-        # A buffer, so the weight transfer would carry the values -- but only if the
-        # rebuilt model allocated the same shape, and it defaults to empty. Without this
-        # the converted model would either fail the state-dict load or come back with the
-        # gauge probe silently switched off.
-        gauge = getattr(model, "gauge_counters", None)
-        config["gauge_counters"] = (
-            gauge.detach().cpu().tolist() if gauge is not None and gauge.numel() else None
-        )
     if model.__class__.__name__ == "AtomicDielectricMACE":
         config["use_polarizability"] = model.use_polarizability
         config["only_dipole"] = False  # model.only_dipole
@@ -878,7 +701,7 @@ def get_atomic_energies(E0s, train_collection, z_table) -> dict:
             try:
                 assert train_collection is not None
                 atomic_energies_dict = data.compute_average_E0s(
-                    reference_state_configurations(train_collection), z_table
+                    train_collection, z_table
                 )
             except Exception as e:
                 raise RuntimeError(
@@ -946,70 +769,6 @@ def get_avg_num_neighbors(head_configs, args, train_loader, device):
     return avg_num_neighbors_out
 
 
-def reference_state_configurations(configs):
-    """Configurations at n = 0, the only ones that define the base surface.
-
-    The base branch is trained on the reference state alone (plan sections 2.2 and 4a),
-    so charged configurations must not enter the E0 fit or the energy scale: they would
-    push carrier binding energy into the base branch's baseline.
-    """
-    filtered = [
-        config
-        for config in configs
-        if config.properties.get("carrier_counts") is None
-        or int(np.asarray(config.properties["carrier_counts"]).sum()) == 0
-    ]
-    if not filtered:
-        logging.warning(
-            "No reference-state (n = 0) configurations found; falling back to the "
-            "full training set for the atomic energy fit"
-        )
-        return configs
-    if len(filtered) != len(configs):
-        logging.info(
-            f"Using {len(filtered)} of {len(configs)} configurations (n = 0) for the "
-            "atomic energy fit"
-        )
-    return filtered
-
-
-def reference_state_data_loader(train_loader):
-    """A loader over the n = 0 subset, used for the energy scale of a defect model."""
-    dataset = train_loader.dataset
-    indices = [
-        index
-        for index in range(len(dataset))
-        if not hasattr(dataset[index], "carrier_counts")
-        or float(dataset[index].carrier_counts.abs().sum()) == 0.0
-    ]
-    if not indices:
-        logging.warning(
-            "No reference-state (n = 0) configurations found; falling back to the "
-            "full training set for the energy scale"
-        )
-        return train_loader
-    if len(indices) != len(dataset):
-        logging.info(
-            f"Using {len(indices)} of {len(dataset)} configurations (n = 0) for the "
-            "energy scale"
-        )
-    # `train_loader.batch_size` is None when the loader was built with a `batch_sampler`
-    # -- which the size-grouped sampler of section 1.1 is -- and `batch_size=None` turns
-    # AUTOMATIC BATCHING OFF: the collater is then handed one `Data` object instead of a
-    # list and fails with "attribute name must be string, not 'int'", four frames into the
-    # energy-scale pass and nowhere near the sampler. Fall back to the batch sampler's own
-    # size; this loader wants a plain batched pass, not the grouping.
-    batch_size = train_loader.batch_size
-    if batch_size is None:
-        batch_size = int(getattr(train_loader.batch_sampler, "batch_size", 1) or 1)
-    return torch_geometric.dataloader.DataLoader(
-        dataset=torch.utils.data.Subset(dataset, indices),
-        batch_size=batch_size,
-        shuffle=False,
-        drop_last=False,
-    )
-
-
 def get_loss_fn(
     args: argparse.Namespace,
     dipole_only: bool,
@@ -1048,45 +807,15 @@ def get_loss_fn(
             magforces_weight=args.magforces_weight,
             huber_delta=args.huber_delta,
         )
-    elif args.loss == "defect":
-        loss_fn = modules.DefectLoss(
-            energy_weight=args.energy_weight,
-            forces_weight=args.forces_weight,
-            delta_energy_weight=args.delta_energy_weight,
-            delta_forces_weight=args.delta_forces_weight,
-            total_energy_weight=args.total_energy_weight,
-            stress_weight=args.stress_weight if args.compute_stress else 0.0,
-            pressure_weight=args.pressure_weight,
-            u_l2=args.defect_u_l2,
-            zn_l2=args.defect_zn_l2,
-            p_l2=args.defect_p_l2,
-            qhost_l2=args.defect_qhost_l2,
-            detach_base_in_totals=args.defect_totals_detach_base,
-            eps_inf=args.eps_inf,
-            eps_inf_prior_weight=args.eps_inf_prior_weight,
-            size_weight=args.defect_size_weight,
-            size_ratio=args.defect_size_ratio,
-            size_tol=args.defect_size_tol,
-            size_warmup_epochs=args.defect_size_warmup_epochs,
-            size_ema_decay=args.defect_size_ema,
-            gauge_weight=args.defect_gauge_weight,
-            eps_gauge_weight=args.defect_eps_gauge_weight,
-            gap_weight=float(getattr(args, "defect_gap_weight", 0.0)),
-            e_gap=float(getattr(args, "defect_e_gap", 0.0)),
-            gap_composition=getattr(args, "defect_gap_composition", None),
-            energy_shape_weight=float(getattr(args, "defect_energy_shape_weight", 0.0) or 0.0),
-            energy_pair_slots=int(getattr(args, "defect_energy_pair_slots", 0) or 0),
-            energy_scale=float(getattr(args, "defect_energy_scale", 1.0) or 1.0),
-        )
     elif args.loss == "l1l2energyforces":
         loss_fn = modules.WeightedEnergyForcesL1L2Loss(
             energy_weight=args.energy_weight,
             forces_weight=args.forces_weight,
         )
     elif args.loss == "dipole":
-        assert dipole_only is True, (
-            "dipole loss can only be used with AtomicDipolesMACE model"
-        )
+        assert (
+            dipole_only is True
+        ), "dipole loss can only be used with AtomicDipolesMACE model"
         loss_fn = modules.DipoleSingleLoss(
             dipole_weight=args.dipole_weight,
         )
@@ -1230,13 +959,11 @@ def get_params_options(
             lr_params_factors["embedding_lr_factor"] = 0.0
             freeze_module(model.node_embedding, True)
 
-    # Materialise every group to a list. Generators would be consumed by the coverage
-    # check below before the optimizer ever saw them.
     param_options = dict(
         params=[
             {
                 "name": "embedding",
-                "params": list(model.node_embedding.parameters()),
+                "params": model.node_embedding.parameters(),
                 "weight_decay": 0.0,
                 "lr": lr_params_factors.get("embedding_lr_factor", 1.0) * args.lr,
             },
@@ -1254,13 +981,13 @@ def get_params_options(
             },
             {
                 "name": "products",
-                "params": list(model.products.parameters()),
+                "params": model.products.parameters(),
                 "weight_decay": args.weight_decay,
                 "lr": lr_params_factors.get("products_lr_factor", 1.0) * args.lr,
             },
             {
                 "name": "readouts",
-                "params": list(model.readouts.parameters()),
+                "params": model.readouts.parameters(),
                 "weight_decay": 0.0,
                 "lr": lr_params_factors.get("readouts_lr_factor", 1.0) * args.lr,
             },
@@ -1273,7 +1000,7 @@ def get_params_options(
         param_options["params"].append(
             {
                 "name": "joint_embedding",
-                "params": list(model.joint_embedding.parameters()),
+                "params": model.joint_embedding.parameters(),
                 "weight_decay": 0.0,
             }
         )
@@ -1281,7 +1008,7 @@ def get_params_options(
         param_options["params"].append(
             {
                 "name": "embedding_readout",
-                "params": list(model.embedding_readout.parameters()),
+                "params": model.embedding_readout.parameters(),
                 "weight_decay": 0.0,
             }
         )
@@ -1289,103 +1016,20 @@ def get_params_options(
         param_options["params"].append(
             {
                 "name": "les_readouts",
-                "params": list(model.les_readouts.parameters()),
+                "params": model.les_readouts.parameters(),
                 "weight_decay": 0.0,
             }
         )
-    if hasattr(model, "onebody_magmombasis_coeffs"):
-        # Held at lr 0 rather than dropped when the contribution is not being trained:
-        # an omitted parameter is indistinguishable from a forgotten one, which is the
-        # failure the coverage check below exists to catch.
+    if (
+        hasattr(model, "onebody_magmombasis_coeffs")
+        and args.train_one_body_contribution
+    ):
         param_options["params"].append(
             {
                 "name": "onebody_magmombasis_coeffs",
                 "params": [model.onebody_magmombasis_coeffs],
                 "weight_decay": 0.0,
-                "lr": args.lr if args.train_one_body_contribution else 0.0,
             }
-        )
-    # Carrier correction heads of MACEDefect. Without these the whole correction branch
-    # sits at its initialisation for the entire run -- and because MLP_u is initialised
-    # at zero, a frozen branch predicts exactly zero, which is indistinguishable from a
-    # correctly initialised one on every identity test that exists.
-    for module_name in (
-        "counter_embedding",
-        "carrier_pooling",
-        "defect_feature_readouts",
-        "latent_charges",
-        # The spectral head. Omitting it left its 12 parameters in no group at all, so the
-        # Hamiltonian would have stayed at initialisation for the entire run -- and a
-        # near-flat eps with small hopping is exactly what "no bound state anywhere" looks
-        # like, so both spectral arms would have completed and reported that component H does
-        # not localise. The orphan guard below caught it on the first real run.
-        "spectral",
-        # The learned Madelung species charges. Same omission, same guard, one edit later:
-        # with --defect_madelung_on_site the trainer refused to start because `madelung.z`
-        # was in no group. It had never been noticed because every Stage-1..3 result came
-        # from defect-perovskite/stage_run.py, which builds its own AdamW over whatever has
-        # requires_grad and so never consulted this function. No weight decay -- Z is a
-        # physical charge held on the composition hyperplane by the post-step projection,
-        # and decaying it towards zero would fight that projection for the same degree of
-        # freedom.
-        "madelung",
-    ):
-        module = getattr(model, module_name, None)
-        if module is not None:
-            param_options["params"].append(
-                {
-                    "name": module_name,
-                    "params": list(module.parameters()),
-                    "weight_decay": 0.0,
-                }
-            )
-
-    # The novelty logit-seed gain. It sits directly on the model rather than inside one
-    # of the whitelisted submodules, so it is an orphan unless named here -- which the
-    # coverage guard below caught on the first run. No weight decay: gamma going to zero
-    # is a meaningful statement (the localisation prior is wrong for this state) and
-    # should be driven by the data, not by a penalty.
-    if hasattr(model, "logit_seed_gamma") and model.logit_seed_gamma.requires_grad:
-        param_options["params"].append(
-            {
-                "name": "logit_seed_gamma",
-                "params": [model.logit_seed_gamma],
-                "weight_decay": 0.0,
-            }
-        )
-
-    # Slow the base branch relative to the correction. Once L_tot trains both branches at
-    # defect geometries (plan A5.3) the base is otherwise a moving target for the
-    # correction, which has to track it while also fitting the carrier physics.
-    base_lr_factor = float(getattr(args, "base_lr_factor", 1.0))
-    if base_lr_factor != 1.0:
-        base_groups = {
-            "embedding",
-            "interactions_decay",
-            "interactions_no_decay",
-            "products",
-            "readouts",
-        }
-        for group in param_options["params"]:
-            if group.get("name") in base_groups:
-                group["lr"] = group.get("lr", args.lr) * base_lr_factor
-
-    # Every group above is opt-in, so a model with a submodule nobody added here trains
-    # with that submodule frozen and reports nothing unusual. Fail loudly instead.
-    covered = {
-        id(param) for group in param_options["params"] for param in group["params"]
-    }
-    orphans = [
-        name
-        for name, param in model.named_parameters()
-        if param.requires_grad and id(param) not in covered
-    ]
-    if orphans:
-        raise RuntimeError(
-            f"{len(orphans)} trainable parameters are in no optimizer group and would "
-            f"never be updated: {orphans[:8]}"
-            + (" ..." if len(orphans) > 8 else "")
-            + ". Add them to get_params_options."
         )
     return param_options
 

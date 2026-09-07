@@ -55,15 +55,22 @@ class TestConvention:
     def test_les_oracle(self):
         """`0.5 q^T (E_PBC - self) q` equals the LES Ewald energy with its background,
         for neutral and net-charged Gaussian charges; LES `sigma = sqrt(2) r_g`."""
-        from mace.modules.latent_ewald import LatentEwald
+        les_ewald = pytest.importorskip("les.module.ewald")
         positions, cell, q = _frame(seed=7)
         r_g = 0.9
         E = ew.ewald_matrix(positions, cell, r_g)
-        les = LatentEwald({"sigma": math.sqrt(2.0) * r_g, "dl": 0.3})
+        # The LES module directly (the programme's `latent_ewald` wrapper was deleted, plan
+        # section 3): its reciprocal sum runs over k != 0 only, so for a net-charged cell the
+        # jellium background -norm_factor sigma^2 Q^2 / (2 V) is added here, as the wrapper did.
+        sigma = math.sqrt(2.0) * r_g
+        norm_factor = 90.4756                                   # 2 pi C in LES's units
+        les = les_ewald.Ewald(dl=0.3, sigma=sigma, remove_self_interaction=True, norm_factor=norm_factor)
+        batch = torch.zeros(len(q), dtype=torch.long)
+        volume = float(abs(torch.det(cell)))
         for charges in (q - q.mean(), q):
             mine = float(ew.energy(E, charges) - 0.5 * (charges ** 2).sum() * ew.self_term(r_g))
-            oracle = float(les.energy(charges, positions, cell.reshape(1, 3, 3),
-                                      torch.zeros(len(charges), dtype=torch.long)))
+            energy, _, _ = les(q=charges, r=positions, cell=cell.reshape(1, 3, 3), batch=batch)
+            oracle = float(energy.reshape(-1)[0]) - norm_factor * sigma ** 2 * float(charges.sum()) ** 2 / (2 * volume)
             assert mine == pytest.approx(oracle, rel=1e-6, abs=1e-6)
 
     def test_tiling_ladder_self_term_is_the_madelung_one(self):

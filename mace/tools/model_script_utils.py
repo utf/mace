@@ -8,11 +8,7 @@ from e3nn import o3
 from mace import modules
 from mace.modules.wrapper_ops import CuEquivarianceConfig
 from mace.tools.finetuning_utils import load_foundations_elements, load_foundations_mdp
-from mace.tools.scripts_utils import (
-    extract_config_mace_model,
-    reference_state_data_loader,
-    resolve_m_max,
-)
+from mace.tools.scripts_utils import extract_config_mace_model, resolve_m_max
 from mace.tools.torch_tools import dtype_dict
 from mace.tools.utils import AtomicNumberTable
 
@@ -82,11 +78,8 @@ def configure_model(
     elif (args.mean is None or args.std is None) and (
         args.model not in ("AtomicDipolesMACE", "AtomicDielectricMACE")
     ):
-        scaling_loader = train_loader
-        if args.model == "MACEDefect":
-            scaling_loader = reference_state_data_loader(train_loader)
         args.mean, args.std = modules.scaling_classes[args.scaling](
-            scaling_loader, atomic_energies
+            train_loader, atomic_energies
         )
     if args.embedding_specs is not None:
         logging.info("Using embedding specifications from command line arguments")
@@ -96,7 +89,6 @@ def configure_model(
         "MACE",
         "ScaleShiftMACE",
         "MACELES",
-        "MACEDefect",
         "PolarMACE",
     ]:
         logging.info("Loading FOUNDATION model")
@@ -138,8 +130,6 @@ def configure_model(
         args.avg_num_neighbors = model_config_foundation["avg_num_neighbors"]
         if args.model == "MACELES":
             args.model = "FoundationMACELES"
-        elif args.model == "MACEDefect":
-            args.model = "FoundationMACEDefect"
         elif args.model in ("MACE", "ScaleShiftMACE"):
             args.model = "FoundationMACE"
         model_config_foundation["heads"] = heads
@@ -151,7 +141,7 @@ def configure_model(
             f"Message passing with hidden irreps {model_config_foundation['hidden_irreps']})"
         )
         logging.info(
-            f"{model_config_foundation['num_interactions']} layers, each with correlation order: {model_config_foundation['correlation']} (body order: {model_config_foundation['correlation'] + 1}) and spherical harmonics up to: l={model_config_foundation['max_ell']}"
+            f"{model_config_foundation['num_interactions']} layers, each with correlation order: {model_config_foundation['correlation']} (body order: {model_config_foundation['correlation']+1}) and spherical harmonics up to: l={model_config_foundation['max_ell']}"
         )
         logging.info(
             f"Radial cutoff: {model_config_foundation['r_max']} A (total receptive field for each atom: {model_config_foundation['r_max'] * model_config_foundation['num_interactions']} A)"
@@ -165,7 +155,7 @@ def configure_model(
             f"Message passing with {args.num_channels} channels and max_L={args.max_L} ({args.hidden_irreps})"
         )
         logging.info(
-            f"{args.num_interactions} layers, each with correlation order: {args.correlation} (body order: {args.correlation + 1}) and spherical harmonics up to: l={args.max_ell}"
+            f"{args.num_interactions} layers, each with correlation order: {args.correlation} (body order: {args.correlation+1}) and spherical harmonics up to: l={args.max_ell}"
         )
         logging.info(
             f"{args.num_radial_basis} radial and {args.num_cutoff_basis} basis functions"
@@ -177,9 +167,9 @@ def configure_model(
             f"Distance transform for radial basis functions: {args.distance_transform}"
         )
 
-        assert len({irrep.mul for irrep in o3.Irreps(args.hidden_irreps)}) == 1, (
-            "All channels must have the same dimension, use the num_channels and max_L keywords to specify the number of channels and the maximum L"
-        )
+        assert (
+            len({irrep.mul for irrep in o3.Irreps(args.hidden_irreps)}) == 1
+        ), "All channels must have the same dimension, use the num_channels and max_L keywords to specify the number of channels and the maximum L"
 
         logging.info(f"Hidden irreps: {args.hidden_irreps}")
 
@@ -261,69 +251,9 @@ def _parse_literal_or_none(value):
     return value
 
 
-def _defect_madelung_kwargs(args) -> dict:
-    """The Edit 1 / Edit 4 flags, parsed once for both MACEDefect construction sites.
-
-    One function because the two sites drifted apart before: the foundation branch silently
-    lacked a flag the scratch branch had, and a run's saved artefact then disagreed with the
-    config that produced it. `_assert_config_round_trip` is the guard, this is the cause it
-    removes.
-    """
-
-    def _floats(raw, name):
-        if raw is None:
-            return None
-        try:
-            return [float(x) for x in str(raw).replace(" ", "").split(",") if x != ""]
-        except ValueError as exc:
-            raise ValueError(f"--{name} must be comma-separated numbers, got {raw!r}") from exc
-
-    composition = _floats(getattr(args, "defect_madelung_composition", None),
-                          "defect_madelung_composition")
-    z_init = _floats(getattr(args, "defect_madelung_z_init", None),
-                     "defect_madelung_z_init")
-    on_site = bool(getattr(args, "defect_madelung_on_site", False))
-    if on_site and not composition:
-        raise ValueError(
-            "--defect_madelung_on_site needs --defect_madelung_composition: the neutrality "
-            "projection has no hyperplane without it, and Z would drift as a group")
-    if composition and z_init and len(composition) != len(z_init):
-        raise ValueError(
-            f"--defect_madelung_composition has {len(composition)} entries and "
-            f"--defect_madelung_z_init has {len(z_init)}; both are in species order")
-    counting = bool(getattr(args, "defect_counting_head", False))
-    if counting and not bool(getattr(args, "defect_spectral_head", False)):
-        raise ValueError(
-            "--defect_counting_head requires --defect_spectral_head: the counting head "
-            "replaces the spectral head and is built on that branch")
-    return dict(
-        counting_head=counting,
-        counting_on_site_range=float(getattr(args, "defect_counting_on_site_range", 3.0)),
-        counting_hop_range=float(getattr(args, "defect_counting_hop_range", 0.5)),
-        counting_smearing_family=str(getattr(args, "defect_counting_smearing", "gaussian")),
-        counting_envelope=str(getattr(args, "defect_counting_envelope", "exp")),
-        counting_decay_length=float(getattr(args, "defect_counting_decay_length", 1.0)),
-        counting_hop_form=str(getattr(args, "defect_counting_hop_form", "linear")),
-        counting_hop_log_beta=float(
-            getattr(args, "defect_counting_hop_beta", 1.0986122886681098)),
-        counting_decay_learned=bool(getattr(args, "defect_counting_decay_learned", False)),
-        counting_decay_log_beta=float(
-            getattr(args, "defect_counting_decay_beta", 0.6931471805599453)),
-        precision_policy=str(getattr(args, "defect_precision_policy", "uniform")),
-        on_site_centred=bool(getattr(args, "defect_on_site_centred", False)),
-        counting_centre_form=str(getattr(args, "defect_counting_centre_form", "argument")),
-        madelung_site_zeta=float(getattr(args, "defect_madelung_site_zeta", 0.0)),
-        counting_t_el=float(getattr(args, "defect_counting_t_el", 0.05)),
-        madelung_on_site=on_site,
-        madelung_eps_inf=float(getattr(args, "defect_madelung_eps_inf", 4.0)),
-        madelung_range=str(getattr(args, "defect_madelung_range", "full")),
-        image_functional=str(getattr(args, "defect_image_functional", "frontier_ff")),
-        madelung_composition=composition,
-        madelung_z_init=z_init,
-    )
-
-
-def _build_model(args, model_config, model_config_foundation, heads):  # pylint: disable=too-many-return-statements
+def _build_model(
+    args, model_config, model_config_foundation, heads
+):  # pylint: disable=too-many-return-statements
 
     if args.model == "MagneticScaleShiftMACE":
         m_max = resolve_m_max(args.m_max, list(model_config["atomic_numbers"]))
@@ -441,39 +371,6 @@ def _build_model(args, model_config, model_config_foundation, heads):  # pylint:
             les_arguments=args.les_arguments,
             **model_config_foundation,
         )
-    if args.model == "FoundationMACEDefect":
-        return modules.MACEDefect(
-            **model_config_foundation,
-            carrier_feature_dim=args.carrier_feature_dim,
-            counter_embedding_dim=args.counter_embedding_dim,
-            carrier_mlp_hidden=args.carrier_mlp_hidden,
-            share_logits_across_spin=args.share_logits_across_spin,
-            zero_u_init=args.defect_zero_u_init,
-            spectral_head=args.defect_spectral_head,
-            spectral_num_states=args.defect_spectral_states,
-            spectral_smearing=args.defect_spectral_smearing,
-            spectral_r_cut=args.defect_spectral_r_cut,
-            spectral_gauge_penalty=args.defect_spectral_gauge_penalty,
-            spectral_decay=args.defect_spectral_decay,
-            spectral_first_shell=args.defect_spectral_first_shell,
-            spectral_sigma=args.defect_spectral_sigma,
-            alpha_mode=args.defect_alpha_mode,
-            logit_seed_gamma=args.defect_logit_seed_gamma,
-            beta=args.defect_beta,
-            use_long_range=args.use_long_range,
-            les_arguments=args.les_arguments,
-            eps_inf_init=args.eps_inf if args.eps_inf is not None else 1.0,
-            freeze_amplitude=args.freeze_amplitude,
-            use_polarisation=args.use_polarisation,
-            host_charge_detached=args.host_charge_detached,
-            pol_gate=args.pol_gate,
-            pol_gate_lambda=args.pol_gate_lambda,
-            pol_gate_hops=args.pol_gate_hops,
-            host_carrier_coupling=args.host_carrier_coupling,
-            carrier_self_isolated=args.carrier_self_isolated,
-            lr_start_epoch=args.lr_start_epoch,
-            **_defect_madelung_kwargs(args),
-        )
     if args.model == "ScaleShiftBOTNet":
         # say it is deprecated
         raise RuntimeError("ScaleShiftBOTNet is deprecated, use MACE instead")
@@ -481,9 +378,9 @@ def _build_model(args, model_config, model_config_foundation, heads):  # pylint:
         raise RuntimeError("BOTNet is deprecated, use MACE instead")
     if args.model == "AtomicDipolesMACE":
         assert args.loss == "dipole", "Use dipole loss with AtomicDipolesMACE model"
-        assert args.error_table == "DipoleRMSE", (
-            "Use error_table DipoleRMSE with AtomicDipolesMACE model"
-        )
+        assert (
+            args.error_table == "DipoleRMSE"
+        ), "Use error_table DipoleRMSE with AtomicDipolesMACE model"
         return modules.AtomicDipolesMACE(
             **model_config,
             correlation=args.correlation,
@@ -497,9 +394,9 @@ def _build_model(args, model_config, model_config_foundation, heads):  # pylint:
     if args.model == "AtomicDielectricMACE":
         args.error_table = "DipolePolarRMSE"
         # std_df = modules.scaling_classes["rms_dipoles_scaling"](train_loader)
-        assert args.loss == "dipole_polar", (
-            "Use dipole_polar loss with AtomicDielectricMACE model"
-        )
+        assert (
+            args.loss == "dipole_polar"
+        ), "Use dipole_polar loss with AtomicDielectricMACE model"
         assert args.error_table in (
             "DipoleRMSE",
             "DipolePolarRMSE",
@@ -516,12 +413,12 @@ def _build_model(args, model_config, model_config_foundation, heads):  # pylint:
         )
 
     if args.model == "EnergyDipolesMACE":
-        assert args.loss == "energy_forces_dipole", (
-            "Use energy_forces_dipole loss with EnergyDipolesMACE model"
-        )
-        assert args.error_table == "EnergyDipoleRMSE", (
-            "Use error_table EnergyDipoleRMSE with AtomicDipolesMACE model"
-        )
+        assert (
+            args.loss == "energy_forces_dipole"
+        ), "Use energy_forces_dipole loss with EnergyDipolesMACE model"
+        assert (
+            args.error_table == "EnergyDipoleRMSE"
+        ), "Use error_table EnergyDipoleRMSE with AtomicDipolesMACE model"
         return modules.EnergyDipolesMACE(
             **model_config,
             correlation=args.correlation,
@@ -530,54 +427,6 @@ def _build_model(args, model_config, model_config_foundation, heads):  # pylint:
                 "RealAgnosticInteractionBlock"
             ],
             MLP_irreps=o3.Irreps(args.MLP_irreps),
-        )
-    if args.model == "MACEDefect":
-        return modules.MACEDefect(
-            **model_config,
-            pair_repulsion=args.pair_repulsion,
-            distance_transform=args.distance_transform,
-            correlation=args.correlation,
-            gate=modules.gate_dict[args.gate],
-            interaction_cls_first=modules.interaction_classes[args.interaction_first],
-            MLP_irreps=o3.Irreps(args.MLP_irreps),
-            atomic_inter_scale=args.std,
-            atomic_inter_shift=[0.0] * len(heads),
-            radial_MLP=ast.literal_eval(args.radial_MLP),
-            radial_type=args.radial_type,
-            heads=heads,
-            embedding_specs=args.embedding_specs,
-            use_embedding_readout=args.use_embedding_readout,
-            use_last_readout_only=args.use_last_readout_only,
-            use_agnostic_product=args.use_agnostic_product,
-            carrier_feature_dim=args.carrier_feature_dim,
-            counter_embedding_dim=args.counter_embedding_dim,
-            carrier_mlp_hidden=args.carrier_mlp_hidden,
-            share_logits_across_spin=args.share_logits_across_spin,
-            zero_u_init=args.defect_zero_u_init,
-            spectral_head=args.defect_spectral_head,
-            spectral_num_states=args.defect_spectral_states,
-            spectral_smearing=args.defect_spectral_smearing,
-            spectral_r_cut=args.defect_spectral_r_cut,
-            spectral_gauge_penalty=args.defect_spectral_gauge_penalty,
-            spectral_decay=args.defect_spectral_decay,
-            spectral_first_shell=args.defect_spectral_first_shell,
-            spectral_sigma=args.defect_spectral_sigma,
-            alpha_mode=args.defect_alpha_mode,
-            logit_seed_gamma=args.defect_logit_seed_gamma,
-            beta=args.defect_beta,
-            use_long_range=args.use_long_range,
-            les_arguments=args.les_arguments,
-            eps_inf_init=args.eps_inf if args.eps_inf is not None else 1.0,
-            freeze_amplitude=args.freeze_amplitude,
-            use_polarisation=args.use_polarisation,
-            host_charge_detached=args.host_charge_detached,
-            pol_gate=args.pol_gate,
-            pol_gate_lambda=args.pol_gate_lambda,
-            pol_gate_hops=args.pol_gate_hops,
-            host_carrier_coupling=args.host_carrier_coupling,
-            carrier_self_isolated=args.carrier_self_isolated,
-            lr_start_epoch=args.lr_start_epoch,
-            **_defect_madelung_kwargs(args),
         )
     if args.model == "MACELES":
         from mace.modules.extensions import MACELES
