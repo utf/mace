@@ -15,11 +15,13 @@ ap.add_argument("--seeds", type=int, default=6)
 ap.add_argument("--ablation", type=int, default=1)
 ap.add_argument("--routes", default="A", help="A, Bp or A,Bp (Route B' only after its ladder gate passes)")
 ap.add_argument("--skip_seeds", default="", help="seeds whose Arm-1 H0 failed the bound-state precondition")
+ap.add_argument("--seed_list", default="", help="explicit seeds (e.g. 6,7,8,9,10,11 for the route-C repeat's winners); overrides --seeds")
 args = ap.parse_args()
 routes = tuple(args.routes.split(","))
 skip = {int(x) for x in args.skip_seeds.split(",") if x}
+seeds = [int(x) for x in args.seed_list.split(",") if x] or list(range(args.seeds))
 lines = []
-for seed in range(args.seeds):
+for seed in seeds:
     if seed in skip:
         continue
     init = f"{args.winners}/dscc_arm1_full_s{seed}/h0_state.pt"      # the converted H0 state (sweep-safe)
