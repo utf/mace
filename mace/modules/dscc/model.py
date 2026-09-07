@@ -498,7 +498,12 @@ class MACEDSCC(nn.Module):
                 pos_b = positions.reshape(num_graphs, n_nodes, 3)
                 sp_b = species.reshape(num_graphs, n_nodes)
                 for g in range(num_graphs):
-                    k_sr, k_lr = kernel_components(pos_b[g], cell[g], self.kernel)
+                    # Under the pair route the kernels' geometry graph is not needed (the
+                    # force comes from the pair derivatives, the energy's parameter gradient
+                    # from lambda and U in gamma_matrix): detached, which halves the memory
+                    # again at 159 atoms.
+                    with torch.set_grad_enabled(not use_pairs):
+                        k_sr, k_lr = kernel_components(pos_b[g], cell[g], self.kernel)
                     gammas.append(gamma_matrix(k_sr, k_lr, self.lambda_dir(), self.u_eff()[sp_b[g]], self.kernel.eps_inf))
                     if self.route_b:
                         Ws.append(gamma_lr(pos_b[g], cell[g], self.kernel.r_g, self.r_split, self.kernel.eps_inf, tol=self.kernel.tol))
@@ -582,7 +587,8 @@ class MACEDSCC(nn.Module):
                 continue
             if self.coupling:
                 pos_g, cell_g, sp_g = positions[nodes], cell[g], species[nodes]
-                k_sr, k_lr = kernel_components(pos_g, cell_g, self.kernel)
+                with torch.set_grad_enabled(not use_pairs):            # see the batched branch
+                    k_sr, k_lr = kernel_components(pos_g, cell_g, self.kernel)
                 gamma = gamma_matrix(k_sr, k_lr, self.lambda_dir(), self.u_eff()[sp_g],
                                      self.kernel.eps_inf)
                 W = None
