@@ -314,7 +314,7 @@ fraction (300 frames) | level-vs-bond slope | Cl `ε_σ − ε_π` (meV):
 | ctrl s4 | 43.7 | 2.02 | 0.53 | 0.640 | 0.247 | 0 |
 | ctrl s5 | 45.5 | 1.95 | 0.45 | 0.323 | 0.223 | 0 |
 
-Medians: full 43.3, control 47.7 meV/Å. Shell RMSE (0–2 / 2–4 / 4–6 / 6–8 / > 8 Å from the
+(The report's precondition column is a diagnostic over the first 300 neutral-vacancy frames; the registered entry gate is `dscc_arm1_gates.py` over all 1191 neutral-vacancy frames, the figures in the entry-gate entry above — seed 5 at 92.9 % — and it is what selects the seeds of any Arm 2+3.) Medians: full 43.3, control 47.7 meV/Å. Shell RMSE (0–2 / 2–4 / 4–6 / 6–8 / > 8 Å from the
 vacancy), full s0: 99 / 77 / 55 / 34 / 33; control s0: 111 / 87 / 61 / 47 / 32 meV/Å — the
 directional block's gain sits inside 8 Å; beyond 8 Å both heads are at the base's floor.
 Criteria (registered thresholds): (i) `pp` stop fraction 0/6 — **pass**; (ii) flanking-Pb

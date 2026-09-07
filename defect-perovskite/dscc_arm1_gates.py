@@ -31,6 +31,7 @@ def main() -> None:
     ap.add_argument("--dataset", default=str(HERE / "dataset_pbe"))
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--max_frames", type=int, default=0)
+    ap.add_argument("--no_ladder", action="store_true", help="precondition only (the Route B' ladder gate is closed)")
     args = ap.parse_args()
     torch.set_default_dtype(torch.float64)
     frames = load_frames(f"{args.dataset}/train.xyz", f"{args.dataset}/valid.xyz")
@@ -48,20 +49,24 @@ def main() -> None:
 
     report = {}
     for w in args.winners:
-        model = torch.load(Path(w) / "model.pt", weights_only=False, map_location=args.device).to(args.device).eval()
+        ckpt = Path(w) / "model_dscc.pt" if (Path(w) / "model_dscc.pt").exists() else Path(w) / "model.pt"
+        model = torch.load(ckpt, weights_only=False, map_location=args.device).to(args.device).eval()
         batches = []
         ds = dd.atomic_data([frames[i] for i in neutral_vac], z_table, 10.0)
         for b in torch_geometric.dataloader.DataLoader(ds, batch_size=8):
             batches.append(b.to(args.device).to_dict())
         pre = precondition.bound_state_precondition(model, batches)
         pre.pop("records", None)
+        print(Path(w).name, "precondition", pre["passed"], f"{pre['pass_fraction']:.3f}",
+              f"sep p50 {1000*pre['separation_p50']:.0f} meV, N_eff p50 {pre['n_eff_p50']:.2f}", flush=True)
+        if args.no_ladder:
+            report[Path(w).name] = {"precondition": pre}
+            continue
         model.route_b = True                      # the pattern needs r_split/q0 machinery only
         lad = ladder.local_neutrality_gate(model, unit, [(2, 2, 2), (3, 3, 3), (4, 4, 4)], z_table, 10.0, batch_fn)
         lad.pop("values", None)
         report[Path(w).name] = {"precondition": pre, "ladder": lad}
-        print(Path(w).name, "precondition", pre["passed"], f"{pre['pass_fraction']:.3f}",
-              f"sep p50 {1000*pre['separation_p50']:.0f} meV, N_eff p50 {pre['n_eff_p50']:.2f};",
-              "ladder q0 rel err", f"{lad['relative_error']['q0']:.3f}", "passed", lad["passed"],
+        print(Path(w).name, "ladder q0 rel err", f"{lad['relative_error']['q0']:.3f}", "passed", lad["passed"],
               "negative test", lad["negative_test_passed"], flush=True)
     json.dump(report, open(args.out, "w"), indent=1, default=str)
     print("saved", args.out)
