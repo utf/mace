@@ -101,3 +101,30 @@ def test_newton_chemical_potential_matches_bisection_to_the_floor():
     Hs = torch.stack([_random_h(9, 4), _random_h(9, 5)]); eps = torch.linalg.eigvalsh(Hs)
     mu = fl.chemical_potential(eps, torch.tensor([3.0, 5.0]), fl.SIGMA_S)
     assert torch.allclose(fl.occupations(eps, mu, fl.SIGMA_S).sum(-1), torch.tensor([3.0, 5.0]), atol=1e-12)
+
+
+def test_batched_backward_equals_per_frame_with_mixed_frontier_saturation():
+    """Regression (2026-09-07): the fixed-N correction of the divided-difference backward is
+    decided per frame. A batch of one gapped frame (frontier in a gap: every occupation
+    saturated, f' = 0) and one frame with a fractional frontier used to drop the correction
+    for both, so the batched cotangent on `H` differed from the per-frame one."""
+    torch.manual_seed(0)
+    n = 12
+    # frame 0: a gap of 2 eV around the frontier at N = 6; frame 1: two levels 0.02 eV apart
+    # straddling the frontier (fractional occupations at sigma_s = 0.05 eV)
+    eps0 = torch.cat([torch.linspace(-3.0, -1.0, 6), torch.linspace(1.0, 3.0, 6)])
+    eps1 = torch.cat([torch.linspace(-3.0, -0.5, 5), torch.tensor([-0.01, 0.01]), torch.linspace(0.5, 3.0, 5)])
+    Q0, _ = torch.linalg.qr(torch.randn(n, n)); Q1, _ = torch.linalg.qr(torch.randn(n, n))
+    H = torch.stack([Q0 @ torch.diag(eps0) @ Q0.T, Q1 @ torch.diag(eps1) @ Q1.T]).requires_grad_(True)
+    G = torch.randn(2, n, n); G = 0.5 * (G + G.transpose(-1, -2))
+    P = fl.fill(H, torch.tensor([6.0, 6.0]), fl.SIGMA_S).P
+    g_batched = torch.autograd.grad((P * G).sum(), H)[0]
+    for b in range(2):
+        Hb = H[b].detach().clone().requires_grad_(True)
+        Pb = fl.fill(Hb, 6.0, fl.SIGMA_S).P
+        gb = torch.autograd.grad((Pb * G[b]).sum(), Hb)[0]
+        assert torch.allclose(g_batched[b], gb, atol=1e-12, rtol=0), b
+    # and the fractional frame's correction is not zero (the case the batch used to drop)
+    Hb = H[1].detach().clone().requires_grad_(True)
+    assert float(torch.autograd.grad((fl.fill(Hb, 6.0, fl.SIGMA_S).P * G[1]).sum(), Hb)[0].abs().max()) > 0
+

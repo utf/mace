@@ -689,10 +689,21 @@ def _dk_eigenbasis(lam: torch.Tensor, f: torch.Tensor, t_el: float, tol: float,
                     df / safe)
 
     M = L * Ghat
+    # Fixed-N correction (mu moves with H), PER FRAME. The verbatim single-frame original
+    # tested `denom > 1e-12` as one scalar; applied to a batch that test read `.all()`,
+    # which switched the correction off for EVERY frame whenever one frame's frontier sat
+    # in a gap (all occupations saturated, f' = 0) -- the batched coupled gradient then
+    # disagreed with the per-frame one by orders of magnitude on the other frames
+    # (found 2026-09-07 by the batched-vs-per-graph gradient test; fixed here, the only
+    # deliberate departure from the verbatim copy). Frames with a saturated frontier get
+    # no correction (0/0 -> 0), the others their own.
     denom = fp.sum(-1)
-    if bool((denom.abs() > 1e-12).all()):
+    ok = denom.abs() > 1e-12
+    if bool(ok.any()):
         num = (fp * torch.diagonal(Ghat, dim1=-2, dim2=-1)).sum(-1)
-        M = M - torch.diag_embed(fp * (num / denom).unsqueeze(-1))
+        safe = torch.where(ok, denom, torch.ones_like(denom))
+        ratio = torch.where(ok, num / safe, torch.zeros_like(denom))
+        M = M - torch.diag_embed(fp * ratio.unsqueeze(-1))
     return M
 
 

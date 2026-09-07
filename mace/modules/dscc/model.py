@@ -33,8 +33,9 @@ from mace.modules.models import ScaleShiftMACE
 from mace.modules.dscc.fill import SIGMA_S
 from mace.modules.dscc.hamiltonian import (A_MAX_DEFAULT, B_MAX_DEFAULT, H0, Q_CUT_DEFAULT,
                                            R_CUT_DEFAULT)
-from mace.modules.dscc.kernels import (KernelConfig, gamma_lr, gamma_matrix, host_potential,
-                                       kernel_components)
+from mace.modules.dscc.ewald import gradient_of_contraction
+from mace.modules.dscc.kernels import (KernelConfig, gamma_lr, gamma_matrix, gamma_pair_derivative, host_potential,
+                                       kernel_components, kernel_pair_gradients)
 from mace.modules.dscc.scf import (ScfOptions, ScfResult, continuation_solve, continuation_solve_batched,
                                    solve_dscc, two_fillings)
 from mace.modules.dscc.species import (N0, S_REF, State, U_MAX_GFN1, neutral_count,
@@ -458,6 +459,14 @@ class MACEDSCC(nn.Module):
         create = bool(training)
         head_energy = torch.zeros(num_graphs, dtype=torch.float64, device=device)
         cotangent_terms: List[Tuple[torch.Tensor, torch.Tensor]] = []   # (tensor, cotangent)
+        # Training forces of the kernel terms (`-Tr(dP dV/dR) - 1/2 dq^T dGamma/dR dq`) from
+        # the kernels' PAIR derivatives (constants of the geometry) contracted with the
+        # attached charges: the same numbers as the cotangent route, without the
+        # second-order autograd graph through the lattice sums that `create_graph` would
+        # otherwise keep (~20 GB per four 79-atom frames). Route B' keeps the cotangent route.
+        use_pairs = (create and compute_force and not compute_stress and self.coupling and not self.route_b
+                     and getattr(self, "gamma_force_mode", "pairs") == "pairs")
+        pair_grad = torch.zeros_like(positions) if use_pairs else None
         dq_all = torch.zeros(positions.shape[0], dtype=torch.float64, device=device)
         diagnostics: Dict[str, List[Any]] = {"dq_sum": [], "n_atoms": []}
         sizes = (ptr[1:] - ptr[:-1])
@@ -504,10 +513,22 @@ class MACEDSCC(nn.Module):
                                                  implicit=training and self.scf_options.method == "newton")
                 head_energy = res.energy
                 dq_fixed = res.dq.detach()
-                V_fixed = torch.einsum("bij,bj->bi", gamma, dq_fixed) + (W if W is not None else 0.0)
-                H_sc = H - torch.diag_embed(V_fixed.repeat_interleave(4, dim=-1))
-                cotangent_terms.append((H_sc, 0.5 * (res.dP + res.dP.transpose(-1, -2))))
-                cotangent_terms.append((gamma, -0.5 * res.dq.unsqueeze(-1) * res.dq.unsqueeze(-2)))
+                dP_sym = 0.5 * (res.dP + res.dP.transpose(-1, -2))
+                if use_pairs:
+                    with torch.no_grad():
+                        pairs = [kernel_pair_gradients(pos_b[g], cell[g], self.kernel) for g in range(num_graphs)]
+                    gamma_p = gamma_pair_derivative(torch.stack([d[0] for d in pairs]), torch.stack([d[1] for d in pairs]),
+                                                    self.lambda_dir(), self.kernel.eps_inf)          # [B, n, n, 3]
+                    n_site = torch.diagonal(dP_sym, dim1=-2, dim2=-1).reshape(num_graphs, n_nodes, 4).sum(-1)
+                    A = (-0.5 * res.dq.unsqueeze(-1) * res.dq.unsqueeze(-2)
+                         - n_site.unsqueeze(-1) * dq_fixed.unsqueeze(-2))                             # [B, n, n]
+                    pair_grad = pair_grad + gradient_of_contraction(A, gamma_p).reshape(-1, 3)
+                    cotangent_terms.append((H, dP_sym))
+                else:
+                    V_fixed = torch.einsum("bij,bj->bi", gamma, dq_fixed) + (W if W is not None else 0.0)
+                    H_sc = H - torch.diag_embed(V_fixed.repeat_interleave(4, dim=-1))
+                    cotangent_terms.append((H_sc, dP_sym))
+                    cotangent_terms.append((gamma, -0.5 * res.dq.unsqueeze(-1) * res.dq.unsqueeze(-2)))
                 dq_all = res.dq.reshape(-1)
                 for key, values in (("iterations", res.iterations), ("converged", res.converged),
                                     ("residual", res.residual), ("commutator", res.commutator), ("rho", res.rho),
@@ -599,11 +620,20 @@ class MACEDSCC(nn.Module):
                 # attached dq is used, because the attached dq is the fill's charge at
                 # FIXED potential, not the self-consistent one.
                 dq_fixed = res.dq.detach()
-                H_sc = H - torch.diag((gamma @ dq_fixed + (W if W is not None else 0.0)).repeat_interleave(4))
-                cotangent_terms.append((H_sc, dP_sym))
-                cotangent_terms.append((gamma, -0.5 * res.dq.unsqueeze(-1) * res.dq.unsqueeze(0)))
-                # (the cotangent keeps dq's graph for the training gradient; autograd does
-                # not differentiate through grad_outputs)
+                if use_pairs:
+                    with torch.no_grad():
+                        d_sr, d_lr = kernel_pair_gradients(pos_g, cell_g, self.kernel)
+                    gamma_p = gamma_pair_derivative(d_sr, d_lr, self.lambda_dir(), self.kernel.eps_inf)
+                    n_site = torch.diagonal(dP_sym).reshape(-1, 4).sum(-1)
+                    A = -0.5 * res.dq.unsqueeze(-1) * res.dq.unsqueeze(0) - n_site.unsqueeze(-1) * dq_fixed.unsqueeze(0)
+                    pair_grad = pair_grad.index_add(0, torch.arange(lo, hi, device=device), gradient_of_contraction(A, gamma_p))
+                    cotangent_terms.append((H, dP_sym))
+                else:
+                    H_sc = H - torch.diag((gamma @ dq_fixed + (W if W is not None else 0.0)).repeat_interleave(4))
+                    cotangent_terms.append((H_sc, dP_sym))
+                    cotangent_terms.append((gamma, -0.5 * res.dq.unsqueeze(-1) * res.dq.unsqueeze(0)))
+                    # (the cotangent keeps dq's graph for the training gradient; the
+                    # gradient is differentiable in grad_outputs under create_graph)
                 dq_all[nodes] = res.dq
                 for key, value in (("iterations", res.iterations), ("converged", res.converged),
                                    ("residual", res.residual), ("commutator", res.commutator),
@@ -661,6 +691,8 @@ class MACEDSCC(nn.Module):
                     for k, g in enumerate(g_head):
                         if g is not None:
                             grads[k] = grads[k] + g
+                if pair_grad is not None:
+                    grads[0] = grads[0] + pair_grad
             result["forces"] = -grads[0]
             if compute_stress:
                 volume = torch.det(data["cell"].view(-1, 3, 3)).abs()

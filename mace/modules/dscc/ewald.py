@@ -110,14 +110,23 @@ def reciprocal_vectors(cell: torch.Tensor, k_c: float) -> torch.Tensor:
     return k[keep]
 
 
+def pair_vectors_of(positions: torch.Tensor) -> torch.Tensor:
+    """`d0_ij = r_i - r_j`, `[N, N, 3]`: the pair leaf every lattice sum is a function of."""
+    return positions.unsqueeze(1) - positions.unsqueeze(0)
+
+
 def lattice_sum(positions: torch.Tensor, cell: torch.Tensor,
                 pair_function: Callable[[torch.Tensor], torch.Tensor],
-                self_value: torch.Tensor, r_c: float, chunk: int = 32) -> torch.Tensor:
+                self_value: torch.Tensor, r_c: float, chunk: int = 32,
+                pair_vectors: Optional[torch.Tensor] = None) -> torch.Tensor:
     """`M_ij = sum_L phi(|r_i - r_j + L|)` over images within `r_c` (all `L` of the
     enclosing box), the `i = j, L = 0` term replaced by `self_value` (`[N]` or scalar): the
-    analytic `r -> 0` limit of `phi`. `pair_function` maps distances `[N, N, c]` to values."""
+    analytic `r -> 0` limit of `phi`. `pair_function` maps distances `[N, N, c]` to values.
+    `pair_vectors` (`d0_ij = r_i - r_j`, `[N, N, 3]`) may be given as the leaf instead of
+    `positions`: then `M_ij` is a function of `d0_ij` alone, which is what `pair_gradient`
+    differentiates."""
     n = positions.shape[0]
-    d0 = positions.unsqueeze(1) - positions.unsqueeze(0)                    # [N, N, 3]
+    d0 = pair_vectors_of(positions) if pair_vectors is None else pair_vectors   # [N, N, 3]
     # Minimum-image pair separations: the integer shift is a constant of the local
     # geometry (gradients flow through `d0` and `cell`), and it bounds the separations by
     # the cell so the image box stays small and complete.
@@ -150,11 +159,15 @@ def lattice_sum(positions: torch.Tensor, cell: torch.Tensor,
 
 def ewald_matrix(positions: torch.Tensor, cell: torch.Tensor,
                  width_i: Union[float, torch.Tensor], width_j: Optional[Union[float, torch.Tensor]] = None,
-                 eta: Optional[float] = None, tol: float = EWALD_TOL) -> torch.Tensor:
+                 eta: Optional[float] = None, tol: float = EWALD_TOL,
+                 pair_vectors: Optional[torch.Tensor] = None, k_chunk: int = 256) -> torch.Tensor:
     """`E_PBC` in eV per unit charge pair (`COULOMB` included): `[N, N]`, symmetric, the
     diagonal including the Gaussian self term. `width_i` (`width_j`) are the Gaussian widths
     of the charges on the row (column) side -- a scalar or `[N]`; `width_j` defaults to
-    `width_i`. Gradients flow to `positions` and `cell`."""
+    `width_i`. Gradients flow to `positions` and `cell`. With `pair_vectors` (`d0_ij =
+    r_i - r_j`) the matrix is evaluated as a function of that leaf instead -- the real-space
+    sum through `lattice_sum`, the reciprocal sum per pair, `sum_k w_k cos(k . d0_ij)` --
+    so that each entry depends on its own pair vector only (`pair_gradient`)."""
     if positions.dtype != torch.float64 or cell.dtype != torch.float64:
         raise TypeError("the Ewald matrix is evaluated in float64 (plan section 1)")
     n = positions.shape[0]
@@ -176,15 +189,23 @@ def ewald_matrix(positions: torch.Tensor, cell: torch.Tensor,
 
     # r -> 0 of the remainder on the self pair: 2/(sqrt(pi) w_ii) - 1/(sqrt(pi) eta).
     self_value = 2.0 / (_SQRT_PI * torch.diagonal(w)) - 1.0 / (_SQRT_PI * eta)
-    real = lattice_sum(positions, cell, remainder, self_value, r_c)
+    real = lattice_sum(positions, cell, remainder, self_value, r_c, pair_vectors=pair_vectors)
     # Reciprocal space: (4 pi / V) sum_k exp(-eta^2 k^2) / k^2 cos(k . (r_i - r_j)).
     k = reciprocal_vectors(cell, k_c)                                      # [n_k, 3]
     k2 = (k * k).sum(dim=-1)
     weight = torch.exp(-(eta ** 2) * k2) / k2                              # [n_k]
-    phase = positions @ k.transpose(0, 1)                                  # [N, n_k]
-    c = torch.cos(phase) * weight.sqrt().unsqueeze(0)
-    s = torch.sin(phase) * weight.sqrt().unsqueeze(0)
-    recip = (4.0 * math.pi / volume) * (c @ c.transpose(0, 1) + s @ s.transpose(0, 1))
+    if pair_vectors is None:
+        phase = positions @ k.transpose(0, 1)                              # [N, n_k]
+        c = torch.cos(phase) * weight.sqrt().unsqueeze(0)
+        s = torch.sin(phase) * weight.sqrt().unsqueeze(0)
+        recip = (4.0 * math.pi / volume) * (c @ c.transpose(0, 1) + s @ s.transpose(0, 1))
+    else:
+        # Per pair (k is a reciprocal-lattice vector, so the minimum-image shift is immaterial).
+        recip = torch.zeros(n, n, dtype=positions.dtype, device=positions.device)
+        for start in range(0, k.shape[0], k_chunk):
+            kk = k[start:start + k_chunk]                                     # [c, 3]
+            recip = recip + (torch.cos(pair_vectors @ kk.transpose(0, 1)) * weight[start:start + k_chunk]).sum(-1)
+        recip = (4.0 * math.pi / volume) * recip
     background = -4.0 * math.pi * eta ** 2 / volume
     return COULOMB * (real + recip + background)
 
@@ -196,11 +217,39 @@ def self_term(width: Union[float, torch.Tensor]) -> torch.Tensor:
 
 def short_range_lattice_sum(positions: torch.Tensor, cell: torch.Tensor,
                             pair_function: Callable[[torch.Tensor], torch.Tensor],
-                            self_value: Union[float, torch.Tensor], r_c: float) -> torch.Tensor:
+                            self_value: Union[float, torch.Tensor], r_c: float,
+                            pair_vectors: Optional[torch.Tensor] = None) -> torch.Tensor:
     """Regime B: `K_ij = sum_L s(|r_ij + L|)` for a short-ranged `s`, images within `r_c`
     (the caller converges `r_c` against the tolerance); `K_ii = s(0) + sum_{L != 0} s(|L|)`
     with `s(0) = self_value`. Rewrapping-invariant by construction."""
-    return lattice_sum(positions, cell, pair_function, torch.as_tensor(self_value, dtype=positions.dtype, device=positions.device), r_c)
+    return lattice_sum(positions, cell, pair_function, torch.as_tensor(self_value, dtype=positions.dtype, device=positions.device), r_c,
+                       pair_vectors=pair_vectors)
+
+
+def pair_gradient(matrix_of_pairs: Callable[[torch.Tensor], Sequence[torch.Tensor]],
+                  positions: torch.Tensor) -> Tuple[torch.Tensor, ...]:
+    """`D_ij = d M_ij / d d0_ij` for each matrix `M` returned by `matrix_of_pairs(d0)`, a
+    function of the pair leaf `d0_ij = r_i - r_j` alone entry by entry (a lattice sum or the
+    per-pair Ewald matrix): one first-order backward per matrix, no graph kept. `[N, N, 3]`
+    each, detached. The geometry derivative of any contraction `sum_ij A_ij M_ij(R)` is then
+    `d/dR_k = sum_j A_kj D_kj - sum_i A_ik D_ik` (`gradient_of_contraction`), which is how
+    the training path takes the force of the kernel terms without a second-order graph
+    through the lattice sums."""
+    with torch.enable_grad():                       # callers may sit inside no_grad: the leaf needs a graph
+        d0 = pair_vectors_of(positions.detach()).requires_grad_(True)
+        matrices = matrix_of_pairs(d0)
+        out = []
+        for m, M in enumerate(matrices):
+            (D,) = torch.autograd.grad(M.sum(), d0, retain_graph=m + 1 < len(matrices))
+            out.append(D.detach())
+    return tuple(out)
+
+
+def gradient_of_contraction(A: torch.Tensor, D: torch.Tensor) -> torch.Tensor:
+    """`d/dR_k sum_ij A_ij M_ij` from the pair derivatives `D_ij = dM_ij/d(r_i - r_j)`:
+    `sum_j A_kj D_kj - sum_i A_ik D_ik`. `A [..., N, N]` (attached), `D [..., N, N, 3]`
+    (constant); returns `[..., N, 3]`."""
+    return torch.einsum("...kj,...kjc->...kc", A, D) - torch.einsum("...ik,...ikc->...kc", A, D)
 
 
 def madelung_constant_cubic() -> float:

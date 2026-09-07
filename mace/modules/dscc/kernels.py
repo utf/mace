@@ -30,7 +30,7 @@ from typing import Dict, Mapping, Optional, Sequence, Tuple
 import torch
 from scipy.special import erfcinv
 
-from mace.modules.dscc.ewald import (COULOMB, EWALD_TOL, ewald_matrix, self_term,
+from mace.modules.dscc.ewald import (COULOMB, EWALD_TOL, ewald_matrix, pair_gradient, self_term,
                                      short_range_lattice_sum)
 
 _SQRT_PI = math.sqrt(math.pi)
@@ -72,10 +72,15 @@ def minimum_image_distances(positions: torch.Tensor, cell: torch.Tensor) -> torc
     return (d - shift @ cell).norm(dim=-1)
 
 
-def k_sr_regime_a(positions: torch.Tensor, cell: torch.Tensor, cfg: KernelConfig) -> torch.Tensor:
+def k_sr_regime_a(positions: torch.Tensor, cell: torch.Tensor, cfg: KernelConfig,
+                  pair_vectors: Optional[torch.Tensor] = None) -> torch.Tensor:
     n = positions.shape[0]
     eye = torch.eye(n, dtype=torch.bool, device=positions.device)
-    r = minimum_image_distances(positions, cell)
+    if pair_vectors is None:
+        r = minimum_image_distances(positions, cell)
+    else:
+        shift = torch.round(pair_vectors.detach() @ torch.linalg.inv(cell.detach()))
+        r = (pair_vectors - shift @ cell).norm(dim=-1)
     r_safe = torch.where(eye, torch.ones_like(r), r)
     off = COULOMB * torch.erf(r_safe / (2.0 * cfg.r_g)) / r_safe * switch_c2(r_safe, cfg.r_d1, cfg.r_d2)
     diag = self_term(cfg.r_g).to(dtype=positions.dtype, device=positions.device).expand(n)
@@ -91,7 +96,7 @@ def regime_b_cutoff(cfg: KernelConfig) -> float:
 
 
 def k_sr_regime_b(positions: torch.Tensor, cell: torch.Tensor, cfg: KernelConfig,
-                  r_c: Optional[float] = None) -> torch.Tensor:
+                  r_c: Optional[float] = None, pair_vectors: Optional[torch.Tensor] = None) -> torch.Tensor:
     two_rg, r_s = 2.0 * cfg.r_g, cfg.r_s
 
     def s_of(r: torch.Tensor) -> torch.Tensor:
@@ -99,21 +104,43 @@ def k_sr_regime_b(positions: torch.Tensor, cell: torch.Tensor, cfg: KernelConfig
 
     s_zero = COULOMB * (1.0 / (_SQRT_PI * cfg.r_g) - 2.0 / (_SQRT_PI * r_s))
     return short_range_lattice_sum(positions, cell, s_of, s_zero,
-                                   regime_b_cutoff(cfg) if r_c is None else r_c)
+                                   regime_b_cutoff(cfg) if r_c is None else r_c, pair_vectors=pair_vectors)
 
 
 def kernel_components(positions: torch.Tensor, cell: torch.Tensor, cfg: KernelConfig,
-                      eta: Optional[float] = None) -> Tuple[torch.Tensor, torch.Tensor]:
-    """`(K_SR, K_LR)` with `K_SR + K_LR = E_PBC`."""
+                      eta: Optional[float] = None,
+                      pair_vectors: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    """`(K_SR, K_LR)` with `K_SR + K_LR = E_PBC`. With `pair_vectors` both are functions of
+    the pair leaf `d0_ij = r_i - r_j` entry by entry (see `ewald.pair_gradient`)."""
     if cfg.regime == "A":
-        k_sr = k_sr_regime_a(positions, cell, cfg)
-        k_lr = ewald_matrix(positions, cell, cfg.r_g, eta=eta, tol=cfg.tol) - k_sr
+        k_sr = k_sr_regime_a(positions, cell, cfg, pair_vectors=pair_vectors)
+        k_lr = ewald_matrix(positions, cell, cfg.r_g, eta=eta, tol=cfg.tol, pair_vectors=pair_vectors) - k_sr
     else:
-        k_sr = k_sr_regime_b(positions, cell, cfg)
+        k_sr = k_sr_regime_b(positions, cell, cfg, pair_vectors=pair_vectors)
         # The Ewald kernel of the broad Gaussian erf(r / r_s) / r: two Gaussians of width
         # r_s / 2 (pair width sqrt(2 (2 (r_s/2)^2)) = r_s).
-        k_lr = ewald_matrix(positions, cell, 0.5 * cfg.r_s, eta=eta, tol=cfg.tol)
+        k_lr = ewald_matrix(positions, cell, 0.5 * cfg.r_s, eta=eta, tol=cfg.tol, pair_vectors=pair_vectors)
     return k_sr, k_lr
+
+
+def kernel_pair_gradients(positions: torch.Tensor, cell: torch.Tensor, cfg: KernelConfig,
+                          eta: Optional[float] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    """`(D_SR, D_LR)`, `[N, N, 3]` each: `d K_ij / d(r_i - r_j)` of the two kernel
+    components, detached constants of the geometry (two first-order backwards through the
+    lattice sums, no graph kept)."""
+    pos, cel = positions.detach(), cell.detach()
+    return pair_gradient(lambda d0: kernel_components(pos, cel, cfg, eta=eta, pair_vectors=d0), pos)
+
+
+def gamma_pair_derivative(d_sr: torch.Tensor, d_lr: torch.Tensor, lambda_dir: torch.Tensor,
+                          eps_inf: float) -> torch.Tensor:
+    """`d Gamma_ij / d(r_i - r_j)` from the components' pair derivatives: the off-diagonal
+    `(D_LR + lambda_dir D_SR) / eps_inf` (attached to `lambda_dir`), zero on the diagonal
+    (`K_LR_ii` and `U_eff` do not move with the geometry). `[..., N, N, 3]`."""
+    n = d_sr.shape[-2]
+    eye = torch.eye(n, dtype=torch.bool, device=d_sr.device).unsqueeze(-1)
+    off = (d_lr + lambda_dir * d_sr) / eps_inf
+    return torch.where(eye, torch.zeros_like(off), off)
 
 
 def gamma_matrix(k_sr: torch.Tensor, k_lr: torch.Tensor, lambda_dir: torch.Tensor,

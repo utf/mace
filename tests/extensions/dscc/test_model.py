@@ -474,3 +474,59 @@ class TestFsccPath:
             e_plus = float(m(_batch([plus]), compute_force=False)["energy"])
             e_minus = float(m(_batch([minus]), compute_force=False)["energy"])
             assert float(out["forces"][atom, comp]) == pytest.approx(-(e_plus - e_minus) / (2 * h), abs=3e-6)
+
+
+class TestPairForcePath:
+    """The training forces of the kernel terms from the kernels' pair derivatives (no
+    second-order graph through the lattice sums): the same forces as the inference route
+    and the same parameter gradients as the cotangent route under create_graph."""
+
+    @pytest.mark.parametrize("regime", ["A", "B"])
+    def test_training_forces_and_gradients_match_the_cotangent_route(self, regime):
+        m = _coupled(regime=regime)
+        batch = _batch([VACP])
+        ref = m(dict(batch), compute_force=True)                          # inference: cotangent route
+        params = [p for p in m.parameters() if p.requires_grad]
+        torch.manual_seed(3)
+        target = ref["forces"].detach() + 0.01 * torch.randn_like(ref["forces"])
+        grads = {}
+        for mode in ("pairs", "autograd"):
+            m.gamma_force_mode = mode
+            out = m(dict(batch), training=True, compute_force=True)
+            assert float((out["forces"] - ref["forces"]).abs().max()) < 1e-9, mode
+            assert out["forces"].requires_grad
+            loss = ((out["forces"] - target) ** 2).sum()
+            grads[mode] = torch.autograd.grad(loss, params, allow_unused=True)
+        m.gamma_force_mode = "pairs"
+        n_compared = 0
+        for gp, ga, p in zip(grads["pairs"], grads["autograd"], params):
+            if gp is None and ga is None:
+                continue
+            assert gp is not None and ga is not None
+            scale = max(float(ga.abs().max()), 1e-6)
+            assert float((gp - ga).abs().max()) <= 1e-8 * scale + 1e-12, (p.shape, float((gp - ga).abs().max()), scale)
+            n_compared += 1
+        assert n_compared > 0 and grads["pairs"][params.index(m.lambda_raw)] is not None
+
+    def test_batched_training_path_matches_per_graph(self):
+        from mace.modules.dscc.scf import ScfOptions
+        m = _coupled(regime="B")
+        m.scf_options = ScfOptions(tol_q=1e-11, tol_E=1e-11, continuation_steps=2)
+        vac_b = _frame(_perovskite(remove_cl=3, seed=2), [0, 0, 1, 0], 1)
+        out = m(_batch([VACP, vac_b]), training=True, compute_force=True)
+        assert out["diagnostics"].get("batched") is True
+        params = [p for p in m.parameters() if p.requires_grad]
+        g_batched = torch.autograd.grad((out["forces"] ** 2).sum(), params, allow_unused=True)
+        forces, gs = [], None
+        for atoms in (VACP, vac_b):
+            single = m(_batch([atoms, VAC0]), training=True, compute_force=True)   # reference graph -> per-graph path
+            n = len(atoms)
+            forces.append(single["forces"][:n])
+            g = torch.autograd.grad((single["forces"][:n] ** 2).sum(), params, allow_unused=True)
+            gs = list(g) if gs is None else [None if a is None else a + b for a, b in zip(gs, g)]
+        assert float((out["forces"] - torch.cat(forces)).abs().max()) < 1e-8
+        for gb, gp in zip(g_batched, gs):
+            if gb is None and gp is None:
+                continue
+            assert float((gb - gp).abs().max()) <= 1e-7 * max(float(gp.abs().max()), 1e-6) + 1e-12
+
