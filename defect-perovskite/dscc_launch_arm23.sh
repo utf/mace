@@ -5,8 +5,8 @@
 #   bash defect-perovskite/dscc_launch_arm23.sh            # ROUTES=A PER_GPU=3 LOCAL_N=2 EPOCHS=30
 set -euo pipefail
 W=$(cd "$(dirname "$0")/.." && pwd)
-ROUTES=${ROUTES:-A}; PER_GPU=${PER_GPU:-3}; LOCAL_N=${LOCAL_N:-2}; EPOCHS=${EPOCHS:-30}
-python "$W/defect-perovskite/dscc_make_arm23_queue.py" --routes "$ROUTES" --epochs "$EPOCHS" --out "$HOME/runs/arm23_queue_all.txt"
+ROUTES=${ROUTES:-A}; PER_GPU=${PER_GPU:-3}; LOCAL_N=${LOCAL_N:-2}; EPOCHS=${EPOCHS:-30}; SKIP=${SKIP:-5}
+python "$W/defect-perovskite/dscc_make_arm23_queue.py" --routes "$ROUTES" --epochs "$EPOCHS" --skip_seeds "$SKIP" --out "$HOME/runs/arm23_queue_all.txt"
 head -n "$LOCAL_N" "$HOME/runs/arm23_queue_all.txt" > "$HOME/runs/arm23_queue_local.txt"
 tail -n +$((LOCAL_N + 1)) "$HOME/runs/arm23_queue_all.txt" > "$HOME/runs/arm23_queue_b3.txt"
 scp -q "$HOME/runs/arm23_queue_b3.txt" b3:~/runs/arm23_queue_b3.txt

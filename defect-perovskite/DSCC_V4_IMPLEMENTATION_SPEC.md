@@ -253,8 +253,11 @@ restricted to one shape class); with Φ = 0 the head carries no electrostatics, 
 **Arm-2+3 entry gates on the trained Arm-1 winners (2026-09-07 00:40; `full_s0..s3`,
 before the Arm-1 decision is opened).**
 * Bound-state precondition (`Delta_c` 0.5 eV, `N_loc` 4, ≥ 95 % of the 1191 neutral-vacancy
-  frames): **passes on all four** — 96.1 / 96.3 / 97.2 / 96.8 %, HOMO separation p50
-  814–876 meV, `N_eff` p50 2.2–2.5.
+  frames): **passes on five of six** — 96.1 / 96.3 / 97.2 / 96.8 / 95.5 % (s0–s4), HOMO
+  separation p50 782–876 meV, `N_eff` p50 2.2–2.5; **`full_s5` fails at 92.9 %** (separation
+  p50 768 meV). Each Arm-2+3 seed starts from its own Arm-1 `H0`, so seed 5's coupled arms
+  do not open: Arm 2+3 runs with seeds 0–4 (recorded deviation from the six-seed protocol;
+  `tau_noise` uses five seeds).
 * Local-neutrality ladder gate (cubic CsPbCl3 ladder, fixed unit carrier on a flanking Pb,
   the model's `q0` pattern vs the species pattern): **fails on all four** — the `1/L` slope of
   `Phi_cc + E_SF` is 53–65 % off Madelung on the 2/3/4 ladder and still 51 % on the

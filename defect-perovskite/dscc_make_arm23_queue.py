@@ -14,10 +14,14 @@ ap.add_argument("--epochs", type=int, default=60)
 ap.add_argument("--seeds", type=int, default=6)
 ap.add_argument("--ablation", type=int, default=1)
 ap.add_argument("--routes", default="A", help="A, Bp or A,Bp (Route B' only after its ladder gate passes)")
+ap.add_argument("--skip_seeds", default="", help="seeds whose Arm-1 H0 failed the bound-state precondition")
 args = ap.parse_args()
 routes = tuple(args.routes.split(","))
+skip = {int(x) for x in args.skip_seeds.split(",") if x}
 lines = []
 for seed in range(args.seeds):
+    if seed in skip:
+        continue
     init = f"{args.winners}/dscc_arm1_full_s{seed}/h0_state.pt"      # the converted H0 state (sweep-safe)
     common = f"--seed {seed} --fold {seed % 4} --epochs {args.epochs} --directional 1 --regime B --init_from {init}"
     for route in routes:
