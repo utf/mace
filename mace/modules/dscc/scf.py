@@ -79,9 +79,11 @@ class ScfOptions:
     damping: str = "newton"      # "newton": damped Newton, the step judged by the NEXT iteration's fill (v4.5,
                                  # no trial re-diagonalisation); "lm": Levenberg-Marquardt; "backtrack": pre-v4.5
     # The tangent predictor between continuation stages is implemented and selectable but
-    # OFF by default: on the hard 159-atom class its start is hair-trigger sensitive (a stage
-    # exhausted `n_max` in two of four otherwise identical runs) for a saving of about one
-    # iteration in fifteen on first visits only (gate, 2026-09-07; tracker C9).
+    # OFF by default. Measured on real frames (gate, 2026-09-07; tracker C9): it saves one
+    # iteration in fifteen on 79-atom frames (15 -> 14) and costs on the hard 159-atom class
+    # (40 -> 42 iterations at lambda 0.05; 18 -> 23 iterations, 47 fills against 19, at
+    # lambda 0.5), on first visits only (one epoch in sixty plus the 5 % check). It does not
+    # pay for itself on this data; the fixed points are the same (<= 2.4e-9).
     predictor: bool = False      # continuation: first-order (tangent) predictor of the next stage's dq
     predictor_trust: float = 1.0 # the predicted change is capped at this multiple of the previous stage's change
     lm_mu0: float = 1e-6         # LM: initial damping, relative to diag(A^T A) (Newton's step to 1e-6)
