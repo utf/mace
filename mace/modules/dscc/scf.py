@@ -408,10 +408,11 @@ def solve_dscc_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[torch.T
                        options: Optional[ScfOptions] = None, implicit: bool = False) -> BatchedScfResult:
     """`solve_dscc` for a batch of EQUAL-SIZED graphs at once: `H0 [B, 4n, 4n]`, `gamma
     [B, N, N]`, per-graph counts. One batched `eigh` and fill per iteration; the damped
-    Newton step, its backtracking and the convergence test are per graph (masked), and a
-    graph whose damping fails takes a plain damped fixed-point step (`mixing`) instead of
-    the per-graph Anderson history -- the only difference from the reference solver, which
-    the tests bound. `implicit` attaches the fixed point's parameter derivative per graph."""
+    Newton step, its backtracking, the Anderson fallback on the graph's own history and
+    the convergence test are per graph (masked) -- the reference solver's algorithm, graph
+    by graph (an earlier version fell back to a plain damped step, which stalled on a
+    159-atom frame the reference solver converges in 40 iterations). `implicit` attaches
+    the fixed point's parameter derivative per graph."""
     opt = options or ScfOptions()
     B, dim = H0.shape[0], H0.shape[-1]
     n_atoms = dim // ORBITALS
@@ -420,6 +421,8 @@ def solve_dscc_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[torch.T
     iterations = torch.zeros(B, dtype=torch.long, device=H0.device)
     energy_prev = torch.full((B,), float("nan"), dtype=H0.dtype, device=H0.device)
     history: List[torch.Tensor] = []
+    dq_hist: List[List[torch.Tensor]] = [[] for _ in range(B)]
+    res_hist: List[List[torch.Tensor]] = [[] for _ in range(B)]
     with torch.no_grad():
         for k in range(opt.n_max):
             sol = _batched_fillings(H0, gamma, W, dq, n_s, n_ref, sigma_s)
@@ -435,9 +438,14 @@ def solve_dscc_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[torch.T
             if bool(converged.all()):
                 break
             active = ~converged
-            # Newton step per active graph.
+            # Newton step per active graph (its history appended first, as in `solve_dscc`).
             step = torch.zeros_like(dq)
             for b in torch.nonzero(active).reshape(-1).tolist():
+                dq_hist[b].append(dq[b])
+                res_hist[b].append(res[b])
+                if len(dq_hist[b]) > opt.history:
+                    dq_hist[b].pop(0)
+                    res_hist[b].pop(0)
                 V_b = gamma[b] @ dq[b] + (W[b] if W is not None else 0.0)
                 H_b = H0[b] - site_potential_matrix(V_b)
                 jac = hole_response(H_b, (int(n_s[0][b]), int(n_s[1][b])), (int(n_ref[0][b]), int(n_ref[1][b])),
@@ -454,7 +462,9 @@ def solve_dscc_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[torch.T
                 if bool((accepted | ~active).all()):
                     break
             newton_dq = dq + scale.unsqueeze(-1) * step
-            fallback_dq = dq + opt.mixing * res
+            fallback_dq = dq.clone()
+            for b in torch.nonzero(active & ~accepted).reshape(-1).tolist():
+                fallback_dq[b] = _anderson(dq_hist[b], res_hist[b], opt.mixing)
             dq = torch.where((active & accepted).unsqueeze(-1), newton_dq,
                              torch.where(active.unsqueeze(-1), fallback_dq, dq))
     # Attached pass at the fixed point (per graph implicit derivative when asked).
