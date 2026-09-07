@@ -472,14 +472,14 @@ class MACEDSCC(nn.Module):
         dq_all = torch.zeros(positions.shape[0], dtype=torch.float64, device=device)
         diagnostics: Dict[str, List[Any]] = {"dq_sum": [], "n_atoms": []}
         sizes = (ptr[1:] - ptr[:-1])
-        # v4.5 warm starts: a batch whose graphs ALL carry a stored `dq` takes the batched
-        # warm-started solve; none -> the batched continuation; a mixture -> per graph.
+        # v4.5 warm starts: a uniform batch stays on the batched path whatever its mixture
+        # of stored and first-visit graphs -- the first visits get their continuation on the
+        # sub-batch (detached) and every graph then takes the batched warm-started solve
+        # (the per-graph path on a mixed 159-atom batch cost ~0.4 GB more per process).
         if warm_start is not None and all(w is None for w in warm_start):
             warm_start = None
-        starts = (torch.stack([w.detach().to(device) for w in warm_start])
-                  if warm_start is not None and all(w is not None for w in warm_start) else None)
         uniform = (all(not s_.is_reference for s_ in states) and bool((sizes == sizes[0]).all())
-                   and (warm_start is None or starts is not None) and not getattr(self, "fscc", ""))
+                   and not getattr(self, "fscc", ""))
         if uniform:
             # Equal sizes, no reference graph: one [B, 4n, 4n] Hamiltonian, batched fills
             # (and the batched solver when the coupling is on), block-diagonal cotangents --
@@ -522,13 +522,36 @@ class MACEDSCC(nn.Module):
                     W = torch.einsum("bij,bj->bi", torch.stack(Ws), self.pattern_scale() * q0)
                     diagnostics["q0_sum"] = q0.detach().sum(-1).cpu().tolist()
                     diagnostics["compensation_cloud"] = [self.compensation_cloud(q0[g], sp_b[g], pos_b[g], cell[g]) for g in range(num_graphs)]
-                if starts is not None:
-                    res = solve_dscc_batched(H, gamma, counts_s, counts_r, self.sigma_s, W, starts, self.scf_options,
-                                             implicit=training and self.scf_options.method == "newton")
-                else:
+                implicit = training and self.scf_options.method == "newton"
+                first_visit_fills = [0] * num_graphs
+                if warm_start is None:
                     res = continuation_solve_batched(H, gamma, counts_s, counts_r, self.sigma_s, W, self.scf_options,
-                                                     implicit=training and self.scf_options.method == "newton")
-                diagnostics["warm_started"] = starts is not None
+                                                     implicit=implicit)
+                else:
+                    starts = torch.zeros(num_graphs, n_nodes, dtype=torch.float64, device=device)
+                    missing = [g for g, w in enumerate(warm_start) if w is None]
+                    for g, w in enumerate(warm_start):
+                        if w is not None:
+                            starts[g] = w.detach().to(device)
+                    if missing:
+                        # First visits inside a warm batch: their continuation on the
+                        # sub-batch, detached; the batched warm solve below re-converges
+                        # from its fixed point in a step or two (the same fixed point).
+                        m = torch.tensor(missing, device=device)
+                        with torch.no_grad():
+                            sub = continuation_solve_batched(
+                                H[m].detach(), gamma[m].detach(), (counts_s[0][m], counts_s[1][m]),
+                                (counts_r[0][m], counts_r[1][m]), self.sigma_s,
+                                None if W is None else W[m].detach(), self.scf_options, implicit=False)
+                        starts[m] = sub.dq.detach()
+                        for j, g in enumerate(missing):
+                            first_visit_fills[g] = int(sub.n_fills[j])
+                    res = solve_dscc_batched(H, gamma, counts_s, counts_r, self.sigma_s, W, starts, self.scf_options,
+                                             implicit=implicit)
+                    res.n_fills = [a + b for a, b in zip(res.n_fills, first_visit_fills)]
+                    res.iterations = [a + b for a, b in zip(res.iterations, first_visit_fills)]
+                diagnostics["warm_started"] = warm_start is not None
+                diagnostics["first_visits"] = int(sum(1 for f in first_visit_fills if f)) if warm_start is not None else num_graphs
                 head_energy = res.energy
                 dq_fixed = res.dq.detach()
                 dP_sym = 0.5 * (res.dP + res.dP.transpose(-1, -2))

@@ -530,6 +530,33 @@ class TestPairForcePath:
             assert float((out["energy"] - ref["energy"]).abs().max()) < 1e-10
             assert not out["forces"].requires_grad
 
+    def test_mixed_warm_batch_stays_batched_and_matches(self):
+        """v4.5: a uniform batch with one stored dq and one first visit takes the batched
+        path (the first visit's continuation on the sub-batch), with the fixed points,
+        forces and gradients of the all-continuation batch."""
+        from mace.modules.dscc.scf import ScfOptions
+        m = _coupled(regime="B")
+        m.scf_options = ScfOptions(tol_q=1e-11, tol_E=1e-11)
+        vac_b = _frame(_perovskite(remove_cl=0, seed=1), [0, 0, 1, 0], 1)
+        batch = _batch([VACP, vac_b])
+        params = [p for p in m.parameters() if p.requires_grad]
+        ref = m(dict(batch), training=True, compute_force=True)
+        assert ref["diagnostics"].get("batched") is True and ref["diagnostics"].get("first_visits") == 2
+        g_ref = torch.autograd.grad((ref["forces"] ** 2).sum(), params, allow_unused=True)
+        n = len(VACP)
+        stored = ref["dq"].detach()[:n] + 1e-3            # a slightly stale stored dq for the first graph
+        out = m(dict(batch), training=True, compute_force=True, warm_start=[stored, None])
+        d = out["diagnostics"]
+        assert d.get("batched") is True and d.get("warm_started") is True and d.get("first_visits") == 1
+        assert float((out["dq"] - ref["dq"]).abs().max()) < 1e-9
+        assert float((out["forces"] - ref["forces"]).abs().max()) < 1e-8
+        g = torch.autograd.grad((out["forces"] ** 2).sum(), params, allow_unused=True)
+        for a, b in zip(g, g_ref):
+            if a is None and b is None:
+                continue
+            assert float((a - b).abs().max()) <= 1e-7 * max(float(b.abs().max()), 1e-6) + 1e-12
+        assert d["iterations"][0] < ref["diagnostics"]["iterations"][0]     # the warm graph: a few steps
+
     def test_batched_training_path_matches_per_graph(self):
         from mace.modules.dscc.scf import ScfOptions
         m = _coupled(regime="B")

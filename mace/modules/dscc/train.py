@@ -306,6 +306,7 @@ class Trainer:
             size = max(1, int(round(self.cfg.warm_check_fraction * len(indices))))
             sample = self.check_rng.choice(list(indices), size=min(size, len(indices)), replace=False).tolist()
             report["single_valued"] = self.warm_check(sample)
+        self._release_pool()
         return report
 
     def warm_check(self, indices: Sequence[int]) -> Dict[str, object]:
@@ -328,28 +329,44 @@ class Trainer:
                 chunk = group[start:start + self.cfg.batch_size]
                 batch = to_device(next(iter(torch_geometric.dataloader.DataLoader(self._dataset(chunk), batch_size=len(chunk)))), self.device)
                 ptr = batch["ptr"]
+                # The two solves run one after the other with the first's output released
+                # before the second: holding both batched outputs doubled the process's GPU
+                # peak (four 159-atom frames: 3.6 -> 7 GB) and OOM'd four runs per GPU.
                 with torch.no_grad():
                     cont = self.model(batch, compute_force=False)                 # the full continuation
+                    dq_c = cont["dq"].detach().cpu()
+                    conv_c = list(cont["diagnostics"]["converged"])
+                    del cont
                     stored = [self.dq_store.get(i) for i in chunk]
                     alt_start = [torch.zeros(int(ptr[g + 1] - ptr[g]), dtype=torch.float64) if w is None else w
                                  for g, w in enumerate(stored)]
                     alt = self.model(batch, compute_force=False, warm_start=[w.to(self.device) for w in alt_start])
-                dq_c, dq_a = cont["dq"].detach().cpu(), alt["dq"].detach().cpu()
+                    dq_a = alt["dq"].detach().cpu()
+                    conv_a = list(alt["diagnostics"]["converged"])
+                    del alt
                 for g, i in enumerate(chunk):
                     lo, hi = int(ptr[g]), int(ptr[g + 1])
                     if stored[g] is None:
                         n_zero += 1
                     else:
                         n_warm += 1
-                    ok = (cont["diagnostics"]["converged"][g] is True and alt["diagnostics"]["converged"][g] is True
+                    ok = (conv_c[g] is True and conv_a[g] is True
                           and float((dq_a[lo:hi] - dq_c[lo:hi]).abs().max()) < tol_root)
                     if ok:
                         self.dq_store[i] = dq_c[lo:hi].clone()
                     else:
                         failed.append(i)
                         self.dq_store.pop(i, None)
+        self._release_pool()
         return {"checked": len(indices), "failed": len(failed), "fraction": len(failed) / len(indices),
                 "failed_frames": failed, "warm": n_warm, "zero": n_zero}
+
+    def _release_pool(self) -> None:
+        """Return the inference passes' cached GPU blocks: their shapes differ from the
+        training step's, and a pool fragmented by them made the step reserve ~0.5 GB more
+        per process (four runs per 24 GB GPU then OOM'd)."""
+        if str(self.device).startswith("cuda"):
+            torch.cuda.empty_cache()
 
     def single_valuedness(self, indices: Sequence[int]) -> Dict[str, object]:
         """Pre-v4.5 name of the check (kept for callers)."""
