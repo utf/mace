@@ -485,6 +485,7 @@ class TestPairForcePath:
     def test_training_forces_and_gradients_match_the_cotangent_route(self, regime):
         m = _coupled(regime=regime)
         batch = _batch([VACP])
+        m.gamma_force_mode = "autograd"
         ref = m(dict(batch), compute_force=True)                          # inference: cotangent route
         params = [p for p in m.parameters() if p.requires_grad]
         torch.manual_seed(3)
@@ -508,6 +509,27 @@ class TestPairForcePath:
             n_compared += 1
         assert n_compared > 0 and grads["pairs"][params.index(m.lambda_raw)] is not None
 
+    @pytest.mark.parametrize("regime", ["A", "B"])
+    def test_inference_forces_match_the_cotangent_route(self, regime):
+        """Inference (no `create_graph`) takes the pair route too: the held-out evaluation of
+        four 159-atom frames kept a 9.4 GB first-order Ewald graph on the cotangent route.
+        Per-graph and batched paths, with and without a warm start."""
+        from mace.modules.dscc.scf import ScfOptions
+        m = _coupled(regime=regime)
+        m.scf_options = ScfOptions(n_max=200)
+        vac_b = _frame(_perovskite(remove_cl=0, seed=1), [0, 0, 1, 0], 1)
+        for frames, batched in (([VACP], True), ([VACP, vac_b], True), ([VACP, VAC0], False)):
+            batch = _batch(frames)                     # a reference graph -> the per-graph path
+            m.gamma_force_mode = "autograd"
+            ref = m(dict(batch), compute_force=True)
+            m.gamma_force_mode = "pairs"
+            with torch.no_grad():                                        # as `Trainer.evaluate`
+                out = m(dict(batch), compute_force=True)
+            assert out["diagnostics"].get("batched", False) is batched
+            assert float((out["forces"] - ref["forces"]).abs().max()) < 1e-9
+            assert float((out["energy"] - ref["energy"]).abs().max()) < 1e-10
+            assert not out["forces"].requires_grad
+
     def test_batched_training_path_matches_per_graph(self):
         from mace.modules.dscc.scf import ScfOptions
         m = _coupled(regime="B")
@@ -517,14 +539,22 @@ class TestPairForcePath:
         assert out["diagnostics"].get("batched") is True
         params = [p for p in m.parameters() if p.requires_grad]
         g_batched = torch.autograd.grad((out["forces"] ** 2).sum(), params, allow_unused=True)
-        forces, gs = [], None
+        forces, gs, diag = [], None, {"iterations": [], "rho": []}
         for atoms in (VACP, vac_b):
             single = m(_batch([atoms, VAC0]), training=True, compute_force=True)   # reference graph -> per-graph path
             n = len(atoms)
             forces.append(single["forces"][:n])
+            for key in diag:
+                diag[key].append(single["diagnostics"][key][0])
             g = torch.autograd.grad((single["forces"][:n] ** 2).sum(), params, allow_unused=True)
             gs = list(g) if gs is None else [None if a is None else a + b for a, b in zip(gs, g)]
         assert float((out["forces"] - torch.cat(forces)).abs().max()) < 1e-8
+        # The solver diagnostics per graph are the per-graph solver's: the same iteration
+        # counts, and rho from each graph's OWN residual tail (a graph that converged before
+        # the batch's last iteration read rho = 1 from its frozen residual).
+        assert out["diagnostics"]["iterations"] == diag["iterations"]
+        for rb, rp in zip(out["diagnostics"]["rho"], diag["rho"]):
+            assert rb == pytest.approx(rp, rel=0.05) and rb < 0.9     # (residual-tail ratios at 1e-11)
         for gb, gp in zip(g_batched, gs):
             if gb is None and gp is None:
                 continue
@@ -533,11 +563,25 @@ class TestPairForcePath:
 
 class TestFsccPairForcePath:
     @pytest.mark.parametrize("kind", ["matched", "full"])
+    def test_inference_forces_match_the_cotangent_route(self, kind):
+        m = _coupled(regime="B")
+        m.fscc = kind
+        batch = _batch([VACP])
+        m.gamma_force_mode = "autograd"
+        ref = m(dict(batch), compute_force=True)
+        m.gamma_force_mode = "pairs"
+        with torch.no_grad():
+            out = m(dict(batch), compute_force=True)
+        assert float((out["forces"] - ref["forces"]).abs().max()) < 1e-9
+        assert float((out["energy"] - ref["energy"]).abs().max()) < 1e-10
+
+    @pytest.mark.parametrize("kind", ["matched", "full"])
     def test_training_forces_and_gradients_match_the_cotangent_route(self, kind):
         m = _coupled(regime="B")
         m.fscc = kind
         batch = _batch([VACP])
-        ref = m(dict(batch), compute_force=True)
+        m.gamma_force_mode = "autograd"
+        ref = m(dict(batch), compute_force=True)                          # inference: cotangent route
         params = [p for p in m.parameters() if p.requires_grad]
         torch.manual_seed(5)
         target = ref["forces"].detach() + 0.01 * torch.randn_like(ref["forces"])

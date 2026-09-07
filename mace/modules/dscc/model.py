@@ -459,12 +459,14 @@ class MACEDSCC(nn.Module):
         create = bool(training)
         head_energy = torch.zeros(num_graphs, dtype=torch.float64, device=device)
         cotangent_terms: List[Tuple[torch.Tensor, torch.Tensor]] = []   # (tensor, cotangent)
-        # Training forces of the kernel terms (`-Tr(dP dV/dR) - 1/2 dq^T dGamma/dR dq`) from
-        # the kernels' PAIR derivatives (constants of the geometry) contracted with the
-        # attached charges: the same numbers as the cotangent route, without the
-        # second-order autograd graph through the lattice sums that `create_graph` would
-        # otherwise keep (~20 GB per four 79-atom frames). Route B' keeps the cotangent route.
-        use_pairs = (create and compute_force and not compute_stress and self.coupling and not self.route_b
+        # Forces of the kernel terms (`-Tr(dP dV/dR) - 1/2 dq^T dGamma/dR dq`) from the
+        # kernels' PAIR derivatives (constants of the geometry) contracted with the attached
+        # charges: the same numbers as the cotangent route, without the autograd graph through
+        # the lattice sums -- second-order under `create_graph` (~20 GB per four 79-atom
+        # frames) in training, first-order (9.4 GB per four 159-atom frames) at inference.
+        # Route B' and the stress keep the cotangent route; `gamma_force_mode = "autograd"`
+        # selects it everywhere (the tests' reference).
+        use_pairs = (compute_force and not compute_stress and self.coupling and not self.route_b
                      and getattr(self, "gamma_force_mode", "pairs") == "pairs")
         pair_grad = torch.zeros_like(positions) if use_pairs else None
         dq_all = torch.zeros(positions.shape[0], dtype=torch.float64, device=device)
@@ -564,7 +566,7 @@ class MACEDSCC(nn.Module):
             if self.coupling and getattr(self, "fscc", ""):
                 # Arm 4: two independent full-SCC solves with absolute charges (plan 2.9).
                 pos_g, cell_g, sp_g = positions[nodes], cell[g], species[nodes]
-                use_pairs_f = (create and compute_force and not compute_stress
+                use_pairs_f = (compute_force and not compute_stress
                                and getattr(self, "gamma_force_mode", "pairs") == "pairs")
                 with torch.set_grad_enabled(not use_pairs_f):        # as the D-SCC branches
                     k_sr, k_lr = kernel_components(pos_g, cell_g, self.kernel)
@@ -692,6 +694,8 @@ class MACEDSCC(nn.Module):
                 for k, g in enumerate(g_all):
                     if g is not None:
                         grads[k] = grads[k] + g
+                if pair_grad is not None:
+                    grads[0] = grads[0] + pair_grad.detach()             # no graph at inference
             else:
                 # Base: the full derivative of E_base (or its cached forces).
                 if cached_base:

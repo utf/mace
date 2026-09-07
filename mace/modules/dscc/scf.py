@@ -500,7 +500,10 @@ def solve_dscc_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[torch.T
     hist = torch.stack(history, dim=0)                                            # [K, B]
     rho = []
     for b in range(B):
-        tail = [float(x) for x in hist[:, b].tolist() if x > 0][-4:]
+        # Each graph's history ends at ITS convergence (a converged graph's residual is
+        # frozen and would repeat in later iterations, reading as rho = 1).
+        own = hist[:int(iterations[b]), b] if int(iterations[b]) > 0 else hist[:, b]
+        tail = [float(x) for x in own.tolist() if x > 0][-4:]
         rho.append(float(tail[-1] / tail[-2]) if len(tail) >= 2 else 0.0)
     return BatchedScfResult(energy=energy, energy_primary=torch.stack(primary), dP=sol.dP, dq=sol.dq,
                             V=V.detach(), iterations=iterations.tolist(), converged=converged.tolist(),
