@@ -34,4 +34,26 @@ def test_decision_routing():
     for s in full:
         s["cl_splitting_mean"] = +0.2                        # wrong sign -> (iii) fails too
     out = arm1.decide(full, control, [0.05] * 6, [0.06] * 6)
-    assert out["route"] == "B"
+    assert out["route"] == "C"                               # a sign failure always routes to C
+
+
+def test_decide_routing_table_exhaustive():
+    """Every one of the 16 verdict combinations lands where the Stage-2 table puts it."""
+    import itertools
+    import numpy as np
+    from mace.modules.dscc import arm1
+
+    def summaries(stop, ratio_ok, slope_full, sign, n_eff, sat):
+        return [{"pp_stop": stop, "flank_tensor_over_bulk_spread": 10.0 if ratio_ok else 1.0,
+                 "level_vs_bond_slope": slope_full, "cl_splitting_mean": sign * 0.1,
+                 "n_eff_p50": n, "coefficient_saturation": sat} for n in n_eff]
+
+    for i, ii, iii, iv in itertools.product([True, False], repeat=4):
+        full = summaries(stop=not i, ratio_ok=ii, slope_full=1.0, sign=-1.0 if iii else 1.0,
+                         n_eff=[2.0, 2.1, 2.0, 2.1, 2.0, 2.1] if iv else [1.0, 3.0, 1.0, 3.0, 1.0, 3.0], sat=0.0)
+        control = summaries(stop=False, ratio_ok=False, slope_full=0.5, sign=-1.0,
+                            n_eff=[1.0, 3.0, 1.0, 3.0, 1.0, 3.0], sat=0.0)
+        out = arm1.decide(full, control, [0.05] * 6, [0.06] * 6)
+        assert (out["i"], out["ii"], out["iii"], out["iv"]) == (i, ii, iii, iv), (i, ii, iii, iv, out)
+        expected = "C" if not (ii and iii) else ("B" if not iv else ("D" if not i else "A"))
+        assert out["route"] == expected, (i, ii, iii, iv, out["route"], expected)

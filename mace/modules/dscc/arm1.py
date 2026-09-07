@@ -171,8 +171,20 @@ def decide(full: Sequence[Dict[str, object]], control: Sequence[Dict[str, object
     spread_full = np.std([s["n_eff_p50"] for s in full]); spread_ctrl = np.std([s["n_eff_p50"] for s in control])
     sat = max(s["coefficient_saturation"] for s in full)
     crit_iv = bool(spread_full <= 0.5 * spread_ctrl and np.median(force_rmse_full) <= np.median(force_rmse_control) and sat < 0.5)
-    n_pass = sum([crit_i, crit_ii, crit_iii, crit_iv])
-    route = "A" if n_pass == 4 else ("D" if n_pass == 3 else ("C" if crit_iii and crit_i else "B"))
+    # The exhaustive Stage-2 routing table (plan §7 "as in the original Stage-2 table";
+    # v8.1 addendum): C whenever the covariance test (ii) or the sign test (iii) fails
+    # (repeat both once; stop if the repeat fails); otherwise B when the identifiability
+    # test (iv) fails, irrespective of (i); otherwise D when only the hopping-stop test (i)
+    # fails; A when all four pass. (An earlier version routed by the pass count, which sent
+    # a lone (ii) or (iv) failure to D; corrected 2026-09-07 on the final Arm-1 report.)
+    if not (crit_ii and crit_iii):
+        route = "C"
+    elif not crit_iv:
+        route = "B"
+    elif not crit_i:
+        route = "D"
+    else:
+        route = "A"
     return {"i_stop_fraction": stops, "i": crit_i, "ii": crit_ii, "ii_ratio": float(np.median([s["flank_tensor_over_bulk_spread"] for s in full])),
             "ii_control_loss": float(control_loss), "iii": crit_iii, "iv": crit_iv,
             "iv_spread_full": float(spread_full), "iv_spread_control": float(spread_ctrl), "iv_saturation": float(sat),

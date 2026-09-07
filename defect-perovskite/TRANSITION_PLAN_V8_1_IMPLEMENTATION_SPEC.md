@@ -773,6 +773,16 @@ lattice has 32, and every transport in the earlier survey was a pure translation
 operations are now taken in the reference lattice's own (snapped) cell, tiled; a toy test
 strains the class frame's cell by 0.5 % and asserts the record still carries all 384.
 
+### Wave note (2026-09-06 14:18 b3): s14a_s2 refused by the gauge gap floor
+
+`s14a_s2` stopped at its epoch-15 gauge refresh with `GaugeError: the pristine occupied
+manifold lost its separating gap at rank 208: 7.890e-04 eV < floor 1.000e-03 eV` — the
+addendum §3.1 guard, working as specified (the checkpoint is invalid, nothing was written
+past it). Its last evaluation (epoch 12): E 12.0 meV/atom, F 20.4 meV/Å, gap_l 0.10 eV.
+The other five seeds continue (s1/s5 on GPU 4, s6 on 5, s3 on 6, s4 on 7; s3/s4 at epoch
+19, the rest at 14–15 of 24). Not restarted: whether a seed whose pristine gap closes under
+training is re-drawn or reported as a failure of the arm is the user's call.
+
 ### D25 — OPEN (user): one frozen correspondence per class cannot cover both Cl orbits
 
 Under Pnma the 48 Cl sites of the 80-atom cell fall into **two** orbits (the 4c apical and

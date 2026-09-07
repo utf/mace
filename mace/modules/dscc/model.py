@@ -633,22 +633,34 @@ class MACEDSCC(nn.Module):
         if compute_force or compute_stress:
             inputs = [positions] + ([strain] if compute_stress else [])
             grads = [torch.zeros_like(t) for t in inputs]
-            # Base: the full derivative of E_base (or its cached forces).
-            if cached_base:
-                grads[0] = grads[0] - f_base
+            if not create and not cached_base:
+                # Inference: ONE backward for base and head together. The Hellmann-Feynman
+                # contraction is the derivative of sum_terms <cot, tensor> at fixed cotangents,
+                # and E_base adds its own derivative -- the same numbers as the split path
+                # (tested), at the cost of a single pass through the base's graph.
+                total = e_base.sum() + sum((cot.detach() * tensor).sum() for tensor, cot in cotangent_terms)
+                g_all = torch.autograd.grad(total, inputs, allow_unused=True)
+                for k, g in enumerate(g_all):
+                    if g is not None:
+                        grads[k] = grads[k] + g
             else:
-                g_base = torch.autograd.grad(e_base.sum(), inputs, create_graph=create,
-                                             retain_graph=True, allow_unused=True)
-                for k, g in enumerate(g_base):
-                    if g is not None:
-                        grads[k] = grads[k] + g
-            # Head: Hellmann-Feynman -- the density (and charges) as constant cotangents.
-            for tensor, cot in cotangent_terms:
-                g_head = torch.autograd.grad(tensor, inputs, grad_outputs=cot, create_graph=create,
-                                             retain_graph=True, allow_unused=True)
-                for k, g in enumerate(g_head):
-                    if g is not None:
-                        grads[k] = grads[k] + g
+                # Base: the full derivative of E_base (or its cached forces).
+                if cached_base:
+                    grads[0] = grads[0] - f_base
+                else:
+                    g_base = torch.autograd.grad(e_base.sum(), inputs, create_graph=create,
+                                                 retain_graph=True, allow_unused=True)
+                    for k, g in enumerate(g_base):
+                        if g is not None:
+                            grads[k] = grads[k] + g
+                # Head: Hellmann-Feynman -- the density (and charges) as constant cotangents,
+                # their graphs kept for the training gradient.
+                for tensor, cot in cotangent_terms:
+                    g_head = torch.autograd.grad(tensor, inputs, grad_outputs=cot, create_graph=create,
+                                                 retain_graph=True, allow_unused=True)
+                    for k, g in enumerate(g_head):
+                        if g is not None:
+                            grads[k] = grads[k] + g
             result["forces"] = -grads[0]
             if compute_stress:
                 volume = torch.det(data["cell"].view(-1, 3, 3)).abs()

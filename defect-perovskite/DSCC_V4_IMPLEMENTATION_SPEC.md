@@ -294,6 +294,65 @@ so the directional block's contribution is in the force quality and the localisa
 stability, not in that slope. Thermal ensemble-mean gap of the pristine frames 2.30–2.44 eV
 (static cell held at 2.40).
 
+**Arm 1 — FINAL reading (2026-09-07 01:47, all twelve runs, final-epoch checkpoints,
+`~/runs/dscc/arm1_report.json`; supersedes the preliminary reading).** Per seed — held-out
+charged force RMSE (meV/Å) | `N_eff` p50 | HOMO separation p50 (eV) | report precondition
+fraction (300 frames) | level-vs-bond slope | Cl `ε_σ − ε_π` (meV):
+
+| run | RMSE | `N_eff` | sep. | precond. | slope | Cl split |
+|---|---|---|---|---|---|---|
+| full s0 | 43.0 | 2.50 | 0.86 | 0.987 | 0.342 | −12 |
+| full s1 | 43.6 | 2.29 | 0.84 | 0.993 | 0.198 | −75 |
+| full s2 | 42.5 | 2.38 | 0.89 | 0.993 | 0.338 | −155 |
+| full s3 | 40.9 | 2.22 | 0.91 | 0.993 | 0.282 | −92 |
+| full s4 | 43.6 | 2.31 | 0.81 | 0.990 | 0.213 | −40 |
+| full s5 | 49.0 | 1.93 | 0.85 | 0.980 | 0.129 | −112 |
+| ctrl s0 | 50.0 | 1.81 | 0.68 | 0.940 | 0.259 | 0 |
+| ctrl s1 | 74.7 | 1.95 | 0.51 | 0.533 | 0.087 | 0 |
+| ctrl s2 | 67.2 | 2.49 | 0.10 | 0.000 | 0.103 | 0 |
+| ctrl s3 | 39.3 | 2.18 | 0.45 | 0.283 | 0.293 | 0 |
+| ctrl s4 | 43.7 | 2.02 | 0.53 | 0.640 | 0.247 | 0 |
+| ctrl s5 | 45.5 | 1.95 | 0.45 | 0.323 | 0.223 | 0 |
+
+Medians: full 43.3, control 47.7 meV/Å. Shell RMSE (0–2 / 2–4 / 4–6 / 6–8 / > 8 Å from the
+vacancy), full s0: 99 / 77 / 55 / 34 / 33; control s0: 111 / 87 / 61 / 47 / 32 meV/Å — the
+directional block's gain sits inside 8 Å; beyond 8 Å both heads are at the base's floor.
+Criteria (registered thresholds): (i) `pp` stop fraction 0/6 — **pass**; (ii) flanking-Pb
+tensor ratio 10.3 (> 3) but the control loses only **5 %** of the level-vs-bond slope
+(median 0.247 vs 0.234; threshold ≥ 30 %) — **fail**; (iii) Cl splitting negative on all six
+seeds — **pass**; (iv) `N_eff` seed spread full **0.175** vs control 0.217 (needs ≤ 0.108) at
+better force quality (43.3 ≤ 47.7) and no saturation — **fail on the spread** (full s5 at
+`N_eff` 1.93 widens the full spread; control s2, whose HOMO is not separated, narrows the
+control's). **Routing: C** — (ii) fails, so the covariance/sign tests are repeated once; stop
+if the repeat fails (plan §7, table of the v8.1 addendum §Stages 2 and 3).
+
+*Code correction, recorded as an error:* `arm1.decide` routed by the pass count (4 → A,
+3 → D, else C/B), which sends a lone (ii) or (iv) failure to D; the table sends any (ii)/(iii)
+failure to C, a (iv) failure with (ii)+(iii) passing to B, and only a lone (i) failure to D.
+So the preliminary "3 of 4 → D" above was a mis-route (under the table it was already C);
+corrected to the table verbatim with a test over all 16 verdict combinations
+(`test_arm1.test_decide_routing_table_exhaustive`); the saved report keeps the old field as
+`decision_pass_count_code`. The final decision is C under both.
+
+*Watch item outcome — the loss spike recurred.* Final-epoch spikes: ctrl s1 (epoch 59, loss
+9.1e-5 vs its median 2.2e-5; held-out 48.7 → 74.7 meV/Å between the epoch-54 and epoch-59
+evaluations), ctrl s2 (epoch 56; 52.8 → 67.2), ctrl s0 (epoch 56; 47.2 → 50.0), full s5
+(epochs 48 and 57; 45.6 → 49.0); every run but full s2 shows at least one loss spike > 3× its
+median after epoch 20 at constant lr 2e-3. **Proposed for the user, not applied:** a
+registered decay of the learning rate to 2e-4 over the last 20 epochs (or reading an
+epoch-averaged final checkpoint). The repeat runs the identical protocol (constant lr 2e-3,
+60 epochs, final checkpoint read): a repeat with a changed protocol is not a repeat.
+
+**Registered before the repeat is launched (2026-09-07 02:30):** the route-C repeat is both
+arms on fresh seeds 6–11 (outer fold = seed mod 4), the identical protocol, the same
+report script and thresholds; the decision is read on the repeat's own six seeds with the
+corrected table; the combined twelve-seed reading is reported for information only. If (ii)
+or (iii) fails on the repeat: **stop** — Arm 2+3 stays closed and the outcome goes to the
+user. If both pass: route by the table on the repeat (A/D: Arm 2+3 opens on the repeat's
+full-`H0` seeds that pass the bound-state precondition; B: stop and investigate
+identifiability). Identical-code check before launch: one epoch of the full s0 configuration
+on the launch commit reproduces the archived epoch-0 loss (recorded below at launch).
+
 ## 3. Task list
 
 Status: `todo` / `wip` / `done` / `blocked`.
@@ -349,7 +408,7 @@ Status: `todo` / `wip` / `done` / `blocked`.
 ### 3.4 Phase 3 — arms (plan §7)
 | # | Task | Status |
 |---|---|---|
-| P3.1 | Arm 1: full `H0` vs scalar-only control, `Phi = 0`, Route A; thresholds (i)–(iv) registered before opening | diagnostics done — `dscc/arm1.py` (`run_diagnostics`, `summarise`, `decide`: stop fraction from the flanking-pair `pp_sigma` modulation at its bound on > 50 % of frames; tensor ratio > 3; control loses ≥ 30 % of the level-vs-bond slope; Cl splitting sign registered NEGATIVE (`eps_sigma − eps_pi < 0`, the axial cation field lowers p_sigma); participation spread halves at ≤ force RMSE without saturation (`|tanh| ≥ 0.98` on < 50 % of coefficients)); routing A/D/C/B. Wave 1 first launched 2026-09-06 20:30 (commit 96d32b1; ~500 s/epoch shared, 295 s alone) and **cancelled at epoch 4–7 on the user's instruction after the step profile** (per-graph slicing and the full base forward: 7.46 s per 4-frame step on CPU → 1.14 s with the batched Φ = 0 path and the cached base, 6.5×). **Resubmitted 2026-09-06 22:40 on commit e03cad2**: `dscc_arm1_{full,ctrl}_s{0,1,2}` on b3 GPUs 4/5/7 (two per GPU), `full_s3` local, wave 2 (`ctrl_s3`, `full/ctrl_s4`, `full/ctrl_s5`) queued behind. Partial old runs moved to `~/runs/dscc_old/` and not read. Results are not opened until all twelve finish and the thresholds above stand as registered. Fast-path check: the resubmitted runs reproduce the cancelled ones epoch by epoch (same seeds: relative loss differences 1e-14 → 1e-3 over epochs 0–5, then the usual chaotic divergence at unchanged loss level). Watch item: the cancelled local `full_s3` showed a loss spike at epoch 14 (1.5e-5 → 6.0e-5, held 54 → 87 meV/Å) at lr 2e-3 — if it recurs, a registered LR schedule is proposed before Arm 2+3 |
+| P3.1 | Arm 1: full `H0` vs scalar-only control, `Phi = 0`, Route A; thresholds (i)–(iv) registered before opening | diagnostics done — `dscc/arm1.py` (`run_diagnostics`, `summarise`, `decide`: stop fraction from the flanking-pair `pp_sigma` modulation at its bound on > 50 % of frames; tensor ratio > 3; control loses ≥ 30 % of the level-vs-bond slope; Cl splitting sign registered NEGATIVE (`eps_sigma − eps_pi < 0`, the axial cation field lowers p_sigma); participation spread halves at ≤ force RMSE without saturation (`|tanh| ≥ 0.98` on < 50 % of coefficients)); routing A/D/C/B. Wave 1 first launched 2026-09-06 20:30 (commit 96d32b1; ~500 s/epoch shared, 295 s alone) and **cancelled at epoch 4–7 on the user's instruction after the step profile** (per-graph slicing and the full base forward: 7.46 s per 4-frame step on CPU → 1.14 s with the batched Φ = 0 path and the cached base, 6.5×). **Resubmitted 2026-09-06 22:40 on commit e03cad2**: `dscc_arm1_{full,ctrl}_s{0,1,2}` on b3 GPUs 4/5/7 (two per GPU), `full_s3` local, wave 2 (`ctrl_s3`, `full/ctrl_s4`, `full/ctrl_s5`) queued behind. Partial old runs moved to `~/runs/dscc_old/` and not read. Results are not opened until all twelve finish and the thresholds above stand as registered. Fast-path check: the resubmitted runs reproduce the cancelled ones epoch by epoch (same seeds: relative loss differences 1e-14 → 1e-3 over epochs 0–5, then the usual chaotic divergence at unchanged loss level). Watch item: the cancelled local `full_s3` showed a loss spike at epoch 14 (1.5e-5 → 6.0e-5, held 54 → 87 meV/Å) at lr 2e-3 — if it recurs, a registered LR schedule is proposed before Arm 2+3. **Final twelve-run reading 2026-09-07: route C** (criteria (ii) and (iv) fail; §2.2 final-reading note); the registered repeat on seeds 6–11 launched 2026-09-07 (same names `dscc_arm1_{full,ctrl}_s{6..11}`) |
 | P3.2 | Arm 2+3 (v4.1 layout): regime B — route {A, B} × coupling {LR-only; LR+U; full; λ=1 fixed} + Φ=0 per route = 10 configurations × 6 seeds; regime-A ablation: full coupling × 2 routes × 6 seeds, excluded from selection; thresholds registered; forecasts §2.10 checked | todo |
 | P3.3 | Arm 4: matched-kernel and full-kernel F-SCC comparators; decision (1)–(6) | todo |
 
@@ -358,7 +417,7 @@ Status: `todo` / `wip` / `done` / `blocked`.
 |---|---|---|
 | P4.1 | Tiling-ladder generator and report (`E(+1) - E(0)` vs `1/L`, `K_LR_ii`, active states, `dq` spread, zero total force) | script done — `defect-perovskite/dscc_ladder.py` (static-cell tilings, Madelung coefficient computed for the cell shape, dense below `--dense_max`, sparse above, dense/sparse agreement per cell); to run on the Arm-1 winner and the Arm-2+3 selection |
 | P4.2 | Sparse path (CSR `H0`, SP2/LDL inertia, Chebyshev/LOBPCG, tail bounds, PME/FMM) | frontier path done — `dscc/sparse.py`: CSR `H0` from the edge blocks; below-slice count by the LDLᵀ inertia of an unpivoted sparse LU (Sylvester; factorisation residual-checked); mid-gap shift by inertia bisection; window eigenpairs by shift-invert ARPACK to machine precision (residual-checked), `k = |Q| + k_buffer` (8) grown until the certified Fermi-tail bound on the omitted charge is ≤ 1e-8 e; frontier D-SCC solve (window quasi-Newton, Anderson fallback, unmixed residual); rank-k frontier forces by block cotangents. Dense/sparse agreement on the toy: energy 1e-7, forces 1e-6, dq 1e-7. **Not done:** PME/FMM (electrostatics stay the dense Ewald matrix: the dense regime is ≲ 5k atoms), Route B′ on the sparse path (needs the full reference density), the 159-atom real-frame agreement run and the ladder cells (after Arm 1) |
-| P4.3 | 2x benchmark per the registered definition | harness done — `defect-perovskite/dscc_benchmark.py` (per-frame energy + forces along a charged trajectory, warm-started, base included; median and p95 of the ratio); to run on the selected model on the named hardware |
+| P4.3 | 2x benchmark per the registered definition | harness done — `defect-perovskite/dscc_benchmark.py` (per-frame energy + forces along a charged trajectory, warm-started, base included; median and p95 of the ratio). **Run 2026-09-07 on the local A4000 (idle), `dscc_arm1_full_s0` (Φ = 0), warm-started along one charged trajectory, after merging the inference backward into one autograd pass (E_base + the Hellmann–Feynman contraction; identical numbers, tests): 79 atoms base 41.9 ms / model 82.9 ms, ratio median 1.98, p95 2.36 (40 frames); 159 atoms 73.2 / 141.0 ms, median 1.92, p95 5.66 (16 frames; the p95 is the slowest frame). Median within 2×, p95 not → fails the registered criterion as it stands** (`~/runs/dscc/benchmark_merged_{79,159}.json`). A first run at 01:35 overlapped the final report on the same GPU and is discarded (medians 2.4–2.5, p95 up to 9). The floor is the base's full forward inside the model (the head needs block 0 attached and E_base is needed anyway); the p95 tail is to be profiled per frame (graph build at the head's 10 Å cutoff) before the selected coupled model is benchmarked |
 
 ### 3.6 Deletion sweep (plan §3, after the Phase 1 gates)
 - [ ] Tier-1/Tier-2 constructor and `u_al` (`defect_composition`, `defect_rank`, `defect_constructor_cache`, `defect_seed`)
