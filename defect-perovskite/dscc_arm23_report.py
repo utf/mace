@@ -92,13 +92,19 @@ def main() -> None:
         last = hist[-1]
         # v4.5: the check's failing fraction is read at its WORST epoch ("failure fails the
         # arm"), and the run-level flag written by the trainer is carried.
+        # Epoch 0's check is the initialised-model diagnostic (v4.2 section 5: the root rule
+        # applies to trained models); the ceiling is read over epochs >= 1, from the history
+        # itself (the trainer's flag is not trusted for this: earlier code counted epoch 0).
         sv_fractions = [float((e.get("single_valued") or {}).get("fraction", 0.0)) for e in hist]
-        sv_max = max(sv_fractions) if sv_fractions else 0.0
+        sv_trained = sv_fractions[1:] if len(sv_fractions) > 1 else sv_fractions
+        sv_max = max(sv_trained) if sv_trained else 0.0
+        ceiling = float(cfg.get("single_valued_ceiling", 0.10))
         entry = {"config": info, "force_rmse": held["force_rmse"], "shell_rmse": held["shell_rmse"],
                  "shape_slope_err": shape_err, "c_q": cq, "n_eff_p50": float(np.median(n_effs)) if n_effs else float("nan"),
                  "sv_fraction": sv_max, "sv_fraction_last": sv_fractions[-1] if sv_fractions else 0.0,
-                 "arm_failed_single_valuedness": bool(held.get("arm_failed_single_valuedness", False)),
-                 "sv_ceiling_exceeded_epochs": held.get("sv_ceiling_exceeded_epochs", []),
+                 "sv_init_fraction": sv_fractions[0] if sv_fractions else 0.0,
+                 "arm_failed_single_valuedness": any(f > ceiling for f in sv_trained),
+                 "sv_ceiling_exceeded_epochs": [k + 1 for k, f in enumerate(sv_trained) if f > ceiling],
                  "converged_fraction": 1.0 - unconv / max(len(sample), 1),
                  "f_sr": float(np.median(f_srs)) if f_srs else None, "s": last.get("s"), "lambda_dir": last.get("lambda_dir"),
                  "u_eff": last.get("u_eff"), "epochs": len(hist), "spikes": spikes}

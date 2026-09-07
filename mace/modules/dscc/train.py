@@ -417,9 +417,15 @@ class Trainer:
                      "warm_batches": stats["warm"], "batches": stats["n"],
                      "lambda_dir": float(self.model.lambda_dir()), "u_eff": self.model.u_eff().detach().cpu().tolist(),
                      "s": float(self.model.pattern_scale()), "time": time.time() - t0}
-            if sv is not None and sv["fraction"] > cfg.single_valued_ceiling:
+            # The ceiling applies to the trained model (v4.2 section 5: the root rule and
+            # convergence gates apply to trained models; the initialised-model outcome is a
+            # diagnostic). Epoch 0's check is that diagnostic -- the zero start against the
+            # continuation at the initial coupling -- and is recorded, not counted.
+            over = bool(sv is not None and sv["fraction"] > cfg.single_valued_ceiling)
+            if over and epoch >= 1:
                 self.sv_ceiling_exceeded_epochs.append(epoch)
-            entry["sv_ceiling_exceeded"] = bool(sv is not None and sv["fraction"] > cfg.single_valued_ceiling)
+            entry["sv_ceiling_exceeded"] = over and epoch >= 1
+            entry["sv_init_diagnostic"] = epoch == 0
             if (epoch + 1) % cfg.eval_every == 0 or epoch == cfg.epochs - 1:
                 entry["held"] = {k: v for k, v in self.evaluate(self.held_idx, "held").items() if k != "energies"}
             history.append(entry)
