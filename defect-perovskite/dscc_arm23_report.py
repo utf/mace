@@ -32,7 +32,9 @@ from mace.tools import torch_geometric                                          
 
 def far_field(shells, counts=None):
     """The registered 4-8 A far-field shell residual: the 4-6 and 6-8 A shells pooled by atom
-    count; runs recorded before C10 carry no counts and are pooled by shell volume (152 : 296)."""
+    count. Runs recorded before C10 carry no counts: the report takes the counts of any run of
+    the SAME SEED that does (the held-out set is a function of the seed), and only without one
+    falls back to shell-volume weights (152 : 296)."""
     v1, v2 = shells.get("4-6"), shells.get("6-8")
     if v1 is None or v2 is None:
         return float(v1 or v2 or 0.0)
@@ -60,6 +62,13 @@ def main() -> None:
     base_resid = {int(r["key"]): r for r in json.load(open(args.residuals))}
     per_run = {}
     by_config = defaultdict(list)
+    counts_by_seed = {}                              # C10: shell counts from any run of the seed
+    for run in args.runs:
+        run = Path(run)
+        if (run / "held_final.json").exists() and (run / "run_record.json").exists():
+            h = json.load(open(run / "held_final.json"))
+            if h.get("shell_counts"):
+                counts_by_seed.setdefault(json.load(open(run / "run_record.json"))["config"]["seed"], h["shell_counts"])
     for run in args.runs:
         run = Path(run)
         info = parse_name(run.name)
@@ -115,7 +124,8 @@ def main() -> None:
         sv_last10 = max(sv_fractions[-10:]) if sv_fractions else 0.0
         over = [k + 1 for k, f in enumerate(sv_trained) if f > ceiling]
         entry = {"config": info, "force_rmse": held["force_rmse"], "shell_rmse": held["shell_rmse"],
-                 "shell_counts": held.get("shell_counts"), "far_field_4_8": far_field(held["shell_rmse"], held.get("shell_counts")),
+                 "shell_counts": held.get("shell_counts"),
+                 "far_field_4_8": far_field(held["shell_rmse"], held.get("shell_counts") or counts_by_seed.get(cfg["seed"])),
                  "shape_slope_err": shape_err, "c_q": cq, "n_eff_p50": float(np.median(n_effs)) if n_effs else float("nan"),
                  "sv_fraction": sv_max, "sv_fraction_last": sv_fractions[-1] if sv_fractions else 0.0,
                  "sv_init_fraction": sv_fractions[0] if sv_fractions else 0.0,

@@ -1,10 +1,10 @@
 # D-SCC plan: C10 rulings (user, 2026-09-08, verbatim)
 
 *Saved verbatim from the user's message answering the Arm 2+3 read-out (`ARM23_COADVISOR.md`,
-tracker C10). The message applies a "v4.4" amendment (`K_LR` required physics, LR-only the
-minimal candidate, Φ = 0 arms as force references); no v4.4 document exists in the repository,
-the tracker or this session's record, so the paragraph below is the only text of v4.4 on file
-and the selection under it is labelled post hoc (see tracker C10 / D13).*
+tracker C10). The message applies the v4.4 amendment (`K_LR` required physics, LR-only the
+minimal candidate, Φ = 0 arms as force references), which had not reached the record when the
+campaign ran; the user sent it at ~15:35 the same day and it is saved verbatim as
+`DSCC_PLAN_V4_4_AMENDMENT.md`. The selection under it is labelled post hoc (tracker C10 / D13).*
 
 ---
 

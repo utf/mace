@@ -20,10 +20,10 @@ before any result was opened:
 Regime-A ablation configurations are reported, never selected.
 
 `select` is the v4.3 rule as registered before the campaign (Phi = 0 a candidate, simplest
-equivalent wins). `select_v44` is the rule the user stated on 2026-09-08 (`K_LR` required
-physics with no learnable coefficient, not subject to the equivalence rule; the minimal
-production candidate is LR-only; the Phi = 0 arms are force REFERENCES, not candidates);
-no v4.4 document predates the campaign, so a selection under it is labelled post hoc.
+equivalent wins). `select_v44` is the v4.4 amendment's rule (`DSCC_PLAN_V4_4_AMENDMENT.md`, received
+2026-09-08 after the campaign: `K_LR` required physics with a fixed coefficient, not subject
+to the equivalence rule; the minimal production candidate is LR-only; the Phi = 0 arms are
+force REFERENCES, not candidates), applied post hoc as the C10 ruling anticipated.
 """
 from __future__ import annotations
 
@@ -167,7 +167,7 @@ def select(configs: Sequence[ConfigSummary]) -> Dict[str, object]:
 
 
 def select_v44(configs: Sequence[ConfigSummary]) -> Dict[str, object]:
-    """The user's 2026-09-08 rule ("v4.4"; no document predates the campaign -- post hoc):
+    """The v4.4 rule (amendment received 2026-09-08 after the campaign -- post hoc):
     `K_LR` is required physics with no learnable coefficient and is not subject to the
     equivalence rule, so the Phi = 0 arms are force REFERENCES and the candidates are the
     gate-passing regime-B configurations that carry `K_LR` (LR-only, LR+U, lambda = 1, full).
@@ -182,7 +182,7 @@ def select_v44(configs: Sequence[ConfigSummary]) -> Dict[str, object]:
     med = lambda x: float(np.median(np.asarray(x, dtype=np.float64)))
     candidates = [c for c in configs if gate_table[c.name]["passed"] and c.coupling != "phi0"]
     ranked = sorted(candidates, key=lambda c: (med(c.force_rmse), simplicity(c)))
-    decision = {"rule": "v4.4 as stated 2026-09-08 (post hoc: no v4.4 document predates the campaign)",
+    decision = {"rule": "v4.4 amendment (received 2026-09-08 after the campaign; applied post hoc)",
                 "gates": gate_table,
                 "ranking": [(c.name, med(c.force_rmse), _spread(c.force_rmse)) for c in ranked],
                 "references": {r: (p.name, med(p.force_rmse), _spread(p.force_rmse)) for r, p in phi0.items()},

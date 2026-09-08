@@ -156,13 +156,14 @@ at 159 atoms is neutral-like; by the criterion in the ruling the 79-atom excess 
 and manifold extrapolation, not the Coulomb channel. The near field (0–2 Å: 48 against 31) is
 the open item. Table and details: tracker D13.
 
-**Selection under the "v4.4" rule.** No v4.4 document is in the record; applied post hoc from
-the ruling: LR-only selected (LR + U 41.3 best candidate, LR-only 41.7, full 42.0 equivalent;
+**Selection under v4.4.** The amendment reached the record at ~15:35 (after the campaign) and
+is on file; applied post hoc as the ruling anticipated: LR-only selected (LR + U 41.3 best candidate, LR-only 41.7, full 42.0 equivalent;
 λ = 1 out on localisation), +1.8 meV/Å against Φ = 0 inside the margin. Root rule on the final
 model and the last ten epochs: every arm passes. `f_sr_abs` 0.69–0.71 on every regime-B arm.
 
 **Running since 15:13 (b3):** Route B′ LR-only ×6, LR + U ×6, full ×6, λ = 1 ×6, regime-A B′
-ablation ×6 in that order at four per GPU on GPUs 4 and 5 (≈ 13 h per run, three waves); the
+ablation ×6 in that order at four per GPU on GPUs 4 and 5 (≈ 13 h per run, eight slots per
+wave: three waves ≈ 40 h for the 24 regime-B runs, a fourth for the ablation); the
 matched-kernel F-SCC comparator on seeds 0, 1, 2 on GPU 7 (≈ 35–45 h). Stop:
 `scratchpad/kill_bp_b3.sh`. Rulings needed: the B′ ladder gate; whether to trim B′ to LR-only
 and LR + U given the diagnostic; the far-field gate wording as implemented; the v4.4 text.
