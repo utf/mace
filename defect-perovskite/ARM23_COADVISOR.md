@@ -168,4 +168,11 @@ matched-kernel F-SCC comparator on seeds 0, 1, 2 on GPU 7 (≈ 35–45 h). Stop:
 `scratchpad/kill_bp_b3.sh`. The C10 addendum settled the B′ ladder gate (re-read as a model
 property, B′ judged on forces), the trim, the far-field reading (gain on the full RMSE and the
 0–2 / 2–4 shells decisive, 4–8 Å reported) and `tau_phys` (trainer convention); the v4.4 text
-is on file. Still missing: the "four checks" the addendum refers to.
+is on file. The four checks arrived and were run (tracker D13): the Ewald background and the
+kernel are exact for a fixed pattern (a point-charge neutral pattern reads Madelung to 0.0 %
+from 16.8 Å up), `q0` is exactly periodic, and the compensation is 18–29 % inside 4 Å — not a
+code fault. But the model's compensation of the missing ion is not a fixed 8–11 Å cloud: read
+against the same-size pristine cell its 85 % radius grows from ≈ 10 Å at 22 Å to > 12 Å at
+34 Å, so the consecutive-pair slopes never settle (41 / 78 / 2 / 97 % off Madelung). B′ stays
+judged on forces; the ladder and `E_SF` wait on the sparse path and on an `H0` that localises
+the compensation. LR + U seeds 4 and 6 run locally (two on the A4000) to finish the B′ set earlier.

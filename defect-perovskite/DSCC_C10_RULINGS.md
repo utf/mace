@@ -57,3 +57,17 @@ above" refers to text that did not reach this session; the four checks are not o
   RMS); it stays in that convention (per-component equivalent 1.7). Recorded.
 - Correction of record (C6): "compensated within the bound-state region" was wrong; the
   fill compensates over its screening length.
+
+---
+
+*The "four checks" context (user, 2026-09-08 ~16:00, verbatim).*
+
+Here is the missing context: Why the number is what it is. Relative to the pristine pattern, the defect cell's `q0` is a compact charge `+z` where the anion is missing (z ≈ 0.6–0.8 in Mulliken terms) plus a compensating `−z` spread over the fill's screening cloud. Under PBC the carrier's cross term with the compact part carries an image contribution of `2z` times the carrier's own Madelung term; the cloud cancels it only to the extent it is compact relative to the cell. With the cloud at 8–11 Å and ladder cells with `L_min` of 11–16 Å, the cancellation is partial, roughly 40 %, giving `2z(1 − f) ≈ 0.5–0.6`. That is your 51–65 %, and it is the same on every seed, which is what a model property looks like rather than a bug. The cloud itself is not surprising: a tight-binding Mulliken fill compensates a missing anion through hybridisation changes over two or three shells, with a decay length of order hopping over gap, which is 6–10 Å here. My C6 statement that `q0` is compensated "within the bound-state region" conflated the bound state (two Pb, `N_eff` ≈ 2.3) with the fill's charge-transfer response. The gate's 5 % tolerance assumed the former; the trained `H0` delivers the latter. "By construction" is the right description.
+Checks that would expose a bug if there were one, an hour of work:
+
+* On the pristine tiled cells, `q0` must be exactly periodic and the carrier's cross term with it size-independent. If it drifts, the fill or the Ewald background is inconsistent across sizes.
+* Fit the slope from the largest two cells only. With a fixed cloud the deviation must shrink with `L` roughly as `(R_c/L)²`; a deviation that does not shrink is a convention error.
+* Cumulative compensation charge versus radius from the vacancy. A 50 % slope error needs a substantial fraction of the `−z` sitting at 5–10 Å. If more than ~80 % is inside 4 Å, the gate result is wrong and the code is at fault.
+* The synthetic locally neutral pattern you already ran (Madelung to 5 %) validates the kernel; sweep its width and confirm the deviation curve passes through the model's value at the model's `R_c`.
+
+What it means for B′. The cross term's size dependence is nearly geometry-independent, so it does not reach the forces. Judge B′ on forces, and withhold any cross-size energy claim that includes `E_SF` until the ladder can be run on cells with `L ≫ R_c`, which needs the sparse solver. Record one physics caveat with it: the cloud is the model's own charge-transfer screening of the missing ion, and `Γ_LR` is already divided by `eps_inf`, so the static well is partly double-screened. That is the Route C question and stays deferred.
