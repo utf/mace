@@ -35,7 +35,7 @@ from mace.modules.dscc.hamiltonian import (A_MAX_DEFAULT, B_MAX_DEFAULT, H0, Q_C
                                            R_CUT_DEFAULT)
 from mace.modules.dscc.ewald import gradient_of_contraction
 from mace.modules.dscc.kernels import (KernelConfig, gamma_lr, gamma_matrix, gamma_pair_derivative, host_potential,
-                                       kernel_components, kernel_pair_gradients)
+                                       kernel_components, kernel_pair_gradients, gamma_lr_pair_gradient)
 from mace.modules.dscc.scf import (ScfOptions, ScfResult, continuation_solve, continuation_solve_batched,
                                    solve_dscc, solve_dscc_batched, two_fillings)
 from mace.modules.dscc.species import (N0, S_REF, State, U_MAX_GFN1, neutral_count,
@@ -464,9 +464,11 @@ class MACEDSCC(nn.Module):
         # charges: the same numbers as the cotangent route, without the autograd graph through
         # the lattice sums -- second-order under `create_graph` (~20 GB per four 79-atom
         # frames) in training, first-order (9.4 GB per four 159-atom frames) at inference.
-        # Route B' and the stress keep the cotangent route; `gamma_force_mode = "autograd"`
-        # selects it everywhere (the tests' reference).
-        use_pairs = (compute_force and not compute_stress and self.coupling and not self.route_b
+        # Route B' takes it too (its Gamma_LR geometry term from the Gamma_LR pair
+        # derivatives, its q0(H0(R)) term through a (W, -n_site) cotangent); the stress keeps
+        # the cotangent route; `gamma_force_mode = "autograd"` selects it everywhere (the
+        # tests' reference).
+        use_pairs = (compute_force and not compute_stress and self.coupling
                      and getattr(self, "gamma_force_mode", "pairs") == "pairs")
         pair_grad = torch.zeros_like(positions) if use_pairs else None
         dq_all = torch.zeros(positions.shape[0], dtype=torch.float64, device=device)
@@ -512,14 +514,15 @@ class MACEDSCC(nn.Module):
                     # again at 159 atoms.
                     with torch.set_grad_enabled(not use_pairs):
                         k_sr, k_lr = kernel_components(pos_b[g], cell[g], self.kernel)
+                        if self.route_b:            # Gamma_LR likewise: detached under the pair route
+                            Ws.append(gamma_lr(pos_b[g], cell[g], self.kernel.r_g, self.r_split, self.kernel.eps_inf, tol=self.kernel.tol))
                     gammas.append(gamma_matrix(k_sr, k_lr, self.lambda_dir(), self.u_eff()[sp_b[g]], self.kernel.eps_inf))
-                    if self.route_b:
-                        Ws.append(gamma_lr(pos_b[g], cell[g], self.kernel.r_g, self.r_split, self.kernel.eps_inf, tol=self.kernel.tol))
                 gamma = torch.stack(gammas)
                 W = None
                 if self.route_b:
                     q0 = self.reference_charges_batched(H, t(n0_rows), counts_r[0], counts_r[1])
-                    W = torch.einsum("bij,bj->bi", torch.stack(Ws), self.pattern_scale() * q0)
+                    sq0 = self.pattern_scale() * q0
+                    W = torch.einsum("bij,bj->bi", torch.stack(Ws), sq0)
                     diagnostics["q0_sum"] = q0.detach().sum(-1).cpu().tolist()
                     diagnostics["compensation_cloud"] = [self.compensation_cloud(q0[g], sp_b[g], pos_b[g], cell[g]) for g in range(num_graphs)]
                 implicit = training and self.scf_options.method == "newton"
@@ -565,6 +568,18 @@ class MACEDSCC(nn.Module):
                          - n_site.unsqueeze(-1) * dq_fixed.unsqueeze(-2))                             # [B, n, n]
                     pair_grad = pair_grad + gradient_of_contraction(A, gamma_p).reshape(-1, 3)
                     cotangent_terms.append((H, dP_sym))
+                    if self.route_b:
+                        # Route B': the -sum_i n_site_i W_i piece of the Hellmann-Feynman
+                        # term, W = Gamma_LR (s q0) -- Gamma_LR's geometry from its pair
+                        # derivatives, q0(H0(R))'s through the cotangent (W, -n_site)
+                        # (Gamma_LR detached above, s and q0 attached as on the cotangent route).
+                        with torch.no_grad():
+                            d_w = torch.stack([gamma_lr_pair_gradient(pos_b[g], cell[g], self.kernel.r_g, self.r_split,
+                                                                      self.kernel.eps_inf, tol=self.kernel.tol)
+                                               for g in range(num_graphs)])
+                        A_w = -n_site.unsqueeze(-1) * sq0.unsqueeze(-2)
+                        pair_grad = pair_grad + gradient_of_contraction(A_w, d_w).reshape(-1, 3)
+                        cotangent_terms.append((W, -n_site))
                 else:
                     V_fixed = torch.einsum("bij,bj->bi", gamma, dq_fixed) + (W if W is not None else 0.0)
                     H_sc = H - torch.diag_embed(V_fixed.repeat_interleave(4, dim=-1))
@@ -645,10 +660,12 @@ class MACEDSCC(nn.Module):
                     # Route B' (v4.2): W = Gamma_LR (s q0), q0 the reference fill of H0
                     # itself, attached (its geometry derivative is in the force through the
                     # (H, dP) cotangent below; a detached q0 would be non-conservative).
-                    g_lr = gamma_lr(pos_g, cell_g, self.kernel.r_g, self.r_split, self.kernel.eps_inf,
-                                    tol=self.kernel.tol)
+                    with torch.set_grad_enabled(not use_pairs):      # see the batched branch
+                        g_lr = gamma_lr(pos_g, cell_g, self.kernel.r_g, self.r_split, self.kernel.eps_inf,
+                                        tol=self.kernel.tol)
                     q0 = self.reference_charges(H, numbers)
-                    W = host_potential(g_lr, self.pattern_scale() * q0)
+                    sq0 = self.pattern_scale() * q0
+                    W = host_potential(g_lr, sq0)
                     diagnostics.setdefault("q0_sum", []).append(float(q0.detach().sum()))
                     diagnostics.setdefault("compensation_cloud", []).append(
                         self.compensation_cloud(q0, sp_g, pos_g, cell_g))
@@ -683,6 +700,13 @@ class MACEDSCC(nn.Module):
                     A = -0.5 * res.dq.unsqueeze(-1) * res.dq.unsqueeze(0) - n_site.unsqueeze(-1) * dq_fixed.unsqueeze(0)
                     pair_grad = pair_grad.index_add(0, torch.arange(lo, hi, device=device), gradient_of_contraction(A, gamma_p))
                     cotangent_terms.append((H, dP_sym))
+                    if self.route_b:                                   # see the batched branch
+                        with torch.no_grad():
+                            d_w = gamma_lr_pair_gradient(pos_g, cell_g, self.kernel.r_g, self.r_split,
+                                                         self.kernel.eps_inf, tol=self.kernel.tol)
+                        A_w = -n_site.unsqueeze(-1) * sq0.unsqueeze(0)
+                        pair_grad = pair_grad.index_add(0, torch.arange(lo, hi, device=device), gradient_of_contraction(A_w, d_w))
+                        cotangent_terms.append((W, -n_site))
                 else:
                     H_sc = H - torch.diag((gamma @ dq_fixed + (W if W is not None else 0.0)).repeat_interleave(4))
                     cotangent_terms.append((H_sc, dP_sym))

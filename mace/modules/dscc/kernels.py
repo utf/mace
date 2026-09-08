@@ -168,6 +168,16 @@ def gamma_lr(positions: torch.Tensor, cell: torch.Tensor, r_g: float, r_split: f
     return ewald_matrix(positions, cell, r_g, r_split, eta=eta, tol=tol) / eps_inf
 
 
+def gamma_lr_pair_gradient(positions: torch.Tensor, cell: torch.Tensor, r_g: float, r_split: float,
+                           eps_inf: float, eta: Optional[float] = None, tol: float = EWALD_TOL) -> torch.Tensor:
+    """Route B' under the pair force route: `d Gamma_LR_ij / d(r_i - r_j)`, the pair
+    derivative of the `r_g`/`r_split` Ewald matrix over `eps_inf` -- a detached constant of
+    the geometry (`[N, N, 3]`, one first-order backward, no graph kept)."""
+    pos, cel = positions.detach(), cell.detach()
+    (d,) = pair_gradient(lambda d0: (ewald_matrix(pos, cel, r_g, r_split, eta=eta, tol=tol, pair_vectors=d0),), pos)
+    return d / eps_inf
+
+
 def centred_pattern(zstar_site: torch.Tensor) -> torch.Tensor:
     """`Zbar_i = Zstar[Z_i] - mean_j Zstar[Z_j]` per cell: mandatory centring (plan
     section 2.5 -- an uncentred pattern is a bug)."""
@@ -206,6 +216,19 @@ def f_sr(dq: torch.Tensor, k_sr: torch.Tensor, k_lr: torch.Tensor) -> torch.Tens
     upper = torch.triu(torch.ones_like(pair, dtype=torch.bool), diagonal=1)
     num = (pair * k_sr)[upper].sum()
     den = (pair * (k_sr + k_lr))[upper].sum()
+    return num / den
+
+
+def f_sr_abs(dq: torch.Tensor, k_sr: torch.Tensor, k_lr: torch.Tensor) -> torch.Tensor:
+    """C10 ruling (2026-09-08): the ABSOLUTE short-range share
+    `sum_{i<j} |dq_i dq_j K_SR_ij| / sum_{i<j} |dq_i dq_j| (|K_SR_ij| + |K_LR_ij|)`, in [0, 1].
+    The signed `f_sr` is unbounded in a small cell (`K_LR` is self-image dominated and
+    negative on every pair, so its denominator can shrink below the numerator): recorded as
+    a criterion defect; this share is reported instead and is NOT a gate."""
+    pair = (dq.unsqueeze(-1) * dq.unsqueeze(-2)).abs()
+    upper = torch.triu(torch.ones_like(pair, dtype=torch.bool), diagonal=1)
+    num = (pair * k_sr.abs())[upper].sum()
+    den = (pair * (k_sr.abs() + k_lr.abs()))[upper].sum()
     return num / den
 
 

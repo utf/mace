@@ -25,7 +25,7 @@ sys.path.insert(0, str(HERE.parent))
 from mace import tools                                                              # noqa: E402
 from mace.modules.dscc import arm23, calibration, data as dd                          # noqa: E402
 from mace.modules.dscc.admission import collective_coordinate, slope_with_se          # noqa: E402
-from mace.modules.dscc.kernels import f_sr, gamma_matrix, kernel_components          # noqa: E402
+from mace.modules.dscc.kernels import f_sr, f_sr_abs, gamma_matrix, kernel_components   # noqa: E402
 from mace.modules.dscc.train import Trainer, TrainConfig, load_frames                # noqa: E402
 from mace.tools import torch_geometric                                              # noqa: E402
 
@@ -66,7 +66,7 @@ def main() -> None:
         held_idx = [m.index for m in metas if m.state.Q != 0 and fold_of.get(m.index) == cfg["fold"]]
         # N_eff and f_SR on a held-out sample (charged frames).
         sample = held_idx[: args.f_sr_frames]
-        n_effs, f_srs, unconv = [], [], 0
+        n_effs, f_srs, f_srs_abs, unconv = [], [], [], 0
         ds = dd.atomic_data([frames[i] for i in sample], z_table, cfg["r_cut"])
         for b in torch_geometric.dataloader.DataLoader(ds, batch_size=1):
             batch = b.to(args.device).to_dict()
@@ -78,6 +78,7 @@ def main() -> None:
                 pos, cell = batch["positions"], batch["cell"].view(3, 3)
                 k_sr, k_lr = kernel_components(pos, cell, model.kernel)
                 f_srs.append(float(f_sr(dq, k_sr, k_lr)))
+                f_srs_abs.append(float(f_sr_abs(dq, k_sr, k_lr)))
                 unconv += int(not out["diagnostics"]["converged"][0])
         # 159-atom shape residual after post-hoc C_Q (interpolation-only frames).
         d159, r159, d_oof, r_oof = [], [], [], []
@@ -99,12 +100,19 @@ def main() -> None:
         sv_trained = sv_fractions[1:] if len(sv_fractions) > 1 else sv_fractions
         sv_max = max(sv_trained) if sv_trained else 0.0
         ceiling = float(cfg.get("single_valued_ceiling", 0.10))
+        # C10 ruling (2026-09-08): the gate is read on the final model and the last ten
+        # epochs; the early-epoch failures are the initialised-map transient (recorded).
+        sv_last10 = max(sv_fractions[-10:]) if sv_fractions else 0.0
+        over = [k + 1 for k, f in enumerate(sv_trained) if f > ceiling]
         entry = {"config": info, "force_rmse": held["force_rmse"], "shell_rmse": held["shell_rmse"],
                  "shape_slope_err": shape_err, "c_q": cq, "n_eff_p50": float(np.median(n_effs)) if n_effs else float("nan"),
                  "sv_fraction": sv_max, "sv_fraction_last": sv_fractions[-1] if sv_fractions else 0.0,
                  "sv_init_fraction": sv_fractions[0] if sv_fractions else 0.0,
                  "arm_failed_single_valuedness": any(f > ceiling for f in sv_trained),
-                 "sv_ceiling_exceeded_epochs": [k + 1 for k, f in enumerate(sv_trained) if f > ceiling],
+                 "sv_ceiling_exceeded_epochs": over,
+                 "sv_fraction_last10": sv_last10, "sv_transient_end": (max(over) if over else 0),
+                 "sv_pooled_fraction": (float(np.mean(sv_trained)) if sv_trained else 0.0),
+                 "f_sr_abs": float(np.median(f_srs_abs)) if f_srs_abs else None,
                  "converged_fraction": 1.0 - unconv / max(len(sample), 1),
                  "f_sr": float(np.median(f_srs)) if f_srs else None, "s": last.get("s"), "lambda_dir": last.get("lambda_dir"),
                  "u_eff": last.get("u_eff"), "epochs": len(hist), "spikes": spikes}
@@ -123,10 +131,15 @@ def main() -> None:
             n_eff_p50=[e["n_eff_p50"] for e in entries], sv_fraction=[e["sv_fraction"] for e in entries],
             converged_fraction=[e["converged_fraction"] for e in entries],
             f_sr=[e["f_sr"] for e in entries if e["f_sr"] is not None],
+            f_sr_abs=[e["f_sr_abs"] for e in entries if e.get("f_sr_abs") is not None],
+            sv_fraction_last10=[e["sv_fraction_last10"] for e in entries],
+            sv_transient_end=[e["sv_transient_end"] for e in entries],
             far_field_4_8=[e["shell_rmse"].get("4-6") or 0.0 for e in entries],
             s_scale=[e["s"] for e in entries if route == "Bp" and e["s"] is not None]))
-    decision = arm23.select(configs)
-    report = {"runs": per_run, "configs": {c.name: c.__dict__ for c in configs}, "decision": decision}
+    decision = arm23.select(configs)                  # v4.3 as registered
+    decision_v44 = arm23.select_v44(configs)          # the 2026-09-08 rule, post hoc
+    report = {"runs": per_run, "configs": {c.name: c.__dict__ for c in configs}, "decision": decision,
+              "decision_v44": decision_v44}
     json.dump(report, open(args.out, "w"), indent=1, default=str)
     print("decision:", json.dumps({k: v for k, v in decision.items() if k != "gates"}, default=str))
     print("saved", args.out)

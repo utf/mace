@@ -9,11 +9,21 @@ before any result was opened:
     the best are EQUIVALENT and the simplest of them is selected (Phi = 0 < LR-only < LR+U
     < lambda = 1 fixed < full; route A before B'); Arm-1 force numbers are not a baseline;
   * localisation stability: seed spread (std) of `N_eff` p50 <= 0.5;
-  * root rule: per-epoch subsample failing fraction <= 0.10 (final epoch) and SCF within
+  * root rule (C10 ruling, 2026-09-08): the v4.5 check's failing fraction <= 0.10 on the
+    final model and on each of the last ten epochs (the early-epoch failures are the
+    initialised-map transient, recorded per run; ceiling from epoch 1) and SCF within
     `n_max` on >= 99 % of training frames;
-  * `f_SR` <= 0.5; Route B' additionally: 4-8 A far-field shell residual improves beyond
-    `tau_noise`, `s` inside [0.1, 1.9], tiling-ladder 1/L coefficient within 5 % of Madelung.
+  * `f_SR` <= 0.5 was registered and is a criterion defect (the signed fraction is unbounded
+    in a small cell); it is no longer a gate -- the absolute share `f_sr_abs` is reported;
+    Route B' additionally: 4-8 A far-field shell residual improves beyond `tau_noise`, `s`
+    inside [0.1, 1.9], tiling-ladder 1/L coefficient within 5 % of Madelung.
 Regime-A ablation configurations are reported, never selected.
+
+`select` is the v4.3 rule as registered before the campaign (Phi = 0 a candidate, simplest
+equivalent wins). `select_v44` is the rule the user stated on 2026-09-08 (`K_LR` required
+physics with no learnable coefficient, not subject to the equivalence rule; the minimal
+production candidate is LR-only; the Phi = 0 arms are force REFERENCES, not candidates);
+no v4.4 document predates the campaign, so a selection under it is labelled post hoc.
 """
 from __future__ import annotations
 
@@ -42,9 +52,12 @@ class ConfigSummary:
     force_rmse: List[float]                 # held-out charged force RMSE per seed, eV/A
     shape_slope_err: List[float]            # |159-atom shape residual slope| after C_Q, eV/A
     n_eff_p50: List[float]
-    sv_fraction: List[float]                # worst-epoch failing fraction of the single-valuedness check (v4.5)
+    sv_fraction: List[float]                # worst-epoch (>= 1) failing fraction of the single-valuedness check (v4.5)
     converged_fraction: List[float]
-    f_sr: List[float] = field(default_factory=list)
+    f_sr: List[float] = field(default_factory=list)              # signed fraction: reported, defective, not a gate
+    sv_fraction_last10: List[float] = field(default_factory=list)   # max over the final model and the last ten epochs (C10)
+    sv_transient_end: List[int] = field(default_factory=list)       # last over-ceiling epoch per seed (0: none)
+    f_sr_abs: List[float] = field(default_factory=list)          # absolute share, reported only
     far_field_4_8: List[float] = field(default_factory=list)
     s_scale: List[float] = field(default_factory=list)
     ladder_rel_err: Optional[float] = None
@@ -73,11 +86,16 @@ def simplicity(c: "ConfigSummary") -> tuple:
 
 def gates(c: ConfigSummary, route_a_far_field: Optional[Sequence[float]] = None) -> Dict[str, object]:
     """The hard gates a configuration must pass to be selectable."""
+    sv_read = c.sv_fraction_last10 if c.sv_fraction_last10 else c.sv_fraction
     out = {"localisation_stable": float(np.std(c.n_eff_p50)) <= N_EFF_SPREAD_MAX,
-           "root_rule": max(c.sv_fraction) <= SV_CEILING if c.coupling != "phi0" else True,
+           "root_rule": max(sv_read) <= SV_CEILING if c.coupling != "phi0" else True,
+           "root_rule_worst_epoch": max(c.sv_fraction) <= SV_CEILING if c.coupling != "phi0" else True,   # information: the pre-C10 reading
            "converged": min(c.converged_fraction) >= CONVERGED_MIN if c.coupling != "phi0" else True,
-           "f_sr": (max(c.f_sr) <= F_SR_FLOOR) if c.f_sr else True,
            "selectable": c.regime == "B"}
+    if c.f_sr:                                                   # information only (C10: the signed gate is defective)
+        out["f_sr_signed_median"] = float(np.median(c.f_sr))
+    if c.f_sr_abs:
+        out["f_sr_abs_median"] = float(np.median(c.f_sr_abs))
     if c.route == "Bp":
         out["s_unsaturated"] = all(S_RANGE[0] <= s <= S_RANGE[1] for s in c.s_scale) if c.s_scale else False
         out["ladder"] = (c.ladder_rel_err is not None and c.ladder_rel_err <= LADDER_TOL)
@@ -85,7 +103,7 @@ def gates(c: ConfigSummary, route_a_far_field: Optional[Sequence[float]] = None)
             gain = float(np.mean(route_a_far_field) - np.mean(c.far_field_4_8))
             out["far_field_gain"] = gain
             out["far_field_beyond_noise"] = gain > _se(c.far_field_4_8) + _se(route_a_far_field)
-    out["passed"] = all(v for k, v in out.items() if isinstance(v, bool))
+    out["passed"] = all(v for k, v in out.items() if isinstance(v, bool) and k != "root_rule_worst_epoch")
     return out
 
 
@@ -129,4 +147,56 @@ def select(configs: Sequence[ConfigSummary]) -> Dict[str, object]:
                      "equivalent": [c.name for c in equivalent], "beaten_beyond_margin": [c.name for c in beaten],
                      "reason": ("selected: best by median force" if chosen is best else
                                 f"selected: simplest of the {len(equivalent)} configurations equivalent within max(tau_phys, tau_noise)")})
+    return decision
+
+
+def select_v44(configs: Sequence[ConfigSummary]) -> Dict[str, object]:
+    """The user's 2026-09-08 rule ("v4.4"; no document predates the campaign -- post hoc):
+    `K_LR` is required physics with no learnable coefficient and is not subject to the
+    equivalence rule, so the Phi = 0 arms are force REFERENCES and the candidates are the
+    gate-passing regime-B configurations that carry `K_LR` (LR-only, LR+U, lambda = 1, full).
+    Among the candidates: rank by the seed median of the held-out force RMSE; every candidate
+    within `max(tau_phys, tau_noise)` of the best candidate on forces and not worse beyond
+    the same kind of margin on the 159-atom shape error is equivalent to it; the simplest
+    equivalent candidate (LR-only < LR+U < lambda = 1 < full) is selected. The selected
+    candidate's force cost against the Phi = 0 reference of its route is reported (inside
+    the margin: "costs nothing in forces")."""
+    route_a = [c for c in configs if c.route == "A" and c.regime == "B"]
+    ff_a = [v for c in route_a for v in c.far_field_4_8] or None
+    gate_table = {c.name: gates(c, ff_a) for c in configs}
+    phi0 = {c.route: c for c in configs if c.coupling == "phi0" and c.regime == "B"}
+    med = lambda x: float(np.median(np.asarray(x, dtype=np.float64)))
+    candidates = [c for c in configs if gate_table[c.name]["passed"] and c.coupling != "phi0"]
+    ranked = sorted(candidates, key=lambda c: (med(c.force_rmse), simplicity(c)))
+    decision = {"rule": "v4.4 as stated 2026-09-08 (post hoc: no v4.4 document predates the campaign)",
+                "gates": gate_table,
+                "ranking": [(c.name, med(c.force_rmse), _spread(c.force_rmse)) for c in ranked],
+                "references": {r: (p.name, med(p.force_rmse), _spread(p.force_rmse)) for r, p in phi0.items()},
+                "tau_noise_force": {r: _spread(p.force_rmse) for r, p in phi0.items()},
+                "tau_noise_shape": {r: _spread(p.shape_slope_err) for r, p in phi0.items()}}
+    if not ranked:
+        decision["selected"] = None; decision["reason"] = "no K_LR-carrying configuration passed the gates"
+        return decision
+    best = ranked[0]
+
+    def tau(c, which):
+        ref = phi0.get(c.route)
+        own = c.force_rmse if which == "force" else c.shape_slope_err
+        spread = _spread(ref.force_rmse if which == "force" else ref.shape_slope_err) if ref is not None else _spread(own)
+        return max(TAU_PHYS_FORCE if which == "force" else TAU_PHYS_SHAPE, spread)
+
+    equivalent, beaten = [best], []
+    for c in ranked[1:]:
+        within_force = med(c.force_rmse) - med(best.force_rmse) <= max(tau(best, "force"), tau(c, "force"))
+        shape_ok = med(c.shape_slope_err) - med(best.shape_slope_err) <= max(tau(best, "shape"), tau(c, "shape"))
+        (equivalent if within_force and shape_ok else beaten).append(c)
+    chosen = sorted(equivalent, key=simplicity)[0]
+    ref = phi0.get(chosen.route)
+    cost = (med(chosen.force_rmse) - med(ref.force_rmse)) if ref is not None else None
+    decision.update({"selected": chosen.name, "best_candidate_by_force": best.name,
+                     "equivalent": [c.name for c in equivalent], "beaten_beyond_margin": [c.name for c in beaten],
+                     "force_cost_vs_phi0": cost,
+                     "costs_nothing_in_forces": (cost is not None and cost <= tau(chosen, "force")),
+                     "reason": ("selected: best candidate by median force" if chosen is best else
+                                f"selected: simplest of the {len(equivalent)} candidates equivalent within max(tau_phys, tau_noise)")})
     return decision

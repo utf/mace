@@ -53,3 +53,34 @@ def test_gates_exclude_unstable_or_ablation_configurations():
     assert not arm23.gates(saturated)["s_unsaturated"]
     out = arm23.select([bad_sv, ablation])
     assert out["selected"] is None and "no configuration" in out["reason"]
+
+
+def test_root_rule_reads_the_final_model_and_last_ten_epochs_and_f_sr_is_not_a_gate():
+    """C10 (2026-09-08): a run whose early epochs exceeded the ceiling passes when its final
+    model and last ten epochs are under it (the transient is recorded); the signed f_SR is
+    reported, not gated."""
+    c = _cfg("B_A_full", sv=0.25, f_sr=1.7)
+    c.sv_fraction_last10 = [0.0] * 6; c.sv_transient_end = [14] * 6; c.f_sr_abs = [0.3] * 6
+    g = arm23.gates(c)
+    assert g["root_rule"] and not g["root_rule_worst_epoch"] and g["passed"] and "f_sr" not in g
+    assert g["f_sr_signed_median"] == 1.7 and g["f_sr_abs_median"] == 0.3
+    c.sv_fraction_last10 = [0.0] * 5 + [0.15]
+    assert not arm23.gates(c)["root_rule"]
+
+
+def test_select_v44_treats_phi0_as_the_reference_and_picks_the_minimal_k_lr_candidate():
+    """The 2026-09-08 rule (post hoc): K_LR required, Phi = 0 a force reference; the simplest
+    candidate equivalent to the best candidate wins, and its cost against Phi = 0 is reported."""
+    phi0 = _cfg("B_A_phi0", coupling="phi0")
+    phi0.force_rmse = [0.0368, 0.0412, 0.0400, 0.0391, 0.0416, 0.0398]       # median 0.0399, spread 1.7 meV/A
+    lr = _cfg("B_A_lr_only", coupling="lr_only", force=0.0405)               # median 0.04175
+    lr_u = _cfg("B_A_lr_u", coupling="lr_u", force=0.0400)                   # median 0.04125 (best candidate)
+    full = _cfg("B_A_full", force=0.0407)
+    far = _cfg("B_A_lambda1", coupling="lambda1", force=0.0480)
+    out = arm23.select_v44([phi0, lr, lr_u, full, far])
+    assert out["best_candidate_by_force"] == "B_A_lr_u"
+    assert out["selected"] == "B_A_lr_only" and set(out["equivalent"]) == {"B_A_lr_u", "B_A_lr_only", "B_A_full"}
+    assert out["beaten_beyond_margin"] == ["B_A_lambda1"] and all(n != "B_A_phi0" for n, *_ in out["ranking"])
+    assert out["costs_nothing_in_forces"] and abs(out["force_cost_vs_phi0"] - (0.04175 - 0.0399)) < 1e-9
+    assert "post hoc" in out["rule"]
+    assert arm23.select([phi0, lr, lr_u, full, far])["selected"] == "B_A_phi0"     # v4.3 on the same records

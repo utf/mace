@@ -481,9 +481,9 @@ class TestPairForcePath:
     second-order graph through the lattice sums): the same forces as the inference route
     and the same parameter gradients as the cotangent route under create_graph."""
 
-    @pytest.mark.parametrize("regime", ["A", "B"])
-    def test_training_forces_and_gradients_match_the_cotangent_route(self, regime):
-        m = _coupled(regime=regime)
+    @pytest.mark.parametrize("regime, route_b", [("A", False), ("B", False), ("B", True)])
+    def test_training_forces_and_gradients_match_the_cotangent_route(self, regime, route_b):
+        m = _coupled(regime=regime, route_b=route_b)
         batch = _batch([VACP])
         m.gamma_force_mode = "autograd"
         ref = m(dict(batch), compute_force=True)                          # inference: cotangent route
@@ -508,14 +508,16 @@ class TestPairForcePath:
             assert float((gp - ga).abs().max()) <= 1e-8 * scale + 1e-12, (p.shape, float((gp - ga).abs().max()), scale)
             n_compared += 1
         assert n_compared > 0 and grads["pairs"][params.index(m.lambda_raw)] is not None
+        if route_b:                        # Route B': the pattern scale's gradient rides the pair route too
+            assert grads["pairs"][params.index(m.s_raw)] is not None
 
-    @pytest.mark.parametrize("regime", ["A", "B"])
-    def test_inference_forces_match_the_cotangent_route(self, regime):
+    @pytest.mark.parametrize("regime, route_b", [("A", False), ("B", False), ("B", True)])
+    def test_inference_forces_match_the_cotangent_route(self, regime, route_b):
         """Inference (no `create_graph`) takes the pair route too: the held-out evaluation of
         four 159-atom frames kept a 9.4 GB first-order Ewald graph on the cotangent route.
-        Per-graph and batched paths, with and without a warm start."""
+        Per-graph and batched paths, with and without a warm start; Route B' since C10."""
         from mace.modules.dscc.scf import ScfOptions
-        m = _coupled(regime=regime)
+        m = _coupled(regime=regime, route_b=route_b)
         m.scf_options = ScfOptions(n_max=200)
         vac_b = _frame(_perovskite(remove_cl=0, seed=1), [0, 0, 1, 0], 1)
         for frames, batched in (([VACP], True), ([VACP, vac_b], True), ([VACP, VAC0], False)):
@@ -557,9 +559,10 @@ class TestPairForcePath:
             assert float((a - b).abs().max()) <= 1e-7 * max(float(b.abs().max()), 1e-6) + 1e-12
         assert d["iterations"][0] < ref["diagnostics"]["iterations"][0]     # the warm graph: a few steps
 
-    def test_batched_training_path_matches_per_graph(self):
+    @pytest.mark.parametrize("route_b", [False, True])
+    def test_batched_training_path_matches_per_graph(self, route_b):
         from mace.modules.dscc.scf import ScfOptions
-        m = _coupled(regime="B")
+        m = _coupled(regime="B", route_b=route_b)
         m.scf_options = ScfOptions(tol_q=1e-11, tol_E=1e-11, continuation_steps=2)
         vac_b = _frame(_perovskite(remove_cl=3, seed=2), [0, 0, 1, 0], 1)
         out = m(_batch([VACP, vac_b]), training=True, compute_force=True)
