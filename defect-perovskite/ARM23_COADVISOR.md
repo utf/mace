@@ -19,7 +19,8 @@ has been opened; item C10 in the tracker carries four rulings.
 ## Per arm
 
 Held-out charged force RMSE (meV/Å; median over six seeds, then the seeds), 159-atom
-shape-slope error (median over the four seeds whose fold carries a 159-atom shape residual),
+shape-slope error (median over four seeds: seeds 0 and 2 have no reading because their `C_Q`
+window admits one and two 159-atom frames, below the three a slope needs),
 `N_eff` p50 median with the seed spread, the single-valuedness failing fraction at its worst
 epoch ≥ 1 and at the last epoch, the trained couplings, and loss spikes per run.
 
@@ -36,8 +37,9 @@ Initial couplings 0.05 and 0.71 / 0.12 / 1.36 eV. `tau_noise` (Φ = 0 seed sprea
 on forces and 0.018 on the shape slope; `tau_phys` 3 meV/Å and 0.015; the margin is 3.0.
 Every run converged its SCF on 100 % of training frames. Force RMSE by distance from the
 vacancy (0–2 / 2–4 / 4–6 / 6–8 / > 8 Å, medians): Φ = 0 84 / 68 / 50 / 32 / 32, LR + U 84 / 72 /
-52 / 33 / 32, full 93 / 74 / 54 / 34 / 32, λ = 1 90 / 74 / 54 / 36 / 33. The coupled arms lose
-inside 4 Å and match Φ = 0 beyond 6 Å. The base alone reads 53.2 meV/Å on the fold-0 charged
+52 / 33 / 32, full 93 / 74 / 54 / 34 / 32, λ = 1 90 / 74 / 54 / 36 / 33. Full and λ = 1 are worse
+on the median inside 4 Å but within their seed spreads (0–2 Å seed std 26 and 15 against 6
+for Φ = 0); LR + U is equal; every arm matches Φ = 0 beyond 6 Å. The base alone reads 53.2 meV/Å on the fold-0 charged
 held-out frames; the `H0` head takes it to 36.8 (Φ = 0, seed 0); the coupling adds nothing.
 
 ## The selection, and the two gates in question
@@ -55,20 +57,23 @@ selection on the same records under every reading of the two contested gates:
 | last-epoch root rule | {Φ = 0} | Φ = 0 |
 | both | {Φ = 0, LR + U, LR-only, full}; λ = 1 out on `localisation_stable` | Φ = 0 |
 
-No arm is beaten beyond the margin in any reading; no coupled arm beats Φ = 0.
+No coupled arm beats Φ = 0. λ = 1, at 43.3, is 3.4 meV/Å above Φ = 0 and beyond the 3.0
+margin — the one arm worse than nothing beyond the margin; it leaves on `localisation_stable`
+before the ranking sees it, which is why `beaten_beyond_margin` is empty in every reading.
 
 **(a) Root rule.** The v4.5 check (a 5 % per-epoch subsample re-run by continuation against
 the warm start, failing fraction ≤ 10 %, "failure fails the arm") is read at its worst epoch
 ≥ 1, and on that reading the full, LR + U and λ = 1 arms fail. The over-ceiling epochs are
 the early ones — full: epochs 1–5 and 14; LR + U: 1–8 and 18; λ = 1: 1–31 (seed 4 over on 22
 epochs) — none within two epochs of a logged loss spike (the spikes sit at epochs 20–58),
-and the final-epoch check is 0/39 on all 36 runs. So the trained maps are single-valued;
+and the final-epoch check is 0/39 on all 36 runs. Pooled over the 59 checked epochs (2301 frames per run) the failing fractions are full 0.3–2.3 %, LR + U 0.3–2.4 %, λ = 1 0.9–7.7 %, regime A ≤ 0.2 % — every run under the 10 % ceiling on that reading; the worst-of-59 reading of a 39-frame subsample is the harshest of the three (one epoch at 5 of 39 reads 12.8 % and is consistent with a true rate of 5 %). So the trained maps are single-valued;
 the failures are the transient from the multi-valued initialised map (28–51 % of the
 79-atom charged frames at epoch 0 reach a different fixed point from a zero start than
 from the continuation, C9) and they fade as `U_eff(Pb)` falls to ≈ 0.1 eV. Under a
 last-epoch reading full and LR + U pass; λ = 1 fails `localisation_stable` regardless
-(`N_eff` spread 0.88 > 0.5, seed 6 at 5.5). The record keeps the strict reading unless
-you overrule it; the selection does not depend on it.
+(`N_eff` spread 0.88 > 0.5, seed 6 at 5.5). Three readings are on the table — worst epoch (strict, as
+registered), pooled, last epoch; the record keeps the strict one unless you overrule it, and
+the selection does not depend on it.
 
 **(b) `f_SR` is a criterion defect, ours.** The registered gate is `f_SR` ≤ 0.5 with
 `f_SR = Σ|dq_i dq_j| K_SR_ij / Σ|dq_i dq_j| (K_SR + K_LR)_ij`. It reads 1.5–1.8 on every
@@ -96,8 +101,10 @@ sharpens nor extends it (LR + U vs full — the λ = 0 ablation — `N_eff` 3.7 
 λ = 0 ablation makes the level shallower and the carrier more extended") is not borne out in
 regime B; in the regime-A ablation `U_eff(Cl)` did go to 2.3–8.9 eV at an equivalent force
 error. The forecast of distinct fixed points at asymmetric geometries is borne out at
-initialisation and in the early epochs. The near-shell loss of the coupled arms (84 → 90–93
-meV/Å inside 2 Å) is the one place the coupling is measurably worse than nothing.
+initialisation and in the early epochs. Inside 2 Å the full and λ = 1 arms are worse than Φ = 0
+on the median (93 and 90 against 84 meV/Å) but within their own seed spreads; forcing the
+short-range coupling on at full strength (λ = 1) is the one arm worse than Φ = 0 beyond the
+selection margin.
 
 Two caveats on the reading. The 159-atom shape criterion rests on four frames per fold and
 is absent on two of the six seeds; it cannot separate the arms (LR + U 0.025 vs Φ = 0 0.042
@@ -115,7 +122,7 @@ the Phase-4 ladder's `K_LR_ii` and `dq`-spread items are vacuous at Φ = 0 (its 
 vs `1/L` remains readable as the base + `H0` size behaviour); and the §9 robustness pass
 retrains "the selected configuration and its Φ = 0 reference", which are now one arm.
 
-- **(i) Close at the selection.** §9 pass on Φ = 0 under the LR-decay protocol (≈ 1 h per
+- **(i) Close at the selection.** §9 pass on Φ = 0 under the LR-decay protocol (1.5–2 h per
   seed on the A4000), the P4.1 ladder on it, and the final artefact.
 - **(ii) (i) plus LR + U under the §9 protocol**, to test whether the equivalence survives the
   final-checkpoint noise. It cannot plausibly reverse the selection (above), but it makes the
