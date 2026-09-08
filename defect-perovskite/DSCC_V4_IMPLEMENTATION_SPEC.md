@@ -654,7 +654,15 @@ same-shape cells (14.3 / 18.0 / 28.6 Å: 8.059 / 8.098 / 8.102 eV) fits a `1/L` 
 −1.16 eV·Å against the expected −4.89, i.e. 24 % of Madelung; dense = sparse to 1e-4 eV where
 the sparse step converged. The decomposition of that slope into the head's `½ dqᵀ Γ dq` (which
 must carry Madelung if `dq` is localised) and the band term `Tr(dP H0)` (the Γ-point
-finite-size error of the fill) is running; recorded as diagnostic, not a gate reading, until it is.
+finite-size error of the fill) is done (`ladder_lr_only_s0_decomp.json`): over the same-shape
+cells the kernel term `½ dqᵀ Γ dq` fits −4.35 eV·Å (89 % of the expected −4.89: the head carries
+the monopole term, `dq` localised with `N_eff` 3.9–5.1) and the band term `Tr(dP H0)` fits
++3.19 eV·Å, cancelling two thirds of it in the total (−1.16). The base contributes nothing
+(`E_base(+1) = E_base(0)` on the same geometry) and the post-hoc `C_Q` is a constant per charge.
+The band term's `1/L` is the Γ-point finite-size error of the fill on cells of 14–29 Å (the
+same physics as the non-converging `q0` above), not an electrostatic term; recorded as a
+diagnostic. Figure: `~/runs/dscc/tiling_convergence.png` (panels A–F: gate values, pair
+deviations, synthetic sweep, cloud profiles, the 1/N_at component, this decomposition).
 
 ## 3. Task list
 
