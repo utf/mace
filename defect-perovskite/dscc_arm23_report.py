@@ -30,6 +30,16 @@ from mace.modules.dscc.train import Trainer, TrainConfig, load_frames           
 from mace.tools import torch_geometric                                              # noqa: E402
 
 
+def far_field(shells, counts=None):
+    """The registered 4-8 A far-field shell residual: the 4-6 and 6-8 A shells pooled by atom
+    count; runs recorded before C10 carry no counts and are pooled by shell volume (152 : 296)."""
+    v1, v2 = shells.get("4-6"), shells.get("6-8")
+    if v1 is None or v2 is None:
+        return float(v1 or v2 or 0.0)
+    n1 = (counts or {}).get("4-6") or 152; n2 = (counts or {}).get("6-8") or 296
+    return float(np.sqrt((v1 ** 2 * n1 + v2 ** 2 * n2) / (n1 + n2)))
+
+
 def parse_name(name: str):
     m = re.match(r"dscc_arm23_(?P<regime>[AB])_(?P<route>A|Bp)_(?P<mode>phi0|lr_only|lr_u|full|lambda1)_s(?P<seed>\d+)$", name)
     return m.groupdict() if m else None
@@ -105,6 +115,7 @@ def main() -> None:
         sv_last10 = max(sv_fractions[-10:]) if sv_fractions else 0.0
         over = [k + 1 for k, f in enumerate(sv_trained) if f > ceiling]
         entry = {"config": info, "force_rmse": held["force_rmse"], "shell_rmse": held["shell_rmse"],
+                 "shell_counts": held.get("shell_counts"), "far_field_4_8": far_field(held["shell_rmse"], held.get("shell_counts")),
                  "shape_slope_err": shape_err, "c_q": cq, "n_eff_p50": float(np.median(n_effs)) if n_effs else float("nan"),
                  "sv_fraction": sv_max, "sv_fraction_last": sv_fractions[-1] if sv_fractions else 0.0,
                  "sv_init_fraction": sv_fractions[0] if sv_fractions else 0.0,
@@ -134,7 +145,7 @@ def main() -> None:
             f_sr_abs=[e["f_sr_abs"] for e in entries if e.get("f_sr_abs") is not None],
             sv_fraction_last10=[e["sv_fraction_last10"] for e in entries],
             sv_transient_end=[e["sv_transient_end"] for e in entries],
-            far_field_4_8=[e["shell_rmse"].get("4-6") or 0.0 for e in entries],
+            far_field_4_8=[e["far_field_4_8"] for e in entries],
             s_scale=[e["s"] for e in entries if route == "Bp" and e["s"] is not None]))
     decision = arm23.select(configs)                  # v4.3 as registered
     decision_v44 = arm23.select_v44(configs)          # the 2026-09-08 rule, post hoc

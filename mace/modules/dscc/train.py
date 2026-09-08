@@ -262,7 +262,12 @@ class Trainer:
         ds = self._dataset(indices)
         loader = torch_geometric.dataloader.DataLoader(ds, batch_size=self.cfg.batch_size)
         sq, n_atoms = 0.0, 0
-        shells = {(0, 2): [0.0, 0], (2, 4): [0.0, 0], (4, 6): [0.0, 0], (6, 8): [0.0, 0], (8, 99): [0.0, 0]}
+        # Convention: `force_rmse` and the shell values are the RMS of the per-atom force-error
+        # VECTOR norm, sqrt(sum |dF|^2 / N_atoms) -- sqrt(3) times the per-component RMS that
+        # MACE's own logs report. The > 8 A shells are resolved since C10 (2026-09-08) and the
+        # atom counts kept so shells can be pooled.
+        shells = {(0, 2): [0.0, 0], (2, 4): [0.0, 0], (4, 6): [0.0, 0], (6, 8): [0.0, 0], (8, 99): [0.0, 0],
+                  (8, 10): [0.0, 0], (10, 12): [0.0, 0], (12, 99): [0.0, 0]}
         energies = []
         k = 0
         for b in loader:
@@ -300,6 +305,7 @@ class Trainer:
                                  "resid_uncal": float(out["energy_uncalibrated"][g] - batch["energy"][g])})
         report = {"tag": tag, "force_rmse": float(np.sqrt(sq / max(n_atoms, 1))),
                   "shell_rmse": {f"{a_}-{b_}": (float(np.sqrt(v[0] / v[1])) if v[1] else None) for (a_, b_), v in shells.items()},
+                  "shell_counts": {f"{a_}-{b_}": v[1] for (a_, b_), v in shells.items()},
                   "energies": energies}
         if self.cfg.coupling and indices:
             # v4.5: the held-out warm starts are checked on the registered fraction too.

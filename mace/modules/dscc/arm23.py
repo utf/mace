@@ -58,7 +58,7 @@ class ConfigSummary:
     sv_fraction_last10: List[float] = field(default_factory=list)   # max over the final model and the last ten epochs (C10)
     sv_transient_end: List[int] = field(default_factory=list)       # last over-ceiling epoch per seed (0: none)
     f_sr_abs: List[float] = field(default_factory=list)          # absolute share, reported only
-    far_field_4_8: List[float] = field(default_factory=list)
+    far_field_4_8: List[float] = field(default_factory=list)      # the 4-6 and 6-8 A shells pooled, per seed
     s_scale: List[float] = field(default_factory=list)
     ladder_rel_err: Optional[float] = None
 
@@ -84,8 +84,11 @@ def simplicity(c: "ConfigSummary") -> tuple:
     return (SIMPLICITY.get(c.coupling, 9), ROUTE_ORDER.get(c.route, 9))
 
 
-def gates(c: ConfigSummary, route_a_far_field: Optional[Sequence[float]] = None) -> Dict[str, object]:
-    """The hard gates a configuration must pass to be selectable."""
+def gates(c: ConfigSummary, route_a_far_field: Optional[Sequence[float]] = None,
+          phi0_far_field: Optional[Sequence[float]] = None) -> Dict[str, object]:
+    """The hard gates a configuration must pass to be selectable. For a Route B' configuration
+    `route_a_far_field` is the SAME-coupling Route A configuration's pooled 4-8 A shell residual
+    per seed and `phi0_far_field` the Phi = 0 arm's (its seed spread is `tau_noise`, v4.3)."""
     sv_read = c.sv_fraction_last10 if c.sv_fraction_last10 else c.sv_fraction
     out = {"localisation_stable": float(np.std(c.n_eff_p50)) <= N_EFF_SPREAD_MAX,
            "root_rule": max(sv_read) <= SV_CEILING if c.coupling != "phi0" else True,
@@ -100,11 +103,26 @@ def gates(c: ConfigSummary, route_a_far_field: Optional[Sequence[float]] = None)
         out["s_unsaturated"] = all(S_RANGE[0] <= s <= S_RANGE[1] for s in c.s_scale) if c.s_scale else False
         out["ladder"] = (c.ladder_rel_err is not None and c.ladder_rel_err <= LADDER_TOL)
         if route_a_far_field is not None and c.far_field_4_8:
-            gain = float(np.mean(route_a_far_field) - np.mean(c.far_field_4_8))
+            med = lambda x: float(np.median(np.asarray(x, dtype=np.float64)))
+            gain = med(route_a_far_field) - med(c.far_field_4_8)
+            noise = _spread(phi0_far_field) if phi0_far_field else _spread(route_a_far_field)
             out["far_field_gain"] = gain
-            out["far_field_beyond_noise"] = gain > _se(c.far_field_4_8) + _se(route_a_far_field)
+            out["far_field_tau_noise"] = noise
+            out["far_field_beyond_noise"] = gain > noise
     out["passed"] = all(v for k, v in out.items() if isinstance(v, bool) and k != "root_rule_worst_epoch")
     return out
+
+
+def _gate_table(configs: Sequence[ConfigSummary]) -> Dict[str, Dict[str, object]]:
+    """Gates per configuration; a Route B' configuration is read against its same-coupling
+    Route A counterpart's far field, with the Route A Phi = 0 seed spread as the noise."""
+    route_a = {c.coupling: c for c in configs if c.route == "A" and c.regime == "B"}
+    phi0_ff = route_a["phi0"].far_field_4_8 if "phi0" in route_a else None
+    table = {}
+    for c in configs:
+        counterpart = route_a.get(c.coupling) if c.route == "Bp" else None
+        table[c.name] = gates(c, counterpart.far_field_4_8 if counterpart is not None else None, phi0_ff)
+    return table
 
 
 def select(configs: Sequence[ConfigSummary]) -> Dict[str, object]:
@@ -114,9 +132,7 @@ def select(configs: Sequence[ConfigSummary]) -> Dict[str, object]:
     every configuration whose median force RMSE is within `max(tau_phys, tau_noise)` of the
     best and whose 159-atom shape error is not worse than the best's beyond the same kind of
     margin is EQUIVALENT to it; the simplest equivalent configuration is selected."""
-    route_a = [c for c in configs if c.route == "A" and c.regime == "B"]
-    ff_a = [v for c in route_a for v in c.far_field_4_8] or None
-    gate_table = {c.name: gates(c, ff_a) for c in configs}
+    gate_table = _gate_table(configs)
     phi0 = {c.route: c for c in configs if c.coupling == "phi0" and c.regime == "B"}
     candidates = [c for c in configs if gate_table[c.name]["passed"]]
     med = lambda x: float(np.median(np.asarray(x, dtype=np.float64)))
@@ -161,9 +177,7 @@ def select_v44(configs: Sequence[ConfigSummary]) -> Dict[str, object]:
     equivalent candidate (LR-only < LR+U < lambda = 1 < full) is selected. The selected
     candidate's force cost against the Phi = 0 reference of its route is reported (inside
     the margin: "costs nothing in forces")."""
-    route_a = [c for c in configs if c.route == "A" and c.regime == "B"]
-    ff_a = [v for c in route_a for v in c.far_field_4_8] or None
-    gate_table = {c.name: gates(c, ff_a) for c in configs}
+    gate_table = _gate_table(configs)
     phi0 = {c.route: c for c in configs if c.coupling == "phi0" and c.regime == "B"}
     med = lambda x: float(np.median(np.asarray(x, dtype=np.float64)))
     candidates = [c for c in configs if gate_table[c.name]["passed"] and c.coupling != "phi0"]
