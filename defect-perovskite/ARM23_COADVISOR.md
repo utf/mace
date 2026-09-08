@@ -161,9 +161,11 @@ is on file; applied post hoc as the ruling anticipated: LR-only selected (LR + U
 λ = 1 out on localisation), +1.8 meV/Å against Φ = 0 inside the margin. Root rule on the final
 model and the last ten epochs: every arm passes. `f_sr_abs` 0.69–0.71 on every regime-B arm.
 
-**Running since 15:13 (b3):** Route B′ LR-only ×6, LR + U ×6, full ×6, λ = 1 ×6, regime-A B′
-ablation ×6 in that order at four per GPU on GPUs 4 and 5 (≈ 13 h per run, eight slots per
-wave: three waves ≈ 40 h for the 24 regime-B runs, a fourth for the ablation); the
+**Running since 15:13 (b3):** Route B′ LR-only ×6 and LR + U ×6 (trimmed to these by the C10
+addendum at 15:41; full, λ = 1 and the ablation not run) at four per GPU on GPUs 4 and 5
+(≈ 13 h per run, eight slots per wave, ≈ 26 h in all); the
 matched-kernel F-SCC comparator on seeds 0, 1, 2 on GPU 7 (≈ 35–45 h). Stop:
-`scratchpad/kill_bp_b3.sh`. Rulings needed: the B′ ladder gate; whether to trim B′ to LR-only
-and LR + U given the diagnostic; the far-field gate wording as implemented; the v4.4 text.
+`scratchpad/kill_bp_b3.sh`. The C10 addendum settled the B′ ladder gate (re-read as a model
+property, B′ judged on forces), the trim, the far-field reading (gain on the full RMSE and the
+0–2 / 2–4 shells decisive, 4–8 Å reported) and `tau_phys` (trainer convention); the v4.4 text
+is on file. Still missing: the "four checks" the addendum refers to.

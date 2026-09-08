@@ -15,8 +15,13 @@ before any result was opened:
     `n_max` on >= 99 % of training frames;
   * `f_SR` <= 0.5 was registered and is a criterion defect (the signed fraction is unbounded
     in a small cell); it is no longer a gate -- the absolute share `f_sr_abs` is reported;
-    Route B' additionally: 4-8 A far-field shell residual improves beyond `tau_noise`, `s`
-    inside [0.1, 1.9], tiling-ladder 1/L coefficient within 5 % of Madelung.
+    Route B' additionally (C10 addendum, 2026-09-08): `s` inside [0.1, 1.9]; its GAIN over the
+    same-coupling Route A arm read on the full per-atom RMSE and on the 0-2, 2-4 and 4-8 A
+    shells, each beyond the Phi = 0 seed spread of that quantity, with the 4-8 A pooled reading
+    reported but not decisive (the decisive readings: the full RMSE and the 0-2 / 2-4 shells);
+    the tiling-ladder `1/L` gate is re-read as a MODEL PROPERTY, reported, not a gate -- it
+    cannot pass on cells with L_min < ~3 R_c (compensation cloud 8-11 A), so B' is judged on
+    forces and no cross-size energy claim includes E_SF until a ladder with L >> R_c exists.
 Regime-A ablation configurations are reported, never selected.
 
 `select` is the v4.3 rule as registered before the campaign (Phi = 0 a candidate, simplest
@@ -60,7 +65,8 @@ class ConfigSummary:
     f_sr_abs: List[float] = field(default_factory=list)          # absolute share, reported only
     far_field_4_8: List[float] = field(default_factory=list)      # the 4-6 and 6-8 A shells pooled, per seed
     s_scale: List[float] = field(default_factory=list)
-    ladder_rel_err: Optional[float] = None
+    ladder_rel_err: Optional[float] = None                        # reported (model property), not a gate (C10 addendum)
+    shells: Dict[str, List[float]] = field(default_factory=dict)  # per-seed shell RMS by "a-b" key (held-out set)
 
 
 def _se(x: Sequence[float]) -> float:
@@ -84,11 +90,11 @@ def simplicity(c: "ConfigSummary") -> tuple:
     return (SIMPLICITY.get(c.coupling, 9), ROUTE_ORDER.get(c.route, 9))
 
 
-def gates(c: ConfigSummary, route_a_far_field: Optional[Sequence[float]] = None,
-          phi0_far_field: Optional[Sequence[float]] = None) -> Dict[str, object]:
+def gates(c: ConfigSummary, route_a: Optional["ConfigSummary"] = None,
+          phi0: Optional["ConfigSummary"] = None) -> Dict[str, object]:
     """The hard gates a configuration must pass to be selectable. For a Route B' configuration
-    `route_a_far_field` is the SAME-coupling Route A configuration's pooled 4-8 A shell residual
-    per seed and `phi0_far_field` the Phi = 0 arm's (its seed spread is `tau_noise`, v4.3)."""
+    `route_a` is the SAME-coupling Route A configuration and `phi0` the Route A Phi = 0 arm
+    (its seed spread of each quantity is that quantity's `tau_noise`, v4.3)."""
     sv_read = c.sv_fraction_last10 if c.sv_fraction_last10 else c.sv_fraction
     out = {"localisation_stable": float(np.std(c.n_eff_p50)) <= N_EFF_SPREAD_MAX,
            "root_rule": max(sv_read) <= SV_CEILING if c.coupling != "phi0" else True,
@@ -101,15 +107,26 @@ def gates(c: ConfigSummary, route_a_far_field: Optional[Sequence[float]] = None,
         out["f_sr_abs_median"] = float(np.median(c.f_sr_abs))
     if c.route == "Bp":
         out["s_unsaturated"] = all(S_RANGE[0] <= s <= S_RANGE[1] for s in c.s_scale) if c.s_scale else False
-        out["ladder"] = (c.ladder_rel_err is not None and c.ladder_rel_err <= LADDER_TOL)
-        if route_a_far_field is not None and c.far_field_4_8:
+        # C10 addendum: the ladder is a model property, reported; not a gate.
+        out["ladder_rel_err"] = c.ladder_rel_err
+        out["ladder_within_tol"] = (c.ladder_rel_err is not None and c.ladder_rel_err <= LADDER_TOL) if c.ladder_rel_err is not None else None
+        if route_a is not None:
             med = lambda x: float(np.median(np.asarray(x, dtype=np.float64)))
-            gain = med(route_a_far_field) - med(c.far_field_4_8)
-            noise = _spread(phi0_far_field) if phi0_far_field else _spread(route_a_far_field)
-            out["far_field_gain"] = gain
-            out["far_field_tau_noise"] = noise
-            out["far_field_beyond_noise"] = gain > noise
-    out["passed"] = all(v for k, v in out.items() if isinstance(v, bool) and k != "root_rule_worst_epoch")
+            readings = {"force_rmse": (route_a.force_rmse, c.force_rmse, phi0.force_rmse if phi0 else route_a.force_rmse)}
+            for key in ("0-2", "2-4", "4-6", "6-8"):
+                if key in route_a.shells and key in c.shells:
+                    readings[key] = (route_a.shells[key], c.shells[key], (phi0.shells.get(key) if phi0 else None) or route_a.shells[key])
+            if route_a.far_field_4_8 and c.far_field_4_8:
+                readings["4-8"] = (route_a.far_field_4_8, c.far_field_4_8, (phi0.far_field_4_8 if phi0 else None) or route_a.far_field_4_8)
+            gains = {}
+            for key, (a, b, ref) in readings.items():
+                gain = med(a) - med(b); noise = _spread(ref)
+                gains[key] = {"gain": gain, "tau_noise": noise, "beyond_noise": gain > noise}
+            out["bprime_gains"] = gains
+            decisive = [k for k in ("force_rmse", "0-2", "2-4") if k in gains]
+            out["bprime_gain_beyond_noise"] = any(gains[k]["beyond_noise"] for k in decisive) if decisive else False
+    info_keys = {"root_rule_worst_epoch", "ladder_within_tol"}          # reported, not gated
+    out["passed"] = all(v for k, v in out.items() if isinstance(v, bool) and k not in info_keys)
     return out
 
 
@@ -117,11 +134,11 @@ def _gate_table(configs: Sequence[ConfigSummary]) -> Dict[str, Dict[str, object]
     """Gates per configuration; a Route B' configuration is read against its same-coupling
     Route A counterpart's far field, with the Route A Phi = 0 seed spread as the noise."""
     route_a = {c.coupling: c for c in configs if c.route == "A" and c.regime == "B"}
-    phi0_ff = route_a["phi0"].far_field_4_8 if "phi0" in route_a else None
+    phi0 = route_a.get("phi0")
     table = {}
     for c in configs:
         counterpart = route_a.get(c.coupling) if c.route == "Bp" else None
-        table[c.name] = gates(c, counterpart.far_field_4_8 if counterpart is not None else None, phi0_ff)
+        table[c.name] = gates(c, counterpart, phi0)
     return table
 
 

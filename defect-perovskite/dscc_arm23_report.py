@@ -156,6 +156,8 @@ def main() -> None:
             sv_fraction_last10=[e["sv_fraction_last10"] for e in entries],
             sv_transient_end=[e["sv_transient_end"] for e in entries],
             far_field_4_8=[e["far_field_4_8"] for e in entries],
+            shells={k: [e["shell_rmse"][k] for e in entries] for k in ("0-2", "2-4", "4-6", "6-8", "8-99")
+                    if all(e["shell_rmse"].get(k) is not None for e in entries)},
             s_scale=[e["s"] for e in entries if route == "Bp" and e["s"] is not None]))
     decision = arm23.select(configs)                  # v4.3 as registered
     decision_v44 = arm23.select_v44(configs)          # the 2026-09-08 rule, post hoc

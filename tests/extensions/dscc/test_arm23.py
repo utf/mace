@@ -2,20 +2,23 @@
 from mace.modules.dscc import arm23
 
 
-def _cfg(name, route="A", coupling="full", force=0.040, shape=0.010, n_eff=2.0, sv=0.02, conv=1.0, f_sr=0.3, ff=0.035, s=1.0, ladder=0.02, regime="B"):
+def _cfg(name, route="A", coupling="full", force=0.040, shape=0.010, n_eff=2.0, sv=0.02, conv=1.0, f_sr=0.3, ff=0.035, s=1.0, ladder=0.02, regime="B", near=None):
+    near = near if near is not None else 2.0 * force
     return arm23.ConfigSummary(name=name, regime=regime, route=route, coupling=coupling,
                                force_rmse=[force + 0.0005 * k for k in range(6)], shape_slope_err=[shape] * 6,
                                n_eff_p50=[n_eff + 0.01 * k for k in range(6)], sv_fraction=[sv] * 6,
                                converged_fraction=[conv] * 6, f_sr=[f_sr] * 6, far_field_4_8=[ff] * 6,
-                               s_scale=[s] * 6, ladder_rel_err=ladder)
+                               s_scale=[s] * 6, ladder_rel_err=ladder,
+                               shells={"0-2": [near + 0.001 * k for k in range(6)], "2-4": [0.8 * near] * 6, "4-6": [ff] * 6, "6-8": [ff] * 6})
 
 
 def test_selection_picks_the_clear_winner_and_resolves_equivalents_to_the_simplest():
     a_full = _cfg("B_A_full", force=0.040)
     a_lr = _cfg("B_A_lr_only", coupling="lr_only", force=0.046)
-    bp_full = _cfg("B_Bp_full", route="Bp", force=0.041, ff=0.030)
+    bp_full = _cfg("B_Bp_full", route="Bp", force=0.041, ff=0.030, near=0.070)   # near-field gain: the decisive reading
     out = arm23.select([a_full, a_lr, bp_full])
-    assert out["gates"]["B_Bp_full"]["passed"] and out["gates"]["B_Bp_full"]["far_field_beyond_noise"]
+    g = out["gates"]["B_Bp_full"]
+    assert g["passed"] and g["bprime_gains"]["4-8"]["beyond_noise"] and "ladder" not in g and g["ladder_rel_err"] == 0.02
     # 1 meV/A < tau_phys: B' full is equivalent to A full; route A is the simpler and is chosen (v4.3)
     assert out["selected"] == "B_A_full" and "B_Bp_full" in out["equivalent"] and out["beaten_beyond_margin"] == ["B_A_lr_only"]
     bp_far = _cfg("B_Bp_full", route="Bp", force=0.030, ff=0.030)
@@ -84,3 +87,23 @@ def test_select_v44_treats_phi0_as_the_reference_and_picks_the_minimal_k_lr_cand
     assert out["costs_nothing_in_forces"] and abs(out["force_cost_vs_phi0"] - (0.04175 - 0.0399)) < 1e-9
     assert "post hoc" in out["rule"]
     assert arm23.select([phi0, lr, lr_u, full, far])["selected"] == "B_A_phi0"     # v4.3 on the same records
+
+
+def test_bprime_gates_after_the_c10_addendum():
+    """The ladder is reported, not gated; the B' gain is read on the full RMSE and the 0-2 / 2-4
+    shells against the same-coupling Route A arm beyond the Phi = 0 seed spread; the 4-8 A
+    pooled gain is reported but not decisive."""
+    phi0 = _cfg("B_A_phi0", coupling="phi0", force=0.040)
+    phi0.force_rmse = [0.0368, 0.0412, 0.0400, 0.0391, 0.0416, 0.0398]
+    a_lr = _cfg("B_A_lr_only", coupling="lr_only", force=0.0417, ff=0.035)
+    bp_far_only = _cfg("B_Bp_lr_only", route="Bp", coupling="lr_only", force=0.0417, ff=0.020, ladder=0.55)   # far field only
+    out = arm23.select([phi0, a_lr, bp_far_only])
+    g = out["gates"]["B_Bp_lr_only"]
+    assert g["ladder_rel_err"] == 0.55 and g["ladder_within_tol"] is False and g["s_unsaturated"]
+    assert g["bprime_gains"]["4-8"]["beyond_noise"] and not g["bprime_gain_beyond_noise"] and not g["passed"]
+    bp_near = _cfg("B_Bp_lr_only", route="Bp", coupling="lr_only", force=0.0417, ff=0.035, ladder=0.55, near=0.060)  # near-field gain
+    out = arm23.select([phi0, a_lr, bp_near])
+    g = out["gates"]["B_Bp_lr_only"]
+    assert g["bprime_gains"]["0-2"]["beyond_noise"] and g["bprime_gain_beyond_noise"] and g["passed"]
+    assert out["selected"] == "B_A_phi0"                                    # equivalent on forces: the simpler route wins
+    assert arm23.select_v44([phi0, a_lr, bp_near])["selected"] == "B_A_lr_only"

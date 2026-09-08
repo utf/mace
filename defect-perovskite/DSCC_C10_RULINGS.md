@@ -37,3 +37,23 @@ One more thing the table says: the first-shell residual is still ~100 meV/Å aga
 - Record: near-field (first-shell) residual ~100 meV/Å unmoved by any arm; open item.
 
 ```
+
+---
+
+*C10 addendum (user, 2026-09-08 ~15:50, verbatim). The phrase "subject to the four checks
+above" refers to text that did not reach this session; the four checks are not on file.*
+
+# C10 addendum (record in D13)
+- B′ ladder selection gate: not waived, re-read. It cannot pass on cells with L_min < ~3 R_c;
+  recorded as a model property (compensation cloud 8–11 Å), not a code fault, subject to
+  the four checks above. B′ is judged on forces; no cross-size energy claim includes E_SF
+  until a ladder with L >> R_c exists (sparse solver). Double-screening caveat recorded.
+- B′ queue: trim to LR-only and LR + U (the far field is periodicity-suppressed at these
+  sizes; the remaining arms cannot add resolvable information).
+- Far-field gate: read the B′ gain against the same-coupling Route A arm on the full
+  per-atom RMSE and on the 0–2, 2–4, 4–8 Å shells at 79 atoms, beyond the Φ = 0 seed
+  spread; the 4–8 Å pooled reading is reported, not decisive.
+- tau_phys = 3 meV/Å was written against the trainer's held-out numbers (per-atom vector
+  RMS); it stays in that convention (per-component equivalent 1.7). Recorded.
+- Correction of record (C6): "compensated within the bound-state region" was wrong; the
+  fill compensates over its screening length.
