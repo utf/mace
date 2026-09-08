@@ -1,0 +1,131 @@
+# Arm 2+3 — the registered rule selects Φ = 0; the coupling trained itself off
+
+*V_Cl+ orthorhombic CsPbCl3, PBE labels of Mosquera-Lois & Walsh, PRX Energy **4**, 043008
+(2025). Plan: D-SCC charge head v4 with amendments v4.1–v4.5. Arm 2+3 = regime B, Route A,
+coupling ∈ {Φ = 0, LR-only, LR + U, full, λ = 1 fixed}, six seeds {0, 1, 2, 3, 4, 6} each
+from the Arm-1 full-`H0` winner of the same seed, 60 epochs at constant lr 2e-3, final
+checkpoint read (the Arm-1 protocol, v4.3); regime-A full coupling as a six-seed ablation
+outside selection. Thresholds registered 2026-09-07 before any result was opened. Campaign
+complete 2026-09-08 13:08; 36 runs, none failed.*
+
+**Status.** The v4.3 selection rule chooses **`B_A_phi0`**, the Φ = 0 head, at a held-out
+charged force RMSE median of 39.9 meV/Å. Every coupled arm is either equivalent to it
+within the registered margin or excluded by a gate, and Φ = 0 is the simplest equivalent
+configuration, so the selection is the same under every reading of the two gates that are
+in question below. The optimiser turned the coupling off: `lambda_dir` trained from 0.05
+to 0.004–0.018 and the hub-site `U_eff(Pb)` from 1.36 eV to 0.04–0.18 eV. Nothing downstream
+has been opened; item C10 in the tracker carries four rulings.
+
+## Per arm
+
+Held-out charged force RMSE (meV/Å; median over six seeds, then the seeds), 159-atom
+shape-slope error (median over the four seeds whose fold carries a 159-atom shape residual),
+`N_eff` p50 median with the seed spread, the single-valuedness failing fraction at its worst
+epoch ≥ 1 and at the last epoch, the trained couplings, and loss spikes per run.
+
+| arm | force | seeds | shape err | `N_eff` (spread) | sv worst / last | `lambda_dir` | `U_eff` Cl / Cs / Pb (eV) | spikes |
+|---|---|---|---|---|---|---|---|---|
+| **Φ = 0 (selected)** | **39.9** | 36.8 / 41.2 / 40.0 / 39.1 / 41.6 / 39.8 | 0.042 | 3.56 (0.29) | — | — | — | 0–2 |
+| LR-only | 41.7 | 48.6 / 40.9 / 42.2 / 37.2 / 55.7 / 41.1 | 0.037 | 3.33 (0.32) | 0.00 / 0.00 | 0 | 0 | 0–5 |
+| LR + U | 41.3 | 42.4 / 39.4 / 41.2 / 41.8 / 39.9 / 41.3 | 0.025 | 3.71 (0.14) | 0.08–0.18 / 0.00 | 0 | 0.27–0.68 / 0.08–0.11 / 0.03–0.18 | 0–3 |
+| full | 42.0 | 39.2 / 42.5 / 44.9 / 39.3 / 41.4 / 47.7 | 0.040 | 3.61 (0.35) | 0.08–0.26 / 0.00 | 0.004–0.018 | 0.20–0.98 / 0.07–0.10 / 0.04–0.18 | 0–4 |
+| λ = 1 fixed | 43.3 | 40.3 / 41.7 / 47.2 / 42.1 / 44.4 / 49.7 | 0.080 | 3.48 (0.88) | 0.10–0.36 / 0.00 | 1 | 0.22–0.33 / 0.08–0.09 / 0.06–0.17 | 1–5 |
+| regime A, full (ablation) | 40.9 | 39.1 / 43.7 / 41.1 / 36.8 / 51.8 / 40.7 | 0.020 | 3.58 (0.34) | 0.00–0.08 / 0.00 | 0.019–0.063 | 2.3–8.9 / 0.09–0.10 / 0.16–0.34 | 0–3 |
+
+Initial couplings 0.05 and 0.71 / 0.12 / 1.36 eV. `tau_noise` (Φ = 0 seed spread) 1.7 meV/Å
+on forces and 0.018 on the shape slope; `tau_phys` 3 meV/Å and 0.015; the margin is 3.0.
+Every run converged its SCF on 100 % of training frames. Force RMSE by distance from the
+vacancy (0–2 / 2–4 / 4–6 / 6–8 / > 8 Å, medians): Φ = 0 84 / 68 / 50 / 32 / 32, LR + U 84 / 72 /
+52 / 33 / 32, full 93 / 74 / 54 / 34 / 32, λ = 1 90 / 74 / 54 / 36 / 33. The coupled arms lose
+inside 4 Å and match Φ = 0 beyond 6 Å. The base alone reads 53.2 meV/Å on the fold-0 charged
+held-out frames; the `H0` head takes it to 36.8 (Φ = 0, seed 0); the coupling adds nothing.
+
+## The selection, and the two gates in question
+
+The registered rule (`arm23.select`): configurations passing the gates are ranked by median
+force; any within `max(tau_phys, tau_noise)` of the best on forces and not worse beyond the
+same kind of margin on the shape slope is equivalent to it; the simplest equivalent wins.
+As reported, only Φ = 0 passes the gates, so the ranking holds one entry. We re-ran the
+selection on the same records under every reading of the two contested gates:
+
+| reading | equivalent set | selected |
+|---|---|---|
+| as registered (worst-epoch root rule, `f_SR` gate) | {Φ = 0} | Φ = 0 |
+| `f_SR` gate removed | {Φ = 0, LR-only} | Φ = 0 |
+| last-epoch root rule | {Φ = 0} | Φ = 0 |
+| both | {Φ = 0, LR + U, LR-only, full}; λ = 1 out on `localisation_stable` | Φ = 0 |
+
+No arm is beaten beyond the margin in any reading; no coupled arm beats Φ = 0.
+
+**(a) Root rule.** The v4.5 check (a 5 % per-epoch subsample re-run by continuation against
+the warm start, failing fraction ≤ 10 %, "failure fails the arm") is read at its worst epoch
+≥ 1, and on that reading the full, LR + U and λ = 1 arms fail. The over-ceiling epochs are
+the early ones — full: epochs 1–5 and 14; LR + U: 1–8 and 18; λ = 1: 1–31 (seed 4 over on 22
+epochs) — none within two epochs of a logged loss spike (the spikes sit at epochs 20–58),
+and the final-epoch check is 0/39 on all 36 runs. So the trained maps are single-valued;
+the failures are the transient from the multi-valued initialised map (28–51 % of the
+79-atom charged frames at epoch 0 reach a different fixed point from a zero start than
+from the continuation, C9) and they fade as `U_eff(Pb)` falls to ≈ 0.1 eV. Under a
+last-epoch reading full and LR + U pass; λ = 1 fails `localisation_stable` regardless
+(`N_eff` spread 0.88 > 0.5, seed 6 at 5.5). The record keeps the strict reading unless
+you overrule it; the selection does not depend on it.
+
+**(b) `f_SR` is a criterion defect, ours.** The registered gate is `f_SR` ≤ 0.5 with
+`f_SR = Σ|dq_i dq_j| K_SR_ij / Σ|dq_i dq_j| (K_SR + K_LR)_ij`. It reads 1.5–1.8 on every
+regime-B coupled arm, 1.2 on regime A and 3.1 on one λ = 1 seed — above 1, which a fraction
+cannot be. On one 79-atom charged frame with the trained full-s0 model the short-range part
+is +0.41 eV and the long-range part −0.19 eV: `K_LR` is negative on all 3081 pairs (−0.97 to
+−0.31 eV/e²) because in a cell this small the neutralising background dominates the
+interaction beyond `r_s`. The quantity is unbounded; the floor was set on a scale it does not
+live on. It also does not depend on the arm's Γ (LR-only reads 1.6 with no `K_SR` in its
+kernel — the report computes it from the kernel split and the trained `dq`), and Φ = 0 passes
+it vacuously. Recorded; selection unaffected; not re-registered — the same status as
+Arm 1's tensor-ratio clause. The plan's regime-B small-cell rule (λ → 0 on the ladder) is a
+different test and has not been run.
+
+**(c) Epoch-0 reading** (C9, still pending): the initialised-model check is a diagnostic and
+the ceiling applies from epoch 1 (v4.2 §5). Under the other reading every arm but LR-only
+fails at initialisation and the campaign is decided before training.
+
+## What the outcome says
+
+Under the registered protocol the data drove the D-SCC coupling toward zero on these
+frames. The bound state is kept in every arm (`N_eff` 3.3–3.7) by `H0`; Φ neither
+sharpens nor extends it (LR + U vs full — the λ = 0 ablation — `N_eff` 3.7 vs 3.6, forces
+41.3 vs 42.0). The §2.10 Route-A forecast ("`lambda_dir` and `U_eff` come out O(1); the
+λ = 0 ablation makes the level shallower and the carrier more extended") is not borne out in
+regime B; in the regime-A ablation `U_eff(Cl)` did go to 2.3–8.9 eV at an equivalent force
+error. The forecast of distinct fixed points at asymmetric geometries is borne out at
+initialisation and in the early epochs. The near-shell loss of the coupled arms (84 → 90–93
+meV/Å inside 2 Å) is the one place the coupling is measurably worse than nothing.
+
+Two caveats on the reading. The 159-atom shape criterion rests on four frames per fold and
+is absent on two of the six seeds; it cannot separate the arms (LR + U 0.025 vs Φ = 0 0.042
+against a margin of 0.018). And the ±10 meV/Å final-checkpoint noise recorded in v4.3
+favours the simpler arms at selection by construction — but a coupled arm would have to
+beat Φ = 0 by more than `tau_phys` = 3 meV/Å to change the outcome, and with the couplings
+trained to ≈ 0 there is no mechanism for that.
+
+## (d) What we ask about the rest of the plan
+
+With Φ = 0 selected the downstream items lose their object: Arm 4's F-SCC comparators
+compare against a coupled D-SCC model; the 2× benchmark engineering item is registered on
+"the Φ-on model" (the Φ = 0 head already reads median 2.07 / p95 2.22 at 79 atoms, P4.3);
+the Phase-4 ladder's `K_LR_ii` and `dq`-spread items are vacuous at Φ = 0 (its `E(+1) − E(0)`
+vs `1/L` remains readable as the base + `H0` size behaviour); and the §9 robustness pass
+retrains "the selected configuration and its Φ = 0 reference", which are now one arm.
+
+- **(i) Close at the selection.** §9 pass on Φ = 0 under the LR-decay protocol (≈ 1 h per
+  seed on the A4000), the P4.1 ladder on it, and the final artefact.
+- **(ii) (i) plus LR + U under the §9 protocol**, to test whether the equivalence survives the
+  final-checkpoint noise. It cannot plausibly reverse the selection (above), but it makes the
+  "no gain from Φ" statement at lower noise.
+- **(iii) Open Arm 4 on the full arm** as an exploratory, non-selected comparison of the
+  D-SCC vs F-SCC feedback sign (§2.10) — a science question, not a selection one.
+
+Our reading: (i), with (iii) only if the feedback-sign question is wanted for its own sake.
+
+Artefacts: `~/runs/dscc/arm23_report.json` (records, gates, decision),
+`arm23_spikes.json`, `v45_gate.json`; the 36 run directories `~/runs/dscc/dscc_arm23_*`
+(`model.pt`, `held_final.json`, `train.log`); tracker
+`defect-perovskite/DSCC_V4_IMPLEMENTATION_SPEC.md` (§1 C10, §2.2 D12, §3.4 P3.2).
