@@ -136,3 +136,33 @@ Artefacts: `~/runs/dscc/arm23_report.json` (records, gates, decision),
 `arm23_spikes.json`, `v45_gate.json`; the 36 run directories `~/runs/dscc/dscc_arm23_*`
 (`model.pt`, `held_final.json`, `train.log`); tracker
 `defect-perovskite/DSCC_V4_IMPLEMENTATION_SPEC.md` (§1 C10, §2.2 D12, §3.4 P3.2).
+
+
+## C10 follow-up (2026-09-08, after the rulings)
+
+**Why Route B′ was absent.** Its v4.2 entry gate — the local-neutrality tiling ladder on the
+trained `H0` — failed on every Arm-1 winner (51–65 % off Madelung: the reference fill
+compensates the missing ion only over 8–11 Å) and the tracker closed the B′ arms before Arm 2+3
+launched. Re-run on the Arm-2+3 Φ = 0 models it fails again (51 / 53 / 61 / 51 %). B′ now runs
+by the C10 ruling over that gate; its registered selection gate (ladder `1/L` within 5 %) fails
+by construction on this `H0` and needs a ruling.
+
+**Units, and the far-field premise.** The trainer's held-out numbers are the RMS of the per-atom
+force-error vector, √3 times the per-component RMS that MACE's logs and the base's 13 meV/Å use;
+"13 vs 33 beyond 8 Å" compared the two. Per component, by shell from the vacancy (8–10 / 10–12 /
+> 12 Å): Φ = 0 head at 79 atoms 20.3 / 13.5 / 10.3 against the out-of-fold neutral floor
+10.2 / 9.5 / 8.3; at 159 atoms 10.6 / 7.2 / 4.5 against 9.4 / 6.9 / 4.7. The charged far field
+at 159 atoms is neutral-like; by the criterion in the ruling the 79-atom excess is small-cell
+and manifold extrapolation, not the Coulomb channel. The near field (0–2 Å: 48 against 31) is
+the open item. Table and details: tracker D13.
+
+**Selection under the "v4.4" rule.** No v4.4 document is in the record; applied post hoc from
+the ruling: LR-only selected (LR + U 41.3 best candidate, LR-only 41.7, full 42.0 equivalent;
+λ = 1 out on localisation), +1.8 meV/Å against Φ = 0 inside the margin. Root rule on the final
+model and the last ten epochs: every arm passes. `f_sr_abs` 0.69–0.71 on every regime-B arm.
+
+**Running since 15:13 (b3):** Route B′ LR-only ×6, LR + U ×6, full ×6, λ = 1 ×6, regime-A B′
+ablation ×6 in that order at four per GPU on GPUs 4 and 5 (≈ 13 h per run, three waves); the
+matched-kernel F-SCC comparator on seeds 0, 1, 2 on GPU 7 (≈ 35–45 h). Stop:
+`scratchpad/kill_bp_b3.sh`. Rulings needed: the B′ ladder gate; whether to trim B′ to LR-only
+and LR + U given the diagnostic; the far-field gate wording as implemented; the v4.4 text.
