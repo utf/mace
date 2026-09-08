@@ -174,5 +174,8 @@ from 16.8 Å up), `q0` is exactly periodic, and the compensation is 18–29 % in
 code fault. But the model's compensation of the missing ion is not a fixed 8–11 Å cloud: read
 against the same-size pristine cell its 85 % radius grows from ≈ 10 Å at 22 Å to > 12 Å at
 34 Å, so the consecutive-pair slopes never settle (41 / 78 / 2 / 97 % off Madelung). B′ stays
-judged on forces; the ladder and `E_SF` wait on the sparse path and on an `H0` that localises
-the compensation. LR + U seeds 4 and 6 run locally (two on the A4000) to finish the B′ set earlier.
+judged on forces; the ladder and `E_SF` wait on the sparse path and on a self-consistent static
+pattern (Route C, deferred) — the non-converging compensation is expected: `q0` is the fill of an
+`H0` with no electrostatics, and its delocalised piece (≈ −0.1 e spread uniformly, confirmed to
+scale as 1/N_at) produces the centred-pattern `1/L` error. LR + U seeds 4 and 6 run locally
+(two on the A4000) to finish the B′ set earlier.

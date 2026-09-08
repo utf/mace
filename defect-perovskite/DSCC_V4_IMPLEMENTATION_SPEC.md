@@ -623,8 +623,38 @@ of gyration (5–6 Å). Verdict: not a code fault (checks 1, 3 and the point-pat
 pass); a model property, but not the fixed 8–11 Å cloud of the addendum: the reference fill's
 compensation of the missing ion spreads with the supercell up to 34 Å, so no ladder on
 dense cells can validate `E_SF` for this `H0`; the L ≫ R_c ladder waits on the sparse path and
-on an `H0` whose reference fill localises the compensation. Ladder-gate re-read stands as
-ruled; B′ judged on forces.
+on a SELF-CONSISTENT static pattern. Ladder-gate re-read stands as ruled; B′ judged on forces.
+
+*Three notes (user, ~16:45; verbatim in `DSCC_C10_RULINGS.md`).* (1) The non-converging
+compensation is expected and no `H0` will fix it: local neutrality is an electrostatic effect,
+and `q0` is the fill of an `H0` with no electrostatics in it — the compensation is whatever
+hybridisation dictates plus a delocalised piece from the valence states renormalising after
+four orbitals are removed, which spreads over the cell like a uniform background and produces
+exactly the centred-pattern `1/L` error. The pattern that is locally neutral by physics is the
+SCC-converged reference charge (the matched-kernel F-SCC's reference solve); using it in the
+energy with its response derivative is Route C. **Confirmation run (`bp_uniform_check.py`,
+`~/runs/dscc/bp_uniform_check.json`):** beyond 10 Å from the vacancy the mean δq0 per site is
+−0.29 / −0.15 / −0.11 me at N = 319 / 624 / 1079, i.e. N × mean = −0.09 / −0.10 / −0.12 e — a
+uniform component of ≈ −0.1 e (15–25 % of z) spread over the cell, scaling as 1/N_at; the
+shell profile of |δq0| decays from 60 me (< 4 Å) through 7–15 (4–6), 4 (6–10) to 0.4–0.6 me
+(10–12 Å) and ≤ 0.2 me beyond, i.e. a screening cloud complete by ≈ 10–12 Å on top of the
+uniform piece. (2) Γ-point sampling convention, recorded: any absolute use of the pristine
+pattern is sampling-dependent (0.24 e per species between the static cell and the tiled
+cells); each cell's own pristine fill at its own sampling is the reference; the stored pattern
+enters the head only through `W` in the Route B′ gap regulariser (the static cell's own fill)
+and the ladder baseline (corrected above). (3) The ARPACK residual is a Phase-4 solver-tolerance
+item, logged at P4.2; the dense CPU path is the registered exact one and the ladder skips the
+sparse agreement.
+
+*LR-only tiling ladder (v4.4's `K_LR` validation; P4.1 on `dscc_arm23_B_A_lr_only_s0`, CPU,
+static-cell tilings, `~/runs/dscc/ladder_lr_only_s0.json`):* `K_LR_ii`'s size-dependent part
+matches the cell-shape Madelung coefficient within 1.3 / 0.1 / 3.4 / 0.0 % on the 79 / 159 / 319 /
+639-atom cells — the kernel carries the monopole term. The model's `E(+1) − E(0)` over the
+same-shape cells (14.3 / 18.0 / 28.6 Å: 8.059 / 8.098 / 8.102 eV) fits a `1/L` coefficient of
+−1.16 eV·Å against the expected −4.89, i.e. 24 % of Madelung; dense = sparse to 1e-4 eV where
+the sparse step converged. The decomposition of that slope into the head's `½ dqᵀ Γ dq` (which
+must carry Madelung if `dq` is localised) and the band term `Tr(dP H0)` (the Γ-point
+finite-size error of the fill) is running; recorded as diagnostic, not a gate reading, until it is.
 
 ## 3. Task list
 
@@ -690,7 +720,7 @@ Status: `todo` / `wip` / `done` / `blocked`.
 | # | Task | Status |
 |---|---|---|
 | P4.1 | Tiling-ladder generator and report (`E(+1) - E(0)` vs `1/L`, `K_LR_ii`, active states, `dq` spread, zero total force) | script done — `defect-perovskite/dscc_ladder.py` (static-cell tilings, Madelung coefficient computed for the cell shape, dense below `--dense_max`, sparse above, dense/sparse agreement per cell); to run on the Arm-1 winner and the Arm-2+3 selection |
-| P4.2 | Sparse path (CSR `H0`, SP2/LDL inertia, Chebyshev/LOBPCG, tail bounds, PME/FMM) | frontier path done — `dscc/sparse.py`: CSR `H0` from the edge blocks; below-slice count by the LDLᵀ inertia of an unpivoted sparse LU (Sylvester; factorisation residual-checked); mid-gap shift by inertia bisection; window eigenpairs by shift-invert ARPACK to machine precision (residual-checked), `k = |Q| + k_buffer` (8) grown until the certified Fermi-tail bound on the omitted charge is ≤ 1e-8 e; frontier D-SCC solve (window quasi-Newton, Anderson fallback, unmixed residual); rank-k frontier forces by block cotangents. Dense/sparse agreement on the toy: energy 1e-7, forces 1e-6, dq 1e-7. **Not done:** PME/FMM (electrostatics stay the dense Ewald matrix: the dense regime is ≲ 5k atoms), Route B′ on the sparse path (needs the full reference density), the 159-atom real-frame agreement run and the ladder cells (after Arm 1) |
+| P4.2 | Sparse path (CSR `H0`, SP2/LDL inertia, Chebyshev/LOBPCG, tail bounds, PME/FMM) | frontier path done — `dscc/sparse.py`: CSR `H0` from the edge blocks; below-slice count by the LDLᵀ inertia of an unpivoted sparse LU (Sylvester; factorisation residual-checked); mid-gap shift by inertia bisection; window eigenpairs by shift-invert ARPACK to machine precision (residual-checked), `k = |Q| + k_buffer` (8) grown until the certified Fermi-tail bound on the omitted charge is ≤ 1e-8 e; frontier D-SCC solve (window quasi-Newton, Anderson fallback, unmixed residual); rank-k frontier forces by block cotangents. Dense/sparse agreement on the toy: energy 1e-7, forces 1e-6, dq 1e-7. **Not done:** PME/FMM (electrostatics stay the dense Ewald matrix: the dense regime is ≲ 5k atoms), Route B′ on the sparse path (needs the full reference density), the 159-atom real-frame agreement run and the ladder cells (after Arm 1). **Solver-tolerance item (2026-09-08, C10 notes):** on the 639-atom (2556-orbital) 2×2×2 ladder cell the shift-invert ARPACK frontier eigenpairs stop at a residual of 1.5–3.8e-8 against the registered 1e-8 (`dscc_ladder.py` aborted; the LR-only ladder was re-run from a scratch copy that records the failure and keeps the dense result); the dense CPU path is the registered exact one; to fix before the sparse path is used on ladder cells |
 | P4.3 | 2x benchmark per the registered definition | harness done — `defect-perovskite/dscc_benchmark.py` (per-frame energy + forces along a charged trajectory, warm-started, base included; median and p95 of the ratio). **Run 2026-09-07 on the local A4000 (idle), `dscc_arm1_full_s0` (Φ = 0), warm-started along one charged trajectory, after merging the inference backward into one autograd pass (E_base + the Hellmann–Feynman contraction; identical numbers, tests): 79 atoms base 41.9 ms / model 82.9 ms, ratio median 1.98, p95 2.36 (40 frames); 159 atoms 73.2 / 141.0 ms, median 1.92, p95 5.66 (16 frames; the p95 is the slowest frame). Median within 2×, p95 not → fails the registered criterion as it stands** (`~/runs/dscc/benchmark_merged_{79,159}.json`). A first run at 01:35 overlapped the final report on the same GPU and is discarded (medians 2.4–2.5, p95 up to 9). The floor is the base's full forward inside the model (the head needs block 0 attached and E_base is needed anyway); the p95 tail is to be profiled per frame (graph build at the head's 10 Å cutoff) before the selected coupled model is benchmarked. **Profile (2026-09-07, CPU, Φ = 0 winner, 79 atoms): base 187 ms, model 228 ms per frame — ratio 1.22 on CPU against ≈ 2.0 on the GPU**, so the GPU deficit is kernel-launch overhead in the head (per frame ≈ 2700 reshapes, 2100 muls, 1200 copies, 170 einsums from the per-edge Slater–Koster assembly and the block cotangents), not arithmetic (the eigh is 5 % of the head). The v4.3 engineering item before Arm 4 is therefore a launch-count reduction of the head's assembly and backward (fused/vectorised SK blocks, fewer views), to be measured on the registered protocol. **Re-run 05:55 on the idle A4000 with 100 frames at 79 atoms: base 42.4 ms / model 87.9 ms, median 2.07, p95 2.22; 159 atoms (16 frames) 74.1 / 145.0 ms, median 1.96, p95 5.79** (`benchmark_idle_{79,159}.json`) — the Φ = 0 head costs about one base forward, so the ratio sits at 2.0 ± 0.1 and the registered criterion (median AND p95 ≤ 2) fails; the 159-atom p95 is one slow frame of sixteen — note (`f76a6d0`): the head's inference now takes the pair route by default (the cotangent route by `gamma_force_mode = "autograd"`), so the Arm-4 benchmark states which route it timed (on b3 the two are within a second at four 159-atom frames) |
 
 ### 3.6 Deletion sweep (plan §3, after the Phase 1 gates)
@@ -714,7 +744,7 @@ suite are the only additions that stay.
 ### 3.7 Deferred register (plan §9)
 - [ ] **End-of-programme robustness pass on the selected model only (v4.3):** LR decay 2e-3 → 2e-4 over the last 20 epochs, spike detection with rollback, epoch-averaged final checkpoint; retrain the selected configuration and its Φ = 0 reference under that protocol and report whether any selection decision changes; no decision made before the pass is revisited unless it does. **After Arm 2+3 (C10 (d)): the selected configuration IS the Φ = 0 reference; whether the pass also covers the best coupled arm (LR + U) awaits the ruling.**
 - [ ] PME/FMM electrostatics for the sparse path beyond the dense regime (≲ 5k atoms) — plan §8, not needed by any registered gate so far.
-- [ ] **Double screening of the Route B′ static well (C10 addendum, the "Route C question"):** the reference fill's compensation cloud is the model's own charge-transfer screening of the missing ion and `Γ_LR` is already divided by `eps_inf`, so the static well is partly double-screened. Deferred; no cross-size energy claim includes `E_SF` until a ladder with L ≫ R_c exists (sparse path) — and, per D13's four checks, until an `H0` whose reference fill localises the compensation.
+- [ ] **Double screening of the Route B′ static well (C10 addendum, the "Route C question"):** the reference fill's compensation cloud is the model's own charge-transfer screening of the missing ion and `Γ_LR` is already divided by `eps_inf`, so the static well is partly double-screened. Deferred; no cross-size energy claim includes `E_SF` until a ladder with L ≫ R_c exists (sparse path) and a self-consistent static pattern (the SCC-converged reference charge) replaces `q0` — Route C, deferred.
 
 ## 4. History note (v8 programme, closed 2026-09-06)
 
