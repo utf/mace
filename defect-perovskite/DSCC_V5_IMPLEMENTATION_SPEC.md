@@ -149,6 +149,49 @@ training started 18:21:02) at 12–16 GB, so ≈ 3.8 h per 30-epoch run and all 
 10 Sep on two GPUs (three once the F-SCC runs finish). Epoch 0 (float32, lr 1e-4): Default head
 4.32 meV/atom, 13.56 meV/Å, stress 0.22 meV/Å³.
 
+**W1.1 revised — v2 registration (user, 2026-09-09 ~20:20: "You are using out of date settings";
+the MACE fine-tuning-guidance page, `guide/finetuning_guidance.html`, supersedes the multihead page's
+1 : 100 + SWA recipe and the Q&A's 1 : 10).** The guidance, as relayed and as fetched: constant
+target weights throughout, e.g. `--energy_weight=10 --forces_weight=10`, no SWA / stage-two
+schedule for multihead fine-tuning (the force-then-energy transition destabilises a model that
+already has coherent forces); for multihead / pseudolabel replay: learning rate 1e-4, EMA decay
+0.9999, grad clip 1.0, weight decay 0 ("weight decay pulls parameters toward zero, i.e. away from
+the pretrained solution"); E0s: explicit isolated-atom DFT (spin-polarised, asymmetric box) if
+available, otherwise `--E0s="estimated"` ("recommended default when explicit isolated-atom
+energies are unavailable"), never "average"; the MH-1 warning verbatim: "Their isolated-atom
+reference is shared between the explicit E0s and learnable bias terms, so setting the E0s
+correctly does not by itself guarantee accurate isolated-atom energies. If your application
+depends on absolute atomic energies (e.g. defect formation energies), also include true
+isolated-atom configurations as explicit training points"; an initial error > 500 meV/atom is
+the E0-mismatch symptom (ours was 4 meV/atom); replay 10k–30k with `fps` + `combinations`; the
+MH-1 release ships the head's own replay set `replay-data-mh-1-omat-pbe.xyz` (500 MB). The runs
+of 18:18 (energy 1 / forces 100 from `run_train`'s defaults and the multihead page's example,
+EMA 0.99999 set by the code, weight decay 5e-7, `foundation` E0s, the MPtraj-OMat replay) are
+stopped at epoch ≈ 18 and recorded as out of date: their energy RMSE per atom rose monotonically
+(prod 4.32 → 6.06, fold 0 3.30 → 6.15 by epoch 15) while forces fell (13.56 → 10.67; 6.15 →
+4.14), the signature of the 1 : 100 weighting against the old base's 10 : 100.
+
+*v2 settings (registered before launch):* `--energy_weight 10 --forces_weight 10` (stress at the
+universal loss default 1.0), `--force_mh_ft_lr True --lr 0.0001 --ema --ema_decay 0.9999`
+(the code's automatic override would set 0.99999), `--weight_decay 0.0 --clip_grad 1.0`, no
+SWA, `--max_num_epochs 30`, batch 8, float32 (the memory deviation stands), `--enable_cueq
+True` (cuEquivariance 0.11.1 on both machines), replay `replay-data-mh-1-omat-pbe.xyz` with
+`--num_samples_pt 10000 --subselect_pt fps --filter_type_pt combinations`, seed 1. *E0s:* no
+DFT isolated atoms exist and none may be run, so `estimated` is the registered route; MACE's own
+estimator (`data.utils.estimate_e0s_from_foundation`: the foundation head's E0s corrected by a
+least-squares fit of its residuals on the training set) gives, on the production set, Cl
+−0.7159, Cs +0.5417, Pb −0.1022 eV (foundation omat_pbe: −0.2574, −0.1297, −0.7736; folds 0–3
+within 0.02 of these: `~/runs/w1_e0s_estimated.json`), with the warning "system is rank
+deficient (rank 2/3)": Cs and Pb counts are always equal in this data, so only E0(Cl) and
+E0(Cs) + E0(Pb) are determined and the Cs/Pb split is the minimum-norm convention — harmless for
+any Cs:Pb-stoichiometric comparison (the Cl-vacancy formation energy depends on E0(Cl) and the
+Cl reference only), recorded. Per the MH-1 warning, the three isolated-atom configurations
+(one atom in a 20 × 21 × 22 Å box, `config_type IsolatedAtom`, `REF_energy` = the estimated E0,
+zero forces, `config_weight 1000` as in the paper's Table 8) are appended to every training file
+(`train_iso.xyz` beside each `train.xyz`) and kept as training points (`--keep_isolated_atoms
+True`); MACE reads the Default head's E0s from them. These are "fake" isolated atoms labelled
+with estimated, not DFT, energies — recorded as such.
+
 **W1.2 Feature export for the head.** Block-0 features of MH-1 are 512x0e+512x1o (n_scalars 512,
 n_vectors 512, from `products[0]`); `MACEDSCC.first_block` / `features` slice them; the head's
 feature-modulation readouts and the rank-1 descriptor are re-dimensioned by construction from
