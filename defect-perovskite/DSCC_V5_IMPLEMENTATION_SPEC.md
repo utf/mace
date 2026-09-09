@@ -117,24 +117,68 @@ default (off). Data: production base `dataset_e0/train.xyz` (1616 neutral: 1057 
 frame in any of them. Command (one line per run, through `b3_run.sh` on GPUs 4/5 by UUID):
 `python -c "import sys; sys.path.insert(0, W); from mace.cli.run_train import main; main()"` with
 the arguments of `scratchpad/w1_smoke.sh` at `--max_num_epochs 30 --num_samples_pt 10000
---subselect_pt fps` and `--name base_v2_{prod,f0,f1,f2,f3}`. **Smoke, replay count, memory,
-step time, element table: below once the local smoke has run.**
+--subselect_pt fps` and `--name base_v2_{prod,f0,f1,f2,f3}`. **Smoke (2026-09-09, `w1_smoke_b3`
+on b3 GPU 4; one epoch, 200 replay samples, otherwise the registered command):** the local A4000
+(16 GB) OOMs at batch 8 in float64 (12.5 GB allocated at the first step), so W1 runs on b3 only;
+peak 17.2 GB on a 24 GB card → ONE run per GPU. The `omat` replay filtered by `combinations` on
+{Cl, Cs, Pb} holds 41 configurations; the remainder is random padding (`allow_random_padding_pt`,
+the code default) — with 10000 samples the replay is 41 relevant + 9959 random MP structures,
+registered as such. Initial errors with the foundation E0s: Default head 5.53 meV/atom,
+43.86 meV/Å (per component, the MACE table), stress 0.11 meV/Å³; pt_head 99.5 meV/atom, 79.1.
+After one epoch at lr 1e-4: Default 3.61 meV/atom, 13.00 meV/Å (the current base: 4.9 / 11.8
+after 140 epochs); pt_head 96.3 / 79.4. Epoch time 6.9 min for 1796 frames (≈ 1.8 s per step of
+8) → ≈ 35–45 min per epoch at 10000 replay samples, 18–22 h per 30-epoch run. The saved model
+(`w1_smoke_b3.model`, float64, `--save_cpu`) carries heads ['pt_head', 'Default'] and 76 elements
+(the replay's) — the head selects 'Default' (`remove_pt_head`) and prunes to {Cl, Cs, Pb}
+(W1.2). **Launched 2026-09-09 ~17:52 (b3 clock):** `~/runs/w1_queue.sh` launches
+`~/runs/w1_queue.txt` (base_v2_prod, base_v2_f0, f1, f2, f3; `~/runs/w1_run.sh NAME TRAIN VALID`
+= the smoke command at 30 epochs / 10000 fps-selected replay samples) one per free GPU among 4, 5
+and 7 (GPU 7 frees when the F-SCC comparators finish, ≈ 05:00 on 10 Sep), never GPUs 0–3, by
+UUID through `b3_run.sh`; logs `~/runs/base_v2_*.log`, queue log `~/runs/w1_queue.log`. The b3
+tree stays at `be3c39b` (run_train identical to HEAD). Expected completion: the first two runs
+≈ 14:00 on 10 Sep, all five ≈ 10 Sep late evening.
 
 **W1.2 Feature export for the head.** Block-0 features of MH-1 are 512x0e+512x1o (n_scalars 512,
 n_vectors 512, from `products[0]`); `MACEDSCC.first_block` / `features` slice them; the head's
 feature-modulation readouts and the rank-1 descriptor are re-dimensioned by construction from
-`n_scalars`. Wrap test (`scratchpad/w1_wrap_test.py`): below.
+`n_scalars`. The fine-tuned base keeps every element of its fine-tuning and replay data (the
+smoke's model table ran to dozens of elements through the replay's random padding), and the
+head's host-free per-species tables (covalent radii, `U_max`, valence) raise on elements they do
+not cover — so the base is PRUNED to {Cl, Cs, Pb} before the head wraps it
+(`mace.modules.dscc.prune.prune_elements`: slices the node embedding and the interaction blocks'
+source/target embeddings with e3nn's `1/sqrt(mul_in)` path normalisation restored, the atomic
+energies and the element buffer; the MH-1 symmetric contractions are element-agnostic and the
+radial embedding / ZBL index full tables by Z; predictions on kept-element frames unchanged to
+1e-10, `test_prune.py`). Wrap test on the pruned MH-1 (`scratchpad/w1_wrap_test.py`, 2026-09-09):
+`MACEDSCC` constructs with `n_scalars` 512, `n_vectors` 512, r_max 6.0, three species;
+`first_block` equals the full forward's block-0 slice to 9e-16 (79 atoms × 2048 features); the
+pristine centre sets on 16 frames; a coupled B′ forward with forces on a real charged 79-atom
+frame converges (22 iterations) at a 3.2 GB peak. The W3 head on base_v2 therefore needs no
+re-dimensioning code; only the cost of the 512-wide features (W2 item 1).
 
 **W1.3 Gates (unchanged).** Validation force / energy RMSE ≤ the current base (11.8 meV/Å per
 component, 4.9 meV/atom); out-of-fold neutral floors by shell (vacancy-side centre) at 79 and
 159; `s0(L) ± SE`, coverage and proxy tables per size; per-size, per-fold admission recorded
 before W5 opens.
 
-## W2 — efficiency (queued; nothing started)
-Order as in the plan. Item 1 (shared derivative graph) after the MH-1 wrap test; item 3 (direct
-reciprocal `K_LR`) self-contained. Agreement gates per item: energies 1e-9 eV, forces 1e-7 eV/Å,
-stress 1e-7 eV/Å³ on a registered frame set (ours, provisional: the D15 held-out charged fold-3
-frames 1622, 1631, 1659, 1670, 1672 and the two 159-atom held-out frames of fold 3, plus the
-static-cell 2×2×2 tiling), and the Phase-1 gates re-run.
+## W2 — efficiency
+
+**Baseline profile (2026-09-09, `scratchpad/w2_profile.py`; B′ LR-only s3, eleven held-out 79-atom
+charged frames after a five-frame warm-up, cold SCF start, A4000, float64, synchronised timers on
+the entry points):** 637 ms per frame with forces at 12–14 SCF iterations. `torch.linalg.eigh`
+182 ms (18.3 calls per frame — about 1.5 diagonalisations per SCF iteration plus the reference
+fills), `autograd.grad` 72 ms (4 calls: the merged base + Hellmann–Feynman backward and the
+pair-route terms), the Ewald terms 96 ms (`kernel_pair_gradients` 52, `kernel_components` 20,
+`gamma_lr_pair_gradient` 18, `gamma_lr` 7), the base forward 24 ms (block 0 + block 1 on the
+r_max graph; the base alone with forces is 50 ms), `fill` 7 ms; the remaining ≈ 250 ms is the SCF
+loop's CPU-side work (the torch profiler on one frame: self CPU 776 ms against self CUDA 383 ms;
+`_DensityMatrix` 70 calls, 3800 small `div`s). A first-sight transient of 130–340 ms on the first
+four or five distinct graph shapes (allocator growth, not compilation: later new shapes cost
+23 ms) inflates any short benchmark and must be excluded by a warm-up. The registered 2×
+benchmark (warm-started trajectory, median 4 SCF iterations) read 305 ms per frame at 79 atoms
+(D14). Order of attack by measured cost: the diagonalisation count and the SCF loop's CPU
+overhead (items 2, 5, 7), the Ewald terms (item 3), the backward (items 1, 6); item 1's inference
+half (one merged backward) is already in place since P4.3, so item 1 is about the training path
+and the 512-wide MH-1 features.
 
 ## W3–W6 — not opened.
