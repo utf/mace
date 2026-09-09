@@ -103,6 +103,30 @@ before the charged window is read.
    charged d-window. The thresholds are the 95th percentiles named in W0.6 (`u_F` in the 2–4 Å
    band, `u_E` over frames).
 
+**W0.2 / W0.4 implemented (2026-09-09 23:20, commit `722f17a`; suite 155 passed).** The three
+code items queued before W3 are done, on the local tree only (b3 stays frozen at `be3c39b`).
+- `Trainer.evaluate` writes the 4–8 Å pooled shell as a first-class `shell_rmse` key and splits
+  the 2–4 Å shell into `2-4:pb_flank`, `2-4:cl_first` (Cl within 3.5 Å of a flanking Pb) and
+  `2-4:other`, each with its atom count; the unrestricted chemical sets are written as
+  `near_rmse_all_radii` (information), so the windowing choice is auditable. `vacancy_centre_full`
+  returns `(radii, flanking pair)`; `vacancy_centre` keeps its old signature.
+- `arm23.gates(..., spec=)`: `spec="v4"` reproduces the recorded campaign reading (decisive
+  `force_rmse`, `0-2`, `2-4`, gate = ANY beyond noise, 4–8 reported) so no v4 number moves;
+  `spec="v5"` is W0.2 — decisive `("force_rmse", "2-4", "4-8")`, `0-2` demoted to information.
+  *Reading choice, ours, registered here before any W3 result exists:* W0.2's "each beyond the
+  Φ = 0 seed spread" is ambiguous between "each compared against its own noise" and "all three
+  must clear it"; we take the strict reading, ALL three, and report `..._any` and `..._all`
+  side by side so the other reading is always visible. The v4 `any` is not changed retroactively.
+  The pooled 4–8 reading is taken from the trainer's new `shells["4-8"]` when present, falling
+  back to the pre-v5 `far_field_4_8` field.
+- `Trainer.fit` keeps a float64 uniform running average of the TRAINABLE parameters over the
+  last `TrainConfig.avg_window` (= 10) epochs, and after the last-epoch `held_final` reading —
+  in that order, so the warm-start store behind the last-epoch numbers is not overwritten first —
+  evaluates it as `held_final_avg`, writes `held_final_avg.json` and `model_avg.pt`, and restores
+  the last-epoch parameters. Every pre-v5 run has no `avg` reading; readers fall back to the
+  last-epoch numbers. Helpers `average_into` / `load_average` / `restore_parameters` are tested
+  directly.
+
 **W0.7 F-SCC finals.** Old base, minimum-image centre: written to the v4 tracker (P3.3) as a
 separate record; not compared with any v5 number.
 
