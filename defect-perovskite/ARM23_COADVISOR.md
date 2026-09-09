@@ -214,3 +214,34 @@ read for B′ (no sparse Route B′ path). The §9 robustness pass is not run (u
 retraining); the ±10 meV/Å final-checkpoint noise stays in every reading. The earlier
 "electrostatics adds nothing resolvable" was about the same-carrier terms; the host term
 reversed it, as the ruling anticipated.
+
+## D15 — who owns the near-field residual (2026-09-09; evaluation only)
+
+**The item was mis-centred.** The 79-atom cell is two octahedra thick along z (11.1 Å), so the
+flanking Pb pair are neighbours through both images and share an occupied bridging Cl on the
+other side. The minimum-image midpoint used for every shell table so far lands on that Cl in
+114 of 256 charged fold-3 frames (the +1 Pb relax away from the vacancy, making the occupied
+path the shorter one); the "0–2 Å charged atoms, 43 meV/Å" were bridging Cl 5.5 Å from the
+vacancy, while the neutral "0–2 Å atoms, 31" were dimerised flanking Pb. With a vacancy-side
+centre no charged frame at either size has an atom inside 2 Å. Shells from 2 Å out change by
+< 1 meV/Å, so the far field, the B′ gains and the selection stand; the far-field gate's
+"decisive 0–2 Å" shell is empty under a correct centre and needs re-registration (C11). The
+evaluator now uses the vacancy-side rule.
+
+**Corrected near field (2–4 Å, per component).** Winner 33.0 against a 21.5 neutral floor at 79
+atoms (flanking Pb 47.8 vs 33.4; first-shell Cl 26.2 vs 16.9; Cs 19.1 vs 10.7); at 159 atoms
+14.3 against 33.2 (4 held-out frames, 31 atoms). Base alone 117.2 at 79 with a systematic −258
+mean radial residual on the flanking Pb (it predicts the neutral dimer attraction); the head
+removes it (+3.9) and leaves an unbiased scatter.
+
+**Reading by the registered rule: mixed** (on the substitute 2–4 Å shell; the registered 0–2 Å
+shell is not readable). `x_159` passes strongly, no radial signature on the pooled atoms at
+either size, but the novelty-predicted excess is 26.4 (15.8–26.4 across the five ways of
+extrapolating the base's calibration, which is shell- and size-blind: it under-predicts the
+neutral 2–4 Å floor by 12 at 79 and by 31 at 159). **Evidence:** at matched Pb–Pb distance the
+base's flanking-Pb residual is the same at both sizes (150–285) while the head's is 43–53 at 79
+and 8–35 at 159 in every overlapping bin; the 79-atom flanking Pb carry 1.7 × the label force of
+the 159-atom ones at the same d (389 vs 236 overall). The remaining 79-atom excess is a property
+of the 79-atom labels and cell, not a deficit the head shows on the geometry. The `b_i(h_i)`
+capacity arm is not indicated on this evidence (C12); if it runs, its metric must be the paired
+79 / 159 flanking-Pb residual at matched d. Caveat: four 159-atom held-out frames.

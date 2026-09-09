@@ -38,6 +38,8 @@ task list and the registers the plan's §10 rules require. Paths relative to the
 | C8 | **Arm 1 routed C twice and the registered rule stopped the programme before Arm 2+3 (2026-09-07 05:30).** Criterion (ii) fails on both rounds: the scalar-only control loses only 5 % / 8 % of the level-vs-bond slope (threshold 30 %), so the directional block does not carry the modelled level-vs-bond response; (i) and (iii) pass both rounds; (iv) fails on the `N_eff` spread (round one) and on force quality (repeat). The block's measurable contribution is the bound state (separated vacancy level on every full seed; the control loses it on most frames and diverged on two repeat seeds). Route C was applied in the v4 wording ("repeat covariance/sign tests once"); the v8.1 table's extra clause, "and the single registered bound release", was not carried into v4 and was not done. Nothing opens without a ruling. Options, none taken: (a) accept the stop — the attribution experiment is negative as registered; (b) re-register, post hoc (two rounds already opened, so this changes the attribution test after the fact), what Arm 1 is meant to attribute (a localisation criterion — bound-state precondition / HOMO separation — in place of the slope test (ii)) and read the existing twelve full seeds against it, no retraining; (c) a third round under a registered LR decay (the final-checkpoint noise is ±10 meV/Å) — outside the rule; (d) open Arm 2+3 on the full `H0` anyway as an exploratory, non-registered arm. | **ruled (v4.3, 2026-09-07):** "stop" in route C stops capacity growth (no edge residual, no bound release, no further onsite capacity); the C5 bound-state precondition, registered before Arm 1 opened, is an earlier gate for Arm 2+3 and is preserved — the scalar-only `H0` fails it on every seed, the full `H0` passes on 9/12, so the block is retained on the C5 gate, not on (ii). Winner: full `H0`, seeds {0, 1, 2, 3, 4, 6, 7, 9, 10}; excluded {5, 8, 11} (92.9 / 94.1 / 92.9 %). Criterion defects recorded, not re-registered (tensor ratio descriptor-only; slope clause's seed spread ≈ 10× its SE). Post-hoc reading (labelled) of full vs control on separation and precondition = the block's demonstrated function, not the basis of admission. Scientific record: the block does not carry the level-vs-bond response; it carries the p_σ/p_π splitting at the flanking Pb that stabilises the Pb–Pb bound state — this supersedes the original hopping-saturation hypothesis |
 | C9 | **v4.5 amendment (user, 2026-09-07 12:40; `DSCC_PLAN_V4_5_AMENDMENT.md`, verbatim): SCF initialisation during training.** Trigger: the coupled Arm-2+3 epochs took 20–33 min at four per GPU (the Φ = 0 arms 90 s) — a profile of one coupled step put 65 % of the GPU time in 32 batched eigendecompositions per batch (4 continuation stages × Newton with trial re-diagonalisations) against one for Φ = 0. Ruling: first visit by the registered four-stage continuation with a tangent predictor, the converged `dq` stored per frame; later visits warm-started, Newton with LM damping (no trial re-diagonalisations), converged to `tol_q`, `tol_E`, `tol_c`; a registered 5 % per-epoch subsample re-run by continuation against the warm start (`tol_root`), the failing fraction under the registered ceiling, failure fails the arm; solver engineering permitted without further ruling; gate before restart (fixed points, band identity, FD forces, implicit gradients vs the previous implementation). | **implemented and gated (commit `997e53a`); campaign restarted 2026-09-07 13:53 (b3 clock)** — see P3.2 and the registers (§2.1) for the gate numbers and one recorded deviation: the damping is a deferred-evaluation damped Newton, not Levenberg–Marquardt (below) |
 | C10 | **Arm 2+3 outcome (campaign complete 2026-09-08 13:08, report 13:20; `~/runs/dscc/arm23_report.json`; note `ARM23_COADVISOR.md`; D12): the registered v4.3 rule selects `B_A_phi0` — the Φ = 0 head — at a held-out charged force RMSE median of 39.9 meV/Å (seeds 36.8 / 41.2 / 40.0 / 39.1 / 41.6 / 39.8), `tau_noise` 1.7, margin `max(tau_phys, tau_noise)` = 3.0 meV/Å; the coupled medians are LR+U 41.3, LR-only 41.7, full 42.0, λ = 1 43.3 (regime-A ablation 40.9, not selectable). Every coupled arm that reaches the ranking is EQUIVALENT to Φ = 0 (none beats it, none is beaten beyond the margin; λ = 1, at 3.4 meV/Å above Φ = 0, is the one arm beyond the margin and leaves on `localisation_stable` before the ranking) and Φ = 0 is the simplest, so the selection is the same under every reading of the two contested gates (counterfactuals run on the same records: with the `f_SR` gate removed and the last-epoch root rule, the equivalent set is {Φ = 0, LR+U, LR-only, full}, λ = 1 excluded by `localisation_stable`; Φ = 0 selected in all four readings). The optimiser turned the coupling off: in the full arm `lambda_dir` trained from 0.05 to 0.004–0.018 and the hub-site `U_eff(Pb)` from 1.36 eV to 0.04–0.18 eV (LR+U: 0.03–0.18; λ = 1: 0.06–0.17); the full and λ = 1 arms are worse on the median inside 2 Å (93 and 90 vs 84 meV/Å, within their seed spreads of 26 and 15), LR + U is equal (84), and every arm equals Φ = 0 beyond 6 Å. Four rulings are needed.** (a) **Root-rule reading.** The report reads the v4.5 check at its worst epoch ≥ 1 (v4.5: "failure fails the arm"): full, LR+U and λ = 1 fail (worst-epoch failing fractions 8–26 %, 8–18 %, 10–36 % against the 10 % ceiling; LR-only and regime A 0–8 %; pooled over all 59 checked epochs, 2301 frames per run: full 0.3–2.3 %, LR + U 0.3–2.4 %, λ = 1 0.9–7.7 %, regime A ≤ 0.2 % — every run under the ceiling on the pooled reading). The over-ceiling epochs are the EARLY ones — full: epochs 1–5 and 14; LR+U: 1–8 and 18; λ = 1: 1–31 (seed 4 over on 22 epochs) — none within two epochs of a logged loss spike (spikes sit at epochs 20–58), and the final-epoch check is 0/39 on all 36 runs: the trained maps are single-valued and the failures are the transient from the multi-valued initialised map (28–51 % of frames at epoch 0, C9) that decays as `U_eff(Pb)` falls. Under the last-epoch reading full and LR+U pass and λ = 1 still fails `localisation_stable` (N_eff seed spread 0.88 > 0.5, seed 6 at 5.5). Selection unchanged either way; the record keeps the strict reading unless overruled. (b) **The `f_SR` gate is a criterion defect (ours).** `f_SR` = Σ|dq_i dq_j| K_SR_ij / Σ|dq_i dq_j| (K_SR + K_LR)_ij reads 1.5–1.8 (median 1.6) on every regime-B coupled arm, 1.2 on regime A, and 3.1 on one λ = 1 seed — above 1, which a fraction cannot be. Measured on one 79-atom charged frame with the trained full-s0 model: SR part +0.41 eV, LR part −0.19 eV, `K_LR` NEGATIVE on all 3081 pairs (range −0.97 to −0.31 eV/e²): in a 79-atom cell the long-range component of the intra-carrier interaction is negative (the neutralising background dominates it beyond `r_s`), so the quantity is unbounded and the registered `≤ 0.5` was set on a scale it does not live on. It also does not discriminate between arms (LR-only reads 1.6 with no `K_SR` in its Γ — the report computes it from the kernel split and the trained `dq` whatever the arm) and Φ = 0 passes it vacuously (no `dq`). Recorded, selection unaffected, not re-registered (same status as Arm 1's tensor-ratio clause). The plan's regime-B small-cell rule (λ → 0 on the ladder) is a different test and has not been run. (c) **Epoch-0 reading** (C9, pending): the initialised-model check is the diagnostic, the ceiling applies from epoch 1 — confirm or overrule (under the other reading every arm but LR-only fails at initialisation). (d) **Downstream with Φ = 0 selected.** Arm 4's F-SCC comparators and decision (1)–(6) compare against a coupled D-SCC model that the selection did not produce; the 2× benchmark engineering item is registered "on the Φ-on model" (the Φ = 0 benchmark already reads 2.07 / 2.22 at 79 atoms, P4.3); the Phase-4 ladder's `K_LR_ii` and `dq`-spread items are vacuous at Φ = 0 (its `E(+1) − E(0)` vs `1/L` remains readable as the base + `H0` size behaviour); the §9 robustness pass retrains "the selected configuration and its Φ = 0 reference", which are now one arm. Options: (i) close at the Arm-2+3 selection — §9 pass on Φ = 0 (mechanical, 1.5–2 h per seed on the A4000), P4.1 ladder on it, final artefact; (ii) additionally retrain LR+U (the best coupled arm) under the §9 protocol to test whether the equivalence survives the final-checkpoint noise — note that a coupled arm would have to BEAT Φ = 0 by more than `tau_phys` = 3 meV/Å to change the selection, and the trained couplings are near zero, so the pass cannot plausibly reverse it; (iii) open Arm 4 on the full arm as an exploratory, non-selected comparison of the D-SCC vs F-SCC feedback sign (§2.10). My reading: (i), with (iii) only if the feedback-sign question is wanted on its own. **§2.10 forecasts against the outcome:** the Route-A forecast ("`lambda_dir` and `U_eff` come out O(1); the λ = 0 ablation makes the level shallower and the carrier more extended") is NOT borne out in regime B — the couplings trained toward zero and the λ = 0 ablation (LR+U vs full) leaves `N_eff` at 3.7 vs 3.6 and forces 41.3 vs 42.0 meV/Å; in the regime-A ablation `U_eff(Cl)` did go to 2.3–8.9 eV (Pb 0.16–0.34) at an equivalent force error. The "practical consequence" forecast (distinct fixed points at asymmetric geometries) is borne out at initialisation and during the first epochs (a). | **RULED 2026-09-08 (`DSCC_C10_RULINGS.md`, verbatim; applied in `23a4639`, `be3c39b`; D13).** (a) Root rule: read on the final model and the last ten epochs (`sv_fraction_last10`), the early-epoch failures recorded as the initialised-map transient (`sv_transient_end`), ceiling from epoch 1 — every arm passes (λ = 1 at most 5 % on its last ten; transients end at epochs 2–14 full, 5–18 LR + U, 5–31 λ = 1). (b) `f_SR`: criterion defect (the user's: "in a small cell `K_LR` is self-image dominated and negative on every pair, so a signed fraction is meaningless"), withdrawn as a gate, reported alongside the absolute share `f_sr_abs` = Σ|dq_i dq_j K_SR_ij| / Σ|dq_i dq_j|(|K_SR| + |K_LR|) — 0.69–0.71 on every regime-B coupled arm, 0.46 on regime A. (c) Epoch 0: diagnostic, confirmed. (d) **Selection under the user's "v4.4" rule — `K_LR` required physics with no learnable coefficient, not subject to the equivalence rule; the minimal candidate LR-only; the Φ = 0 arms force references: LR-only SELECTED (`select_v44`; candidates LR + U 41.3 best, LR-only 41.7, full 42.0 equivalent; λ = 1 out on `localisation_stable`; cost against Φ = 0 +1.8 meV/Å inside the 3.0 margin, "costs nothing in forces"). The v4.4 amendment reached the record at ~15:35 on 2026-09-08 (`DSCC_PLAN_V4_4_AMENDMENT.md`, verbatim), after the campaign, so this selection is labelled POST HOC as the ruling itself anticipated; v4.4 also states that `K_LR` is "validated by the tiling-ladder gate (§8)" — the P4.1 ladder on the LR-only candidate is therefore a required validation and is running (D13) — and records that "force-only selection cannot resolve the image term; its absence from the admissible tests is a data limitation, not evidence against it"; the v4.3 rule as registered still resolves to Φ = 0 (with the C10 gates: {Φ = 0, LR + U, LR-only, full} equivalent). `arm23_report_c10.json`. Not closed: Route B′ (six seeds, same protocol) and the matched-kernel F-SCC comparator (three seeds) LAUNCHED 2026-09-08 15:13 (b3 clock) — see P3.2b, P3.3. **Why Route B′ was absent (the user asked):** its registered v4.2 entry gate — the local-neutrality ladder on the trained `H0` — failed on all four Arm-1 winners (51–65 % off Madelung; the reference-fill compensation of the missing ion extends over 8–11 Å) and the tracker recorded "Route B′ arms are therefore not opened"; re-run on the Arm-2+3 Φ = 0 models s0–s3 it fails again (`q0` slope 51 / 53 / 61 / 51 % off Madelung, species negative test passes; `arm23_phi0_gates.json`). B′ therefore opens BY THE RULING over the C6/v4.2 entry gate; its registered selection gate "tiling-ladder `1/L` coefficient within 5 % of Madelung" fails by construction on this `H0` and awaits a ruling (the code keeps it as registered). **Prerequisite diagnostic (D13): the far-field premise was mis-scaled** — the trainer's held-out numbers are the RMS of the per-atom force-error VECTOR (√3 × the per-component RMS of MACE's logs and of the base's 13 meV/Å); in one convention the charged far field of the Φ = 0 head at 159 atoms sits AT the out-of-fold neutral floor beyond 10 Å (7.2 vs 6.9, 4.5 vs 4.7 meV/Å) and 5 meV/Å above it at 8–10 Å, while at 79 atoms it is 18 meV/Å above it in quadrature at 8–10 Å: by the user's own criterion "small-cell and manifold extrapolation", not the Coulomb channel, and B′ is not mandatory on that ground. Open item recorded: the near-field residual (0–2 Å: 48 per component / 83 in the trainer convention against a 31 out-of-fold neutral floor) is unmoved by every electrostatic arm. **Rulings still needed:** (e) the B′ ladder selection gate (waive, re-read, or B′ reads on forces only); (f) whether to trim the B′ queue to LR-only and LR + U given the diagnostic (the queue runs LR-only, LR + U, full, λ = 1, then the regime-A B′ ablation; stop with `scratchpad/kill_bp_b3.sh`); (g) confirmation of the far-field gate reading now implemented (4–6 and 6–8 Å pooled by atom count, gain over the same-coupling Route A arm beyond the Route A Φ = 0 seed spread); (h) RESOLVED — the v4.4 text arrived ~15:35 and is on file; (i) the convention of the registered `tau_phys` = 3 meV/Å (the trainer's per-atom-vector RMS, as applied, or MACE's per-component RMS, D13). **C10 ADDENDUM (user, ~15:50, verbatim in `DSCC_C10_RULINGS.md`; applied, D13): (e) the B′ ladder gate is not waived but RE-READ — a model property (compensation cloud 8–11 Å; it cannot pass on cells with L_min < ~3 R_c), reported, not a gate; B′ is judged on forces; no cross-size energy claim includes `E_SF` until a ladder with L ≫ R_c exists (sparse solver); double-screening caveat recorded; "subject to the four checks above" refers to text that did not reach the record — the four checks are requested. (f) B′ queue trimmed to LR-only and LR + U (12 runs; the far field is periodicity-suppressed at these sizes) — the b3 queue file truncated in place at 15:41 before any full / λ = 1 / ablation line launched, the driver restarted for 15 runs. (g) the far-field gate re-read: the B′ gain over the same-coupling Route A arm on the full per-atom RMSE and on the 0–2, 2–4 and 4–8 Å shells at 79 atoms, each beyond the Φ = 0 seed spread; the 4–8 Å pooled reading reported, not decisive (implemented: decisive = full RMSE, 0–2, 2–4; the held-out shells mix in the fold's four to six 159-atom frames, < 2 % of the atoms). (i) `tau_phys` = 3 meV/Å stays in the trainer's convention (1.7 per component). Correction of record to C6 (the user's): "compensated within the bound-state region" was wrong — the fill compensates over its screening length. The "four checks" arrived ~16:00 with the physics of the number (verbatim in `DSCC_C10_RULINGS.md`) and were run (D13): the kernel and the Ewald background are exact for a fixed pattern; the gate result is a model property — the reference fill's compensation of the missing ion is not a fixed cloud but spreads with the cell (85 % radius ≈ 10 Å at 22 Å, > 12 Å at 34 Å), so the model's `1/L` slope never settles; the double-screening caveat is deferred as the Route C question (§3.7). LR + U seeds 4 and 6 moved to the local A4000 (two at a time) on the user's request at 15:50 to finish the B′ set earlier.** **Outcome (2026-09-09, D14): with the twelve Route B′ runs complete, both selection rules select `B_Bp_lr_only` (median 32.9 [19.0 per component] against Φ = 0 39.9 [23.0]; every Route A arm beaten beyond the margin; B′ gates pass with every far-field reading beyond noise); production status provisional on Arm 4 (F-SCC finals ≈ 07:00 on 10 Sep); the 2× benchmark fails on the winner (7.0 / 8.6); the §9 pass NOT run (user: no retraining).** |
+| C11 | **Shell centre defect (D15, 2026-09-09):** the minimum-image flanking-Pb midpoint sits on the occupied bridging Cl in ≈ 45 % of the charged 79-atom frames (the cell is two octahedra thick along z), so every charged 0–2 Å reading before D15 is an artefact and the far-field gate's "decisive 0–2 Å" shell is EMPTY under a correct centre; the full-RMSE and 2–4 Å readings, the B′ gains and the selection are unchanged (shells from 2 Å out move by < 1 meV/Å). `Trainer.evaluate` now uses the vacancy-side centre. Needed: re-register the gate's decisive shells (2–4 Å, or 0–4 Å) under the corrected centre; whether to re-read the 48 runs' shells (≈ 1.5 h GPU, no effect on the outcome). | open |
+| C12 | **Capacity arm `b_i(h_i)` after D15:** the reading by the registered rule is mixed on the substitute 2–4 Å shell (the registered 0–2 Å shell is not readable); the evidence (size-independent base residual at matched d, 2–5 × smaller head residual at 159 on the same geometry, the base's systematic dimer error removed by the head, 1.7 × larger 79-atom label forces) says the 79-atom near-field excess is a property of the 79-atom labels and cell, not a head-capacity deficit; the arm is not indicated on this evidence; if it runs, its metric is the paired 79 / 159 flanking-Pb residual at matched d. | open |
 | C4 | **Regime-A placement check fails on the training set at the plan's defaults** (`r_d1 = 3.2`, `r_d2 = 3.6` Å, floor 1e-3). Identified first-shell Pb–Cl bonds beyond `r_d1`: 3.1 % on the 544 pristine frames, 5–7 % on the 79-atom vacancy frames (the six-nearest rule counts a Cl across the vacancy for the flanking Pb), 1.2–1.6 % at 159 atoms; intra-octahedron Cl–Cl edges below `r_d2`: 2.0–2.6 % (0 at 159 atoms). The first-shell Pb–Cl distribution is thermal and wide: p50 2.88 Å, fraction > 3.0 / 3.1 / 3.2 / 3.3 Å = 22.5 / 10.8 / 5.6 / 3.4 %. No window in the 3.2–3.6 Å gap clears a 1e-3 floor on these frames. Options for ruling: (a) register a higher floor (≈ 5e-2) with the physical consequence that a few % of first-shell pairs sit inside the switch; (b) move the window up (e.g. 3.5–4.0 Å, still below the 4.8 Å vacancy-spanning minimum, but then the Cs–Cl shell at 3.5–4.1 Å is inside it); (c) make regime B (no switch) the primary regime and report regime A as failing its placement gate. Also: exclude the vacancy-flanking Pb's sixth neighbour from the identified set, or run the check on pristine frames only. | **ruled (v4.1): regime B primary; regime A failed its gate, retained as a reduced ablation only** (retrospective floor 5e-2 for the ablation; flanking-Pb bond fraction and `m_sw` reported; excluded from selection) |
 
 ## 2. Registers
@@ -532,7 +534,10 @@ Excess of the Φ = 0 head over that floor in quadrature: 79 atoms 17.6 (8–10 �
 manifold extrapolation, not the Coulomb channel. No geometry is shared between the charged and
 neutral frames (0 common group keys at either size), so the model-free label difference
 F(Q) − F(0) cannot be read. Near field: 48 per component (83 in the trainer's convention) at
-0–2 Å against a 31 floor, unmoved by any electrostatic arm (C10 open item).
+0–2 Å against a 31 floor, unmoved by any electrostatic arm (C10 open item). **[D15 correction, 2026-09-09: the 0–2 Å rows of this table for the
+charged 79-atom frames are an artefact of the minimum-image centre (a bridging Cl on the
+occupied side of a two-image flanking pair); the near field is the 2–4 Å shell, 33.0 against 21.5
+on the winner — see D15. Shells from 2 Å out are unaffected.]**
 
 *C10 readings on the Arm-2+3 records (`arm23_report_c10.json`, same runs).* Root rule on
 the final model and the last ten epochs: every arm passes (λ = 1 at most 0.051); transients
@@ -713,7 +718,9 @@ far shells are D13's diagnostic on s0–s3).* On the report's own five shells (0
 12.1 / 8.5 (> 12 Å per seed 8.1 / 8.6 / 10.0 / 8.9 / 8.5 / 7.5; LR + U 14.5 / 12.3 / 9.3) against
 D13's Φ = 0 diagnostic 20.3 / 13.5 / 10.3 and the out-of-fold neutral floor 10.2 / 9.5 / 8.3: the
 8–10 Å excess over the floor falls from 10.1 to 3.9, the 10–12 Å one from 4.0 to 2.6, and B′
-reaches the floor beyond 12 Å; the near field stays open (43 against 31, C10). Shape error after post-hoc
+reaches the floor beyond 12 Å; the near field stays open (43 against 31, C10 — **corrected in D15: that 0–2 Å row is a
+centre artefact; the near field is the 2–4 Å shell, 33.0 against 21.5, flanking Pb 47.8 against
+33.4**). Shape error after post-hoc
 `C_Q` (the four seeds with 159-atom held-out frames): B′ LR-only 0.022 / 0.008 / 0.025 / 0.004
 (median 0.015), LR + U 0.021 / 0.004 / 0.013 / 0.020, Φ = 0 0.050 / 0.043 / 0.041 / 0.009 (0.042);
 `tau_noise_shape` 0.018.
@@ -766,6 +773,180 @@ the host pattern (Route B′: `K_LR` with the static well at about half its init
 the 8–10 Å gap to the neutral floor and reaches the floor beyond 12 Å, 7.0 [4.1] meV/Å on the full RMSE with every seed outside the Φ = 0 seed range.
 `s` trains to 0.49–0.63; `U_eff` is equivalent to off; the ±10 meV/Å final-checkpoint noise, the 2×
 cost and the near field are the open items.
+
+**D15 — Near-field ownership diagnostic (evaluation only; registered 2026-09-09 before any
+number was read).** *Purpose (user's spec, verbatim in intent):* decide whether the 0–2 Å
+charged-frame force residual (43 against a 31 meV/Å neutral floor, per component) belongs to the
+head (capacity) or to the frozen base (extrapolation on the charged manifold); the result gates
+whether the `b_i(h_i)` capacity arm is run. *Inputs:* the selected B′ LR-only checkpoint, best
+seed by held-out RMSE (`dscc_arm23_B_Bp_lr_only_s3`, 18.0 per component), final checkpoint as
+trained, on its own fold 3: 258 held-out charged 79-atom frames; all 17 charged 159-atom frames
+(4 held-out, 13 in-sample, labelled); the neutral vacancy frames with out-of-fold predictions
+from the cross-fit bases (1174 at 79 atoms, 17 at 159); features = the production base's
+block-0 invariant (l = 0) scalars per atom (128), standardised per species over the neutral
+training atoms; no label enters the novelty score. Residuals per component (trainer ÷ √3),
+residual = model − label. Vacancy centre for binning only: the flanking-Pb midpoint (Pb whose
+sixth Cl is beyond 4 Å), minimum image; shells 0–2 / 2–4 / 4–6 / 6–8 / > 8 Å.
+
+*Registered thresholds (user):* `x_159` = 1.2 (base-owned if the 159-atom held-out charged 0–2 Å
+residual ≤ 1.2 × the 159-atom neutral 0–2 Å floor); `e_head` = 10 meV/Å (base-owned if the
+novelty-predicted excess is < 10; head-owned if ≥ 15; mixed between); `s_rad` = 0.3 (a systematic
+radial signature is |mean signed radial residual| ≥ 0.3 × the RMS residual on the same atoms);
+novelty k = 5 nearest neighbours, Euclidean in standardised feature space, per species; novelty
+bins = deciles of the neutral out-of-fold distribution. *Reading rule (user):* base-owned = 159
+held-out 0–2 Å ≤ `x_159` × floor AND excess < `e_head` AND no radial signature; head-owned =
+excess ≥ 15 with the 159 held-out 0–2 Å > 1.5 × floor, or a radial signature at both sizes;
+mixed otherwise. Caveat registered: the 159-atom held-out set is four frames — every 159-atom
+number carries its atom count and the in-sample 159 numbers are shown separately.
+
+*Choices ours, fixed before reading (`D15_nearfield.json["registered"]["choices"]`):* (1) the
+novelty reference for a fold-k neutral atom is the pristine atoms plus the neutral vacancy atoms
+of folds ≠ k — exactly the training set of `cf_base_f{k}`, so no atom matches itself — and the
+charged atoms use pristine + folds ≠ 3 (the same reference density as the calibration);
+(2) standardisation per species over all neutral training atoms (pristine + neutral vacancy);
+(3) the calibration `e_b(species, decile)` is the cross-fit base's per-component residual RMS on
+the pooled out-of-fold neutral vacancy atoms of that decile; charged atoms beyond the neutral
+maximum fall in the top decile (the registered reading), and a second, labelled "extrapolated"
+reading fits `e_b` linearly in the novelty over the decile means and evaluates it at each atom's
+novelty — the registered reading stands if they disagree; (4) excess per shell and per species
+category = sqrt(max(r² − mean e_b², 0)) with r the observed per-component RMS and the mean over
+the shell's atoms; reported for the winner (the ownership reading) and for the base alone (physics
+plus extrapolation, not the reading); (5) direction within 4 Å of the centre: signed radial =
+r·u, radial RMS = sqrt(mean (r·u)²), tangential RMS per component = sqrt(mean |r − (r·u)u|² / 2),
+RMS residual per component = sqrt(mean |r|² / 3) on the same atoms, plus the labels' mean signed
+radial force for context; (6) first-shell Cl = Cl within 3.5 Å of either flanking Pb; categories
+flanking Pb / first-shell Cl / Cs / other Pb / other Cl; (7) matched geometry: bins of the
+flanking Pb–Pb distance `d` of 0.2 Å over the overlapping range, reporting the flanking-Pb
+residual (winner and base, frame and atom counts) at each size and the 0–2 Å entry where
+populated — an atom enters the 0–2 Å shell only when a flanking Pb comes within 2 Å of the
+midpoint (d < 4 Å), so the shell is the dimerised flanking pair and may be empty at 159 atoms; if
+both sides of the `x_159` clause are empty the clause is reported as not readable, never as a
+pass or a fail. Scripts `scratchpad/d15_stage1.py` (per-atom cache `~/runs/dscc/D15_atoms.npz`)
+and `d15_stage2.py`; outputs `~/runs/dscc/D15_nearfield.json`, `D15_novelty.png`,
+`D15_direction.png`; label check `D15_label_by_d.json`; cache `D15_atoms.npz`.
+
+*Finding first: the registered near-field item was mis-centred.* The 79-atom cell is 16 × 16 ×
+11.1 Å — two octahedra thick along z — so the two Pb flanking the vacancy are ALSO neighbours
+through the other z image and share an occupied bridging Cl there. The minimum-image midpoint
+(the trainer's `evaluate` shells, `farfield_diag.py`, the D13 and D14 0–2 Å rows, the 48-run
+report) takes the shorter path; in the +1 state the Pb relax away from the vacancy, so the
+occupied path is the shorter one in 114 of the 256 centred fold-3 charged frames (132 have two
+paths under 8 Å; 2 have no flanking pair), and the "0–2 Å charged atoms" were bridging Cl
+0.1–0.7 Å from that false centre and 5.5 Å from the vacancy (every seed's report counted
+107–122 such atoms). The neutral frames dimerise across the vacancy (d < 4 Å in 77 of 1153
+frames; d quartiles 3.68 / 4.34 / 4.72 / 5.04 / 6.02 Å against 4.93 / 5.57 / 5.83 / 5.96 / 6.80 charged),
+so their centre was right (2 of 1153 mis-centred) and their "0–2 Å atoms" were the dimerised
+flanking Pb; the 159-atom cells have no second path. The registered "43 against 31" compared two
+populations that never coexist. With the vacancy-side centre (registered choice 7; the pair-vector
+image whose midpoint has the farthest nearest non-flanking atom) no charged frame at either size
+has an atom inside 2 Å (nearest-atom radius quartiles 2.17 / 2.73 / 2.89 / 2.97 / 3.34 Å at 79;
+2.72–3.33 at 159 held-out), so the registered 0–2 Å shell and the `x_159` clause on it are NOT
+READABLE and the near field is the 2–4 Å shell: the flanking Pb at 2.5–3.4 Å, their first-shell Cl
+and the nearest Cs. Every shell from 2 Å out is unchanged by the fix (winner s3, minimum-image →
+vacancy-side: 2–4 33.0 → 33.0, 4–6 22.3 → 22.9, 6–8 14.7 → 14.4, > 8 14.0 → 14.0), so the D13 far
+field, the D14 full-RMSE and 2–4 Å gate readings, the B′ gains and the selection stand; the
+gate's "decisive 0–2 Å" reading is empty under a correct centre and needs re-registration
+(C11). `Trainer.evaluate` now uses `train.vacancy_centre` (synthetic two-image test); the 48
+runs' shells are not re-read (optional, ≈ 1.5 h GPU, no effect on the gate outcome).
+
+*Step 1 — by shell (per component, meV/Å; winner / base alone / out-of-fold neutral floor;
+atom counts in brackets).*
+
+| set | all | 2–4 Å | 4–6 Å | 6–8 Å | > 8 Å |
+|---|---|---|---|---|---|
+| charged 79 held-out, winner (258 fr) | 18.2 | 33.0 [1927] | 22.9 [2868] | 14.4 [8235] | 14.0 [7194] |
+| charged 79 held-out, base | 52.7 | 117.2 | 72.3 | 37.4 | 21.8 |
+| neutral 79 out-of-fold floor (1174 fr; 0–2 Å 29.8 [154], dimerised Pb) | 12.9 | 21.5 [9223] | 17.4 [10733] | 10.3 [39141] | 9.9 [31836] |
+| charged 159 held-out, winner (4 fr) | 6.9 | 14.3 [31] | 11.6 [46] | 7.8 [153] | 4.5 [406] |
+| charged 159 held-out, base | 24.1 | 76.5 | 45.8 | 16.9 | 11.0 |
+| charged 159 in-sample, winner (13 fr) | 7.9 | 20.1 [92] | 12.4 [153] | 7.4 [511] | 5.5 [1311] |
+| charged 159 in-sample, base | 31.5 | 105.0 | 62.3 | 21.7 | 12.6 |
+| neutral 159 out-of-fold floor (17 fr) | 12.0 | 33.2 [125] | 19.9 [183] | 10.8 [672] | 7.6 [1723] |
+
+Species in the 2–4 Å shell (winner / base / floor [n winner / n floor]): 79 — flanking Pb 47.8 /
+175.6 / 33.4 [512 / 2152], first-shell Cl 26.2 / 89.7 / 16.9 [1259 / 6263], Cs 19.1 / 60.1 / 10.7
+[153 / 798]; 159 held-out — Pb 19.7 / 135.4 / 52.1 [8 / 34], Cl 13.2 / 43.5 / 21.1 [17 / 74], Cs 7.0 /
+19.4 / 27.3 [6 / 17]; 159 in-sample — Pb 34.3 / 180.3 [26], Cl 10.3 / 53.5 [52], Cs 9.4 / 38.4 [14].
+The corrected near-field item reads: 2–4 Å 33.0 against a 21.5 floor at 79 atoms — flanking Pb
+47.8 vs 33.4, first-shell Cl 26.2 vs 16.9, Cs 19.1 vs 10.7 — and 14.3 against 33.2 at 159.
+
+*Steps 2–3 — novelty and the base-error calibration.* `e_b` by decile (neutral out-of-fold,
+per species): Cl 7.3 → 17.9, Cs 7.0 → 11.4, Pb 9.6 → 32.4 (top-decile edges Cl 4.45–13.8, Cs
+3.8–15.7, Pb 4.67–24.3 in standardised feature distance). Self-check on the neutral floor: the
+curve reproduces the neutral 0–2 Å floor (29.8 predicted 30.7; 82 % of the dimerised Pb in the
+top decile) but under-predicts the 2–4 Å floor (21.5 vs 17.9, self-excess 12.0 in quadrature) and
+the 4–6 Å one (17.4 vs 12.2; 12.3), over-predicts beyond 6 Å (10.3 vs 12.3), and at 159 atoms
+under-predicts the 2–4 Å floor by 30.6 (33.2 vs 12.9) with 95 % of those atoms in the LOWEST
+decile — the novelty score is shell-blind and size-blind. Charged 79 novelty: 3 % of all atoms
+beyond the neutral p99; 2–4 Å 16 % (43 % in the top decile); flanking Pb 40 % beyond p99 (431 of
+512 in the top decile); first-shell Cl 8 %; Cs 1 %. Charged 159: ≤ 3 % beyond p99, 92 % of the
+atoms in decile 0. Predicted excess of the winner at 79 atoms, five ways (decile reading
+[registered] / extrapolated fit / over the same-shell floor, no calibration / self-check-corrected
+decile / self-check-corrected extrapolated): 2–4 Å = within 4 Å: **26.4** / 19.9 / 25.0 / 23.5 /
+15.8; flanking Pb 36.4 / 16.4 / 34.2 / 34.3 / 11.1; first-shell Cl 22.1 / 21.5 / 20.1 / 18.5 / 17.8;
+Cs 16.6 / 16.6 / 15.8 / 11.4 / 11.5; 4–6 Å 19.2 / 19.0 / 14.9 / 14.7; 6–8 Å 7.2 / 7.1 / 10.0; > 8 Å
+6.2 / 6.0 / 9.9; all 12.4 / 11.1 / 12.9. The flanking-Pb value spans 11–36 on how `e_b` is
+extrapolated past the neutral range alone. Base alone, 2–4 Å: 115.6 (physics plus extrapolation,
+not the reading). 159 held-out, 2–4 Å: winner 14.3 against `e_b` 15.2 → excess 0 on every
+version (Pb 0 [n 8], Cl 10.7 [17], Cs 0 [6]); 159 in-sample 2–4 Å 13.3 / 6.4 (Pb 23.9 / 9.4 [26]).
+
+*Step 4 — direction within 4 Å (winner; mean signed radial / radial RMS / tangential RMS per
+component / RMS per component / labels' mean signed radial; signature at 0.3 × RMS).* 79
+held-out, all 1927 atoms in 256 frames: +6.8 / 42.7 / 26.8 / 33.0 / +9.1 — no signature
+(threshold 9.9); flanking Pb +3.9 / 64.0 / 37.2 / 47.8 / −99.4 — none; first-shell Cl +10.3 / 32.2 /
+22.6 / 26.2 / +40.0 — yes (7.9); Cs −13.2 / 25.8 / 14.7 / 19.1 / +116.2 — yes. Base alone: all +1.3 /
+186.5 / 56.9 / 117.2; flanking Pb **−257.5** / 295.7 / 50.2 / 175.6 (the base pulls the flanking pair
+together — the neutral dimer — on charged frames); first-shell Cl +118.6; Cs −99.0: systematic on
+every species. 159 held-out, 31 atoms in 4 frames: all +2.9 / 20.1 / 10.3 / 14.3 / −112 — none
+(4.3); flanking Pb +28.5 / 31.2 / 9.6 / 19.7 [8] — yes; Cl −9.1 [17]; Cs +3.0 [6]; base all −24.4,
+Pb −181.2. 159 in-sample (92 atoms, 13 frames): all +3.2 — none; Pb +18.1 [26]; Cl −0.1; Cs −12.3.
+The head removes the base's systematic radial error and leaves an unbiased, radially dominated
+scatter at both sizes; the pooled signature test is negative at both, the per-species 159 tests
+rest on 6–17 atoms.
+
+*Step 5 — size at matched geometry (d across the vacancy, 0.2 Å bins; flanking-Pb residual
+winner / base [n Pb]).* 79: 4.8–5.0 71.0 / 283.7 [4]; 5.0–5.2 49.7 / 255.9 [10]; 5.2–5.4 52.2 /
+219.8 [42]; 5.4–5.6 52.7 / 196.4 [84]; 5.6–5.8 42.7 / 188.0 [94]; 5.8–6.0 43.7 / 155.6 [170]; 6.0–6.2
+49.7 / 143.1 [78]; 6.2–6.4 45.6 / 130.4 [18]; 6.4–6.6 49.8 / 129.2 [8]; 6.6–6.8 88.4 / 121.8 [4]. 159
+held-out: 5.4–5.6 8.1 / 242.3 [2]; 6.2–6.4 17.6 / 105.5 [2]; 6.4–6.6 26.6 / 55.7 [2]; 6.6–6.8 21.6 /
+20.4 [2]. 159 in-sample: 4.8–5.0 72.7 / 282.5; 5.0–5.2 47.0 / 282.4; 5.2–5.4 24.8 / 268.1; 5.4–5.6
+10.5 / 251.4; 5.6–5.8 34.6 / 201.8 [4]; 5.8–6.0 12.2 / 158.4; 6.0–6.2 20.7 / 127.0; 6.4–6.6 30.8 /
+59.1; 6.6–6.8 16.2 / 23.3; 6.8–7.0 27.7 / 15.0 ([2] unless stated). The base's residual is the
+same at both sizes along the whole curve (a property of the local geometry); the head's is 43–53
+at 79 and 8–35 at 159 in every overlapping bin, held-out and in-sample alike. Label check: the
+flanking Pb carry a label force RMS of 360–500 meV/Å per component at 79 in every bin (389
+overall) against 62–302 at 159 held-out (236) and 39–355 in-sample (232) — at matched d the
+79-atom flanking Pb feel ≈ 1.7 × the force (5.4–5.6 Å: 393 vs 62 / 47; 5.8–6.0: 359 vs 165;
+6.4–6.6: 498 vs 275 / 318); the winner's residual relative to the label is 12 % at 79 and 8 % / 15 %
+at 159. The 0–2 Å entry is empty in every bin at both sizes.
+
+*Step 6 — novelty dependence, 79-atom 2–4 Å shell by decile (n; winner / base / `e_b`):* 19:
+18.1 / 93.0 / 7.2; 66: 20.6 / 93.1 / 8.3; 71: 19.5 / 100.2 / 9.7; 92: 23.5 / 88.2 / 10.3; 116: 21.7 /
+89.4 / 10.7; 113: 21.0 / 84.5 / 11.2; 142: 23.3 / 90.7 / 12.3; 197: 26.9 / 101.7 / 13.3; 287: 32.3 /
+127.0 / 16.5; 824: 40.6 / 133.8 / 26.4. Slopes per decile: winner 1.94, base 3.72, calibration
+1.54 — the winner's residual rises with novelty at 1.3 × the calibration's slope, the base's at
+2.4 ×. The 0–2 Å rows are empty.
+
+*Reading (registered rule).* On the registered 0–2 Å shell: NOT READABLE — no charged atom in
+it at 79 or 159 atoms under a correct centre. On the substitute 2–4 Å shell (= within 4 Å):
+`x_159` PASSES (159 held-out 14.3 ≤ 1.2 × 33.2; below the 79-atom floor 21.5 as well; 31 atoms in 4
+frames against 125 floor atoms); no radial signature on the pooled within-4 Å atoms at either
+size; excess ≥ 15 on every version (26.4 registered; 15.8 at the lowest) — so the base-owned
+clause fails on excess alone, the head-owned clause fails on the `x_159` and double-signature
+clauses, and the verdict by the letter is **mixed**. Weight of the evidence: the base's
+flanking-Pb residual at matched d is size-independent while the head's is 2–5 × smaller at 159
+on the same geometry; the base's near-field error is systematic (it predicts the neutral dimer
+attraction) and the head removes it; and the 79-atom flanking Pb carry 1.7 × the label force at
+matched d. The residual 79-atom excess is therefore a property of the 79-atom labels and cell
+(image and strain physics the head does not resolve there, or does not need to at 159), not a
+deficit the head shows on the geometry — the C7 base-support reading of D13 in a corrected form.
+A `b_i(h_i)` capacity arm read at 79 atoms would chase that; not indicated on this evidence. If
+it runs, its metric must be the paired 79 / 159 flanking-Pb residual at matched d (the leak
+readout), not the 79-atom excess. Caveats: the 159 held-out set is 4 frames (8 flanking Pb, 31
+atoms within 4 Å); the 159 neutral floor (33.2 at 2–4 Å) rests on 17 frames whose atoms sit in
+decile 0 of a size-blind novelty score; the excess depends on how `e_b` is extrapolated past the
+neutral range for the flanking Pb (40 % beyond p99). Ruling items: C11 (re-register the far-field
+gate's decisive shells under the vacancy-side centre) and C12 (the capacity arm).
 
 ## 3. Task list
 
