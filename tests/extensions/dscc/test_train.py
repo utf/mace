@@ -41,3 +41,26 @@ def test_frame_weights_normalise_within_frozen_stratum_totals(tmp_path):
     w_a = [trainer.frame_weight[i] for i in range(4)]
     assert all(abs(w - 3.0 / 4) < 1e-12 for w in w_a)       # stratum A: total 3 over 4 frames
     assert trainer.frame_weight[4] == pytest.approx(1.0)      # stratum B: default total 1, one frame
+
+
+def test_vacancy_centre_takes_the_empty_side_of_a_two_image_pair():
+    """Two Pb 5.3 A apart along an 11.1 A axis share two sites: a bridging Cl on the short
+    path and the vacancy on the long one. The minimum-image midpoint would sit on the Cl."""
+    cell = torch.diag(torch.tensor([16.0, 16.0, 11.1], dtype=torch.float64))
+    pos, numbers = [], []
+    for z0 in (0.0, 5.3):                                       # the flanking pair along z
+        pos.append([8.0, 8.0, z0]); numbers.append(82)
+        for dx, dy in ((2.8, 0.0), (-2.8, 0.0), (0.0, 2.8), (0.0, -2.8)):      # four equatorial Cl each
+            pos.append([8.0 + dx, 8.0 + dy, z0]); numbers.append(17)
+    pos.append([8.0, 8.0, 2.65]); numbers.append(17)            # the occupied bridge on the short path
+    pos.append([4.0, 4.0, 8.2]); numbers.append(55)             # a Cs off to the side
+    pos = torch.tensor(pos, dtype=torch.float64)
+    rad = tr.vacancy_centre(pos, cell, numbers)
+    assert rad is not None
+    # the vacancy site is at z = 8.2 (the long path), 2.9 A from each flanking Pb
+    assert rad[0] == pytest.approx(2.9, abs=1e-6) and rad[5] == pytest.approx(2.9, abs=1e-6)
+    assert rad[10] == pytest.approx(11.1 - 8.2 + 2.65, abs=1e-6)  # the bridging Cl is 5.55 A away, not 0
+    # a centred pair (no second image path) reproduces the minimum-image midpoint
+    cell2 = torch.diag(torch.tensor([16.0, 16.0, 22.2], dtype=torch.float64))
+    rad2 = tr.vacancy_centre(pos, cell2, numbers)
+    assert rad2[10] == pytest.approx(0.0, abs=1e-6)             # now the only shared site is the bridge: it is the "vacancy"

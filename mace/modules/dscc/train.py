@@ -105,6 +105,46 @@ def static_cell_atoms(path: str):
     return atoms
 
 
+def vacancy_centre(pos: torch.Tensor, cell: torch.Tensor, numbers) -> Optional[torch.Tensor]:
+    """Distance of every atom from the vacancy centre: the midpoint of the flanking Pb pair
+    (the two Pb whose sixth-nearest Cl is beyond 4 A), label-free. The pair can be neighbours
+    through MORE THAN ONE image of a short cell axis (the 79-atom cell is two octahedra thick
+    along z, 11.1 A): one shared site holds the vacancy, the other a normal bridging Cl, and in
+    the +1 state the occupied path is often the shorter one. Among the pair-vector images
+    shorter than 8 A the vacancy-side midpoint is the one whose nearest non-flanking atom is
+    farthest away (D15, 2026-09-09; the minimum-image midpoint before that). None when no
+    flanking pair is found."""
+    from mace.modules.dscc.kernels import minimum_image_distances
+    z = torch.as_tensor(numbers, device=pos.device)
+    r = minimum_image_distances(pos, cell)
+    pb = torch.nonzero(z == 82).reshape(-1); cl = torch.nonzero(z == 17).reshape(-1)
+    if pb.numel() == 0 or cl.numel() < 6:
+        return None
+    dist = torch.sort(r[pb][:, cl], dim=1).values
+    flank = pb[dist[:, 5] > 4.0]
+    if flank.numel() != 2:
+        return None
+    inv = torch.linalg.inv(cell)
+    raw = pos[flank[1]] - pos[flank[0]]
+    raw = raw - torch.round(raw @ inv) @ cell
+    best = None
+    for i in (-1, 0, 1):
+        for j in (-1, 0, 1):
+            for k in (-1, 0, 1):
+                v = raw + torch.tensor([i, j, k], dtype=pos.dtype, device=pos.device) @ cell
+                length = float(v.norm())
+                if length >= 8.0:
+                    continue
+                dv = pos - (pos[flank[0]] + 0.5 * v)
+                dv = dv - torch.round(dv @ inv) @ cell
+                rad = dv.norm(dim=-1)
+                other = rad.clone(); other[flank] = float("inf")
+                score = (float(other.min()), -length)
+                if best is None or score > best[0]:
+                    best = (score, rad)
+    return best[1]
+
+
 def to_device(batch, device):
     return batch.to(device).to_dict()
 
@@ -287,17 +327,8 @@ class Trainer:
                 pos, cell = batch["positions"][lo:hi], batch["cell"].view(-1, 3, 3)[g]
                 numbers = a.get_atomic_numbers()
                 d = collective_coordinate(pos, cell, numbers)
-                z = torch.as_tensor(numbers, device=pos.device)
-                from mace.modules.dscc.kernels import minimum_image_distances
-                r = minimum_image_distances(pos, cell)
-                pb = torch.nonzero(z == 82).reshape(-1); cl = torch.nonzero(z == 17).reshape(-1)
-                dist = torch.sort(r[pb][:, cl], dim=1).values
-                flank = pb[dist[:, 5] > 4.0]
-                if flank.numel() == 2:
-                    mid = pos[flank[0]] + 0.5 * (pos[flank[1]] - pos[flank[0]] - torch.round((pos[flank[1]] - pos[flank[0]]) @ torch.linalg.inv(cell)) @ cell)
-                    dv = pos - mid
-                    dv = dv - torch.round(dv @ torch.linalg.inv(cell)) @ cell
-                    rad = dv.norm(dim=-1)
+                rad = vacancy_centre(pos, cell, numbers)      # vacancy-side midpoint (D15)
+                if rad is not None:
                     for (a_, b_), acc in shells.items():
                         m = (rad >= a_) & (rad < b_)
                         acc[0] += float(diff[lo:hi][m].sum()); acc[1] += int(m.sum())
