@@ -40,7 +40,7 @@ from mace.modules.dscc.scf import (ScfOptions, ScfResult, continuation_solve, co
                                    solve_dscc, solve_dscc_batched, two_fillings)
 from mace.modules.dscc.species import (N0, S_REF, State, U_MAX_GFN1, neutral_count,
                                        states_from_batch)
-from mace.modules.dscc.fill import fill
+from mace.modules.dscc.fill import eigh_for, fill
 from mace.modules.dscc.fscc import fscc_head, excess_trace_norm
 
 # Registered defaults for the bounded learnables (plan section 2.4; to confirm before use).
@@ -165,6 +165,10 @@ class MACEDSCC(nn.Module):
     def _lr_route(self) -> str:
         return getattr(self.kernel, "lr_route", "reciprocal")
 
+    def _background(self) -> str:
+        """C13: the background convention (density for v5; a pickled config may say point)."""
+        return getattr(self.kernel, "background", "density")
+
     def lambda_dir(self) -> torch.Tensor:
         """`lambda_dir`: learned in `[0, lambda_max]`, or held at `lambda_fixed` (Arm 2+3
         couplings "LR-only" (0), "LR + U" (0) and "lambda_dir = 1 fixed")."""
@@ -230,7 +234,7 @@ class MACEDSCC(nn.Module):
                                   n_dn: torch.Tensor) -> torch.Tensor:
         """`reference_charges` for `H [B, 4n, 4n]` with per-graph `n0 [B, N]` and counts."""
         with torch.no_grad():
-            spectrum = torch.linalg.eigh(H)
+            spectrum = eigh_for(H, getattr(self.scf_options, 'eigh_device', 'auto'))
         P = fill(H, n_up, self.sigma_s, spectrum).P + fill(H, n_dn, self.sigma_s, spectrum).P
         occupied = torch.diagonal(P, dim1=-2, dim2=-1).reshape(H.shape[0], -1, 4).sum(-1)
         return n0 - occupied
@@ -243,7 +247,7 @@ class MACEDSCC(nn.Module):
         exactly: the reference is neutral."""
         n_up, n_dn = S_REF.counts(neutral_count(numbers))
         with torch.no_grad():
-            spectrum = torch.linalg.eigh(H)
+            spectrum = eigh_for(H, getattr(self.scf_options, 'eigh_device', 'auto'))
         P = fill(H, float(n_up), self.sigma_s, spectrum).P + fill(H, float(n_dn), self.sigma_s, spectrum).P
         occupied = torch.diagonal(P).reshape(-1, 4).sum(-1)
         n0 = torch.tensor([float(N0[z]) for z in numbers], dtype=H.dtype, device=H.device)
@@ -384,7 +388,7 @@ class MACEDSCC(nn.Module):
             if self.route_b:
                 # v4.2: the gap regulariser acts on H0 - W with W from the pristine q0.
                 g_lr = gamma_lr(positions[nodes], cell[g], self.kernel.r_g, self.r_split,
-                                self.kernel.eps_inf, tol=self.kernel.tol, route=self._lr_route())
+                                self.kernel.eps_inf, tol=self.kernel.tol, route=self._lr_route(), background=self._background())
                 W = host_potential(g_lr, self.pattern_scale() * self.reference_charges(H, numbers))
                 H = H - torch.diag(W.repeat_interleave(4))
             n_up, n_dn = S_REF.counts(neutral_count(numbers))
@@ -523,7 +527,7 @@ class MACEDSCC(nn.Module):
                     with torch.set_grad_enabled(not use_pairs):
                         k_sr, k_lr = kernel_components(pos_b[g], cell[g], self.kernel, need_sr=self._need_sr())
                         if self.route_b:            # Gamma_LR likewise: detached under the pair route
-                            Ws.append(gamma_lr(pos_b[g], cell[g], self.kernel.r_g, self.r_split, self.kernel.eps_inf, tol=self.kernel.tol, route=self._lr_route()))
+                            Ws.append(gamma_lr(pos_b[g], cell[g], self.kernel.r_g, self.r_split, self.kernel.eps_inf, tol=self.kernel.tol, route=self._lr_route(), background=self._background()))
                     gammas.append(gamma_matrix(k_sr, k_lr, self.lambda_dir(), self.u_eff()[sp_b[g]], self.kernel.eps_inf))
                 gamma = torch.stack(gammas)
                 W = None
@@ -670,7 +674,7 @@ class MACEDSCC(nn.Module):
                     # (H, dP) cotangent below; a detached q0 would be non-conservative).
                     with torch.set_grad_enabled(not use_pairs):      # see the batched branch
                         g_lr = gamma_lr(pos_g, cell_g, self.kernel.r_g, self.r_split, self.kernel.eps_inf,
-                                        tol=self.kernel.tol, route=self._lr_route())
+                                        tol=self.kernel.tol, route=self._lr_route(), background=self._background())
                     q0 = self.reference_charges(H, numbers)
                     sq0 = self.pattern_scale() * q0
                     W = host_potential(g_lr, sq0)

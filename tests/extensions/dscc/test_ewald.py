@@ -58,7 +58,8 @@ class TestConvention:
         les_ewald = pytest.importorskip("les.module.ewald")
         positions, cell, q = _frame(seed=7)
         r_g = 0.9
-        E = ew.ewald_matrix(positions, cell, r_g)
+        E = ew.ewald_matrix(positions, cell, r_g, background="point")   # LES: the point-charge background
+        E_density = ew.ewald_matrix(positions, cell, r_g)                    # C13: the model-density background
         # The LES module directly (the programme's `latent_ewald` wrapper was deleted, plan
         # section 3): its reciprocal sum runs over k != 0 only, so for a net-charged cell the
         # jellium background -norm_factor sigma^2 Q^2 / (2 V) is added here, as the wrapper did.
@@ -72,15 +73,22 @@ class TestConvention:
             energy, _, _ = les(q=charges, r=positions, cell=cell.reshape(1, 3, 3), batch=batch)
             oracle = float(energy.reshape(-1)[0]) - norm_factor * sigma ** 2 * float(charges.sum()) ** 2 / (2 * volume)
             assert mine == pytest.approx(oracle, rel=1e-6, abs=1e-6)
+            # C13: the density convention adds the clouds' second-moment term 2 pi r_g^2 C Q^2 / V
+            mine_d = float(ew.energy(E_density, charges) - 0.5 * (charges ** 2).sum() * ew.self_term(r_g))
+            assert mine_d - mine == pytest.approx(2 * math.pi * r_g ** 2 * ew.COULOMB * float(charges.sum()) ** 2 / volume, abs=1e-9)
 
     def test_tiling_ladder_self_term_is_the_madelung_one(self):
         """`E_PBC_ii - C/(sqrt(pi) r_g) = -alpha_M C / L` for one Gaussian in a cubic cell
         (the image-overlap correction `6 erfc(L/(2 r_g)) C/L` is 1.7e-7 at L = 8 and
         below 1e-16 from L = 12)."""
         for L in (12.0, 16.0, 32.0):
-            E = ew.ewald_matrix(torch.zeros(1, 3), torch.eye(3) * L, 1.0)
+            E = ew.ewald_matrix(torch.zeros(1, 3), torch.eye(3) * L, 1.0, background="point")
             k_lr = float(E[0, 0] - ew.self_term(1.0))
             assert k_lr == pytest.approx(-ew.madelung_constant_cubic() * ew.COULOMB / L, abs=1e-8)
+            # C13 (density): the same plus the cloud's second moment, 4 pi r_g^2 C / L^3
+            E_d = ew.ewald_matrix(torch.zeros(1, 3), torch.eye(3) * L, 1.0)
+            assert float(E_d[0, 0] - ew.self_term(1.0)) == pytest.approx(
+                -ew.madelung_constant_cubic() * ew.COULOMB / L + 4 * math.pi * ew.COULOMB / L ** 3, abs=1e-8)
 
     def test_pair_kernel_is_erf_over_r_at_the_pair_width(self):
         """Two charges in cubic boxes, the O(1/L) image term removed by extrapolation:
@@ -135,8 +143,13 @@ class TestRegimeBLatticeSum:
 
         self_value = ew.COULOMB * (1 / (math.sqrt(math.pi) * r_g) - 2 / (math.sqrt(math.pi) * r_s))
         K = ew.short_range_lattice_sum(positions, cell, s_of, self_value, r_c=30.0)
-        diff = ew.ewald_matrix(positions, cell, r_g) - ew.ewald_matrix(positions, cell, r_s / 2)
+        diff = ew.ewald_matrix(positions, cell, r_g, background="point") - ew.ewald_matrix(positions, cell, r_s / 2, background="point")
         assert float((K - diff).abs().max()) < 1e-10
+        # C13 (density, no constants): the difference of two G != 0 sums misses the summand's
+        # own G = 0 term pi (r_s^2 - 4 r_g^2) C / V, which the real-space sum contains.
+        volume = float(torch.det(cell).abs())
+        diff_d = ew.ewald_matrix(positions, cell, r_g) - ew.ewald_matrix(positions, cell, r_s / 2)
+        assert float((K - (diff_d + math.pi * (r_s ** 2 - 4 * r_g ** 2) * ew.COULOMB / volume)).abs().max()) < 1e-10
         # Converged in the image range and rewrapping-invariant.
         K2 = ew.short_range_lattice_sum(positions, cell, s_of, self_value, r_c=40.0)
         assert float((K - K2).abs().max()) < 1e-12

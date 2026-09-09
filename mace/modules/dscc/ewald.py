@@ -157,10 +157,14 @@ def lattice_sum(positions: torch.Tensor, cell: torch.Tensor,
     return total
 
 
+BACKGROUNDS = ("density", "point")
+
+
 def ewald_matrix(positions: torch.Tensor, cell: torch.Tensor,
                  width_i: Union[float, torch.Tensor], width_j: Optional[Union[float, torch.Tensor]] = None,
                  eta: Optional[float] = None, tol: float = EWALD_TOL,
-                 pair_vectors: Optional[torch.Tensor] = None, k_chunk: int = 256) -> torch.Tensor:
+                 pair_vectors: Optional[torch.Tensor] = None, k_chunk: int = 256,
+                 background: str = "density") -> torch.Tensor:
     """`E_PBC` in eV per unit charge pair (`COULOMB` included): `[N, N]`, symmetric, the
     diagonal including the Gaussian self term. `width_i` (`width_j`) are the Gaussian widths
     of the charges on the row (column) side -- a scalar or `[N]`; `width_j` defaults to
@@ -206,18 +210,32 @@ def ewald_matrix(positions: torch.Tensor, cell: torch.Tensor,
             kk = k[start:start + k_chunk]                                     # [c, 3]
             recip = recip + (torch.cos(pair_vectors @ kk.transpose(0, 1)) * weight[start:start + k_chunk]).sum(-1)
         recip = (4.0 * math.pi / volume) * recip
-    background = -4.0 * math.pi * eta ** 2 / volume
-    return COULOMB * (real + recip + background)
+    # C13 (v5, registered 2026-09-09): the model density is a superposition of Gaussian clouds,
+    # and the exact periodic energy of that density with its neutralising background is the
+    # G != 0 sum with NO constant ("density"). In the alpha-split form the real-space remainder
+    # carries the implicit G = 0 term pi (4 eta^2 - w^2) / V of its short-ranged summand, so the
+    # background term that makes the total constant vanish is -pi (4 eta^2 - w^2) / V (a matrix
+    # for mixed widths). "point" is the v4 convention (-4 pi eta^2 / V, total -pi w^2 / V: the
+    # clouds interact with the background as points) -- kept for the conversion of old files.
+    if background not in BACKGROUNDS:
+        raise ValueError(f"unknown background convention {background!r}; expected one of {BACKGROUNDS}")
+    if background == "density":
+        bg = -(4.0 * math.pi * eta ** 2 - math.pi * w ** 2) / volume
+    else:
+        bg = -4.0 * math.pi * eta ** 2 / volume
+    return COULOMB * (real + recip + bg)
 
 
 def reciprocal_matrix(positions: torch.Tensor, cell: torch.Tensor, width: float,
                       tol: float = EWALD_TOL, pair_vectors: Optional[torch.Tensor] = None,
-                      k_chunk: int = 256) -> torch.Tensor:
+                      k_chunk: int = 256, constant: float = 0.0) -> torch.Tensor:
     """v5 W2 item 3: the periodic kernel of a pair of Gaussians with combined width `w`,
     `sum_L erf(|r_ij + L| / w) / |r_ij + L|` with the neutralising background, evaluated in
     reciprocal space ALONE: `C [(4 pi / V) sum_{k != 0} exp(-k^2 w^2 / 4) / k^2 cos(k . r_ij)
-    - pi w^2 / V]`, `[N, N]`, the diagonal included (its `r -> 0` limit is the Gaussian self
-    term). Equal to `ewald_matrix(s_i, s_j)` with `w = sqrt(2 (s_i^2 + s_j^2))` to `tol`: a
+    + constant / V]`, `[N, N]`, the diagonal included (its `r -> 0` limit is the Gaussian self
+    term). `constant` is the uniform G = 0 term in A^2 (C13: 0 for a density-consistent
+    periodic kernel, `-pi (r_s^2 - 4 r_g^2)` for `K_LR`, `-pi w^2` for the v4 point
+    convention). Equal to `ewald_matrix(s_i, s_j)` with `w = sqrt(2 (s_i^2 + s_j^2))` to `tol`: a
     smooth Gaussian potential converges in reciprocal space by itself, and the real-space
     remainder `ewald_matrix` still sums over ~100 images vanishes identically when the
     splitting width equals the pair width. Differentiable in `positions` and `cell` (stress).
@@ -241,7 +259,7 @@ def reciprocal_matrix(positions: torch.Tensor, cell: torch.Tensor, width: float,
         for start in range(0, k.shape[0], k_chunk):
             kk = k[start:start + k_chunk]
             recip = recip + (torch.cos(pair_vectors @ kk.transpose(0, 1)) * weight[start:start + k_chunk]).sum(-1)
-    return COULOMB * ((4.0 * math.pi / volume) * recip - math.pi * float(width) ** 2 / volume)
+    return COULOMB * ((4.0 * math.pi / volume) * recip + float(constant) / volume)
 
 
 def reciprocal_pair_gradient(positions: torch.Tensor, cell: torch.Tensor, width: float,

@@ -32,7 +32,7 @@ from mace.tools import torch_geometric                                    # noqa
 def madelung_of_cell(cell: torch.Tensor) -> float:
     """`alpha` of a unit point charge in this cell shape: `E_self - C/(sqrt(pi) r) = -alpha C / L`."""
     r_g = 0.3
-    E = ewald.ewald_matrix(torch.zeros(1, 3, dtype=torch.float64), cell, r_g)
+    E = ewald.ewald_matrix(torch.zeros(1, 3, dtype=torch.float64), cell, r_g, background="point")   # a POINT charge's alpha (C13)
     L = float(torch.det(cell).abs() ** (1.0 / 3.0))
     return -float(E[0, 0] - ewald.self_term(r_g)) * L / ewald.COULOMB
 
@@ -102,9 +102,18 @@ def main() -> None:
     # the first cell's), since the Madelung coefficient is a property of the cell shape.
     same = [r for r in rows if abs(r["alpha_cell"] - rows[0]["alpha_cell"]) < 0.02 * rows[0]["alpha_cell"]]
     a, b = fit_one_over_l([r["L"] for r in same], [r["dE"] for r in same]) if len(same) >= 2 else (float("nan"), float("nan"))
+    # C13: the density convention's second-moment term (a 1/V piece) is removed before the
+    # monopole 1/L reading; both slopes are reported.
+    from mace.modules.dscc.ladder import second_moment_term
+    kcfg = getattr(model, "kernel", None)
+    if kcfg is not None and getattr(kcfg, "background", "density") == "density" and len(same) >= 2:
+        corrected = [r["dE"] - second_moment_term(float(r.get("volume", r["L"] ** 3)), float(kcfg.r_g), float(kcfg.eps_inf), 1.0) for r in same]
+        a2, b2 = fit_one_over_l([r["L"] for r in same], corrected)
+    else:
+        a2, b2 = a, b
     alpha_mean = float(np.mean([r["alpha_cell"] for r in same]))
     madelung = -alpha_mean * ewald.COULOMB / (2.0 * model.kernel.eps_inf)
-    report = {"rows": rows, "fit_cells": [r["tiling"] for r in same], "dE_intercept": a, "dE_slope": b,
+    report = {"rows": rows, "fit_cells": [r["tiling"] for r in same], "dE_intercept": a, "dE_slope": b, "dE_slope_minus_second_moment": b2, "dE_intercept_minus_second_moment": a2,
               "madelung_slope_expected": madelung, "dE_slope_rel_err": abs(b - madelung) / abs(madelung),
               "k_lr_ii_alpha_rel_err_max": max((r.get("k_lr_ii_alpha_rel_err", 0.0) for r in rows), default=None),
               "coupling": bool(model.coupling), "model": args.model,

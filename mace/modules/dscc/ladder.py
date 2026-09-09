@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Sequence, Tuple
 
+import math
+
 import numpy as np
 import torch
 
@@ -35,6 +37,14 @@ def tiling_ladder(pristine, tilings: Sequence[Tuple[int, int, int]], vacancy_spe
 def madelung_slope(eps_inf: float) -> float:
     """`-alpha_M C / (2 eps_inf)`: the registered `1/L` coefficient of the monopole term."""
     return -madelung_constant_cubic() * COULOMB / (2.0 * eps_inf)
+
+
+def second_moment_term(volume: float, r_g: float, eps_inf: float, q: float = 1.0) -> float:
+    """C13: the model density's second-moment (Makov-Payne `Q Q_2`) term that the density
+    background convention adds to a cell of volume `V` carrying `Q`: `0.5 * 4 pi r_g^2 C /
+    (eps_inf V) * Q^2` (eV) -- a `1/V` term a `1/L` fit on small cells would otherwise read
+    into its slope. Subtract it before fitting the monopole `1/L` coefficient, or fit it."""
+    return 0.5 * 4.0 * math.pi * r_g ** 2 * COULOMB / (eps_inf * volume) * q ** 2
 
 
 def fit_one_over_l(lengths: Sequence[float], values: Sequence[float]) -> Tuple[float, float]:

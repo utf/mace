@@ -291,13 +291,99 @@ not a further W2 item; items 1 and 6 (the training-path shared graph, the single
 contraction) can still trim the 38 ms backward.
 
 
-**Convention flag (C13, for the user).** The outline's item-3 formula carries the constant
-`−π (r_s² − 4 r_g²)/Ω`; the code's `E_PBC` (all v4 results) carries the physical
-Gaussian-background convention, under which `K_LR = E_PBC − K_SR` has `−π r_s²/Ω` — the two
-differ by the uniform `4π r_g² C/Ω` (0.0616 eV per pair at 79 atoms, 0.0154 at 319), i.e. the
-item-4 `κ` differs by that amount and `E(+1) − E(0)` by `½ · 4π r_g² C/(eps_inf Ω) Q²` = 7.7 meV
-at 79 atoms (a 1/Ω term). Item 3 keeps the code's convention (verified to 1e-13 against the v4
-route and against W0.5's diagonal); the outline's constant is adopted only if the user rules
-that the Gaussian-width background term is to be dropped.
+**C13 — registered background convention (ruled by the user 2026-09-09 evening; verbatim):**
+
+```markdown
+# C13 — registered background convention (v5, all W2+ code)
+E_PBC_ij = (4π/Ω) Σ_{G≠0} e^{−G² r_g²}/G² cos(G·r_ij)          (own-cloud included; no constant;
+                                                              an α-split implementation must add
+                                                              −π(1/α² − 4 r_g²)/Ω, not −π/(α² Ω))
+K_LR_ij  = (4π/Ω) Σ_{G≠0} e^{−G² r_s²/4}/G² cos(G·r_ij) − π(r_s² − 4 r_g²)/Ω
+κ(h)     = −π(r_s² − 4 r_g²)/Ω     (item 4; energy ½ κ Q², stress ∂κ/∂h, no forces)
+Γ_LR     : G ≠ 0 sum with the combined width, no constant (q0 net neutral)
+Conversion, old → new energies: add ½ · 4π r_g² · C/(ε∞ Ω) · Q²  (C = 14.4 eV·Å);
+forces, stress-free quantities, fixed points and selections unchanged.
+Old-convention files: everything before the change, including the F-SCC finals.
+W6: E_M(Q; h) includes the same model-density second-moment term.
+```
+
+*The user's reasoning, recorded:* both conventions are α-independent (so the Ewald test could not
+decide) and share the inclusive diagonal (verified in W0.5); they differ only in how the model
+density interacts with the neutralising background. The declared density is a superposition of
+Gaussian clouds of width `r_g`; the exact energy of that density plus its background in a
+periodic cell is the G ≠ 0 sum with no constant, and subtracting the `K_SR` lattice sum leaves
+`−π(r_s² − 4r_g²)/Ω`. The code's `−π r_s²/Ω` was the point-charge background convention (the
+clouds interact with themselves as Gaussians but with the background as points — no single
+density does that). Physically the term is the Makov–Payne second-moment contribution
+`(2π/3ε∞Ω) Q Q_2` of the model density; a 1 Å cloud is a fair stand-in for a Pb 6p orbital.
+Consequences ≈ 8 meV at 79 atoms, 4 meV at 159 — a `1/Ω` term a size-independent `C_Q` cannot
+absorb but the 17-frame shape test cannot resolve. The uniform mode never enters the fixed point:
+`δP`, `q`, forces, the root rule, the selection and the 2× benchmark are identical; energies,
+stress, item 4's `κ` and the `1/Ω` component of the ladder change; `Γ_LR` is unaffected because
+`q0` is net neutral. *Actions ruled:* reprofile the post-hoc `C_Q` under the new convention;
+re-run the tiling ladder before W3 opens; W6's `E_M` carries the same second-moment term; the
+F-SCC finals and every earlier file stay in the old convention, compared only with old files.
+
+*Implementation (2026-09-09, this commit):* `KernelConfig.background` = 'density' (default, also
+for configs pickled before v5) | 'point' (v4, for conversions); `ewald.ewald_matrix(background=)`
+— under 'density' the α-split background is `−π(4η² − w²)/Ω` per pair (the user's
+`−π(1/α² − 4r_g²)/Ω` with `1/α² = 4η²`, generalised to mixed widths) so the total constant
+vanishes; `ewald.reciprocal_matrix(constant=)` with 0 by default; `kernels.k_lr_constant(cfg)` =
+`−π(r_s² − 4r_g²)` ('density') or `−π r_s²` ('point'), added to the G ≠ 0 sum of the broad
+Gaussian on both routes; `gamma_lr` carries no constant under 'density'. Regime A follows the
+same rule through `ewald_matrix`. **Tests** (`test_reciprocal.py`, `test_ewald.py`, `test_kernels.py`):
+K_LR(density) − K_LR(point) = 4π r_g² C/V on every entry on both routes; Γ_LR(density) −
+Γ_LR(point) = π w² C/(ε V) and a net-neutral pattern feels no difference in `W`; the
+density-convention E_PBC equals the G ≠ 0 sum with no constant; the LES oracle is the point
+convention (kept as the point-convention check) and the density energy differs from it by
+2π r_g² C Q²/V; the Makov–Payne diagonal check gains the cloud's 4π r_g² C/L³ under 'density'
+(both conventions tested); the regime-B short-range identity `K_SR = E(r_g) − E(r_s/2)` holds
+under 'point' and under 'density' with the summand's own G = 0 term π(r_s² − 4r_g²)C/V made
+explicit. **Model-level conversion gate (`scratchpad/w2_gate_c13.py`, `~/runs/dscc/c13_gate.json`,
+against the point-convention reference of the registered frame set, three models):** every
+charged-frame energy shifts by exactly `½ · 4π r_g² C/(ε∞ V) · Q²` — 7.94 meV at 79 atoms
+(V = 2937 Å³), 3.97 meV at 159, 0.99 meV on the 639-atom tiling — residual |ΔE − conversion| ≤
+9.4e-12 eV; forces unchanged to 1.9e-12 eV/Å; the stress shifts by the pure pressure term
+`−A/V²` (A = the energy constant × V) to 1.2e-15 eV/Å³; fixed points unchanged. **Ladder
+reading under C13:** the second-moment term is a `1/V` piece (22.6 eV·Å³ / L³ for Q = 1, ε∞ = 4,
+r_g = 1 Å), which a three-cell `1/L` fit reads into its slope (the locally neutral toy ladder
+moved from −5.11 to −4.82 eV·Å, 5.7 %); `ladder.second_moment_term` is subtracted before the
+monopole `1/L` reading (the kernel test, `dscc_ladder.py`'s `dE_slope_minus_second_moment`), and
+`dscc_ladder.py`'s cell-shape Madelung coefficient is the point-charge one by construction
+(`background="point"`). Old-convention files: every result before this commit, including the
+F-SCC finals; the conversion above applies to their energies.
+**C_Q reprofiled under C13 (`scratchpad/c13_cq_reprofile.py`, `~/runs/dscc/c13_cq_reprofile_s3.json`;
+the winner's held residuals converted analytically — the gate shows the conversion is exact —
+and the registered post-hoc profile re-run on the interpolation-only 159-atom frames against the
+out-of-fold neutral base residuals):** `C_Q` 12.5651 → 12.5691 eV (+4.0 meV, the 159-atom
+conversion; SE 0.0026 unchanged), `s0` 0.117 ± 0.064 and the shape residual slope −0.0076
+unchanged (a constant shift within a size), the 79-vs-159 mean residual after one `C_Q` −0.8226 →
+−0.8187 eV (the two sizes' conversions differ by 3.9 meV; the −0.82 eV between-size offset itself
+is the E_SF / small-cell term recorded at D13–D14, untouched). Tiling ladder under C13: below.
+
+**Item 7b — CPU LAPACK for the single float64 `eigh` (done 2026-09-09; `fill.eigh_for`,
+`ScfOptions.eigh_device` = 'auto' (registered: a single float64 matrix of ≤ 512 orbitals on a
+CUDA tensor goes through MKL and back; batched matrices and float32 stay on the GPU), threaded
+through the batched solver and the model's reference fills).** Measured (Xeon Gold 6248R, MKL;
+316 orbitals, float64): torch/MKL 6.5 / 5.0 / 5.5 ms at 1 / 4 / 8 threads, scipy evd 8.3, evr
+10.8, numpy 7.9; the GPU→CPU→GPU round trip 5.9 ms against cuSOLVER's 11.8; float32 stays faster
+on the GPU (2.5 vs 4.0). Gate: the C13 gate above was run with the backend on (forces to 1.9e-12,
+fixed points unchanged). **Profiles:** cold start 277 → **241 ms** per frame (`eigh` 65 ms for 18
+calls); warm-started 167 → **149 ms** (six `eigh` 34 ms, backward 39, base forward 23, `q0` fill
+12). **Registered 2× benchmark:** 79 atoms base 43.3 ms, model 156 ms, ratio median **3.59**, p95
+3.96 (from 3.90 / 4.50; D14: 7.03 / 7.43).
+
+**Item 1 — the "duplicated base pass" (measured 2026-09-09, on the user's pushback).** The
+benchmark's model time is one call of the head, which runs the base ONCE (its forward, 22–23 ms,
+the same as standalone at 20 ms) and takes E_base and the head's Hellmann–Feynman terms in ONE
+merged backward (38–40 ms, of which the base's own backward is ≈ 28 ms standalone). The base's
+share inside the head is therefore ≈ 50 ms of the 149, the same as the base alone (43–48 ms);
+there is no second base pass to remove — item 1's inference half has been in place since P4.3.
+What item 1 can still return is the ≈ 10 ms the head's cotangent terms add to the backward
+(item 6's contraction), not 50 ms. The remaining warm-frame budget: base 50, six `eigh` 34,
+backward extra 10, `q0` 12, chemical potentials ≈ 14 (host-synchronised loops), `hole_response`
+8, kernels 6, misc ≈ 15; at the criterion's 2 × 43 = 86 ms the head's own share must fall to
+≈ 40 ms.
+
 
 ## W3–W6 — not opened.

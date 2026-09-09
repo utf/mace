@@ -28,6 +28,24 @@ DEGENERACY_TOL = 1e-7
 _SQRT_PI = math.sqrt(math.pi)
 
 
+EIGH_CPU_MAX_ORBITALS = 512   # v5 W2 item 7 (registered): a single float64 eigh up to this size runs on the CPU
+
+
+def eigh_for(H: torch.Tensor, device: str = "auto") -> "tuple[torch.Tensor, torch.Tensor]":
+    """`torch.linalg.eigh` on the backend the size warrants (v5 W2 item 7, measured on the
+    A4000 + Xeon Gold 6248R): a single float64 316-orbital `eigh` costs 11.8 ms in cuSOLVER and
+    5.9 ms through MKL including the round trip, while batched matrices (3-4x cheaper per
+    matrix on the GPU) and float32 (2.5 ms on the GPU against 4.0 on the CPU) stay where they
+    are. `device`: 'auto' (the rule), 'cpu', 'cuda' (never move)."""
+    single = H.dim() == 2 or int(torch.tensor(H.shape[:-2]).prod()) == 1
+    use_cpu = (device == "cpu") or (device == "auto" and H.is_cuda and H.dtype == torch.float64
+                                     and single and H.shape[-1] <= EIGH_CPU_MAX_ORBITALS)
+    if use_cpu and H.is_cuda:
+        eps, U = torch.linalg.eigh(H.detach().cpu())
+        return eps.to(H.device), U.to(H.device)
+    return torch.linalg.eigh(H)
+
+
 def _require_gaussian() -> None:
     if _cnt._FAMILY != "gaussian":                     # pylint: disable=protected-access
         raise RuntimeError(
@@ -139,7 +157,7 @@ class FillResult:
 
 def fill(H: torch.Tensor, n_electrons: Union[float, torch.Tensor],
          sigma_s: float = SIGMA_S, spectrum: Optional[Sequence[torch.Tensor]] = None,
-         mu: Optional[torch.Tensor] = None) -> FillResult:
+         mu: Optional[torch.Tensor] = None, eigh_device: str = "auto") -> FillResult:
     """`P = fill(H, N)` and `F_band(H, N)` for a float64 symmetric `H` `[..., n, n]`.
 
     `spectrum = (eps, U)` of this `H` may be supplied to share one `eigh` between several
@@ -150,7 +168,7 @@ def fill(H: torch.Tensor, n_electrons: Union[float, torch.Tensor],
         raise TypeError(f"head arithmetic is float64 (plan section 1); got {H.dtype}")
     if spectrum is None:
         with torch.no_grad():
-            eps, U = torch.linalg.eigh(H)
+            eps, U = eigh_for(H, eigh_device)
     else:
         eps, U = (t.detach() for t in spectrum)
     n = torch.as_tensor(n_electrons, dtype=H.dtype, device=H.device)

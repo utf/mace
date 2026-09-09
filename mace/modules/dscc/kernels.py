@@ -49,6 +49,7 @@ class KernelConfig:
     r_s: float = 6.5            # regime B range-separation width, A
     tol: float = EWALD_TOL
     lr_route: str = "reciprocal"  # v5 W2 item 3: 'reciprocal' (direct k-space K_LR / Gamma_LR) or 'ewald' (the v4 route)
+    background: str = "density"   # C13 (v5): 'density' (the model density's own background; no constant in E_PBC) or 'point' (v4)
 
     def __post_init__(self) -> None:
         if self.regime not in REGIMES:
@@ -59,6 +60,8 @@ class KernelConfig:
             raise ValueError("regime B needs r_s > 2 r_g")
         if self.lr_route not in ("reciprocal", "ewald"):
             raise ValueError(f"unknown lr_route {self.lr_route!r}")
+        if self.background not in ("density", "point"):
+            raise ValueError(f"unknown background {self.background!r}")
 
 
 def switch_c2(r: torch.Tensor, r1: float, r2: float) -> torch.Tensor:
@@ -115,6 +118,23 @@ def lr_route(cfg: KernelConfig) -> str:
     return getattr(cfg, "lr_route", "reciprocal")
 
 
+def background_of(cfg: KernelConfig) -> str:
+    """C13: the background convention of a config -- 'density' (v5) unless the config says
+    'point'; configs pickled before v5 read as 'density' (their files stay in the point
+    convention; see `k_lr_constant`)."""
+    return getattr(cfg, "background", "density")
+
+
+def k_lr_constant(cfg: KernelConfig) -> float:
+    """The uniform G = 0 term of `K_LR` in A^2 (times `C / V` in the matrix): C13's
+    `-pi (r_s^2 - 4 r_g^2)` under the density convention, `-pi r_s^2` under the v4 point
+    convention. The difference, `4 pi r_g^2`, is the conversion of old energies:
+    `E_new - E_old = 0.5 * 4 pi r_g^2 * C / (eps_inf V) * Q^2`."""
+    if background_of(cfg) == "point":
+        return -math.pi * cfg.r_s ** 2
+    return -math.pi * (cfg.r_s ** 2 - 4.0 * cfg.r_g ** 2)
+
+
 def kernel_components(positions: torch.Tensor, cell: torch.Tensor, cfg: KernelConfig,
                       eta: Optional[float] = None,
                       pair_vectors: Optional[torch.Tensor] = None,
@@ -123,17 +143,22 @@ def kernel_components(positions: torch.Tensor, cell: torch.Tensor, cfg: KernelCo
     the pair leaf `d0_ij = r_i - r_j` entry by entry (see `ewald.pair_gradient`). With
     `need_sr=False` (v5 W2: `lambda_dir` held at zero, so `K_SR` never enters `Gamma`) the
     short-range component is returned as zeros and its lattice sum is skipped."""
+    bg = background_of(cfg)
     if cfg.regime == "A":
         k_sr = k_sr_regime_a(positions, cell, cfg, pair_vectors=pair_vectors)
-        k_lr = ewald_matrix(positions, cell, cfg.r_g, eta=eta, tol=cfg.tol, pair_vectors=pair_vectors) - k_sr
+        k_lr = ewald_matrix(positions, cell, cfg.r_g, eta=eta, tol=cfg.tol, pair_vectors=pair_vectors, background=bg) - k_sr
         return k_sr, k_lr
     # Regime B: K_LR is the periodic kernel of the broad Gaussian erf(r / r_s) / r (two
     # Gaussians of width r_s / 2, pair width r_s), evaluated in reciprocal space alone
-    # (v5 W2 item 3; the v4 Ewald route kept under lr_route = 'ewald', identical to tol).
+    # (v5 W2 item 3; the v4 Ewald route kept under lr_route = 'ewald', identical to tol),
+    # plus its uniform G = 0 term (C13: `k_lr_constant`).
+    volume = torch.det(cell).abs()
+    const = COULOMB * k_lr_constant(cfg) / volume
     if lr_route(cfg) == "ewald":
-        k_lr = ewald_matrix(positions, cell, 0.5 * cfg.r_s, eta=eta, tol=cfg.tol, pair_vectors=pair_vectors)
+        # the G != 0 sum alone (density background of a pair width equal to the split: no constant)
+        k_lr = ewald_matrix(positions, cell, 0.5 * cfg.r_s, eta=eta, tol=cfg.tol, pair_vectors=pair_vectors, background="density") + const
     else:
-        k_lr = reciprocal_matrix(positions, cell, cfg.r_s, tol=cfg.tol, pair_vectors=pair_vectors)
+        k_lr = reciprocal_matrix(positions, cell, cfg.r_s, tol=cfg.tol, pair_vectors=pair_vectors) + const
     if need_sr:
         k_sr = k_sr_regime_b(positions, cell, cfg, pair_vectors=pair_vectors)
     else:
@@ -191,15 +216,17 @@ def phi_cc(gamma: torch.Tensor, dq: torch.Tensor) -> torch.Tensor:
 
 def gamma_lr(positions: torch.Tensor, cell: torch.Tensor, r_g: float, r_split: float,
              eps_inf: float, eta: Optional[float] = None, tol: float = EWALD_TOL,
-             route: str = "reciprocal") -> torch.Tensor:
+             route: str = "reciprocal", background: str = "density") -> torch.Tensor:
     """Plan section 2.5: the Ewald matrix between a Gaussian of width `r_g` and one of
     width `r_split` (`r_split > r_g`, so `H0` owns the sharp near field), over `eps_inf`."""
     if r_split <= r_g:
         raise ValueError(f"r_split ({r_split}) must exceed r_g ({r_g})")
+    w = math.sqrt(2.0 * (r_g ** 2 + r_split ** 2))
     if route == "ewald":
-        return ewald_matrix(positions, cell, r_g, r_split, eta=eta, tol=tol) / eps_inf
-    # v5 W2 item 3: the combined pair width sqrt(2 (r_g^2 + r_split^2)), reciprocal space alone.
-    return reciprocal_matrix(positions, cell, math.sqrt(2.0 * (r_g ** 2 + r_split ** 2)), tol=tol) / eps_inf
+        return ewald_matrix(positions, cell, r_g, r_split, eta=eta, tol=tol, background=background) / eps_inf
+    # v5 W2 item 3: the combined pair width, reciprocal space alone; C13: no constant under
+    # the density convention (q0 is net neutral, so a uniform term would not act anyway).
+    return reciprocal_matrix(positions, cell, w, tol=tol, constant=(0.0 if background == "density" else -math.pi * w ** 2)) / eps_inf
 
 
 def gamma_lr_pair_gradient(positions: torch.Tensor, cell: torch.Tensor, r_g: float, r_split: float,

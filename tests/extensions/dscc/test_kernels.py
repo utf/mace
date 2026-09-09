@@ -85,8 +85,12 @@ class TestRegimeB:
         for L in (32.0, 64.0):
             _, k_lr = kn.kernel_components(torch.zeros(1, 3), torch.eye(3) * L, cfg)
             broad_self = 2 * ew.COULOMB / (math.sqrt(math.pi) * cfg.r_s)
+            # C13: K_LR's constant -pi (r_s^2 - 4 r_g^2) / V leaves, against the point-charge
+            # Madelung term, the site cloud's second moment 4 pi r_g^2 C / L^3.
             assert float(k_lr[0, 0]) - broad_self == pytest.approx(
-                -ew.madelung_constant_cubic() * ew.COULOMB / L, abs=1e-8)
+                -ew.madelung_constant_cubic() * ew.COULOMB / L + 4 * math.pi * cfg.r_g ** 2 * ew.COULOMB / L ** 3, abs=1e-8)
+            _, k_lr_pt = kn.kernel_components(torch.zeros(1, 3), torch.eye(3) * L, kn.KernelConfig(regime="B", r_g=1.0, r_s=5.0, background="point"))
+            assert float(k_lr_pt[0, 0]) - broad_self == pytest.approx(-ew.madelung_constant_cubic() * ew.COULOMB / L, abs=1e-8)
 
 
 class TestGamma:
@@ -213,7 +217,9 @@ class TestRouteBLadder:
             all_pattern = torch.cat([pattern, extra_charge]) if extra_pos is not None else pattern
             g_lr = kn.gamma_lr(all_pos, cell, r_g, r_split, eps_inf)
             W = (g_lr @ all_pattern)[:len(numbers_v)]
-            values.append(float(kn.phi_cc(gamma, dq) + dq @ W))
+            # C13: the density convention's second-moment term (a 1/V piece, 22.6 eV.A^3 / L^3
+            # here) is removed before the monopole 1/L fit, as the ladder gate does.
+            values.append(float(kn.phi_cc(gamma, dq) + dq @ W) - ld.second_moment_term(float(torch.det(cell).abs()), r_g, eps_inf, float(dq.sum())))
             lengths.append(float(cell[0, 0]))
         _, slope = ld.fit_one_over_l(lengths, values)
         return slope, ld.madelung_slope(eps_inf)
