@@ -71,6 +71,38 @@ percentile of the energy proxy on the neutral out-of-fold frames; both recorded 
 Localisation tolerance for W5 (ours, provisional): `N_eff` p50 within ±0.3 of the forces-only
 twin, separation p50 within ±0.1 eV, precondition fraction within ±2 %.
 
+**W0.6a Proxy definition closed (registered 2026-09-09 23:05, before any fold model was
+opened).** Two holes in W0.6 as first written, closed here so the thresholds can be computed
+before the charged window is read.
+
+1. *The two terms and how they combine.* The per-atom force proxy is the SUM of the two terms
+   the outline names, `u_F(atom) = |F_ft − F_found| + sd_folds(F)`, per component, and the two
+   terms are ALSO written separately. `F_ft` is the out-of-fold base for that frame (the frame's
+   own fold); `F_found` is the frozen foundation `omat_pbe` head of the original
+   `~/.cache/mace/macemh1model`, never the fine-tuned model's drifted `pt_head` (W1.1 replay
+   trajectory). The energy proxy is `u_E(frame) = |E_ft − E_found_aligned| / N + sd_folds(E)/N`.
+2. *The cross-fit spread on neutral frames is biased low, and the bias is recorded, not
+   corrected.* A neutral frame is out-of-fold for exactly one of the four bases; the other three
+   trained on it, so `sd_folds` over the four is smaller there than on a charged geometry, where
+   all four are out-of-fold. The consequence is a threshold that is too TIGHT, i.e. charged frames
+   are flagged out-of-range more readily — the safe direction for an uncertainty flag. Recorded as
+   a known bias of the proxy; no correction factor is applied (ours, provisional).
+3. *Energy alignment (new).* The foundation head and the fine-tuned head carry different
+   isolated-atom references (estimated E0s vs the foundation's), so the raw `E_ft − E_found` is
+   dominated by a per-composition constant and the 79 / 80 / 159-atom compositions differ. Before
+   the proxy is formed, the foundation energies are aligned by ordinary least squares on the
+   neutral out-of-fold frames against the three species counts,
+   `E_found_aligned = E_found + Σ_s n_s a_s` with `s ∈ {Cl, Cs, Pb}`; the fitted `a_s` are
+   recorded, and the alignment costs three degrees of freedom on the same frames that set `u_E`
+   (recorded, not cross-fitted; ours, provisional).
+4. *Isolated-atom frames are excluded* from every out-of-fold evaluation and from both
+   thresholds (the weight-1000 `IsolatedAtom` rows of `train_iso.xyz`; the 437 meV Cs miss would
+   otherwise dominate).
+5. *Order of operations.* Stage 1 computes `u_F`, `u_E` per size (79, 159) on neutral out-of-fold
+   frames and WRITES them to `~/runs/w1_proxy_thresholds.json`; only then does stage 2 open the
+   charged d-window. The thresholds are the 95th percentiles named in W0.6 (`u_F` in the 2–4 Å
+   band, `u_E` over frames).
+
 **W0.7 F-SCC finals.** Old base, minimum-image centre: written to the v4 tracker (P3.3) as a
 separate record; not compared with any v5 number.
 
