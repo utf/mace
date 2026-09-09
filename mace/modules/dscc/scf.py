@@ -154,6 +154,14 @@ class ScfOptions:
     lm_up: float = 100.0         # LM: damping factor on a rejected step (1e-6 -> 1 in three rejections)
     lm_down: float = 0.1         # LM: damping factor on an accepted step
     lm_max_reject: int = 4       # consecutive rejections before the Anderson step on the history
+    # v5 W2 item 7 (registered 2026-09-09): under `no_grad` (inference, the SCF loop) the batched
+    # solver first iterates in float32 to `pre_tol_q`, then continues in float64 from that
+    # iterate to the registered tolerances -- the fixed point, judged in float64, is unchanged;
+    # a float32 `eigh` costs a fifth of a float64 one on the A4000. Off under gradients.
+    mixed_precision: bool = True
+    pre_tol_q: float = 1e-5      # float32 stage: unmixed residual, max-norm
+    pre_tol_E: float = 1e-5      # float32 stage: energy change, eV
+    pre_tol_c: float = 1e-2      # float32 stage: commutator norm
 
 
 _TRACE = False   # debugging: print the per-graph solver's iterations
@@ -612,6 +620,7 @@ class BatchedScfResult:
     rho: List[float]
     fills: Tuple[FillResult, FillResult, FillResult, FillResult]
     n_fills: List[int] = field(default_factory=list)   # diagonalisations spent per graph
+    pre_fills: List[int] = field(default_factory=list)  # v5 W2 item 7: float32 pre-stage fills per graph
 
 
 def _batched_fillings(H0: torch.Tensor, gamma: torch.Tensor, W: Optional[torch.Tensor],
@@ -672,7 +681,8 @@ def _batched_fixed_point(H0: torch.Tensor, gamma: torch.Tensor, W: Optional[torc
 def solve_dscc_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[torch.Tensor, torch.Tensor],
                        n_ref: Tuple[torch.Tensor, torch.Tensor], sigma_s: float = SIGMA_S,
                        W: Optional[torch.Tensor] = None, dq0: Optional[torch.Tensor] = None,
-                       options: Optional[ScfOptions] = None, implicit: bool = False) -> BatchedScfResult:
+                       options: Optional[ScfOptions] = None, implicit: bool = False,
+                       mixed: Optional[bool] = None) -> BatchedScfResult:
     """`solve_dscc` for a batch of EQUAL-SIZED graphs at once: `H0 [B, 4n, 4n]`, `gamma
     [B, N, N]`, per-graph counts. One batched `eigh` and fill per iteration; the damped
     Newton step (v4.5: judged by the next iteration's residual, no trial
@@ -685,6 +695,22 @@ def solve_dscc_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[torch.T
         raise ValueError("the batched solver is the Newton solver")
     if opt.damping == "backtrack":
         return _solve_dscc_batched_backtrack(H0, gamma, n_s, n_ref, sigma_s, W, dq0, opt, implicit)
+    pre_fills = None
+    # The pre-stage runs whenever no implicit derivative is attached (training passes
+    # `implicit=True`); the loop itself is always under `no_grad`, and the outer grad mode at
+    # inference only serves the attached final pass.
+    use_mixed = (getattr(opt, "mixed_precision", False) if mixed is None else bool(mixed))
+    # No pre-stage from a warm start (`dq0`): the float64 solve needs two fills from a good
+    # start anyway, so the float32 stage would only add diagonalisations.
+    if use_mixed and H0.dtype == torch.float64 and not implicit and dq0 is None:
+        import dataclasses
+        pre = dataclasses.replace(opt, mixed_precision=False, tol_q=opt.pre_tol_q, tol_E=opt.pre_tol_E, tol_c=opt.pre_tol_c)
+        with torch.no_grad():                      # a starting point only: no attached pass in float32
+            r32 = solve_dscc_batched(H0.detach().float(), gamma.detach().float(), n_s, n_ref, sigma_s,
+                                     None if W is None else W.detach().float(), None if dq0 is None else dq0.detach().float(),
+                                     pre, implicit=False)
+        dq0 = r32.dq.detach().double()
+        pre_fills = list(r32.n_fills)
     B, dim = H0.shape[0], H0.shape[-1]
     n_atoms = dim // ORBITALS
     lm = opt.damping == "lm"
@@ -776,7 +802,11 @@ def solve_dscc_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[torch.T
             dq_prev, res_prev, r_prev, r2_prev = dq, res, r_norm, r2
             pending = active & ~fallback                                          # Anderson steps are not judged
             dq = torch.where(active.unsqueeze(-1), new_dq, dq)
-    return _batched_fixed_point(H0, gamma, W, dq, n_s, n_ref, sigma_s, implicit, iterations, converged, hist, n_fills)
+    result = _batched_fixed_point(H0, gamma, W, dq, n_s, n_ref, sigma_s, implicit, iterations, converged, hist, n_fills)
+    if pre_fills is not None:                      # diagnostics: float32 fills spent before the float64 stage
+        result.pre_fills = pre_fills
+        result.n_fills = [int(a) + int(b) for a, b in zip(result.n_fills, pre_fills)]
+    return result
 
 
 def _solve_dscc_batched_backtrack(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[torch.Tensor, torch.Tensor],
@@ -851,14 +881,21 @@ def _solve_dscc_batched_backtrack(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tu
 
 def continuation_solve_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s, n_ref, sigma_s: float = SIGMA_S,
                                W: Optional[torch.Tensor] = None, options: Optional[ScfOptions] = None,
-                               implicit: bool = False) -> BatchedScfResult:
+                               implicit: bool = False, mixed: Optional[bool] = None) -> BatchedScfResult:
     """D11 for a batch: the continuation from Phi = 0 with the last solve carrying the
-    gradient; iteration counts summed over the ramp."""
+    gradient; iteration counts summed over the ramp. `mixed` overrides the options' float32
+    pre-stage (the model passes `not training`, so the training path is unchanged)."""
     opt = options or ScfOptions()
     if int(opt.continuation_steps) <= 0:
-        return solve_dscc_batched(H0, gamma, n_s, n_ref, sigma_s, W, None, opt, implicit=implicit)
+        return solve_dscc_batched(H0, gamma, n_s, n_ref, sigma_s, W, None, opt, implicit=implicit, mixed=mixed)
     steps = int(opt.continuation_steps)
     B = H0.shape[0]
+    mixed = (bool(getattr(opt, "mixed_precision", False)) if mixed is None else bool(mixed)) and H0.dtype == torch.float64 and not implicit
+    if mixed:
+        import dataclasses
+        pre = dataclasses.replace(opt, mixed_precision=False, tol_q=opt.pre_tol_q, tol_E=opt.pre_tol_E, tol_c=opt.pre_tol_c)
+        H0_32, gamma_32 = H0.detach().float(), gamma.detach().float()
+        W_32 = None if W is None else W.detach().float()
     sol0 = two_fillings(H0, n_s, n_ref, sigma_s)
     dq = sol0.dq.detach()
     eps, U = sol0.fills[0].eps.detach(), sol0.fills[0].U.detach()
@@ -884,9 +921,20 @@ def continuation_solve_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s, n_ref
                     delta = delta * (cap / size)
                 start[b] = dq[b] + delta
         dq_before = start
-        result = solve_dscc_batched(H0, frac * gamma, n_s, n_ref, sigma_s, None if W is None else frac * W,
-                                    start, opt, implicit=implicit and k == steps)
-        dq = result.dq.detach()
+        if mixed and k < steps:
+            # v5 W2 item 7: the ramp's intermediate stages only seed the next stage -- solved in
+            # float32 to the pre-tolerances, under no_grad; the last stage runs the float64
+            # solver (with its own float32 pre-stage) from the float32 seed.
+            with torch.no_grad():
+                result = solve_dscc_batched(H0_32, frac * gamma_32, n_s, n_ref, sigma_s, None if W is None else frac * W_32,
+                                            start.float(), pre, implicit=False)
+            dq = result.dq.detach().double()
+        else:
+            # The last stage of a mixed ramp starts from the float32 seed, which is a warm
+            # start for the float64 solver (two or three fills); no further pre-stage.
+            result = solve_dscc_batched(H0, frac * gamma, n_s, n_ref, sigma_s, None if W is None else frac * W,
+                                        start, opt, implicit=implicit and k == steps, mixed=False if mixed else mixed)
+            dq = result.dq.detach()
         eps, U = result.fills[0].eps.detach(), result.fills[0].U.detach()
         s_prev = frac
         total = result.iterations if total is None else [a + b for a, b in zip(total, result.iterations)]

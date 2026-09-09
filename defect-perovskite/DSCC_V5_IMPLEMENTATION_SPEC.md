@@ -144,7 +144,10 @@ the old base were trained in, halving the activation memory; the head still conv
 to float64 at load. All five runs requeued from scratch under the same script otherwise; the
 float64 smoke stands as the smoke. The first production epoch (10616 frames) had not completed
 in 25 min at float64, so the user's 6.9-min-per-epoch estimate (the smoke's 1796 frames) does not
-transfer; the float32 epoch time is recorded when the first epoch lands.
+transfer; the float32 epoch time: **7.5 min per epoch** (10616 frames; `base_v2_prod` epoch 0 at 18:28:30,
+training started 18:21:02) at 12–16 GB, so ≈ 3.8 h per 30-epoch run and all five by ≈ 04:00 on
+10 Sep on two GPUs (three once the F-SCC runs finish). Epoch 0 (float32, lr 1e-4): Default head
+4.32 meV/atom, 13.56 meV/Å, stress 0.22 meV/Å³.
 
 **W1.2 Feature export for the head.** Block-0 features of MH-1 are 512x0e+512x1o (n_scalars 512,
 n_vectors 512, from `products[0]`); `MACEDSCC.first_block` / `features` slice them; the head's
@@ -244,6 +247,49 @@ remainder ≈ 110 ms (from ≈ 250). Gate timings per frame (cold, first-sight t
 frame): B′ LR-only 79 atoms 636–1005 → 358–740 ms, 159 atoms 1166–1298 → 846 ms; full 537–570 →
 379–426; LR + U 509–538 → 361–417. Next by measured cost: the diagonalisations (items 7, 8 — backend,
 batching by cell size, warm starts) and the loop's remaining CPU work.
+
+**Item 7 — eigensolver backend and float32 pre-iterations (done 2026-09-09; `ScfOptions.mixed_precision`
+= True, `pre_tol_q` 1e-5, `pre_tol_E` 1e-5 eV, `pre_tol_c` 1e-2 (registered); `test_frontier.py`).**
+Backend benchmark on the A4000 (float64 symmetric `eigh`, ms per matrix): 316 orbitals —
+cuSOLVER single 13.0, batched ×4 5.5, ×8 3.3; CPU LAPACK (8 threads) single 9.5, batched 9.3–9.9;
+cuSOLVER float32 single 2.5. 636 orbitals — cuSOLVER 23.5 / 17.5 (×4) / 13.8 (×8); CPU 24.3 /
+23.8; float32 7.4. So: batching frames of one cell size pays 3–4 × per matrix on the GPU (the
+evaluation path already batches); a single 316-orbital float64 `eigh` is as fast on the CPU as
+on the GPU; float32 is 3–5 × cheaper. Implemented: under no implicit derivative (i.e. not
+training) the batched solver first iterates in float32 to the pre-tolerances and then continues
+in float64 from that iterate to the registered tolerances; the continuation ramp's intermediate
+stages (which only seed the next stage) run entirely in float32; the chemical-potential solve has
+dtype-aware tolerances. The fixed point is judged in float64 and unchanged: toy batched solves
+agree with the plain solver to 1e-15; **agreement gate against the item-3 reference
+(`w2_item7_gate.json`): worst |ΔE| 9.1e-12 eV, |ΔF| 2.4e-12 eV/Å, |Δσ| 2.1e-15 eV/Å³ — passed.**
+`test_batched_lm_solver_matches_per_graph` now compares iteration counts under
+`mixed_precision=False` (the reference algorithm); a new test checks the mixed fixed point.
+**Profile after items 2, 3, 5, 7:** 637 → 362 → **277 ms per frame** (cold start): `eigh` 94 ms
+(22 calls, most of them float32), backward 42, base forward 22, fills 4, kernels 6. Gate
+timings per frame (cold, first frame with the first-sight transient): B′ LR-only 79 atoms
+636–1005 → 226–581 ms; 159 atoms 1166–1298 → 665–701; full 537–570 → 224–323; LR + U 509–538 →
+193–327. The CPU backend for single frames and float32 pre-iterations in training are not used
+(training gradients untouched). The pre-stage is a model-level inference decision (`mixed = not
+training` at the solver calls, so the training path — including its detached first-visit seed —
+is bitwise as before and `test_batched_training_path_matches_per_graph` compares like with like),
+and it is skipped from a warm start (`dq0` given: the float64 solve needs its two or three fills
+anyway; measured 164 vs 167 ms per frame either way).
+
+**Item 8 — warm-started inference and the registered 2× benchmark (measured 2026-09-09).**
+Warm-started along a charged 79-atom trajectory (each frame from the previous fixed point,
+`scratchpad/w2_warm_profile.py`): **167 ms per frame** at 3–5 float64 SCF iterations —
+`solve_dscc_batched` 79 ms (six `eigh` 60 ms, the chemical potentials ≈ 14 ms with their host
+syncs, `hole_response` 8), the merged backward 38 ms, the base forward 22 ms, the B′ reference
+fill (`q0`, one `eigh`) 14 ms, kernels 6 ms. **Registered 2× benchmark (P4.3 protocol,
+`dscc_benchmark.py`, idle A4000, `B_Bp_lr_only_s3`):** 79 atoms base 42.5 ms, model 164 ms,
+ratio median **3.90**, p95 4.50 (100 frames, SCF median 2 iterations); 159 atoms 73.8 / 322 ms,
+median **4.26**, p95 8.33 (16 frames) — down from 7.03 / 8.59 at D14, still above the criterion.
+What is left is structural: one full base forward and its backward (≈ 50 ms, the criterion's own
+denominator) plus one `eigh` per SCF fill on a dense 316-orbital `H`; the head's remaining
+budget under 2× would be ≈ 43 ms at 79 atoms. That is the W6 question (one `eigh`, SCF-free),
+not a further W2 item; items 1 and 6 (the training-path shared graph, the single Fréchet
+contraction) can still trim the 38 ms backward.
+
 
 **Convention flag (C13, for the user).** The outline's item-3 formula carries the constant
 `−π (r_s² − 4 r_g²)/Ω`; the code's `E_PBC` (all v4 results) carries the physical

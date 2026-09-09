@@ -70,3 +70,20 @@ def test_batched_frontier_matches_per_frame():
             assert float((both.dq[b] - one.dq).abs().max()) < 1e-12
             assert abs(float(both.energy[b]) - float(one.energy)) < 1e-12
             assert float((both.dP[b] - one.dP).abs().max()) < 1e-12
+
+
+def test_mixed_precision_batched_solve_reaches_the_float64_fixed_point():
+    """v5 W2 item 7: the float32 pre-stage changes the iteration count, not the fixed point."""
+    Hs = torch.stack([_random_h(seed=s) for s in (6, 7)])
+    rng = np.random.default_rng(8); n_atoms = 9
+    G = torch.tensor(rng.standard_normal((2, n_atoms, n_atoms))); gamma = 0.05 * (G @ G.transpose(1, 2)) / n_atoms + 0.3 * torch.eye(n_atoms)
+    n_s = (torch.tensor([17.0, 17.0]), torch.tensor([18.0, 18.0])); n_ref = (torch.tensor([18.0, 18.0]), torch.tensor([18.0, 18.0]))
+    with torch.no_grad():
+        mixed = scf.solve_dscc_batched(Hs, gamma, n_s, n_ref, options=scf.ScfOptions())
+        plain = scf.solve_dscc_batched(Hs, gamma, n_s, n_ref, options=scf.ScfOptions(mixed_precision=False))
+        ramp_m = scf.continuation_solve_batched(Hs, gamma, n_s, n_ref, options=scf.ScfOptions())
+        ramp_p = scf.continuation_solve_batched(Hs, gamma, n_s, n_ref, options=scf.ScfOptions(mixed_precision=False))
+    assert all(mixed.converged) and all(plain.converged)
+    assert mixed.pre_fills and sum(mixed.pre_fills) > 0
+    assert float((mixed.dq - plain.dq).abs().max()) < 1e-10 and float((mixed.energy - plain.energy).abs().max()) < 1e-10
+    assert float((ramp_m.dq - ramp_p.dq).abs().max()) < 1e-10 and float((ramp_m.energy - ramp_p.energy).abs().max()) < 1e-10

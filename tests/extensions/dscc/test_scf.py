@@ -200,7 +200,8 @@ class TestV45Solver:
         gamma = torch.stack([t[1] for t in toys])
         n_s = (torch.tensor([N_S[0]] * 2), torch.tensor([N_S[1]] * 2))
         n_ref = (torch.tensor([N_REF[0]] * 2), torch.tensor([N_REF[1]] * 2))
-        opts = self._opts()
+        import dataclasses
+        opts = dataclasses.replace(self._opts(), mixed_precision=False)   # the reference algorithm, iteration counts compared
         b = scf.solve_dscc_batched(H0, gamma, n_s, n_ref, options=opts)
         c = scf.continuation_solve_batched(H0, gamma, n_s, n_ref, options=opts)
         for k, (H, G, *_) in enumerate(toys):

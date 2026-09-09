@@ -56,6 +56,9 @@ def chemical_potential(eps: torch.Tensor, n_electrons, sigma_s: float,
     n = torch.as_tensor(n_electrons, dtype=eps.dtype, device=eps.device)
     if n.dim() == 0:
         n = n.expand(eps.shape[:-1])
+    if eps.dtype != torch.float64:                      # v5 W2 item 7: float32 pre-iterations
+        tol = max(tol, 1e-5)
+    count_tol = 1e-13 if eps.dtype == torch.float64 else 1e-5
     # Safeguarded Newton from the mid-gap of the integer count (the SCF profile put the
     # ~50-step bisection at a quarter of the forward): the count is monotone in mu, so a
     # Newton step is accepted when it stays inside the shrinking bracket [lo, hi] and a
@@ -77,7 +80,7 @@ def chemical_potential(eps: torch.Tensor, n_electrons, sigma_s: float,
         newton = mu - count / slope.clamp_min(1e-300)
         inside = (newton > lo) & (newton < hi) & (slope > 1e-300)
         mu_new = torch.where(inside, newton, 0.5 * (lo + hi))
-        done = (count.abs() < 1e-13) | ((hi - lo) < tol)
+        done = (count.abs() < count_tol) | ((hi - lo) < tol)
         mu = torch.where(done, mu, mu_new)
         if bool(done.all()):
             break

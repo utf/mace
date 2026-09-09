@@ -537,7 +537,7 @@ class MACEDSCC(nn.Module):
                 first_visit_fills = [0] * num_graphs
                 if warm_start is None:
                     res = continuation_solve_batched(H, gamma, counts_s, counts_r, self.sigma_s, W, self.scf_options,
-                                                     implicit=implicit)
+                                                     implicit=implicit, mixed=not training)
                 else:
                     starts = torch.zeros(num_graphs, n_nodes, dtype=torch.float64, device=device)
                     missing = [g for g, w in enumerate(warm_start) if w is None]
@@ -553,7 +553,7 @@ class MACEDSCC(nn.Module):
                             sub = continuation_solve_batched(
                                 H[m].detach(), gamma[m].detach(), (counts_s[0][m], counts_s[1][m]),
                                 (counts_r[0][m], counts_r[1][m]), self.sigma_s,
-                                None if W is None else W[m].detach(), self.scf_options, implicit=False)
+                                None if W is None else W[m].detach(), self.scf_options, implicit=False, mixed=not training)
                         starts[m] = sub.dq.detach()
                         for j, g in enumerate(missing):
                             first_visit_fills[g] = int(sub.n_fills[j])
