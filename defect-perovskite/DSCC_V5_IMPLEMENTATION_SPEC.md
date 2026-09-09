@@ -716,4 +716,20 @@ stress preserved to the gates. What W2 leaves for W6 is structural at this size:
 diagonalisation per SCF fill on a 316-orbital `H` (six milliseconds each, 12 % of the base
 per fill) and the SCF loop's kernel count.
 
+## W3 — head baseline on base v2 (prerequisites cleared; the arm itself is NOT opened)
+
+**Base artefact.** `defect-perovskite/w3_make_base.py` converts a `base_v2` multi-head fine-tune
+into the plain `ScaleShiftMACE` the head takes (`dscc_train.py --base`): drop the replay head,
+prune to {Cl, Cs, Pb}, float64, checked on real out-of-fold frames before writing.
+`~/runs/base_v2_prod/base_v2_prod_base.pt` written 2026-09-09 23:18 (heads ['Default'], elements
+[17, 55, 82]).
+
+**Path smoke (2026-09-09 23:19, local A4000, 1 epoch, 12 charged frames, Φ = 0, regime B).** The
+head trains on base v2 unchanged: epoch 4 s, no unconverged frames, and the run directory carries
+`model.pt`, `model_avg.pt`, `held_final.json`, `held_final_avg.json`. The W0.2 keys are present
+and internally consistent — the 4–8 Å pooled count equals 4–6 plus 6–8 (173 = 42 + 131) and the
+three near-field categories partition the 2–4 Å shell (8 + 20 + 3 = 31) — and the W0.4 averaged
+model over a single epoch reproduces the last epoch to 1e-16. The force RMSE of an untrained head
+on twelve frames is not a reading and is not recorded.
+
 ## W3–W6 — not opened.
