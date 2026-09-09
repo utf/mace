@@ -179,3 +179,38 @@ pattern (Route C, deferred) — the non-converging compensation is expected: `q0
 `H0` with no electrostatics, and its delocalised piece (≈ −0.1 e spread uniformly, confirmed to
 scale as 1/N_at) produces the centred-pattern `1/L` error. LR + U seeds 4 and 6 run locally
 (two on the A4000) to finish the B′ set earlier.
+
+## Route B′ outcome (2026-09-09; tracker D14)
+
+**Both selection rules select `B_Bp_lr_only`.** Held-out charged force RMSE on seed medians,
+per component (trainer convention in brackets): B′ LR + U 18.9 [32.8], B′ LR-only 19.0 [32.9],
+Φ = 0 23.0 [39.9], Route A LR + U 23.8 [41.3], LR-only 24.1 [41.7], full 24.2 [42.0]. The two
+B′ arms are equivalent within the 3.0 margin and the simpler wins; Φ = 0 and every Route A arm
+are beaten beyond the margin, every winner seed (18.0–19.1) outside the Φ = 0 seed range
+(21.2–24.0). Under v4.4 the `K_LR` candidate costs −4.1 [−7.0] meV/Å against the Φ = 0
+reference, i.e. nothing. B′ entered post hoc (the C10 ruling over its failed entry gate); within
+the B′ set the pre-registered rule applied unchanged.
+
+**Gates.** Root rule 0 % on the last ten epochs of every seed; `N_eff` 3.3–3.5; converged 100 %;
+`s` 0.49–0.63 (unsaturated, about half its initial scale); the far-field gains over Route A
+LR-only beyond the Φ = 0 spread on the full RMSE, 0–2 and 2–4 Å (decisive) and on 4–6, 6–8 and
+4–8 Å (reported). Shells per component (0–2 / 2–4 / 4–6 / 6–8 / 8–10 / 10–12 / > 12 Å): B′
+43 / 35 / 24 / 15 / 14 / 12 / 8.5 against Φ = 0 48 / 40 / 29 / 19 / 20 / 14 / 10 and the
+out-of-fold neutral floor 31 / 22 / 17 / 10 / 10 / 9.5 / 8.3 — B′ reaches the floor beyond 12 Å
+and closes most of the 8–10 Å gap; the near field (43 vs 31) stays open. Shape error 0.015
+against 0.042. `U_eff(Pb)` in LR + U trains to 0.16–0.31 eV: "off" is the selected value.
+
+**Checks on the winner.** Pair-route forces agree with central differences on a real held-out
+frame to 2e-5 eV/Å; the `q0` ladder slope is 29–40 % off Madelung on the six `H0` (model
+property, reported); the `1/L` coefficient of `E(+1) − E(0)` is 67 % of Madelung (Route A
+LR-only 24 %), the head's kernel term 90 %. **The 2× benchmark fails on the winner:** ratio
+7.0 at 79 atoms and 8.6 at 159 (p95 7.4 / 13.7) against 2.0 / 1.9 for Φ = 0 — the coupled head
+costs about six base forwards; not profiled.
+
+**Status.** Production status is provisional on Arm 4: the matched-kernel F-SCC (three seeds,
+λ and U learned) is at epoch 30 of 60 and reads 17.2 / 19.2 / 17.4 per component at epoch 29 —
+at or below the B′ finals at half training; finals ≈ 07:00 on 10 Sep. Decision (4) cannot be
+read for B′ (no sparse Route B′ path). The §9 robustness pass is not run (user, 9 Sep: no
+retraining); the ±10 meV/Å final-checkpoint noise stays in every reading. The earlier
+"electrostatics adds nothing resolvable" was about the same-carrier terms; the host term
+reversed it, as the ruling anticipated.
