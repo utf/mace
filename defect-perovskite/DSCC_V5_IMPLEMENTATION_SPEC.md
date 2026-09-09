@@ -192,6 +192,25 @@ zero forces, `config_weight 1000` as in the paper's Table 8) are appended to eve
 True`); MACE reads the Default head's E0s from them. These are "fake" isolated atoms labelled
 with estimated, not DFT, energies — recorded as such.
 
+*v2 smoke and launch (2026-09-09).* A custom `--pt_train_file` path is loaded WHOLE in this MACE
+version (`--num_samples_pt` / `--subselect_pt` / `--filter_type_pt` act only on the built-in
+shortcuts): the first smoke pulled all 372k replay configurations. The docs' Method 1 applies:
+`mace.cli.fine_tuning_select` on the MH-1 omat_pbe replay file with `--filtering_type
+combinations --subselect fps --num_samples 10000` (head_pt `omat_pbe`) — 107 Cl/Cs/Pb-combination
+structures exist in it, the rest is random padding — writes
+`~/.cache/mace/replay_mh1_omat_pbe_sel10k.xyz` (10000 frames, 1–148 atoms, `head=omat_pbe`, the
+`REF_*` keys), which is the registered replay set on both machines. The replay's labels are the
+foundation head's own predictions (its initial error on the replay is exactly zero): a
+pseudolabel replay. Local smoke (A4000, float32, cueq, one epoch on `train_iso.xyz` with the
+selected replay): E0s read from the isolated-atom frames, `UniversalLoss(10, 10, 1)`, lr 1e-4,
+weight decay 0, clip 1.0; initial Default-head error 1.69 meV/atom (5.53 under the foundation
+E0s), 43.9 meV/Å; after one epoch **0.90 meV/atom, 13.86 meV/Å**, stress 0.20 (v1's epoch 0:
+4.32 / 13.56); 4.3 min per epoch with cuEquivariance (7.0 without, on b3); the model saves after
+conversion back to e3nn. **Restart on b3 at 20:44 (b3 clock):** the v1 runs stopped at epoch ≈ 18
+(directories `*_v1_1to100`), all five requeued on `train_iso.xyz` through `w1_run.sh` (= v2),
+`base_v2_prod` on GPU 4, the others as GPUs 5 and 7 free. Expected ≈ 2.5 h per run, all five by
+≈ 04:00 on 10 Sep.
+
 **W1.2 Feature export for the head.** Block-0 features of MH-1 are 512x0e+512x1o (n_scalars 512,
 n_vectors 512, from `products[0]`); `MACEDSCC.first_block` / `features` slice them; the head's
 feature-modulation readouts and the rank-1 descriptor are re-dimensioned by construction from
