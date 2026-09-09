@@ -107,3 +107,8 @@ def test_bprime_gates_after_the_c10_addendum():
     assert g["bprime_gains"]["0-2"]["beyond_noise"] and g["bprime_gain_beyond_noise"] and g["passed"]
     assert out["selected"] == "B_A_phi0"                                    # equivalent on forces: the simpler route wins
     assert arm23.select_v44([phi0, a_lr, bp_near])["selected"] == "B_A_lr_only"
+    # a B' winner is costed against the Route A Phi = 0 reference (there is no B' Phi = 0 arm)
+    bp_win = _cfg("B_Bp_lr_only", route="Bp", coupling="lr_only", force=0.0330, ff=0.030, ladder=0.55, near=0.060)
+    out = arm23.select_v44([phi0, a_lr, bp_win])
+    assert out["selected"] == "B_Bp_lr_only" and out["beaten_beyond_margin"] == ["B_A_lr_only"]
+    assert abs(out["force_cost_vs_phi0"] - (0.03425 - 0.0399)) < 1e-9 and out["costs_nothing_in_forces"]

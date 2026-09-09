@@ -222,7 +222,7 @@ def select_v44(configs: Sequence[ConfigSummary]) -> Dict[str, object]:
         shape_ok = med(c.shape_slope_err) - med(best.shape_slope_err) <= max(tau(best, "shape"), tau(c, "shape"))
         (equivalent if within_force and shape_ok else beaten).append(c)
     chosen = sorted(equivalent, key=simplicity)[0]
-    ref = phi0.get(chosen.route)
+    ref = phi0.get(chosen.route) or phi0.get("A")        # v4.4: the Route A Phi = 0 arms are the force references (a B' Phi = 0 arm is not run)
     cost = (med(chosen.force_rmse) - med(ref.force_rmse)) if ref is not None else None
     decision.update({"selected": chosen.name, "best_candidate_by_force": best.name,
                      "equivalent": [c.name for c in equivalent], "beaten_beyond_margin": [c.name for c in beaten],
