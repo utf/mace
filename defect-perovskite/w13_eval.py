@@ -81,6 +81,7 @@ def main():
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--r_max", type=float, default=6.0)
     ap.add_argument("--batch_size", type=int, default=4)
+    ap.add_argument("--limit", type=int, default=0, help="debug: only this many frames per file")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
     folds = [int(x) for x in args.folds.split(",")]
@@ -95,7 +96,7 @@ def main():
     rows = []          # one per out-of-fold neutral frame
     for k in folds:
         for name in ("null_oof.xyz", "valid.xyz"):
-            frames = read(f"{args.data}/fold{k}/{name}", ":")
+            frames = read(f"{args.data}/fold{k}/{name}", f":{args.limit}" if args.limit else ":")
             preds = {j: forces_energies(bases[j], frames, ztable, args.r_max, args.device, args.batch_size) for j in folds}
             fF, fE = forces_energies(found_model, frames, ztable, args.r_max, args.device, args.batch_size)
             for i, a in enumerate(frames):
