@@ -64,3 +64,50 @@ def test_vacancy_centre_takes_the_empty_side_of_a_two_image_pair():
     cell2 = torch.diag(torch.tensor([16.0, 16.0, 22.2], dtype=torch.float64))
     rad2 = tr.vacancy_centre(pos, cell2, numbers)
     assert rad2[10] == pytest.approx(0.0, abs=1e-6)             # now the only shared site is the bridge: it is the "vacancy"
+
+
+def test_near_field_categories_split_the_flanking_pb_from_the_first_shell_cl():
+    """W0.2 (v5): inside the 2-4 A shell the flanking Pb pair, the Cl within 3.5 A of a
+    flanking Pb, and the remainder are separate readings."""
+    cell = torch.diag(torch.tensor([16.0, 16.0, 11.1], dtype=torch.float64))
+    pos, numbers = [], []
+    for z0 in (0.0, 5.3):
+        pos.append([8.0, 8.0, z0]); numbers.append(82)
+        for dx, dy in ((2.8, 0.0), (-2.8, 0.0), (0.0, 2.8), (0.0, -2.8)):
+            pos.append([8.0 + dx, 8.0 + dy, z0]); numbers.append(17)
+    pos.append([8.0, 8.0, 2.65]); numbers.append(17)          # the occupied bridge
+    pos.append([4.0, 4.0, 8.2]); numbers.append(55)           # a Cs off to the side
+    pos = torch.tensor(pos, dtype=torch.float64)
+    found = tr.vacancy_centre_full(pos, cell, numbers)
+    assert found is not None
+    rad, flank = found
+    assert sorted(int(i) for i in flank) == [0, 5]            # the two Pb
+    cats = tr.near_field_categories(pos, cell, numbers, flank)
+    assert bool(cats["pb_flank"][0]) and bool(cats["pb_flank"][5])
+    assert int(cats["pb_flank"].sum()) == 2
+    # every equatorial Cl is 2.8 A from its Pb, and the bridge 2.65 A: all first shell
+    assert int(cats["cl_first"].sum()) == 9
+    assert not bool(cats["cl_first"][11]) and bool(cats["other"][11])     # the Cs
+    assert int((cats["pb_flank"] & cats["cl_first"]).sum()) == 0          # the categories partition
+    assert int((cats["pb_flank"] | cats["cl_first"] | cats["other"]).sum()) == len(numbers)
+
+
+def test_parameter_average_is_uniform_over_the_window_and_restores_the_last_epoch():
+    """W0.4: the evaluation model is the uniform average of the trainable parameters over the
+    window; the last-epoch parameters are restored after it is read."""
+    model = torch.nn.Linear(2, 1, dtype=torch.float64)
+    frozen = torch.nn.Parameter(torch.ones(2, dtype=torch.float64), requires_grad=False)
+    model.register_parameter("frozen", frozen)
+    values = [1.0, 2.0, 6.0]
+    avg_sum, n = None, 0
+    for v in values:
+        with torch.no_grad():
+            model.weight.fill_(v); model.bias.fill_(-v); model.frozen.fill_(v)
+        avg_sum = tr.average_into(avg_sum, model); n += 1
+    assert "frozen" not in avg_sum                               # only the trainable parameters
+    saved = tr.load_average(model, avg_sum, n)
+    assert float(model.weight[0, 0]) == pytest.approx(3.0)       # (1 + 2 + 6) / 3
+    assert float(model.bias[0]) == pytest.approx(-3.0)
+    assert float(model.frozen[0]) == pytest.approx(6.0)          # untouched
+    tr.restore_parameters(model, saved)
+    assert float(model.weight[0, 0]) == pytest.approx(6.0) and float(model.bias[0]) == pytest.approx(-6.0)

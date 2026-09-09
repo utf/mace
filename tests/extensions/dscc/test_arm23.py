@@ -1,4 +1,6 @@
 """Arm 2+3 selection logic against the registered thresholds."""
+import pytest
+
 from mace.modules.dscc import arm23
 
 
@@ -112,3 +114,33 @@ def test_bprime_gates_after_the_c10_addendum():
     out = arm23.select_v44([phi0, a_lr, bp_win])
     assert out["selected"] == "B_Bp_lr_only" and out["beaten_beyond_margin"] == ["B_A_lr_only"]
     assert abs(out["force_cost_vs_phi0"] - (0.03425 - 0.0399)) < 1e-9 and out["costs_nothing_in_forces"]
+
+
+def test_v5_far_field_gate_reads_all_of_rmse_2_4_and_4_8():
+    """W0.2 (v5, registered 2026-09-09): the decisive keys become ("force_rmse", "2-4", "4-8"),
+    the 0-2 A shell drops to information, and "each beyond the Phi = 0 seed spread" is read as
+    ALL of them. The v4 reading (any of force_rmse / 0-2 / 2-4) stays reproducible."""
+    phi0 = _cfg("B_A_phi0", coupling="phi0", force=0.040)
+    phi0.force_rmse = [0.0368, 0.0412, 0.0400, 0.0391, 0.0416, 0.0398]
+    a_lr = _cfg("B_A_lr_only", coupling="lr_only", force=0.0417, ff=0.035)
+    # gains on the full RMSE and 0-2 only: passes v4 (any), fails v5 (2-4 and 4-8 flat)
+    bp = _cfg("B_Bp_lr_only", route="Bp", coupling="lr_only", force=0.0417, ff=0.035, ladder=0.55, near=0.060)
+    g4 = arm23.gates(bp, a_lr, phi0, spec="v4")
+    g5 = arm23.gates(bp, a_lr, phi0, spec="v5")
+    assert g4["bprime_decisive_keys"] == ["force_rmse", "0-2", "2-4"]
+    assert g5["bprime_decisive_keys"] == ["force_rmse", "2-4", "4-8"]
+    assert g4["bprime_gain_beyond_noise"] and not g5["bprime_gain_beyond_noise"]
+    assert g5["bprime_gain_beyond_noise_any"] is True         # both quantifiers are reported
+    # the pooled 4-8 shell is taken from `shells` when the trainer wrote it (W0.2), not far_field_4_8
+    a2 = _cfg("B_A_lr_only", coupling="lr_only", force=0.0417, ff=0.035)
+    b2 = _cfg("B_Bp_lr_only", route="Bp", coupling="lr_only", force=0.0300, ff=0.035, ladder=0.55, near=0.060)
+    for c, val in ((a2, 0.050), (b2, 0.020)):
+        c.shells["4-8"] = [val] * 6
+        c.shells["2-4"] = [0.080 if c is a2 else 0.050] * 6
+    phi0.shells["4-8"] = [0.050, 0.0505, 0.0495, 0.0502, 0.0498, 0.0501]
+    phi0.shells["2-4"] = [0.080, 0.0805, 0.0795, 0.0802, 0.0798, 0.0801]
+    g5 = arm23.gates(b2, a2, phi0, spec="v5")
+    assert g5["bprime_gains"]["4-8"]["gain"] == pytest.approx(0.030)
+    assert g5["bprime_gain_beyond_noise"] and g5["passed"]
+    with pytest.raises(ValueError):
+        arm23.gates(b2, a2, phi0, spec="v6")

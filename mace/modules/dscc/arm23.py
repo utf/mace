@@ -91,10 +91,21 @@ def simplicity(c: "ConfigSummary") -> tuple:
 
 
 def gates(c: ConfigSummary, route_a: Optional["ConfigSummary"] = None,
-          phi0: Optional["ConfigSummary"] = None) -> Dict[str, object]:
+          phi0: Optional["ConfigSummary"] = None, spec: str = "v4") -> Dict[str, object]:
     """The hard gates a configuration must pass to be selectable. For a Route B' configuration
     `route_a` is the SAME-coupling Route A configuration and `phi0` the Route A Phi = 0 arm
-    (its seed spread of each quantity is that quantity's `tau_noise`, v4.3)."""
+    (its seed spread of each quantity is that quantity's `tau_noise`, v4.3).
+
+    `spec` selects the registered far-field reading. "v4" is the C10 ruling as the campaign was
+    read (decisive: the full RMSE and the 0-2 / 2-4 A shells; 4-8 A reported, not decisive; the
+    gate passes if ANY decisive reading beats its noise) and is kept so every recorded v4 number
+    reproduces. "v5" is W0.2 of the v5 tracker, registered 2026-09-09 before any W3 result
+    existed: decisive keys ("force_rmse", "2-4", "4-8"), the 0-2 A shell dropped to information
+    (it is empty under a correct centre), and the gate reads "each beyond the Phi = 0 seed
+    spread" as ALL of the three. Both quantifiers are always reported
+    (`bprime_gain_beyond_noise_any` / `_all`); `bprime_gain_beyond_noise` is the gated one."""
+    if spec not in ("v4", "v5"):
+        raise ValueError(f"unknown gate spec {spec!r}")
     sv_read = c.sv_fraction_last10 if c.sv_fraction_last10 else c.sv_fraction
     out = {"localisation_stable": float(np.std(c.n_eff_p50)) <= N_EFF_SPREAD_MAX,
            "root_rule": max(sv_read) <= SV_CEILING if c.coupling != "phi0" else True,
@@ -116,21 +127,31 @@ def gates(c: ConfigSummary, route_a: Optional["ConfigSummary"] = None,
             for key in ("0-2", "2-4", "4-6", "6-8"):
                 if key in route_a.shells and key in c.shells:
                     readings[key] = (route_a.shells[key], c.shells[key], (phi0.shells.get(key) if phi0 else None) or route_a.shells[key])
-            if route_a.far_field_4_8 and c.far_field_4_8:
+            # The pooled 4-8 A shell: since W0.2 the trainer writes it as a first-class shell
+            # key, so prefer that; `far_field_4_8` is the pre-v5 field the v4 reports carry.
+            if "4-8" in route_a.shells and "4-8" in c.shells:
+                readings["4-8"] = (route_a.shells["4-8"], c.shells["4-8"], (phi0.shells.get("4-8") if phi0 else None) or route_a.shells["4-8"])
+            elif route_a.far_field_4_8 and c.far_field_4_8:
                 readings["4-8"] = (route_a.far_field_4_8, c.far_field_4_8, (phi0.far_field_4_8 if phi0 else None) or route_a.far_field_4_8)
             gains = {}
             for key, (a, b, ref) in readings.items():
                 gain = med(a) - med(b); noise = _spread(ref)
                 gains[key] = {"gain": gain, "tau_noise": noise, "beyond_noise": gain > noise}
             out["bprime_gains"] = gains
-            decisive = [k for k in ("force_rmse", "0-2", "2-4") if k in gains]
-            out["bprime_gain_beyond_noise"] = any(gains[k]["beyond_noise"] for k in decisive) if decisive else False
-    info_keys = {"root_rule_worst_epoch", "ladder_within_tol"}          # reported, not gated
+            keys = ("force_rmse", "2-4", "4-8") if spec == "v5" else ("force_rmse", "0-2", "2-4")
+            decisive = [k for k in keys if k in gains]
+            out["bprime_decisive_keys"] = decisive
+            out["bprime_gain_beyond_noise_any"] = any(gains[k]["beyond_noise"] for k in decisive) if decisive else False
+            out["bprime_gain_beyond_noise_all"] = all(gains[k]["beyond_noise"] for k in decisive) and len(decisive) == len(keys)
+            out["bprime_gain_beyond_noise"] = (out["bprime_gain_beyond_noise_all"] if spec == "v5"
+                                               else out["bprime_gain_beyond_noise_any"])
+    info_keys = {"root_rule_worst_epoch", "ladder_within_tol",
+                 "bprime_gain_beyond_noise_any", "bprime_gain_beyond_noise_all"}   # reported, not gated
     out["passed"] = all(v for k, v in out.items() if isinstance(v, bool) and k not in info_keys)
     return out
 
 
-def _gate_table(configs: Sequence[ConfigSummary]) -> Dict[str, Dict[str, object]]:
+def _gate_table(configs: Sequence[ConfigSummary], spec: str = "v4") -> Dict[str, Dict[str, object]]:
     """Gates per configuration; a Route B' configuration is read against its same-coupling
     Route A counterpart's far field, with the Route A Phi = 0 seed spread as the noise."""
     route_a = {c.coupling: c for c in configs if c.route == "A" and c.regime == "B"}
@@ -138,7 +159,7 @@ def _gate_table(configs: Sequence[ConfigSummary]) -> Dict[str, Dict[str, object]
     table = {}
     for c in configs:
         counterpart = route_a.get(c.coupling) if c.route == "Bp" else None
-        table[c.name] = gates(c, counterpart, phi0)
+        table[c.name] = gates(c, counterpart, phi0, spec=spec)
     return table
 
 

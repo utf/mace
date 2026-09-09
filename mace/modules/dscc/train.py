@@ -59,6 +59,7 @@ class TrainConfig:
     single_valued_ceiling: float = 0.10   # failing fraction that fails the arm (registered ceiling)
     warm_check_fraction: float = 0.05     # v4.5: per-epoch subsample re-run by continuation against the warm start
     eval_every: int = 5
+    avg_window: int = 10              # W0.4 (v5): epochs whose parameters are averaged for the evaluation model
     grad_clip: float = 10.0
     cache_base: bool = True           # E_base/F_base cached per frame; block 0 recomputed
     device: str = "cuda"
@@ -105,7 +106,7 @@ def static_cell_atoms(path: str):
     return atoms
 
 
-def vacancy_centre(pos: torch.Tensor, cell: torch.Tensor, numbers) -> Optional[torch.Tensor]:
+def vacancy_centre_full(pos: torch.Tensor, cell: torch.Tensor, numbers):
     """Distance of every atom from the vacancy centre: the midpoint of the flanking Pb pair
     (the two Pb whose sixth-nearest Cl is beyond 4 A), label-free. The pair can be neighbours
     through MORE THAN ONE image of a short cell axis (the 79-atom cell is two octahedra thick
@@ -142,7 +143,64 @@ def vacancy_centre(pos: torch.Tensor, cell: torch.Tensor, numbers) -> Optional[t
                 score = (float(other.min()), -length)
                 if best is None or score > best[0]:
                     best = (score, rad)
-    return best[1]
+    if best is None:
+        return None
+    return best[1], flank
+
+
+def vacancy_centre(pos: torch.Tensor, cell: torch.Tensor, numbers) -> Optional[torch.Tensor]:
+    """The radii alone (the signature every pre-W0 caller uses)."""
+    out = vacancy_centre_full(pos, cell, numbers)
+    return None if out is None else out[0]
+
+
+FIRST_SHELL_CL = 3.5      # A: a Cl is "first shell" if it is within this of a flanking Pb (W0.2)
+
+
+def near_field_categories(pos: torch.Tensor, cell: torch.Tensor, numbers,
+                          flank: torch.Tensor) -> Dict[str, torch.Tensor]:
+    """W0.2 near-field split of the 2-4 A shell: the flanking Pb pair, the first-shell Cl
+    (Cl within FIRST_SHELL_CL of a flanking Pb) and the remainder. Boolean masks over the
+    frame's atoms, before any radius window is applied -- `evaluate` intersects them with
+    the 2-4 A shell and reports the unrestricted sets' counts as information."""
+    from mace.modules.dscc.kernels import minimum_image_distances
+    z = torch.as_tensor(numbers, device=pos.device)
+    r = minimum_image_distances(pos, cell)
+    pb_flank = torch.zeros(pos.shape[0], dtype=torch.bool, device=pos.device)
+    pb_flank[flank] = True
+    cl = z == 17
+    cl_first = cl & (r[:, flank].min(dim=1).values <= FIRST_SHELL_CL)
+    return {"pb_flank": pb_flank, "cl_first": cl_first, "other": ~(pb_flank | cl_first)}
+
+
+def average_into(avg_sum: Optional[Dict[str, torch.Tensor]], model: torch.nn.Module) -> Dict[str, torch.Tensor]:
+    """W0.4: accumulate the TRAINABLE parameters of `model` into a float64 running sum."""
+    with torch.no_grad():
+        named = {k: v for k, v in model.named_parameters() if v.requires_grad}
+        if avg_sum is None:
+            return {k: v.detach().to(torch.float64).clone() for k, v in named.items()}
+        for k, v in named.items():
+            avg_sum[k] += v.detach().to(torch.float64)
+    return avg_sum
+
+
+def load_average(model: torch.nn.Module, avg_sum: Dict[str, torch.Tensor], n: int) -> Dict[str, torch.Tensor]:
+    """W0.4: write the uniform average into `model`, returning the parameters it replaced (so
+    the caller can restore the last-epoch model afterwards)."""
+    saved = {}
+    with torch.no_grad():
+        for k, v in model.named_parameters():
+            if v.requires_grad:
+                saved[k] = v.detach().clone()
+                v.copy_((avg_sum[k] / n).to(v.dtype))
+    return saved
+
+
+def restore_parameters(model: torch.nn.Module, saved: Dict[str, torch.Tensor]) -> None:
+    with torch.no_grad():
+        for k, v in model.named_parameters():
+            if k in saved:
+                v.copy_(saved[k])
 
 
 def to_device(batch, device):
@@ -306,8 +364,14 @@ class Trainer:
         # VECTOR norm, sqrt(sum |dF|^2 / N_atoms) -- sqrt(3) times the per-component RMS that
         # MACE's own logs report. The > 8 A shells are resolved since C10 (2026-09-08) and the
         # atom counts kept so shells can be pooled.
-        shells = {(0, 2): [0.0, 0], (2, 4): [0.0, 0], (4, 6): [0.0, 0], (6, 8): [0.0, 0], (8, 99): [0.0, 0],
-                  (8, 10): [0.0, 0], (10, 12): [0.0, 0], (12, 99): [0.0, 0]}
+        # W0.2 (v5): the 4-8 A pooled shell is a first-class key (the far-field gate reads it);
+        # the 2-4 A shell is additionally split into the flanking Pb pair, the first-shell Cl
+        # and the remainder. The 0-2 A shell is kept (empty under a correct centre for charged
+        # frames) so the neutral dimerised pair stays visible as a diagnostic.
+        shells = {(0, 2): [0.0, 0], (2, 4): [0.0, 0], (4, 6): [0.0, 0], (6, 8): [0.0, 0], (4, 8): [0.0, 0],
+                  (8, 99): [0.0, 0], (8, 10): [0.0, 0], (10, 12): [0.0, 0], (12, 99): [0.0, 0]}
+        near = {"2-4:pb_flank": [0.0, 0], "2-4:cl_first": [0.0, 0], "2-4:other": [0.0, 0]}
+        near_all = {"pb_flank": [0.0, 0], "cl_first": [0.0, 0]}     # unrestricted, information only
         energies = []
         k = 0
         for b in loader:
@@ -327,16 +391,32 @@ class Trainer:
                 pos, cell = batch["positions"][lo:hi], batch["cell"].view(-1, 3, 3)[g]
                 numbers = a.get_atomic_numbers()
                 d = collective_coordinate(pos, cell, numbers)
-                rad = vacancy_centre(pos, cell, numbers)      # vacancy-side midpoint (D15)
+                found = vacancy_centre_full(pos, cell, numbers)   # vacancy-side midpoint (D15)
+                rad = None if found is None else found[0]
                 if rad is not None:
                     for (a_, b_), acc in shells.items():
                         m = (rad >= a_) & (rad < b_)
                         acc[0] += float(diff[lo:hi][m].sum()); acc[1] += int(m.sum())
+                    cats = near_field_categories(pos, cell, numbers, found[1])
+                    window = (rad >= 2.0) & (rad < 4.0)
+                    for key, mask in cats.items():
+                        acc = near[f"2-4:{key}"]
+                        m = window & mask
+                        acc[0] += float(diff[lo:hi][m].sum()); acc[1] += int(m.sum())
+                    for key in ("pb_flank", "cl_first"):
+                        acc = near_all[key]
+                        m = cats[key]
+                        acc[0] += float(diff[lo:hi][m].sum()); acc[1] += int(m.sum())
                 energies.append({"index": indices[k - 1], "n": hi - lo, "d": d,
                                  "resid_uncal": float(out["energy_uncalibrated"][g] - batch["energy"][g])})
+        rms = lambda v: (float(np.sqrt(v[0] / v[1])) if v[1] else None)
         report = {"tag": tag, "force_rmse": float(np.sqrt(sq / max(n_atoms, 1))),
-                  "shell_rmse": {f"{a_}-{b_}": (float(np.sqrt(v[0] / v[1])) if v[1] else None) for (a_, b_), v in shells.items()},
+                  "shell_rmse": {f"{a_}-{b_}": rms(v) for (a_, b_), v in shells.items()},
                   "shell_counts": {f"{a_}-{b_}": v[1] for (a_, b_), v in shells.items()},
+                  "near_rmse": {k: rms(v) for k, v in near.items()},
+                  "near_counts": {k: v[1] for k, v in near.items()},
+                  "near_rmse_all_radii": {k: rms(v) for k, v in near_all.items()},
+                  "near_counts_all_radii": {k: v[1] for k, v in near_all.items()},
                   "energies": energies}
         if self.cfg.coupling and indices:
             # v4.5: the held-out warm starts are checked on the registered fraction too.
@@ -421,6 +501,13 @@ class Trainer:
         sampler = dd.SizeGroupedSampler(sizes, cfg.batch_size, seed=cfg.seed)
         rng = np.random.default_rng(cfg.seed)
         history = []
+        # W0.4 (v5): the evaluation model is the uniform parameter average over the last
+        # `avg_window` epochs. Every epoch is accepted in this trainer (there is no rollback),
+        # so the window is simply the final `avg_window` epochs; the average is accumulated in
+        # float64 over the TRAINABLE parameters only, and the last-epoch model is read too.
+        avg_window = max(0, min(int(cfg.avg_window), cfg.epochs))
+        avg_sum: Optional[Dict[str, torch.Tensor]] = None
+        avg_n = 0
         for epoch in range(cfg.epochs):
             sampler.set_epoch(epoch)
             t0 = time.time()
@@ -472,6 +559,8 @@ class Trainer:
                          entry["lambda_dir"], entry["s"], entry.get("held", {}).get("force_rmse"), entry["time"])
             json.dump(history, open(self.run_dir / "history.json", "w"), indent=1, default=str)
             torch.save(self.model, self.run_dir / "model.pt")
+            if avg_window and epoch >= cfg.epochs - avg_window:
+                avg_sum = average_into(avg_sum, self.model); avg_n += 1
             if sv is not None and sv["fraction"] > cfg.single_valued_ceiling:
                 logging.warning("single-valuedness failing fraction %.3f exceeds the ceiling %.3f", sv["fraction"], cfg.single_valued_ceiling)
         final = self.evaluate(self.held_idx, "held_final")
@@ -480,4 +569,15 @@ class Trainer:
         final["arm_failed_single_valuedness"] = bool(self.sv_ceiling_exceeded_epochs)
         json.dump(final, open(self.run_dir / "held_final.json", "w"), indent=1, default=str)
         torch.save(self.model, self.run_dir / "model.pt")
-        return {"history": history, "held_final": {k: v for k, v in final.items() if k != "energies"}}
+        out = {"history": history, "held_final": {k: v for k, v in final.items() if k != "energies"}}
+        # The averaged model is evaluated AFTER the last-epoch reading, so the warm-start store
+        # the last-epoch numbers were produced with is not overwritten before they are taken.
+        if avg_sum is not None and avg_n > 0:
+            saved = load_average(self.model, avg_sum, avg_n)
+            avg = self.evaluate(self.held_idx, "held_final_avg")
+            avg["avg_epochs"] = avg_n
+            json.dump(avg, open(self.run_dir / "held_final_avg.json", "w"), indent=1, default=str)
+            torch.save(self.model, self.run_dir / "model_avg.pt")
+            out["held_final_avg"] = {k: v for k, v in avg.items() if k != "energies"}
+            restore_parameters(self.model, saved)
+        return out
