@@ -33,6 +33,8 @@ def main() -> None:
     ap.add_argument("--frames", type=int, default=40, help="consecutive charged frames of one source (the trajectory)")
     ap.add_argument("--size", type=int, default=79)
     ap.add_argument("--out", default="")
+    ap.add_argument("--predictor", type=int, default=0, help="v5 W2: warm start from the secant of the last two fixed points (2 dq_n - dq_{n-1})")
+    ap.add_argument("--tol_q", type=float, default=None, help="override the solver's inference tolerance (the registered value is used when unset)")
     args = ap.parse_args()
     torch.set_default_dtype(torch.float64)
     import ase.io
@@ -53,8 +55,12 @@ def main() -> None:
     # warm-up
     b = batch(frames[0], model.r_cut); model(b, compute_force=True)
     ScaleShiftMACE.forward(base, batch(frames[0], float(base.r_max)), compute_force=True); sync()
+    if args.tol_q is not None:
+        import dataclasses
+        model.scf_options = dataclasses.replace(model.scf_options, tol_q=args.tol_q, tol_q_inference=args.tol_q)
     t_head, t_base, iters = [], [], []
     warm = None
+    history = []
     for atoms in frames:
         bb = batch(atoms, float(base.r_max))
         sync(); t0 = time.perf_counter()
@@ -64,14 +70,17 @@ def main() -> None:
         sync(); t0 = time.perf_counter()
         out = model(bh, compute_force=True, warm_start=warm)          # initialisation iii along the trajectory
         sync(); t_head.append(time.perf_counter() - t0)
-        warm = [out["dq"].detach()]
+        history.append(out["dq"].detach()); history = history[-2:]
+        # v5 W2 closing item: the tangent along the trajectory as the secant of the last two
+        # fixed points (the geometry response is not formed); plain warm start otherwise.
+        warm = [2 * history[-1] - history[-2]] if (args.predictor and len(history) == 2 and history[-1].shape == history[-2].shape) else [history[-1]]
         iters.append(out["diagnostics"].get("iterations", [0])[0])
     ratio = np.array(t_head) / np.array(t_base)
     report = {"model": args.model, "device": args.device, "hardware": torch.cuda.get_device_name(0) if args.device.startswith("cuda") else "cpu",
               "n_frames": len(frames), "size": args.size, "coupling": bool(model.coupling), "route_b": bool(model.route_b),
               "base_ms_median": 1000 * float(np.median(t_base)), "model_ms_median": 1000 * float(np.median(t_head)),
               "ratio_median": float(np.median(ratio)), "ratio_p95": float(np.percentile(ratio, 95)),
-              "scf_iterations_median": float(np.median(iters)) if iters else None,
+              "scf_iterations_median": float(np.median(iters)) if iters else None, "predictor": bool(args.predictor), "tol_q": float(model.scf_options.tol_q_inference if args.tol_q is None else args.tol_q),
               "passes_2x": bool(np.median(ratio) <= 2.0 and np.percentile(ratio, 95) <= 2.0),
               "note": "the model's time includes the base's full forward (the head needs block 0 attached; E_base is not cached at inference)"}
     print(json.dumps(report, indent=1))

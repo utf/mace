@@ -395,4 +395,85 @@ backward extra 10, `q0` 12, chemical potentials ≈ 14 (host-synchronised loops)
 ≈ 40 ms.
 
 
+**W2 closing items (user, 2026-09-09 evening; registered verbatim before any result is read):**
+
+```markdown
+# W2 closing items (registered; gated against the saved reference outputs as before)
+- chemical potentials: vectorised CPU root-find on the returned eigenvalues
+- misc: launch/sync audit of the warm-frame path
+- predictor: tangent extrapolation of dq along a trajectory (warm start only)
+- inference tolerance: tol_q,inf = 1e-6 registered separately from the gate tolerance
+  1e-8, with the force-error bound |ΔF| ≤ ‖Γ‖·tol_q,inf recorded and checked once
+- q0 fill without forming P; item 6 (cotangent trim)
+- active-window partial solve inside Newton (Rayleigh–Ritz on previous window vectors +
+  dense inverse iteration), same fixed point within tol_f; shared with Phase 4
+- re-read the registered benchmark at 79 and 159 (median and p95) after these; if p95
+  fails, the 2× reading passes to W6 and the record says so
+```
+
+*The user's budget reading, recorded:* the head's own share is 99 ms against a target of ≈ 50;
+mechanical floors — chemical potentials 14 → ≈ 1 (a vectorised root-find on eigenvalues that are
+already on the CPU after the MKL path; the 14 ms is Python bisection with device syncs), misc
+15 → ≈ 5 (launch overhead), six `eigh` 34 → 17 (a predictor along the trajectory saves one, an
+inference tolerance of 1e-6 one or two), `q0` fill 12 → ≈ 7 (`q0_i` needs `Σ_occ f_a |Π_i a|²`,
+not `P`), backward extra 10 → ≈ 3 (item 6); hole response and kernels 14 are physics. ≈ 50 ms of
+mechanical savings lands the head near 45–50 ms and the ratio near 2.0 at 79 atoms; the p95 and
+the 159-atom number decide, and 2× *with margin* stays W6's (≈ 1.9 without an SCF loop). The
+criterion is harsh at this size: a 6 ms diagonalisation is already 12 % of a 50 ms base, so any
+electronic head sits near the line at 79 atoms; the ratio becomes a fair test of the solver at
+sizes where the sparse path is the solver. The active-window partial solve is the Phase-4 solver
+in embryo. On the ladder: the kernel is clean (1.8 %); the 23 % shortfall of the total slope after
+the second-moment subtraction is the band-term drift and the static pattern's non-local
+compensation of D13–D14; the B′ energy record is unchanged (no cross-size claim); the `C_Q` and
+offset shifts are exactly the conversion. Item 1's "duplicated base pass" withdrawn by the user
+on the measurement.
+
+**Choices ours, before reading (registered here):** (a) the CPU root-find is the same safeguarded
+Newton-with-bisection on the Gaussian count, vectorised in NumPy over the stacked counts, with
+the same stopping rule (|count| < 1e-13 or bracket < 1e-12) and the same three polish steps —
+the values must equal the torch solve to 1e-13; (b) "tangent extrapolation along a trajectory"
+is implemented as the secant of the last two fixed points, `dq_pred = 2 dq_n − dq_{n−1}` (the
+geometry response `∂dq/∂R` is not formed), applied by the caller through the existing
+`warm_start` interface; (c) `tol_q,inf` = 1e-6 lives in `ScfOptions.tol_q_inference` and is used
+when the model is called with `training=False`; `tol_E` and `tol_c` keep their registered values;
+the bound `|ΔF| ≤ ‖Γ‖₂ · tol_q,inf` is recorded per frame (‖Γ‖₂ from the frame's Γ) and checked
+once on the registered frames against the 1e-8 solve; the W2 agreement gates keep 1e-8;
+(d) the active window is the levels with `|f_S − f_ref| > tol_f` at the previous solve plus
+`n_buffer` = 8 levels on each side; the below-window count is tracked as an integer and the
+window is rebuilt from a full `eigh` whenever the Ritz residual `‖H x − θ x‖` of any window
+vector exceeds `1e-8`, the count changes, or a Ritz value approaches the window edge within
+`4 σ_s`; the Newton Jacobian uses the last full basis; the fixed point is required to agree with
+the full-`eigh` solve within `tol_f` in `dq` (the item gate).
+
+**Closing items, first pass (2026-09-09 evening; gate at the gate tolerance against the point-convention
+reference with the C13 conversion: |ΔE − conversion| ≤ 9.4e-12 eV, |ΔF| ≤ 1.9e-12 eV/Å, stress
+by the pressure term to 1.2e-15; suite 148 passed).** (a) *Chemical potentials:* the same
+safeguarded Newton, vectorised in NumPy on the host (`fill._chemical_potential_numpy`, taken for
+float64 spectra up to 256k eigenvalues; equal to the device solve to 1e-13, `test_frontier.py`):
+14 → 0.4 ms per warm frame. (b) *`q0` without `P`:* `MACEDSCC._occupied_from_spectrum` gives
+`Σ_σ Σ_a f_σ,a |Π_i a|²` from the spectrum; it is taken when no graph is needed (true
+`no_grad`); at inference the head builds `H0` under gradients for the merged backward, so the
+`(W, −n_site)` cotangent still flows through the fills' divided-difference backward there — the
+reference fill reads 9.6 ms (from 11.9) with the host potentials, and the remaining trim is
+item 6 below. (c) *Inference tolerance:* `ScfOptions.tol_q_inference` = 1e-6, applied by
+`MACEDSCC._inference_options` when `training=False`; the bound check
+(`scratchpad/w2_tolbound.py`, `~/runs/dscc/w2_tolbound.json`; seven registered frames, two
+models): ‖Γ‖₂ = 11.2–12.2 eV, bound 1.1–1.2e-5 eV/Å, measured |ΔF| between the 1e-6 and 1e-8
+solves ≤ 5.8e-15 eV/Å — the bound holds with ten orders to spare because the two solves are
+the same solve: the last Newton step from the float32 seed (residual ≈ 1e-5) lands near 1e-11,
+and the convergence test's other members (`tol_E` = 1e-10 eV, `tol_c` = 1e-7) still have to be
+met, so relaxing `tol_q` alone changes neither the iteration count (median 4 either way) nor the
+benchmark (147 vs 151 ms). An inference *triple* (`tol_q`, `tol_E`, `tol_c`) would be needed for
+a saving — not registered; the user's call. (d) *Predictor:* the secant of the last two fixed
+points, `2 dq_n − dq_{n−1}`, on the benchmark trajectory (100 frames, 79 atoms) — **worse**:
+151 ms per frame, ratio 3.56 (p95 3.99) against 135 ms, **3.16 (p95 3.31)** with the plain warm
+start at the same median of 4 iterations (the extrapolated start costs rejected fills); the
+predictor is implemented in `dscc_benchmark.py --predictor` and OFF by default, the plain warm
+start remains the registered initialisation. (e) *Benchmark after (a)–(d):* 79 atoms base
+42.7 ms, model 135 ms, ratio median **3.16**, p95 3.31; 159 atoms 73.7 / 315 ms, **4.26**, p95
+7.97 (the 636-orbital `eigh` stays on the GPU at 23 ms). Warm-frame profile: 142 ms with the
+predictor on (six `eigh` 33, backward 41, base 24, `q0` 10, hole response 7, kernels 6, 38
+device syncs ≈ 15 ms of waiting). Remaining W2 items: the launch/sync audit, item 6, the
+active-window partial solve.
+
 ## W3–W6 — not opened.

@@ -18,6 +18,7 @@ import math
 from dataclasses import dataclass
 from typing import Optional, Sequence, Union
 
+import numpy as np
 import torch
 
 from mace.modules.dscc import legacy as _cnt
@@ -74,6 +75,10 @@ def chemical_potential(eps: torch.Tensor, n_electrons, sigma_s: float,
     n = torch.as_tensor(n_electrons, dtype=eps.dtype, device=eps.device)
     if n.dim() == 0:
         n = n.expand(eps.shape[:-1])
+    if eps.dtype == torch.float64 and eps.numel() <= CPU_ROOTFIND_MAX_ELEMENTS:
+        # v5 W2 closing item: the same safeguarded Newton, vectorised in NumPy on the host
+        # (the eigenvalues are a few kB; the torch loop below costs a device sync per step).
+        return _chemical_potential_numpy(eps, n, sigma_s, tol, polish)
     if eps.dtype != torch.float64:                      # v5 W2 item 7: float32 pre-iterations
         tol = max(tol, 1e-5)
     count_tol = 1e-13 if eps.dtype == torch.float64 else 1e-5
@@ -108,6 +113,42 @@ def chemical_potential(eps: torch.Tensor, n_electrons, sigma_s: float,
         slope = (torch.exp(-x * x) / (sigma_s * _SQRT_PI)).sum(dim=-1)
         mu = torch.where(slope > 1e-300, mu - count / slope, mu)
     return mu
+
+
+CPU_ROOTFIND_MAX_ELEMENTS = 1 << 18      # 256k eigenvalues: up to 64 stacked 4096-orbital spectra
+
+
+def _chemical_potential_numpy(eps: torch.Tensor, n: torch.Tensor, sigma_s: float, tol: float, polish: int) -> torch.Tensor:
+    """`chemical_potential` on the host: identical algorithm and stopping rule, no device
+    round trips inside the loop; the result returns to `eps`'s device."""
+    from scipy.special import erfc as _erfc
+    e = eps.cpu().numpy().reshape(-1, eps.shape[-1]); nn = n.detach().cpu().numpy().reshape(-1).astype(np.float64)
+    sorted_e = np.sort(e, axis=-1)
+    n_int = np.clip(np.rint(nn).astype(np.int64), 1, e.shape[-1] - 1)
+    rows = np.arange(e.shape[0])
+    mu = 0.5 * (sorted_e[rows, n_int - 1] + sorted_e[rows, n_int])
+    lo = e.min(axis=-1) - 50.0 * sigma_s - 1.0
+    hi = e.max(axis=-1) + 50.0 * sigma_s + 1.0
+    done = np.zeros(e.shape[0], dtype=bool)
+    for _ in range(60):
+        x = (e - mu[:, None]) / sigma_s
+        count = (0.5 * _erfc(x)).sum(axis=-1) - nn
+        slope = (np.exp(-x * x) / (sigma_s * _SQRT_PI)).sum(axis=-1)
+        hi = np.where(count > 0, mu, hi)
+        lo = np.where(count > 0, lo, mu)
+        newton = mu - count / np.maximum(slope, 1e-300)
+        inside = (newton > lo) & (newton < hi) & (slope > 1e-300)
+        mu_new = np.where(inside, newton, 0.5 * (lo + hi))
+        done = (np.abs(count) < 1e-13) | ((hi - lo) < tol)
+        mu = np.where(done, mu, mu_new)
+        if done.all():
+            break
+    for _ in range(polish):
+        x = (e - mu[:, None]) / sigma_s
+        count = (0.5 * _erfc(x)).sum(axis=-1) - nn
+        slope = (np.exp(-x * x) / (sigma_s * _SQRT_PI)).sum(axis=-1)
+        mu = np.where(slope > 1e-300, mu - count / slope, mu)
+    return torch.as_tensor(mu, dtype=eps.dtype).reshape(eps.shape[:-1]).to(eps.device)
 
 
 class _DensityMatrix(torch.autograd.Function):

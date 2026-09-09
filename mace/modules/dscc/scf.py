@@ -164,6 +164,10 @@ class ScfOptions:
     pre_tol_E: float = 1e-5      # float32 stage: energy change, eV
     pre_tol_c: float = 1e-2      # float32 stage: commutator norm
     eigh_device: str = "auto"    # v5 W2 item 7: 'auto' (single float64 eigh <= 512 orbitals on the CPU), 'cpu', 'cuda'
+    # v5 W2 closing item (registered): the inference tolerance on the unmixed residual,
+    # separate from the gate tolerance `tol_q` = 1e-8; the model applies it when called with
+    # training=False. The force-error bound |dF| <= ||Gamma||_2 tol_q,inf is recorded per frame.
+    tol_q_inference: float = 1e-6
 
 
 _TRACE = False   # debugging: print the per-graph solver's iterations

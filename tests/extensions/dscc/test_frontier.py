@@ -87,3 +87,19 @@ def test_mixed_precision_batched_solve_reaches_the_float64_fixed_point():
     assert mixed.pre_fills and sum(mixed.pre_fills) > 0
     assert float((mixed.dq - plain.dq).abs().max()) < 1e-10 and float((mixed.energy - plain.energy).abs().max()) < 1e-10
     assert float((ramp_m.dq - ramp_p.dq).abs().max()) < 1e-10 and float((ramp_m.energy - ramp_p.energy).abs().max()) < 1e-10
+
+
+def test_host_root_find_equals_the_device_solve():
+    """v5 W2 closing item: the NumPy chemical-potential solve equals the torch loop to 1e-13."""
+    H = _random_h(seed=9); eps = torch.linalg.eigvalsh(H)
+    counts = torch.tensor([17.0, 18.0, 19.0])
+    host = fl.chemical_potential(eps.unsqueeze(0).expand(3, -1), counts, fl.SIGMA_S)
+    old_limit = fl.CPU_ROOTFIND_MAX_ELEMENTS
+    try:
+        fl.CPU_ROOTFIND_MAX_ELEMENTS = 0            # force the device path
+        dev = fl.chemical_potential(eps.unsqueeze(0).expand(3, -1), counts, fl.SIGMA_S)
+    finally:
+        fl.CPU_ROOTFIND_MAX_ELEMENTS = old_limit
+    assert float((host - dev).abs().max()) < 1e-13
+    for k, n in enumerate(counts.tolist()):
+        assert float(fl.occupations(eps, host[k], fl.SIGMA_S).sum()) == pytest.approx(n, abs=1e-12)

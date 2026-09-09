@@ -157,6 +157,17 @@ class MACEDSCC(nn.Module):
 
     # ----------------------------------------------------------------- learnables
 
+    def _inference_options(self, training: bool):
+        """v5 W2 closing item: the registered inference tolerance `tol_q_inference` (1e-6)
+        replaces the gate tolerance (1e-8) when the model is called with `training=False`;
+        every other solver number is unchanged."""
+        opt = self.scf_options
+        tol_inf = getattr(opt, "tol_q_inference", None)
+        if training or tol_inf is None or tol_inf == opt.tol_q:
+            return opt
+        import dataclasses
+        return dataclasses.replace(opt, tol_q=tol_inf)
+
     def _need_sr(self) -> bool:
         """v5 W2: `K_SR` enters `Gamma` only through `lambda_dir`; with `lambda_dir` held at
         zero (LR-only, LR + U) its lattice sum and pair derivative are skipped."""
@@ -235,9 +246,23 @@ class MACEDSCC(nn.Module):
         """`reference_charges` for `H [B, 4n, 4n]` with per-graph `n0 [B, N]` and counts."""
         with torch.no_grad():
             spectrum = eigh_for(H, getattr(self.scf_options, 'eigh_device', 'auto'))
+        if not torch.is_grad_enabled():
+            return n0 - self._occupied_from_spectrum(spectrum, n_up, n_dn)     # v5 W2: no density matrix
         P = fill(H, n_up, self.sigma_s, spectrum).P + fill(H, n_dn, self.sigma_s, spectrum).P
         occupied = torch.diagonal(P, dim1=-2, dim2=-1).reshape(H.shape[0], -1, 4).sum(-1)
         return n0 - occupied
+
+    def _occupied_from_spectrum(self, spectrum, n_up, n_dn) -> torch.Tensor:
+        """`sum_sigma sum_a f_sigma,a |Pi_i a|^2` per site from the spectrum alone (v5 W2
+        closing item: the reference fill without forming `P`; inference only, detached)."""
+        eps, U = spectrum
+        counts = torch.stack([torch.as_tensor(n_up, dtype=eps.dtype, device=eps.device).expand(eps.shape[:-1]),
+                              torch.as_tensor(n_dn, dtype=eps.dtype, device=eps.device).expand(eps.shape[:-1])])
+        from mace.modules.dscc.fill import chemical_potential, occupations
+        mus = chemical_potential(eps.unsqueeze(0).expand(2, *eps.shape), counts, self.sigma_s)
+        f = occupations(eps, mus[0], self.sigma_s) + occupations(eps, mus[1], self.sigma_s)      # [..., n]
+        w = (U * U).reshape(*eps.shape[:-1], -1, 4, eps.shape[-1]).sum(-2)                        # |Pi_i a|^2, [..., N, n]
+        return torch.einsum("...ia,...a->...i", w, f)
 
     def reference_charges(self, H: torch.Tensor, numbers: Sequence[int]) -> torch.Tensor:
         """Route B' (v4.2): `q0_i = n0[Z_i] - sum_sigma Tr(Pi_i P_ref_sigma(H0))` at `H = H0`
@@ -248,9 +273,11 @@ class MACEDSCC(nn.Module):
         n_up, n_dn = S_REF.counts(neutral_count(numbers))
         with torch.no_grad():
             spectrum = eigh_for(H, getattr(self.scf_options, 'eigh_device', 'auto'))
+        n0 = torch.tensor([float(N0[z]) for z in numbers], dtype=H.dtype, device=H.device)
+        if not torch.is_grad_enabled():
+            return n0 - self._occupied_from_spectrum(spectrum, float(n_up), float(n_dn))
         P = fill(H, float(n_up), self.sigma_s, spectrum).P + fill(H, float(n_dn), self.sigma_s, spectrum).P
         occupied = torch.diagonal(P).reshape(-1, 4).sum(-1)
-        n0 = torch.tensor([float(N0[z]) for z in numbers], dtype=H.dtype, device=H.device)
         return n0 - occupied
 
     def compensation_cloud(self, q0: torch.Tensor, species: torch.Tensor, positions: torch.Tensor,
@@ -538,9 +565,10 @@ class MACEDSCC(nn.Module):
                     diagnostics["q0_sum"] = q0.detach().sum(-1).cpu().tolist()
                     diagnostics["compensation_cloud"] = [self.compensation_cloud(q0[g], sp_b[g], pos_b[g], cell[g]) for g in range(num_graphs)]
                 implicit = training and self.scf_options.method == "newton"
+                scf_opts = self._inference_options(training)
                 first_visit_fills = [0] * num_graphs
                 if warm_start is None:
-                    res = continuation_solve_batched(H, gamma, counts_s, counts_r, self.sigma_s, W, self.scf_options,
+                    res = continuation_solve_batched(H, gamma, counts_s, counts_r, self.sigma_s, W, scf_opts,
                                                      implicit=implicit, mixed=not training)
                 else:
                     starts = torch.zeros(num_graphs, n_nodes, dtype=torch.float64, device=device)
@@ -557,11 +585,11 @@ class MACEDSCC(nn.Module):
                             sub = continuation_solve_batched(
                                 H[m].detach(), gamma[m].detach(), (counts_s[0][m], counts_s[1][m]),
                                 (counts_r[0][m], counts_r[1][m]), self.sigma_s,
-                                None if W is None else W[m].detach(), self.scf_options, implicit=False, mixed=not training)
+                                None if W is None else W[m].detach(), scf_opts, implicit=False, mixed=not training)
                         starts[m] = sub.dq.detach()
                         for j, g in enumerate(missing):
                             first_visit_fills[g] = int(sub.n_fills[j])
-                    res = solve_dscc_batched(H, gamma, counts_s, counts_r, self.sigma_s, W, starts, self.scf_options,
+                    res = solve_dscc_batched(H, gamma, counts_s, counts_r, self.sigma_s, W, starts, scf_opts,
                                              implicit=implicit)
                     res.n_fills = [a + b for a, b in zip(res.n_fills, first_visit_fills)]
                     res.iterations = [a + b for a, b in zip(res.iterations, first_visit_fills)]
