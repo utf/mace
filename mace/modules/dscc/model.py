@@ -40,7 +40,7 @@ from mace.modules.dscc.scf import (ScfOptions, ScfResult, continuation_solve, co
                                    solve_dscc, solve_dscc_batched, two_fillings)
 from mace.modules.dscc.species import (N0, S_REF, State, U_MAX_GFN1, neutral_count,
                                        states_from_batch)
-from mace.modules.dscc.fill import eigh_for, fill
+from mace.modules.dscc.fill import eigh_for, fill, site_occupation
 from mace.modules.dscc.fscc import fscc_head, excess_trace_norm
 
 # Registered defaults for the bounded learnables (plan section 2.4; to confirm before use).
@@ -248,9 +248,7 @@ class MACEDSCC(nn.Module):
             spectrum = eigh_for(H, getattr(self.scf_options, 'eigh_device', 'auto'))
         if not torch.is_grad_enabled():
             return n0 - self._occupied_from_spectrum(spectrum, n_up, n_dn)     # v5 W2: no density matrix
-        P = fill(H, n_up, self.sigma_s, spectrum).P + fill(H, n_dn, self.sigma_s, spectrum).P
-        occupied = torch.diagonal(P, dim1=-2, dim2=-1).reshape(H.shape[0], -1, 4).sum(-1)
-        return n0 - occupied
+        return n0 - site_occupation(H, spectrum, n_up, n_dn, self.sigma_s)      # v5 W2 item 6: one contraction
 
     def _occupied_from_spectrum(self, spectrum, n_up, n_dn) -> torch.Tensor:
         """`sum_sigma sum_a f_sigma,a |Pi_i a|^2` per site from the spectrum alone (v5 W2
@@ -276,9 +274,7 @@ class MACEDSCC(nn.Module):
         n0 = torch.tensor([float(N0[z]) for z in numbers], dtype=H.dtype, device=H.device)
         if not torch.is_grad_enabled():
             return n0 - self._occupied_from_spectrum(spectrum, float(n_up), float(n_dn))
-        P = fill(H, float(n_up), self.sigma_s, spectrum).P + fill(H, float(n_dn), self.sigma_s, spectrum).P
-        occupied = torch.diagonal(P).reshape(-1, 4).sum(-1)
-        return n0 - occupied
+        return n0 - site_occupation(H, spectrum, float(n_up), float(n_dn), self.sigma_s)   # v5 W2 item 6
 
     def compensation_cloud(self, q0: torch.Tensor, species: torch.Tensor, positions: torch.Tensor,
                            cell: torch.Tensor) -> Dict[str, float]:

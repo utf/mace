@@ -112,11 +112,12 @@ def two_fillings(H: torch.Tensor, n_s: Tuple[int, int], n_ref: Tuple[int, int],
         fills[sigma + 2] = FillResult(P=None, mu=mu[sigma + 2], eps=eps, U=U, f=f_r, F_band=(f_r * eps).sum(-1) + R_r, entropy=R_r)
         df = f_s - f_r
         energy = energy + (df * eps).sum(-1) + (R_s - R_r)
+        # dq over ALL levels (an [N, n] contraction: the sum rule sum dq = Q holds to rounding,
+        # the registered 1e-12); the active set serves the low-rank dP only.
+        w_all = (U * U).reshape(*batch_shape, n_atoms, ORBITALS, n_orb).sum(-2)                  # |Pi_i a|^2, [..., N, n]
+        dq = dq - torch.einsum("...ia,...a->...i", w_all, df)
         idx = torch.nonzero(df.abs().reshape(-1, n_orb).amax(0) > FRONTIER_TOL).reshape(-1)
-        U_act = U[..., :, idx]; dfa = df[..., idx]
-        w = (U_act * U_act).reshape(*batch_shape, n_atoms, ORBITALS, idx.numel()).sum(-2)     # |Pi_i a|^2, [..., N, n_act]
-        dq = dq - torch.einsum("...ia,...a->...i", w, dfa)
-        frontier.append((U_act, dfa))
+        frontier.append((U[..., :, idx], df[..., idx]))
     return TwoFillings(energy=energy, dq=dq, fills=tuple(fills), dP=None, frontier=frontier)
 
 
@@ -639,7 +640,8 @@ def _batched_fillings(H0: torch.Tensor, gamma: torch.Tensor, W: Optional[torch.T
 def _batched_fixed_point(H0: torch.Tensor, gamma: torch.Tensor, W: Optional[torch.Tensor], dq: torch.Tensor,
                          n_s, n_ref, sigma_s: float, implicit: bool, iterations: torch.Tensor,
                          converged: torch.Tensor, hist: List[List[float]],
-                         n_fills: Optional[torch.Tensor] = None, eigh_device: str = "auto") -> BatchedScfResult:
+                         n_fills: Optional[torch.Tensor] = None, eigh_device: str = "auto",
+                         reuse: Optional[TwoFillings] = None) -> BatchedScfResult:
     """The attached pass at the (per graph) fixed point `dq`, the implicit-function hook
     when asked, and the diagnostics -- shared by the LM and the backtracking loops."""
     B, n_atoms = dq.shape
@@ -659,7 +661,11 @@ def _batched_fixed_point(H0: torch.Tensor, gamma: torch.Tensor, W: Optional[torc
         dq_star = dq.detach()
     V = torch.einsum("bij,bj->bi", gamma, dq_star) + (W if W is not None else 0.0)
     H = H0 - torch.diag_embed(V.repeat_interleave(ORBITALS, dim=-1))
-    sol = two_fillings(H, n_s, n_ref, sigma_s, eigh_device=eigh_device)
+    # v5 W2: without an implicit derivative (inference; the head keeps gradients enabled for
+    # its own graph, so grad mode is not the test) the loop's last fill was evaluated at
+    # exactly this `dq_star` -- the converged iterate is not moved after its fill -- and is
+    # reused; the attached pass (implicit, training) always re-fills under gradients.
+    sol = reuse if (reuse is not None and not implicit) else two_fillings(H, n_s, n_ref, sigma_s, eigh_device=eigh_device)
     residual = (sol.dq.detach() - dq_star.detach()).abs().amax(dim=-1)
     energy = sol.energy - 0.5 * torch.einsum("bi,bij,bj->b", dq_star, gamma, dq_star)
     primary = []
@@ -739,6 +745,7 @@ def solve_dscc_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[torch.T
     dq_prev, res_prev = dq.clone(), torch.zeros_like(dq)
     r_prev = torch.full((B,), float("inf"), dtype=H0.dtype, device=H0.device)
     r2_prev = torch.full((B,), float("inf"), dtype=H0.dtype, device=H0.device)
+    last_sol = None; dq_at_sol = None
     with torch.no_grad():
         # `n_max` bounds each graph's ACCEPTED iterates (the pre-v4.5 meaning); rejected
         # deferred steps cost fills, not iterations. A graph at the cap is left unconverged.
@@ -747,7 +754,9 @@ def solve_dscc_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[torch.T
             if not bool(live.any()):
                 break
             n_fills = n_fills + live.long()
+            dq_at_sol = dq.clone()
             sol = _batched_fillings(H0, gamma, W, dq, n_s, n_ref, sigma_s, eigh_device=getattr(opt, 'eigh_device', 'auto'))
+            last_sol = sol
             res = sol.dq - dq                                                     # [B, N]
             r_norm = res.abs().amax(dim=-1)
             r2 = res.norm(dim=-1) if lm else r_norm                               # judges the deferred steps
@@ -808,7 +817,9 @@ def solve_dscc_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[torch.T
             dq_prev, res_prev, r_prev, r2_prev = dq, res, r_norm, r2
             pending = active & ~fallback                                          # Anderson steps are not judged
             dq = torch.where(active.unsqueeze(-1), new_dq, dq)
-    result = _batched_fixed_point(H0, gamma, W, dq, n_s, n_ref, sigma_s, implicit, iterations, converged, hist, n_fills, eigh_device=getattr(opt, 'eigh_device', 'auto'))
+    reuse = last_sol if (last_sol is not None and torch.equal(dq_at_sol, dq)) else None
+    result = _batched_fixed_point(H0, gamma, W, dq, n_s, n_ref, sigma_s, implicit, iterations, converged, hist, n_fills,
+                                  eigh_device=getattr(opt, 'eigh_device', 'auto'), reuse=reuse)
     if pre_fills is not None:                      # diagnostics: float32 fills spent before the float64 stage
         result.pre_fills = pre_fills
         result.n_fills = [int(a) + int(b) for a, b in zip(result.n_fills, pre_fills)]

@@ -103,3 +103,20 @@ def test_host_root_find_equals_the_device_solve():
     assert float((host - dev).abs().max()) < 1e-13
     for k, n in enumerate(counts.tolist()):
         assert float(fl.occupations(eps, host[k], fl.SIGMA_S).sum()) == pytest.approx(n, abs=1e-12)
+
+
+def test_site_occupation_matches_the_density_route_and_its_gradient():
+    """v5 W2 item 6: occupations and their H-gradient (through a random site functional) equal
+    the two-fill density route to 1e-10, single and batched."""
+    for Hs in (_random_h(seed=10), torch.stack([_random_h(seed=11), _random_h(seed=12)])):
+        Hg = Hs.clone().requires_grad_(True)
+        with torch.no_grad():
+            spectrum = torch.linalg.eigh(Hg)
+        occ = fl.site_occupation(Hg, spectrum, 17.0, 18.0)
+        P = fl.fill(Hg, 17.0, fl.SIGMA_S, spectrum).P + fl.fill(Hg, 18.0, fl.SIGMA_S, spectrum).P
+        occ_p = torch.diagonal(P, dim1=-2, dim2=-1).reshape(*Hs.shape[:-2], -1, 4).sum(-1)
+        assert float((occ - occ_p).abs().max()) < 1e-10
+        g = torch.randn(occ.shape, dtype=torch.float64)
+        (d1,) = torch.autograd.grad((occ * g).sum(), Hg, retain_graph=True)
+        (d2,) = torch.autograd.grad((occ_p * g).sum(), Hg)
+        assert float((d1 - d2).abs().max()) < 1e-10

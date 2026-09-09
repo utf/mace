@@ -177,6 +177,46 @@ class _DensityMatrix(torch.autograd.Function):
         return dH, None, None, None, None, None, None
 
 
+class _SiteOccupation(torch.autograd.Function):
+    """v5 W2 item 6: the site occupations of a two-spin reference fill,
+    `occ_i = sum_sigma sum_a f_sigma,a |Pi_i a|^2`, from the spectrum alone (no density
+    matrix), with ONE Daleckii-Krein contraction as the backward: the cotangent `g_i` on the
+    occupations is `G = diag(g)` expanded over the site's orbitals, `Ghat = U^T G U` is
+    formed once, both spins' divided-difference maps (with their fixed-N corrections) act on
+    that one `Ghat`, and one `U M U^T` returns the cotangent on `H`. The P route did two
+    forwards (U f U^T each) and two backwards (Ghat and U M U^T each): ten products to three."""
+
+    @staticmethod
+    def forward(ctx, H, eps, U, mu_up, mu_dn, f_up, f_dn, sigma_s, degeneracy_tol):
+        n_orb = eps.shape[-1]
+        w = (U * U).reshape(*eps.shape[:-1], n_orb // 4, 4, n_orb).sum(-2)          # [..., N, n]
+        occ = torch.einsum("...ia,...a->...i", w, f_up + f_dn)
+        ctx.save_for_backward(eps, U, mu_up, mu_dn, f_up, f_dn)
+        ctx.sigma_s = float(sigma_s); ctx.tol = float(degeneracy_tol)
+        return occ
+
+    @staticmethod
+    def backward(ctx, grad_occ):
+        eps, U, mu_up, mu_dn, f_up, f_dn = ctx.saved_tensors
+        g_orb = grad_occ.repeat_interleave(4, dim=-1)                                # [..., n]
+        Ghat = U.transpose(-1, -2) @ (g_orb.unsqueeze(-1) * U)                       # U^T diag(g) U
+        M = (_cnt._dk_eigenbasis(eps, f_up, ctx.sigma_s, ctx.tol, Ghat, mu_up)       # pylint: disable=protected-access
+             + _cnt._dk_eigenbasis(eps, f_dn, ctx.sigma_s, ctx.tol, Ghat, mu_dn))    # pylint: disable=protected-access
+        dH = U @ M @ U.transpose(-1, -2)
+        return dH, None, None, None, None, None, None, None, None
+
+
+def site_occupation(H: torch.Tensor, spectrum, n_up, n_dn, sigma_s: float = SIGMA_S) -> torch.Tensor:
+    """`occ_i` of the two-spin fill at counts `(n_up, n_dn)` `[..., N]`, attached to `H`
+    through `_SiteOccupation` (one contraction); the potentials solved once for both counts."""
+    eps, U = (s.detach() for s in spectrum)
+    counts = torch.stack([torch.as_tensor(n_up, dtype=eps.dtype, device=eps.device).expand(eps.shape[:-1]),
+                          torch.as_tensor(n_dn, dtype=eps.dtype, device=eps.device).expand(eps.shape[:-1])])
+    mus = chemical_potential(eps.unsqueeze(0).expand(2, *eps.shape), counts, sigma_s)
+    f_up, f_dn = occupations(eps, mus[0], sigma_s), occupations(eps, mus[1], sigma_s)
+    return _SiteOccupation.apply(H, eps, U, mus[0], mus[1], f_up, f_dn, sigma_s, DEGENERACY_TOL)
+
+
 @dataclass
 class FillResult:
     """One fill of one (batch of) Hamiltonian(s). `P` is `None` for a frontier-only fill
