@@ -15,7 +15,7 @@ import torch
 
 import math
 
-from mace.modules.dscc.fill import SIGMA_S, FillResult, chemical_potential, fill
+from mace.modules.dscc.fill import SIGMA_S, FillResult, chemical_potential, fill, generalised_entropy, occupations
 
 _SQRT_PI = math.sqrt(math.pi)
 
@@ -28,32 +28,95 @@ def site_charge_difference(dP: torch.Tensor, n_atoms: int) -> torch.Tensor:
     return -torch.diagonal(dP, dim1=-2, dim2=-1).reshape(*dP.shape[:-2], n_atoms, ORBITALS).sum(-1)
 
 
-@dataclass
+FRONTIER_TOL = 1e-10     # v5 W2 item 2 (registered): a level is active when |f_S - f_ref| exceeds this
+
+
 class TwoFillings:
-    energy: torch.Tensor        # J (band form), differentiable through H
-    dP: torch.Tensor            # sum_sigma (P_S - P_ref), attached
-    dq: torch.Tensor            # [N], attached
-    fills: Tuple[FillResult, FillResult, FillResult, FillResult]   # S_up, S_dn, ref_up, ref_dn
+    """The two fillings of one `H`: `energy` (band form, differentiable through `H` on the
+    eager path), `dq` `[..., N]`, the four `fills` (S_up, S_dn, ref_up, ref_dn) and `dP =
+    sum_sigma (P_S - P_ref)`, formed on demand from the active levels on the frontier path
+    (v5 W2 item 2) and held eagerly (attached) on the training path."""
+
+    def __init__(self, energy: torch.Tensor, dq: torch.Tensor, fills, dP: Optional[torch.Tensor] = None,
+                 frontier: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None) -> None:
+        self.energy, self.dq, self.fills = energy, dq, fills
+        self._dP, self._frontier = dP, frontier
+
+    @property
+    def dP(self) -> torch.Tensor:
+        if self._dP is None:
+            U0 = self.fills[0].U
+            dP = torch.zeros(U0.shape, dtype=U0.dtype, device=U0.device)
+            for U_act, dfa in (self._frontier or []):
+                dP = dP + (U_act * dfa.unsqueeze(-2)) @ U_act.transpose(-1, -2)
+            self._dP = dP
+        return self._dP
 
 
 def two_fillings(H: torch.Tensor, n_s: Tuple[int, int], n_ref: Tuple[int, int],
                  sigma_s: float = SIGMA_S) -> TwoFillings:
-    """Fill one `H` at the state's and the reference's per-spin counts."""
+    """Fill one `H` at the state's and the reference's per-spin counts: one `eigh`, ONE
+    chemical-potential solve for the distinct counts (v5 W2 item 5: it was eight), a spin
+    channel whose counts agree in state and reference skipped exactly (its two fills would
+    cancel term by term; v5 W2 item 2), and -- under `no_grad`, the inference and SCF-loop
+    path -- no density matrices at all: `dq_i = -sum_a df_a |Pi_i a|^2` over the active
+    levels `|df_a| > FRONTIER_TOL`, `energy = sum_a df_a eps_a + R_S - R_ref` over all
+    levels, `dP` formed from the active vectors on demand. With gradients enabled (training,
+    the attached pass) the eager fills with the divided-difference backward are used, so
+    the training gradient is unchanged."""
     with torch.no_grad():
         eps, U = torch.linalg.eigh(H)
     spectrum = (eps, U)
+    batch_shape = eps.shape[:-1]
+    n_orb = eps.shape[-1]
+    n_atoms = n_orb // ORBITALS
 
-    def count(x):                      # a float, or a per-graph tensor for a batched H
-        return x if torch.is_tensor(x) else float(x)
-    s_up = fill(H, count(n_s[0]), sigma_s, spectrum)
-    s_dn = fill(H, count(n_s[1]), sigma_s, spectrum)
-    r_up = fill(H, count(n_ref[0]), sigma_s, spectrum)
-    r_dn = fill(H, count(n_ref[1]), sigma_s, spectrum)
-    energy = (s_up.F_band - r_up.F_band) + (s_dn.F_band - r_dn.F_band)
-    dP = (s_up.P - r_up.P) + (s_dn.P - r_dn.P)
-    n_atoms = H.shape[-1] // ORBITALS
-    return TwoFillings(energy=energy, dP=dP, dq=site_charge_difference(dP, n_atoms),
-                       fills=(s_up, s_dn, r_up, r_dn))
+    def as_count(x):
+        c = x if torch.is_tensor(x) else torch.tensor(float(x), dtype=eps.dtype, device=eps.device)
+        c = c.to(dtype=eps.dtype, device=eps.device)
+        return c.expand(batch_shape) if c.dim() == 0 else c
+    counts = [as_count(n_s[0]), as_count(n_s[1]), as_count(n_ref[0]), as_count(n_ref[1])]   # s_up, s_dn, r_up, r_dn
+    same = (bool(torch.equal(counts[0], counts[2])), bool(torch.equal(counts[1], counts[3])))
+    order = [0, 1] + ([] if same[0] else [2]) + ([] if same[1] else [3])
+    with torch.no_grad():
+        mus = chemical_potential(eps.unsqueeze(0).expand(len(order), *eps.shape),
+                                 torch.stack([counts[k] for k in order]), sigma_s)
+    mu = {k: mus[i] for i, k in enumerate(order)}
+    mu.setdefault(2, mu[0]); mu.setdefault(3, mu[1])
+
+    if torch.is_grad_enabled():
+        # Eager path: attached densities with the divided-difference backward.
+        res = {k: fill(H, counts[k], sigma_s, spectrum, mu=mu[k]) for k in order}
+        res.setdefault(2, res[0]); res.setdefault(3, res[1])
+        energy = torch.zeros_like(res[0].F_band); dP = torch.zeros_like(res[0].P)
+        for sigma in (0, 1):
+            if not same[sigma]:
+                energy = energy + (res[sigma].F_band - res[sigma + 2].F_band)
+                dP = dP + (res[sigma].P - res[sigma + 2].P)
+        return TwoFillings(energy=energy, dq=site_charge_difference(dP, n_atoms),
+                           fills=(res[0], res[1], res[2], res[3]), dP=dP)
+
+    # Frontier path (no gradients): occupations and entropies only; the active levels carry dq.
+    fills: List[Optional[FillResult]] = [None, None, None, None]
+    energy = torch.zeros(batch_shape, dtype=eps.dtype, device=eps.device)
+    dq = torch.zeros(*batch_shape, n_atoms, dtype=eps.dtype, device=eps.device)
+    frontier: List[Tuple[torch.Tensor, torch.Tensor]] = []
+    for sigma in (0, 1):
+        f_s = occupations(eps, mu[sigma], sigma_s); R_s = generalised_entropy(eps, mu[sigma], sigma_s)
+        fills[sigma] = FillResult(P=None, mu=mu[sigma], eps=eps, U=U, f=f_s, F_band=(f_s * eps).sum(-1) + R_s, entropy=R_s)
+        if same[sigma]:
+            fills[sigma + 2] = fills[sigma]
+            continue
+        f_r = occupations(eps, mu[sigma + 2], sigma_s); R_r = generalised_entropy(eps, mu[sigma + 2], sigma_s)
+        fills[sigma + 2] = FillResult(P=None, mu=mu[sigma + 2], eps=eps, U=U, f=f_r, F_band=(f_r * eps).sum(-1) + R_r, entropy=R_r)
+        df = f_s - f_r
+        energy = energy + (df * eps).sum(-1) + (R_s - R_r)
+        idx = torch.nonzero(df.abs().reshape(-1, n_orb).amax(0) > FRONTIER_TOL).reshape(-1)
+        U_act = U[..., :, idx]; dfa = df[..., idx]
+        w = (U_act * U_act).reshape(*batch_shape, n_atoms, ORBITALS, idx.numel()).sum(-2)     # |Pi_i a|^2, [..., N, n_act]
+        dq = dq - torch.einsum("...ia,...a->...i", w, dfa)
+        frontier.append((U_act, dfa))
+    return TwoFillings(energy=energy, dq=dq, fills=tuple(fills), dP=None, frontier=frontier)
 
 
 # ------------------------------------------------------------------ the D-SCC loop
@@ -249,7 +312,7 @@ def solve_dscc(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[int, int],
             max_reject = opt.lm_max_reject if lm else opt.max_backtrack
             if opt.method == "newton" and not (deferred and rejects >= max_reject):
                 if jac is None:
-                    jac = hole_response(H, n_s, n_ref, sigma_s, spectrum=(sol.fills[0].eps, sol.fills[0].U)) @ gamma
+                    jac = hole_response(H, n_s, n_ref, sigma_s, spectrum=(sol.fills[0].eps, sol.fills[0].U), mus=tuple(f.mu for f in sol.fills)) @ gamma
                 if deferred:
                     # v4.5: the step is taken and judged by the next iteration's residual --
                     # the fill it needs anyway. Damped Newton halves the step on a rejection
@@ -298,7 +361,7 @@ def solve_dscc(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[int, int],
         V1 = gamma @ dq_leaf + (W if W is not None else 0.0)
         sol1 = two_fillings(H0 - site_potential_matrix(V1), n_s, n_ref, sigma_s)
         jac = hole_response((H0 - site_potential_matrix(V1)).detach(), n_s, n_ref, sigma_s,
-                            spectrum=(sol1.fills[0].eps, sol1.fills[0].U)) @ gamma.detach()
+                            spectrum=(sol1.fills[0].eps, sol1.fills[0].U), mus=tuple(f.mu for f in sol1.fills)) @ gamma.detach()
         A_T = (torch.eye(n_atoms, dtype=H0.dtype, device=H0.device) - jac).transpose(0, 1)
         dq_star = sol1.dq
         dq_star.register_hook(lambda c: torch.linalg.solve(A_T, c))
@@ -313,7 +376,7 @@ def solve_dscc(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[int, int],
     energy = sol.energy - 0.5 * dq_star @ gamma @ dq_star
     energy_primary = primary_functional(H0, gamma, sol, W)
     # Commutator of the self-consistent H with the state's majority density.
-    P_s = sol.fills[0].P.detach()
+    P_s = sol.fills[0].density().detach()
     H_next = (H0 - site_potential_matrix(gamma @ sol.dq.detach() + (W if W is not None else 0.0))).detach()
     commutator = float((H_next @ P_s - P_s @ H_next).norm())
     tail = [h for h in history[-4:] if h > 0]
@@ -360,7 +423,8 @@ def root_rule(H0: torch.Tensor, gamma_full: torch.Tensor, gamma_zero: torch.Tens
 
 def hole_response(H: torch.Tensor, n_s: Tuple[int, int], n_ref: Tuple[int, int],
                   sigma_s: float = SIGMA_S, active_tol: float = 1e-12,
-                  spectrum: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
+                  spectrum: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+                  mus: Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
     """`M_ij = d dq_new_i / d V_j` at `H = H0 - diag(V)`: the site-resolved response of the
     charge DIFFERENCE `dq = -sum_sigma Tr(Pi (P_S - P_ref))` to the site potential, exact
     in the eigenbasis (Daleckii-Krein divided differences with the fixed-N correction, as
@@ -374,12 +438,15 @@ def hole_response(H: torch.Tensor, n_s: Tuple[int, int], n_ref: Tuple[int, int],
         n_orb = H.shape[-1]
         n_atoms = n_orb // ORBITALS
         M = torch.zeros(n_atoms, n_atoms, dtype=H.dtype, device=H.device)
-        for n_state, n_reference in ((n_s[0], n_ref[0]), (n_s[1], n_ref[1])):
+        for sigma, (n_state, n_reference) in enumerate(((n_s[0], n_ref[0]), (n_s[1], n_ref[1]))):
             if n_state == n_reference:
                 continue
             terms = []
+            mu_of = {}
             for n_el, sign in ((n_state, 1.0), (n_reference, -1.0)):
-                mu = chemical_potential(eps, float(n_el), sigma_s)
+                # v5 W2 item 5: the fills' chemical potentials are reused when given.
+                mu = (mus[sigma if sign > 0 else sigma + 2] if mus is not None else chemical_potential(eps, float(n_el), sigma_s))
+                mu_of[sign] = mu
                 x = (eps - mu) / sigma_s
                 f = 0.5 * torch.erfc(x)
                 fp = -torch.exp(-x * x) / (sigma_s * _SQRT_PI)           # df/d eps <= 0
@@ -397,7 +464,7 @@ def hole_response(H: torch.Tensor, n_s: Tuple[int, int], n_ref: Tuple[int, int],
                 d_f = f[active].unsqueeze(-1) - f.unsqueeze(0)
                 near = d_eps.abs() <= 1e-7
                 mid = 0.5 * (eps[active].unsqueeze(-1) + eps.unsqueeze(0))
-                x_mid = (mid - chemical_potential(eps, float(n_state if sign > 0 else n_reference), sigma_s)) / sigma_s
+                x_mid = (mid - mu_of[sign]) / sigma_s
                 L = torch.where(near, -torch.exp(-x_mid * x_mid) / (sigma_s * _SQRT_PI),
                                 d_f / torch.where(near, torch.ones_like(d_eps), d_eps))
                 # Pairs (a in act, b any) counted once, (b in act, a any) once, minus both-in-act.
@@ -443,14 +510,14 @@ def _commutator_norm(H0: torch.Tensor, gamma: torch.Tensor, W: Optional[torch.Te
                      sol: TwoFillings) -> float:
     """`|[H(dq_new), P_S]|` (Frobenius): the state's majority density against the
     Hamiltonian its own charges produce -- the plan's `tol_c` test."""
-    P_s = sol.fills[0].P.detach()
+    P_s = sol.fills[0].density().detach()
     H_next = (H0 - site_potential_matrix(gamma @ sol.dq.detach() + (W if W is not None else 0.0))).detach()
     return float((H_next @ P_s - P_s @ H_next).norm())
 
 
 def _commutator_norm_batched(H0: torch.Tensor, gamma: torch.Tensor, W: Optional[torch.Tensor],
                              sol: TwoFillings) -> torch.Tensor:
-    P_s = sol.fills[0].P.detach()
+    P_s = sol.fills[0].density().detach()
     V = torch.einsum("bij,bj->bi", gamma, sol.dq.detach()) + (W if W is not None else 0.0)
     H_next = (H0 - torch.diag_embed(V.repeat_interleave(ORBITALS, dim=-1))).detach()
     return (H_next @ P_s - P_s @ H_next).flatten(1).norm(dim=-1)
@@ -569,7 +636,7 @@ def _batched_fixed_point(H0: torch.Tensor, gamma: torch.Tensor, W: Optional[torc
             V_b = (gamma[b] @ dq_leaf[b] + (W[b] if W is not None else 0.0)).detach()
             H_b = (H0[b] - site_potential_matrix(V_b)).detach()
             jac = hole_response(H_b, (int(n_s[0][b]), int(n_s[1][b])), (int(n_ref[0][b]), int(n_ref[1][b])),
-                                sigma_s, spectrum=(sol1.fills[0].eps[b], sol1.fills[0].U[b])) @ gamma[b].detach()
+                                sigma_s, spectrum=(sol1.fills[0].eps[b], sol1.fills[0].U[b]), mus=tuple(f.mu[b] for f in sol1.fills)) @ gamma[b].detach()
             A_T[b] = (torch.eye(n_atoms, dtype=H0.dtype, device=H0.device) - jac).transpose(0, 1)
         dq_star = sol1.dq
         dq_star.register_hook(lambda c: torch.linalg.solve(A_T, c.unsqueeze(-1)).squeeze(-1))
@@ -582,12 +649,13 @@ def _batched_fixed_point(H0: torch.Tensor, gamma: torch.Tensor, W: Optional[torc
     energy = sol.energy - 0.5 * torch.einsum("bi,bij,bj->b", dq_star, gamma, dq_star)
     primary = []
     commutator = []
+    dP_all = sol.dP; P_s_all = sol.fills[0].density().detach()
     for b in range(B):
-        one = TwoFillings(energy=sol.energy[b], dP=sol.dP[b], dq=sol.dq[b],
-                          fills=tuple(FillResult(P=f.P[b], mu=f.mu[b], eps=f.eps[b], U=f.U[b], f=f.f[b],
+        one = TwoFillings(energy=sol.energy[b], dP=dP_all[b], dq=sol.dq[b],
+                          fills=tuple(FillResult(P=None, mu=f.mu[b], eps=f.eps[b], U=f.U[b], f=f.f[b],
                                                  F_band=f.F_band[b], entropy=f.entropy[b]) for f in sol.fills))
         primary.append(primary_functional(H0[b], gamma[b], one, None if W is None else W[b]))
-        P_s = sol.fills[0].P[b].detach()
+        P_s = P_s_all[b]
         H_next = (H0[b] - site_potential_matrix(gamma[b] @ sol.dq[b].detach() + (W[b] if W is not None else 0.0))).detach()
         commutator.append(float((H_next @ P_s - P_s @ H_next).norm()))
     rho = []
@@ -693,7 +761,7 @@ def solve_dscc_batched(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tuple[torch.T
                     res_hist[b].pop(0)
                 V_b = gamma[b] @ dq[b] + (W[b] if W is not None else 0.0)
                 H_b = H0[b] - site_potential_matrix(V_b)
-                jac[b] = hole_response(H_b, counts[b][0], counts[b][1], sigma_s, spectrum=(eps[b], U[b])) @ gamma[b]
+                jac[b] = hole_response(H_b, counts[b][0], counts[b][1], sigma_s, spectrum=(eps[b], U[b]), mus=tuple(f.mu[b] for f in sol.fills)) @ gamma[b]
             if lm:
                 step = _lm_step(res, jac, mu)
             else:
@@ -757,7 +825,7 @@ def _solve_dscc_batched_backtrack(H0: torch.Tensor, gamma: torch.Tensor, n_s: Tu
                 V_b = gamma[b] @ dq[b] + (W[b] if W is not None else 0.0)
                 H_b = H0[b] - site_potential_matrix(V_b)
                 jac = hole_response(H_b, (int(n_s[0][b]), int(n_s[1][b])), (int(n_ref[0][b]), int(n_ref[1][b])),
-                                    sigma_s, spectrum=(sol.fills[0].eps[b], sol.fills[0].U[b])) @ gamma[b]
+                                    sigma_s, spectrum=(sol.fills[0].eps[b], sol.fills[0].U[b]), mus=tuple(f.mu[b] for f in sol.fills)) @ gamma[b]
                 step[b] = _newton_step(res[b], jac)
             scale = torch.ones(B, dtype=H0.dtype, device=H0.device)
             accepted = torch.zeros(B, dtype=torch.bool, device=H0.device)

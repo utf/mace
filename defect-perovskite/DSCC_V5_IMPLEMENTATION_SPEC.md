@@ -135,8 +135,16 @@ after 140 epochs); pt_head 96.3 / 79.4. Epoch time 6.9 min for 1796 frames (≈ 
 = the smoke command at 30 epochs / 10000 fps-selected replay samples) one per free GPU among 4, 5
 and 7 (GPU 7 frees when the F-SCC comparators finish, ≈ 05:00 on 10 Sep), never GPUs 0–3, by
 UUID through `b3_run.sh`; logs `~/runs/base_v2_*.log`, queue log `~/runs/w1_queue.log`. The b3
-tree stays at `be3c39b` (run_train identical to HEAD). Expected completion: the first two runs
-≈ 14:00 on 10 Sep, all five ≈ 10 Sep late evening.
+tree stays at `be3c39b` (run_train identical to HEAD). **Restart 18:18 (b3 clock) in float32:** `base_v2_prod` died at
+22.9 GB (CUDA OOM in a backward on a large replay structure, 25 min in, before its first epoch
+completed); `f0` sat at 23.3 GB and `f1` had just been launched onto the freed GPU by the
+runner — both stopped, the three directories moved aside (`*_f64_oom_*`). Registered deviation
+(ours, with the reason): `--default_dtype float32` — the dtype every MACE foundation model and
+the old base were trained in, halving the activation memory; the head still converts the base
+to float64 at load. All five runs requeued from scratch under the same script otherwise; the
+float64 smoke stands as the smoke. The first production epoch (10616 frames) had not completed
+in 25 min at float64, so the user's 6.9-min-per-epoch estimate (the smoke's 1796 frames) does not
+transfer; the float32 epoch time is recorded when the first epoch lands.
 
 **W1.2 Feature export for the head.** Block-0 features of MH-1 are 512x0e+512x1o (n_scalars 512,
 n_vectors 512, from `products[0]`); `MACEDSCC.first_block` / `features` slice them; the head's
@@ -208,6 +216,34 @@ LR-only 79 atoms 705–1155 ms → 527–600 ms, 159 atoms 1318–1440 → 1071�
 still needed) 545–611 → 498–574; 639 atoms energy-only on the CPU 24.8 → 20.6 s. The Ewald
 terms' 96 ms of the baseline profile fall to ≈ 5 ms on LR-only; the remaining cost is the SCF
 loop (items 2, 5, 7).
+
+**Items 2 and 5 — frontier-only fillings and one chemical-potential solve per pass (done
+2026-09-09; `scf.two_fillings`, `scf.TwoFillings`, `fill.FillResult.density()`, `fill.fill(mu=)`,
+`scf.hole_response(mus=)`, `scf.FRONTIER_TOL` = 1e-10 (registered); `test_frontier.py`).** The
+cProfile of the inference forward put 47 % of the wall time in `chemical_potential` (174 calls per
+frame: two per fill — `fill` and `_DensityMatrix.forward` each solved it — eight per SCF pass,
+plus four per Jacobian) and the density matrices of the unaffected spin channel were formed and
+subtracted every pass. Now: one `eigh` per pass, ONE batched chemical-potential solve for the
+distinct counts (the solves are element-wise, so the values equal separate solves to 1e-14), the
+channel whose state and reference counts agree skipped exactly (one fill object reused for both,
+its contribution to `dP`, `dq` and the energy identically zero), the fills' potentials reused by
+the Jacobian; under `no_grad` (the SCF loop and inference) no density matrix is formed: `dq_i =
+−Σ_a Δf_a |Π_i a|²` over the active levels `|Δf_a| > 1e-10`, `energy = Σ_a Δf_a ε_a + R_S −
+R_ref` over all levels, `dP` from the active vectors on demand (the force cotangent, the primary
+functional), `P_S` on demand for the commutator test (once per solve). With gradients enabled
+(training, the attached pass) the eager fills with the divided-difference backward run as before,
+so training gradients are unchanged (`test_model.py` batched-vs-per-graph gradient and FD tests
+pass). **Agreement gate against the saved reference of the committed item-3 code**
+(`~/runs/dscc/w2_reference_item3.json`, `w2_item2_gate.json`; the registered frames plus a neutral
+79-atom frame and a two-frame batch; three models): worst |ΔE| 9.1e-12 eV, |ΔF| 1.9e-12 eV/Å, |Δσ|
+1.2e-15 eV/Å³ — passed. **Phase-1 gates:** the suite (145 tests with the new ones) passes.
+**Profile after items 2, 3, 5 (same protocol as the baseline):** 637 → **362 ms per frame** at
+12–14 cold-start SCF iterations: `eigh` 182 ms (18.3 calls, unchanged, now 50 % of the total),
+backward 39 ms (one call), base forward 23 ms, fills 4 ms, kernels 6 ms; the SCF loop's CPU-side
+remainder ≈ 110 ms (from ≈ 250). Gate timings per frame (cold, first-sight transients on the first
+frame): B′ LR-only 79 atoms 636–1005 → 358–740 ms, 159 atoms 1166–1298 → 846 ms; full 537–570 →
+379–426; LR + U 509–538 → 361–417. Next by measured cost: the diagonalisations (items 7, 8 — backend,
+batching by cell size, warm starts) and the loop's remaining CPU work.
 
 **Convention flag (C13, for the user).** The outline's item-3 formula carries the constant
 `−π (r_s² − 4 r_g²)/Ω`; the code's `E_PBC` (all v4 results) carries the physical

@@ -97,9 +97,10 @@ class _DensityMatrix(torch.autograd.Function):
     one takes a tensor `N` so equal-size frames fill in one call."""
 
     @staticmethod
-    def forward(ctx, H, n_electrons, sigma_s, degeneracy_tol, eps, U):
+    def forward(ctx, H, n_electrons, sigma_s, degeneracy_tol, eps, U, mu=None):
         n = torch.as_tensor(n_electrons, dtype=H.dtype, device=H.device)
-        mu = chemical_potential(eps, n, sigma_s)
+        if mu is None:
+            mu = chemical_potential(eps, n, sigma_s)
         f = occupations(eps, mu, sigma_s)
         P = (U * f.unsqueeze(-2)) @ U.transpose(-1, -2)
         ctx.save_for_backward(eps, U, f, mu)
@@ -111,24 +112,31 @@ class _DensityMatrix(torch.autograd.Function):
     def backward(ctx, grad_P):
         eps, U, f, mu = ctx.saved_tensors
         dH = _cnt._dk_backward(eps, U, f, ctx.sigma_s, ctx.tol, grad_P, mu)   # pylint: disable=protected-access
-        return dH, None, None, None, None, None
+        return dH, None, None, None, None, None, None
 
 
 @dataclass
 class FillResult:
-    """One fill of one (batch of) Hamiltonian(s)."""
-    P: torch.Tensor          # [..., n, n], differentiable in H (divided-difference backward)
+    """One fill of one (batch of) Hamiltonian(s). `P` is `None` for a frontier-only fill
+    (v5 W2 item 2, inference: the density is not formed); `density()` forms it on demand."""
+    P: Optional[torch.Tensor]  # [..., n, n], differentiable in H (divided-difference backward), or None
     mu: torch.Tensor         # [...], detached
     eps: torch.Tensor        # [..., n], detached spectrum
     U: torch.Tensor          # [..., n, n], detached eigenvectors
     f: torch.Tensor          # [..., n], detached occupations
-    F_band: torch.Tensor     # [...], differentiable in H with dF/dH = P exactly
+    F_band: torch.Tensor     # [...], differentiable in H with dF/dH = P exactly (eager fills)
     entropy: torch.Tensor    # [...], R, detached
+
+    def density(self) -> torch.Tensor:
+        """`P = U f U^T` (detached when formed on demand)."""
+        if self.P is None:
+            self.P = (self.U * self.f.unsqueeze(-2)) @ self.U.transpose(-1, -2)
+        return self.P
 
 
 def fill(H: torch.Tensor, n_electrons: Union[float, torch.Tensor],
-         sigma_s: float = SIGMA_S, spectrum: Optional[Sequence[torch.Tensor]] = None
-         ) -> FillResult:
+         sigma_s: float = SIGMA_S, spectrum: Optional[Sequence[torch.Tensor]] = None,
+         mu: Optional[torch.Tensor] = None) -> FillResult:
     """`P = fill(H, N)` and `F_band(H, N)` for a float64 symmetric `H` `[..., n, n]`.
 
     `spectrum = (eps, U)` of this `H` may be supplied to share one `eigh` between several
@@ -143,9 +151,10 @@ def fill(H: torch.Tensor, n_electrons: Union[float, torch.Tensor],
     else:
         eps, U = (t.detach() for t in spectrum)
     n = torch.as_tensor(n_electrons, dtype=H.dtype, device=H.device)
-    mu = chemical_potential(eps, n, sigma_s)
+    if mu is None:                       # v5 W2: the caller may share one solve between fills
+        mu = chemical_potential(eps, n, sigma_s)
     f = occupations(eps, mu, sigma_s)
-    P = _DensityMatrix.apply(H, n, sigma_s, DEGENERACY_TOL, eps, U)
+    P = _DensityMatrix.apply(H, n, sigma_s, DEGENERACY_TOL, eps, U, mu)
     R = generalised_entropy(eps, mu, sigma_s)
     # The envelope value: `F_band` is stationary in the occupations at fixed N, so its only
     # H-derivative is Tr(P dH). Written with the detached density so that autograd returns
