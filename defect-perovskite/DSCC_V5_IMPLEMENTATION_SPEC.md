@@ -476,4 +476,50 @@ predictor on (six `eigh` 33, backward 41, base 24, `q0` 10, hole response 7, ker
 device syncs ≈ 15 ms of waiting). Remaining W2 items: the launch/sync audit, item 6, the
 active-window partial solve.
 
+**Closing items, second pass and the benchmark re-read (2026-09-09, ~19:50).** (f) *Item 6:*
+`fill.site_occupation` / `_SiteOccupation` — the two-spin reference occupations from the
+spectrum with ONE Daleckii–Krein contraction as the backward (`Ĝ = Uᵀ diag(g) U` once, both
+spins' divided-difference maps on it, one `U M Uᵀ`; ten products to three); equal to the
+density route in value and H-gradient to 1e-10 (single and batched; the batched-vs-per-graph
+training gradient test passes); the reference fill 9.6 → 8.5 ms (its `eigh` is 6 of it).
+(g) *One free diagonalisation:* the batched solver's final attached pass re-filled the very `H`
+the converged pass had just solved; without an implicit derivative (inference) that fill is
+now reused exactly — six → **five** `eigh` per warm frame. With the frontier `dq` now summed
+over all levels (the active set serves the low-rank `dP` only) the registered sum rule
+`Σdq = Q` holds to rounding again (it had slipped to 9e-12 against the 1e-12 gate with the
+reused frontier fill). Gate at the gate tolerance: |ΔE − conversion| 9.4e-12, |ΔF| 1.1e-11,
+stress 4e-14 — passed. (h) *Active-window partial solve* (`mace/modules/dscc/window.py`, tests
+`test_window.py`): Rayleigh–Ritz on the carried window basis, two-shift dense inverse
+iteration with adaptive rounds, the residual check on the levels inside the tails' range, the
+two LDLᵀ inertia counts certifying that exactly `m` eigenvalues lie in the window's range, and
+the fallback on any failed check; on the toy it reproduces the full fillings (`dq`, energy,
+`dP`) to 1e-10 and rejects a level pushed into the window. **Measured at 316 orbitals it does not
+pay:** even for potential changes of 3e-5 eV the inner levels need 7–8 refinement rounds (two
+316-orbital solves each) — 32 ms against 5.7 ms for the MKL `eigh`; a 3e-2 change falls back.
+Dense inverse iteration converges the band-edge levels of the window too slowly at this size;
+the item's value is where a dense `eigh` does not exist (the sparse path, with a
+folded-spectrum Chebyshev filter instead of shifted solves). Kept, tested and certified as the
+Phase-4 embryo; **not wired into the production solver.** (i) *Sync/launch audit* (torch
+profiler, warm frame): self CPU 145 ms against self CUDA 129 ms; ≈ 3000 kernel launches
+(18.5 ms), 180 stream syncs (10.6 ms), 261 copies (6.9 ms) per frame — the "misc" floor is
+kernel fusion of the SCF loop's small ops (CUDA graphs or a fused loop), not a few stray syncs;
+not done in W2.
+
+**Registered benchmark re-read (P4.3 protocol, `dscc_benchmark.py`, idle A4000, the D14 winner
+`B_Bp_lr_only_s3`, plain warm start, `tol_q,inf` 1e-6):**
+
+| size | base | model | ratio median | p95 | SCF median | at D14 |
+|---|---|---|---|---|---|---|
+| 79 atoms (100 frames) | 42.2 ms | 128 ms | **3.03** | 3.27 | 4 | 7.03 / 7.43 |
+| 159 atoms (16 frames) | 73.2 ms | 269 ms | **3.66** | 7.54 | 4 | 8.59 / 13.7 |
+
+The head's own share at 79 atoms is now ≈ 86 ms (five `eigh` 30, backward 37 of which the
+base's own ≈ 28, base forward 22 shared with the denominator, `q0` 8, hole response 7, kernels
+6, the rest launch and sync overhead). **By the registered rule the 2× reading passes to W6:**
+the median is 3.0 at 79 atoms and the p95 fails at both sizes; W2 delivered 637 → 128 ms per
+warm frame (7.03 → 3.03) with every fixed point, energy (up to the C13 conversion), force and
+stress preserved to the gates. What W2 leaves for W6 is structural at this size: one full
+diagonalisation per SCF fill on a 316-orbital `H` (six milliseconds each, 12 % of the base
+per fill) and the SCF loop's kernel count.
+
 ## W3–W6 — not opened.
