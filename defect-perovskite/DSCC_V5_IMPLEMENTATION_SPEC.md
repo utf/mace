@@ -126,6 +126,12 @@ code items queued before W3 are done, on the local tree only (b3 stays frozen at
   the last-epoch parameters. Every pre-v5 run has no `avg` reading; readers fall back to the
   last-epoch numbers. Helpers `average_into` / `load_average` / `restore_parameters` are tested
   directly.
+- `dscc_arm23_report.py` (commit `e8e0d1e`) reads the averaged evaluation where a run wrote one
+  and falls back to the last epoch otherwise, recording which reading each run contributed
+  (`--reading avg|last`); it takes the pooled 4–8 Å value from the trainer's own key when present
+  and only then falls back to pooling 4–6 and 6–8 by atom count; `--spec v5` additionally writes
+  the v5 far-field gate table alongside the v4 decision, which is left untouched. This was the
+  last code prerequisite for W3.
 
 **W0.7 F-SCC finals.** Old base, minimum-image centre: written to the v4 tracker (P3.3) as a
 separate record; not compared with any v5 number.
