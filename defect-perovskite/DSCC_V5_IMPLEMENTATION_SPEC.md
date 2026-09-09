@@ -211,6 +211,28 @@ conversion back to e3nn. **Restart on b3 at 20:44 (b3 clock):** the v1 runs stop
 `base_v2_prod` on GPU 4, the others as GPUs 5 and 7 free. Expected ≈ 2.5 h per run, all five by
 ≈ 04:00 on 10 Sep.
 
+**W1 v2 results, first two runs (2026-09-09 22:40–22:42 b3 clock; 30 epochs, best = last, ≈ 2 h
+each).** `base_v2_prod` (validation, the same 154 frames the old base's gate numbers were read on):
+energy **1.16 meV/atom**, forces **10.23 meV/Å** per component, stress 0.16 meV/Å³ — the old base
+4.9 / 11.8: **both W1.3 validation gates pass.** By size: 79 atoms 1.05 meV/atom (mean offset −0.66),
+80 atoms 1.20 (+1.06), 159 atoms 2.00 (−1.69; two frames). Trajectory (epochs 0 / 4 / 9 / 14 / 19 /
+24 / 29): energy 0.89 / 1.03 / 1.26 / 1.22 / 1.19 / 1.19 / 1.16 meV/atom, forces 13.82 / 11.97 /
+11.23 / 10.92 / 10.64 / 10.41 / 10.23 meV/Å, stress 0.24 / 0.14 / 0.19 / 0.17 / 0.16 / 0.17 / 0.16,
+loss 6.1e-5 → 3.4e-5 — forces still falling at epoch 29, energy flat since epoch 9 at the
+10 : 10 weighting (v1 at 1 : 100 had reached 6.06 / 10.67 by epoch 15 with the energy rising).
+`base_v2_f0` (its fold's validation split): 0.43 meV/atom, 3.88 meV/Å, stress 0.11 (epochs 0 → 29:
+0.76 → 0.43, 6.27 → 3.88). **Isolated-atom check on `base_v2_prod`** (the MH-1 caveat): the
+predicted isolated-atom energies against their weight-1000 labels are Cl −0.754 vs −0.716
+(−38 meV), Pb −0.115 vs −0.102 (−13 meV), **Cs +0.105 vs +0.542 (−437 meV)** — the learnable bias
+did not pin the Cs reference even at weight 1000 (this is the source of the 11–13 meV/atom
+train-set energy RMSE in the final error table; the bulk fit is 1.2 meV/atom). Because the data
+constrain only E0(Cl) and E0(Cs) + E0(Pb), the Cs/Pb split of the labels was itself the
+minimum-norm convention; the Cl reference (the one a Cl-vacancy formation energy uses) is
+reproduced to 38 meV. Recorded: absolute formation energies referenced to isolated Cs are not
+supported by this base; Cs:Pb-stoichiometric comparisons are. Remaining: `f1` (GPU 5, 22:41),
+`f2`, `f3` as GPUs free (GPU 7 after the F-SCC finals); W1.3's out-of-fold floors by shell and
+the coverage / proxy tables wait for all four folds.
+
 **W1.2 Feature export for the head.** Block-0 features of MH-1 are 512x0e+512x1o (n_scalars 512,
 n_vectors 512, from `products[0]`); `MACEDSCC.first_block` / `features` slice them; the head's
 feature-modulation readouts and the rank-1 descriptor are re-dimensioned by construction from
