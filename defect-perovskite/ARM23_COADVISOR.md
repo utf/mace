@@ -238,10 +238,15 @@ removes it (+3.9) and leaves an unbiased scatter.
 shell is not readable). `x_159` passes strongly, no radial signature on the pooled atoms at
 either size, but the novelty-predicted excess is 26.4 (15.8–26.4 across the five ways of
 extrapolating the base's calibration, which is shell- and size-blind: it under-predicts the
-neutral 2–4 Å floor by 12 at 79 and by 31 at 159). **Evidence:** at matched Pb–Pb distance the
-base's flanking-Pb residual is the same at both sizes (150–285) while the head's is 43–53 at 79
-and 8–35 at 159 in every overlapping bin; the 79-atom flanking Pb carry 1.7 × the label force of
+neutral 2–4 Å floor by 12 at 79 and by 31 at 159). **Evidence:** at matched Pb–Pb distance, in the
+5.2–6.4 Å bulk the base's flanking-Pb residual is the same at both sizes (150–270) while the
+head's is 43–53 at 79 against 8–35 at 159 (1.2–6 × smaller on the same geometry); at d ≥ 6.4 Å
+base and head both fall at 159 (the 79-atom cell adds an error source there); only at d < 5.2 Å
+(one trained-on 159 frame per bin) is the head's residual equal at the two sizes; the 79-atom flanking Pb carry 1.7 × the label force of
 the 159-atom ones at the same d (389 vs 236 overall). The remaining 79-atom excess is a property
 of the 79-atom labels and cell, not a deficit the head shows on the geometry. The `b_i(h_i)`
-capacity arm is not indicated on this evidence (C12); if it runs, its metric must be the paired
-79 / 159 flanking-Pb residual at matched d. Caveat: four 159-atom held-out frames.
+capacity arm is not indicated on this evidence for the bulk, with the d < 5.2 Å corner open
+(C12); if it runs, its metric must be the paired 79 / 159 flanking-Pb residual at matched d with
+the short-d bins reported separately. Caveats: four 159-atom held-out frames; held-out files now
+exist in two centre conventions (everything before `3a6a05c`, including the coming F-SCC finals,
+is minimum-image) — no cross-convention comparison.
