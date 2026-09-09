@@ -125,6 +125,8 @@ def main():
                 else:
                     band = np.ones(n, dtype=bool)          # pristine: no vacancy, whole frame
                 row["proxy_f"] = (dis + sd)[band].tolist()
+                row["proxy_f_dis"] = dis[band].tolist()
+                row["proxy_f_sd"] = sd[band].tolist()
                 row["proxy_f_terms"] = {"dis_p95": float(np.percentile(dis[band], 95)),
                                         "sd_p95": float(np.percentile(sd[band], 95))}
                 rows.append(row)

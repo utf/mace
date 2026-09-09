@@ -69,6 +69,7 @@ def main():
         dis = per_component(pF[i] - fF[i])
         band = ((rad >= 2.0) & (rad < 4.0)) if rad is not None else np.ones(n, dtype=bool)
         proxy_f = (dis + sd)[band]
+        dis_b, sd_b = dis[band], sd[band]
         e_sd = float(np.std([kF[k][1][i] for k in folds], ddof=1))
         e_proxy = (abs(float(pE[i]) - (float(fE[i]) + counts @ a_s)) + e_sd) / n
         ref_e = float(a.info.get("REF_energy", np.nan))
@@ -77,6 +78,10 @@ def main():
                          "proxy_f_p95_meV_per_A": float(1000 * np.percentile(proxy_f, 95)) if proxy_f.size else None,
                          "proxy_f_median_meV_per_A": float(1000 * np.median(proxy_f)) if proxy_f.size else None,
                          "proxy_e_meV_per_atom": float(1000 * e_proxy),
+                         "proxy_e_dis_meV_per_atom": float(1000 * abs(float(pE[i]) - (float(fE[i]) + counts @ a_s)) / n),
+                         "proxy_e_sd_meV_per_atom": float(1000 * e_sd / n),
+                         "proxy_f_dis_p95_meV_per_A": float(1000 * np.percentile(dis_b, 95)) if dis_b.size else None,
+                         "proxy_f_sd_p95_meV_per_A": float(1000 * np.percentile(sd_b, 95)) if sd_b.size else None,
                          "band_atoms": int(band.sum()),
                          "dis_p95": float(1000 * np.percentile(dis[band], 95)) if band.sum() else None,
                          "sd_p95": float(1000 * np.percentile(sd[band], 95)) if band.sum() else None})
@@ -91,16 +96,33 @@ def main():
         key = str(size)
         uF = (thr["sizes"].get(key) or {}).get("u_F_meV_per_A")
         uE = (thr["sizes"].get(key) or {}).get("u_E_meV_per_atom")
-        inside_f = [r for r in sub if uF is not None and r["proxy_f_p95_meV_per_A"] is not None and r["proxy_f_p95_meV_per_A"] <= uF]
-        inside_e = [r for r in sub if uE is not None and r["proxy_e_meV_per_atom"] <= uE]
+        # Comparison level (registered here): a frame is "within u_F" when the 95th percentile
+        # of its own band atoms is at or below the threshold -- stricter than an atom-fraction
+        # reading, and the same statistic the threshold itself was formed from.
+        t = (thr["sizes"].get(key) or {})
+        def frac(field, bound):
+            if bound is None:
+                return None, None
+            ok = [r for r in sub if r.get(field) is not None and r[field] <= bound]
+            return len(ok), len(ok) / max(len(sub), 1)
+        nF, fF_ = frac("proxy_f_p95_meV_per_A", uF)
+        nE, fE_ = frac("proxy_e_meV_per_atom", uE)
+        nFd, fFd = frac("proxy_f_dis_p95_meV_per_A", t.get("u_F_dis_meV_per_A"))
+        nFs, fFs = frac("proxy_f_sd_p95_meV_per_A", t.get("u_F_sd_meV_per_A"))
+        nEd, fEd = frac("proxy_e_dis_meV_per_atom", t.get("u_E_dis_meV_per_atom"))
+        nEs, fEs = frac("proxy_e_sd_meV_per_atom", t.get("u_E_sd_meV_per_atom"))
         report["sizes"][key] = {
             "n_charged": len(sub),
             "d_window": [float(min(r["d"] for r in sub if r["d"])), float(max(r["d"] for r in sub if r["d"]))],
             "proxy_f_p95_median_meV_per_A": float(np.median([r["proxy_f_p95_meV_per_A"] for r in sub if r["proxy_f_p95_meV_per_A"] is not None])),
             "proxy_e_median_meV_per_atom": float(np.median([r["proxy_e_meV_per_atom"] for r in sub])),
-            "frames_within_u_F": len(inside_f), "frames_within_u_E": len(inside_e),
-            "fraction_within_u_F": len(inside_f) / max(len(sub), 1),
-            "fraction_within_u_E": len(inside_e) / max(len(sub), 1)}
+            "frames_within_u_F": nF, "frames_within_u_E": nE,
+            "fraction_within_u_F": fF_, "fraction_within_u_E": fE_,
+            # per-term, information only (the registered rule is the sum)
+            "fraction_within_u_F_dis": fFd, "fraction_within_u_F_sd": fFs,
+            "fraction_within_u_E_dis": fEd, "fraction_within_u_E_sd": fEs,
+            "proxy_f_dis_p95_median": float(np.median([r["proxy_f_dis_p95_meV_per_A"] for r in sub if r.get("proxy_f_dis_p95_meV_per_A") is not None])),
+            "proxy_f_sd_p95_median": float(np.median([r["proxy_f_sd_p95_meV_per_A"] for r in sub if r.get("proxy_f_sd_p95_meV_per_A") is not None]))}
 
     # --- admission per size (s0 from the out-of-fold NEUTRAL rows; sQ from the charged rows)
     cfg = AdmissionConfig(s_tol=args.s_tol, z=args.z, base_protocol="base_v2_cf_4fold")
@@ -113,6 +135,17 @@ def main():
         neutral_r[size] = [-r["e_resid"] for r in nsub]        # E_label - E_base = -(E_base - E_label)
     table = admission_table(charged_d, charged_r, neutral_d, neutral_r, cfg)
     report["admission"] = table_record(table, cfg, fold=-1)     # -1: the pooled cross-fit reading
+    # Per fold (W1.3: "per-size, per-fold admission decision"): `s0(L)` from that fold's own
+    # out-of-fold neutral residuals; the charged side (`sQ`, the window, the bins) is the
+    # production base on the same 1047 frames and is therefore identical across folds.
+    report["admission_by_fold"] = {}
+    for f in sorted({r["fold"] for r in rows}):
+        nd, nr = {}, {}
+        for size in charged_d:
+            nsub = [r for r in rows if r["n"] == size and r.get("d") and r["fold"] == f]
+            nd[size] = [r["d"] for r in nsub]; nr[size] = [-r["e_resid"] for r in nsub]
+        report["admission_by_fold"][str(f)] = table_record(
+            admission_table(charged_d, charged_r, nd, nr, cfg), cfg, fold=f)
     report["rows"] = out_rows
     json.dump(report, open(os.path.expanduser(args.out), "w"), indent=1, default=str)
     for size, rec in report["sizes"].items():
@@ -120,6 +153,8 @@ def main():
         print(f"n={size}: {rec['n_charged']} charged, d {rec['d_window'][0]:.2f}-{rec['d_window'][1]:.2f} A, "
               f"proxy_F p95 median {rec['proxy_f_p95_median_meV_per_A']:.1f} (within u_F {100*rec['fraction_within_u_F']:.0f} %), "
               f"proxy_E median {rec['proxy_e_median_meV_per_atom']:.2f} (within u_E {100*rec['fraction_within_u_E']:.0f} %)")
+        print(f"        per-term within-fractions: F dis {rec['fraction_within_u_F_dis']} sd {rec['fraction_within_u_F_sd']}, "
+              f"E dis {rec['fraction_within_u_E_dis']} sd {rec['fraction_within_u_E_sd']}")
         if t:
             print(f"        s0 {t.s0:.4f} +- {t.s0_se:.4f} eV/A, sQ {t.sQ:.4f} +- {t.sQ_se:.4f}, coverage {t.coverage}, admitted {t.admitted} ({t.reason})")
 

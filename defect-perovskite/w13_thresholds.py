@@ -32,17 +32,32 @@ def main():
     a_s, *_ = np.linalg.lstsq(A, y, rcond=None)
     resid_E = y - A @ a_s                      # aligned energy disagreement, eV per frame
 
+    nat = np.array([r["n"] for r in rows], dtype=np.float64)
     out = {"alignment": {"a_Cl": float(a_s[0]), "a_Cs": float(a_s[1]), "a_Pb": float(a_s[2]),
-                         "n_frames": len(rows), "rms_before_meV_per_atom": float(1000 * np.sqrt((y ** 2).mean()) / 79),
-                         "rms_after_meV_per_atom": float(1000 * np.sqrt((resid_E ** 2).mean()) / 79)},
+                         "n_frames": len(rows),
+                         "rms_before_meV_per_atom": float(1000 * np.sqrt(((y / nat) ** 2).mean())),
+                         "rms_after_meV_per_atom": float(1000 * np.sqrt(((resid_E / nat) ** 2).mean())),
+                         "note": "Cs : Pb is 1 : 1 in every cell, so only a_Cl and a_Cs + a_Pb are "
+                                 "identifiable; lstsq splits the sum equally. Only the predicted "
+                                 "offset sum_s n_s a_s is a reading."},
            "sizes": {}}
     for size in sorted({r["n"] for r in rows}):
         idx = [i for i, r in enumerate(rows) if r["n"] == size]
         sub = [rows[i] for i in idx]
         pf = np.concatenate([np.asarray(r["proxy_f"]) for r in sub]) if sub else np.array([])
+        pdis = np.concatenate([np.asarray(r["proxy_f_dis"]) for r in sub]) if sub and "proxy_f_dis" in sub[0] else np.array([])
+        psd = np.concatenate([np.asarray(r["proxy_f_sd"]) for r in sub]) if sub and "proxy_f_sd" in sub[0] else np.array([])
         eu = np.array([(abs(resid_E[i]) + sub_j["e_sd_folds"]) / sub_j["n"] for i, sub_j in zip(idx, sub)])
-        rec = {"n_frames": len(sub), "u_F_meV_per_A": float(1000 * np.percentile(pf, 95)) if pf.size else None,
-               "u_E_meV_per_atom": float(1000 * np.percentile(eu, 95)) if eu.size else None,
+        e_dis = np.array([abs(resid_E[i]) / sub_j["n"] for i, sub_j in zip(idx, sub)])
+        e_sd = np.array([sub_j["e_sd_folds"] / sub_j["n"] for sub_j in sub])
+        pct = lambda a: float(1000 * np.percentile(a, 95)) if a.size else None
+        rec = {"n_frames": len(sub), "u_F_meV_per_A": pct(pf), "u_E_meV_per_atom": pct(eu),
+               # Information only (W1.3 note): the registered threshold is the SUM. The
+               # foundation-disagreement term measures how far fine-tuning moved the foundation,
+               # not extrapolation, and is expected to dominate and not to discriminate; the
+               # cross-fit spread is the component that carries information about a new geometry.
+               "u_F_dis_meV_per_A": pct(pdis), "u_F_sd_meV_per_A": pct(psd),
+               "u_E_dis_meV_per_atom": pct(e_dis), "u_E_sd_meV_per_atom": pct(e_sd),
                "u_F_terms": {"dis_p95": med([r["proxy_f_terms"]["dis_p95"] for r in sub]),
                              "sd_p95": med([r["proxy_f_terms"]["sd_p95"] for r in sub])},
                "force_rmse_median_meV_per_A": 1000 * med([r["force_rmse"] for r in sub]),

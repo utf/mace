@@ -366,6 +366,26 @@ Two scripts, run locally on the A4000; b3 stays frozen at `be3c39b`.
   identifiable flanking pair and carry no shell reading. Recorded as a dry run of the pipeline,
   not as the W1.3 numbers — those wait for all four folds.
 
+**W1.3 expected-reading note (registered 2026-09-09 23:40, BEFORE stage 2 runs).** The fold-0 dry
+run puts the foundation-disagreement term at 175 meV/Å (79 atoms) and 200 meV/Å (159) p95 in the
+2–4 Å band, against a model force error of about 11 meV/Å in the same band. That term measures how
+far the fine-tune moved the foundation, not how far a charged geometry sits outside the training
+distribution, and it will dominate the registered sum `u_F = p95(dis + sd)`. We therefore expect
+the stage-2 table to report a within-`u_F` fraction near 100 % and we say so before opening it:
+that pass is vacuous, not a validation. The informative component is the cross-fit spread. The
+registered rule is NOT changed — `u_F`, `u_E` stay the sums — but stage 1b now also writes the
+per-term thresholds `u_F_dis`, `u_F_sd`, `u_E_dis`, `u_E_sd`, and stage 2 reports the within-fraction
+for each term, so the discriminating component is visible next to the registered one.
+Two further choices registered here: a charged frame counts as "within `u_F`" when the 95th
+percentile over ITS OWN band atoms is at or below the threshold (the same statistic the threshold
+was formed from, stricter than an atom-fraction reading); and the admission table is written per
+fold as well as pooled, `s0(L)` from that fold's own out-of-fold neutral residuals while the
+charged side (`sQ`, window, bins) is the production base on the same 1047 frames and so is
+identical across folds. With five 159-atom neutral frames per fold against 0.2 Å bins and
+`n_min` = 3, coverage at 159 is expected to fail per fold and probably pooled; that is a recorded
+limitation of the data, and the 159-atom energy admission will read "unmeasurable", not "refused".
+One-shot driver `defect-perovskite/w13_run.sh` (fetch f1–f3, stage 1 → 1b → 2, log `~/runs/w13.log`).
+
 ## W2 — efficiency
 
 **Baseline profile (2026-09-09, `scratchpad/w2_profile.py`; B′ LR-only s3, eleven held-out 79-atom
