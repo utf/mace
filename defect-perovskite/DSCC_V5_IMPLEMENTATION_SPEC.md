@@ -331,6 +331,41 @@ component, 4.9 meV/atom); out-of-fold neutral floors by shell (vacancy-side cent
 159; `s0(L) ± SE`, coverage and proxy tables per size; per-size, per-fold admission recorded
 before W5 opens.
 
+**W1.3 procedure registered (2026-09-09 23:30, before any fold model beyond f0 was opened).**
+Two scripts, run locally on the A4000; b3 stays frozen at `be3c39b`.
+- *Data.* Each fold holds out 451 neutral frames: `valid.xyz` (153 pristine, 80 atoms — the
+  split the training log's Default-head numbers were read on) and `null_oof.xyz` (298 neutral
+  vacancy frames, 293 at 79 atoms and 5 at 159), which no base of that fold ever saw. Across the
+  four folds every neutral frame is out-of-fold exactly once. The charged set is `eval_qp1.xyz`
+  (1047 frames, 1030 at 79 and 17 at 159); no base saw any of it.
+- *Stage 1* (`scratchpad/w13_eval.py`): per out-of-fold neutral frame, the fold's own base gives
+  the force error per component by shell (`2-4`, `4-8`, `8-10`, `10-12`, `12+`, vacancy-side
+  centre) with the 2–4 Å split into flanking Pb / first-shell Cl / other, the energy residual,
+  the collective coordinate `d`, and the two proxy terms — the frozen foundation (`omat_pbe`)
+  disagreement and the cross-fit spread over the four fold bases. A per-atom force quantity is
+  always the RMS over the three Cartesian components (per component, as everywhere in v5).
+- *Stage 1b* (`scratchpad/w13_thresholds.py`): the OLS species alignment of W0.6a.3 and the
+  thresholds `u_F`, `u_E` per size, written to `~/runs/w1_proxy_thresholds.json` before stage 2
+  runs. Note on the alignment (from the fold-0 dry run): the design matrix is rank-deficient —
+  these cells are Cs : Pb = 1 : 1, so only `a_Cl` and `a_Cs + a_Pb` are identifiable and
+  `lstsq` splits the sum equally. The predicted alignment `Σ n_s a_s` is unique, which is all the
+  proxy uses; the individual `a_Cs`, `a_Pb` are not readings.
+- *Stage 2* (`scratchpad/w13_charged.py`, run only after the thresholds exist): the charged
+  d-window, the proxy against `u_F` / `u_E` per size, and `admission_table` (coverage bins of
+  width 0.2 Å with `n_min` 3, `s0 ± SE` from the out-of-fold NEUTRAL residuals, `sQ` from the
+  charged ones), with `s_tol` = 0.018 and `z` = 2 as W0.6 registered.
+- *Which model is `F_ft`* (choice, ours, registered here): on the neutral threshold frames it is
+  the frame's own out-of-fold base — the production base trained on all of them, so it would be
+  an in-sample reading. On charged geometries no base is in-sample, and `F_ft` is the PRODUCTION
+  base, the model W3 will wrap; the spread term is over the four fold bases in both cases.
+- *Dry run on fold 0 alone* (2026-09-09 23:12, one base, so no spread term): out-of-fold neutral
+  force RMSE per component, median over frames — 79 atoms 7.78 meV/Å overall, by shell
+  11.20 / 7.40 / 6.84 / 5.88 / 4.80, near-field 15.26 (flanking Pb) and 9.19 (first-shell Cl)
+  against 5.57 for the rest of the 2–4 Å band; 159 atoms (5 frames) 9.26 overall, 23.44 in 2–4 Å
+  (38.34 at the flanking Pb); 80-atom pristine 3.63. Five of the 293 79-atom frames have no
+  identifiable flanking pair and carry no shell reading. Recorded as a dry run of the pipeline,
+  not as the W1.3 numbers — those wait for all four folds.
+
 ## W2 — efficiency
 
 **Baseline profile (2026-09-09, `scratchpad/w2_profile.py`; B′ LR-only s3, eleven held-out 79-atom
