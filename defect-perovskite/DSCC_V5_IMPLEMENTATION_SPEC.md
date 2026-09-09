@@ -359,7 +359,16 @@ out-of-fold neutral base residuals):** `C_Q` 12.5651 → 12.5691 eV (+4.0 meV, t
 conversion; SE 0.0026 unchanged), `s0` 0.117 ± 0.064 and the shape residual slope −0.0076
 unchanged (a constant shift within a size), the 79-vs-159 mean residual after one `C_Q` −0.8226 →
 −0.8187 eV (the two sizes' conversions differ by 3.9 meV; the −0.82 eV between-size offset itself
-is the E_SF / small-cell term recorded at D13–D14, untouched). Tiling ladder under C13: below.
+is the E_SF / small-cell term recorded at D13–D14, untouched). **Tiling ladder under C13 (`dscc_ladder.py` on the winner `B_Bp_lr_only_s3`, CPU, static-cell
+tilings, `~/runs/dscc/ladder_bp_lr_only_s3_c13.json`):** `E(+1) − E(0)` = 8.1685 / 8.2536 / 8.3282 /
+8.2974 eV on the 79 / 159 / 319 / 639-atom cells (L = 14.3 / 18.0 / 22.7 / 28.6 Å); the same-shape
+`1/L` fit (79, 159, 639) gives −3.58 eV·Å raw and **−3.77 eV·Å after the second-moment term** is
+removed (`dE_slope_minus_second_moment`), i.e. 77 % of the expected −4.89 (the old-convention s0
+reading was 67 %; the v4 Route A LR-only 24 %); `K_LR_ii`'s size-dependent part matches the
+cell-shape Madelung coefficient to 1.8 %. Dense = sparse where the sparse step converged. The
+`E_SF` exclusion from cross-size energy claims (C10 addendum) stands; the ladder is the model
+property W3's B′ arm inherits. **W6 note (ruled):** `E_M(Q; h)` must carry the same model-density
+second-moment term so that W6 and the SCF models agree at fixed cell.
 
 **Item 7b — CPU LAPACK for the single float64 `eigh` (done 2026-09-09; `fill.eigh_for`,
 `ScfOptions.eigh_device` = 'auto' (registered: a single float64 matrix of ≤ 512 orbitals on a
