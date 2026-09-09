@@ -35,6 +35,8 @@ def far_field(shells, counts=None):
     count. Runs recorded before C10 carry no counts: the report takes the counts of any run of
     the SAME SEED that does (the held-out set is a function of the seed), and only without one
     falls back to shell-volume weights (152 : 296)."""
+    if shells.get("4-8") is not None:
+        return float(shells["4-8"])        # W0.2 (v5): the trainer writes the pooled shell itself
     v1, v2 = shells.get("4-6"), shells.get("6-8")
     if v1 is None or v2 is None:
         return float(v1 or v2 or 0.0)
@@ -55,6 +57,10 @@ def main() -> None:
     ap.add_argument("--residuals", default=str(HERE / "dscc_base_residuals.json"))
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--f_sr_frames", type=int, default=24)
+    ap.add_argument("--spec", default="v4", choices=("v4", "v5"), help="far-field gate reading (W0.2)")
+    ap.add_argument("--reading", default="avg", choices=("avg", "last"),
+                    help="W0.4: 'avg' reads held_final_avg.json where a run has one and falls back "
+                         "to the last-epoch file; 'last' always reads the last epoch")
     args = ap.parse_args()
     torch.set_default_dtype(torch.float64)
     frames = load_frames(f"{args.dataset}/train.xyz", f"{args.dataset}/valid.xyz")
@@ -77,7 +83,13 @@ def main() -> None:
         rec = json.load(open(run / "run_record.json")); cfg = rec["config"]
         hist = json.load(open(run / "history.json"))
         spikes = spikes_of(run)                       # v4.3: loss-spike events logged, not acted on
-        held = json.load(open(run / "held_final.json"))
+        # W0.4 (v5): the evaluation model is the epoch average where the run wrote one; every
+        # pre-v5 run has only its last-epoch file and falls back to it. The reading actually
+        # used is recorded per run.
+        avg_path = run / "held_final_avg.json"
+        use_avg = args.reading == "avg" and avg_path.exists()
+        held = json.load(open(avg_path if use_avg else run / "held_final.json"))
+        held_last = json.load(open(run / "held_final.json"))
         model_path = run / ("model_dscc.pt" if (run / "model_dscc.pt").exists() else "model.pt")
         model = torch.load(model_path, weights_only=False, map_location=args.device).to(args.device).eval()
         z_table = tools.AtomicNumberTable(model.atomic_numbers)
@@ -123,7 +135,10 @@ def main() -> None:
         # epochs; the early-epoch failures are the initialised-map transient (recorded).
         sv_last10 = max(sv_fractions[-10:]) if sv_fractions else 0.0
         over = [k + 1 for k, f in enumerate(sv_trained) if f > ceiling]
-        entry = {"config": info, "force_rmse": held["force_rmse"], "shell_rmse": held["shell_rmse"],
+        entry = {"config": info, "reading": "avg" if use_avg else "last",
+                 "force_rmse_last_epoch": held_last["force_rmse"],
+                 "force_rmse": held["force_rmse"], "shell_rmse": held["shell_rmse"],
+                 "near_rmse": held.get("near_rmse"), "near_counts": held.get("near_counts"),
                  "shell_counts": held.get("shell_counts"),
                  "far_field_4_8": far_field(held["shell_rmse"], held.get("shell_counts") or counts_by_seed.get(cfg["seed"])),
                  "shape_slope_err": shape_err, "c_q": cq, "n_eff_p50": float(np.median(n_effs)) if n_effs else float("nan"),
@@ -156,13 +171,15 @@ def main() -> None:
             sv_fraction_last10=[e["sv_fraction_last10"] for e in entries],
             sv_transient_end=[e["sv_transient_end"] for e in entries],
             far_field_4_8=[e["far_field_4_8"] for e in entries],
-            shells={k: [e["shell_rmse"][k] for e in entries] for k in ("0-2", "2-4", "4-6", "6-8", "8-99")
+            shells={k: [e["shell_rmse"][k] for e in entries] for k in ("0-2", "2-4", "4-6", "6-8", "4-8", "8-99")
                     if all(e["shell_rmse"].get(k) is not None for e in entries)},
             s_scale=[e["s"] for e in entries if route == "Bp" and e["s"] is not None]))
     decision = arm23.select(configs)                  # v4.3 as registered
     decision_v44 = arm23.select_v44(configs)          # the 2026-09-08 rule, post hoc
     report = {"runs": per_run, "configs": {c.name: c.__dict__ for c in configs}, "decision": decision,
-              "decision_v44": decision_v44}
+              "decision_v44": decision_v44, "reading": args.reading, "spec": args.spec}
+    if args.spec == "v5":                             # W0.2: the v5 far-field gate, reported alongside
+        report["gates_v5"] = arm23._gate_table(configs, spec="v5")
     json.dump(report, open(args.out, "w"), indent=1, default=str)
     print("decision:", json.dumps({k: v for k, v in decision.items() if k != "gates"}, default=str))
     print("saved", args.out)
