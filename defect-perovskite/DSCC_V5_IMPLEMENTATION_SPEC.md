@@ -233,6 +233,25 @@ supported by this base; Cs:Pb-stoichiometric comparisons are. Remaining: `f1` (G
 `f2`, `f3` as GPUs free (GPU 7 after the F-SCC finals); W1.3's out-of-fold floors by shell and
 the coverage / proxy tables wait for all four folds.
 
+**Replay (pt_head) validation trajectory, read 2026-09-09 23:00 after the user's question.** The
+replay head's validation error against the MH-1 pseudolabels (initial error 0) reaches its minimum
+around epoch 8–11 and then RISES for the rest of the run at the constant lr 1e-4. `base_v2_prod`
+(epochs 0 / 5 / 8 / 14 / 20 / 26 / 29): energy 5.77 / 3.61 / 3.64 / 3.47 / 4.17 / 3.92 / 4.05
+meV/atom, forces 17.42 / 14.67 / 14.15 / 14.62 / 15.68 / 16.38 / 17.11 meV/Å, stress 1.35 / 1.11 /
+0.98 / 1.05 / 1.06 / 1.11 / 1.17 meV/Å³; `base_v2_f0`: energy 5.75 → 3.16 (epoch 11) → 3.70,
+forces 18.51 → 14.38 (epoch 11) → 16.49, stress 1.39 → 0.87 → 1.04. At epoch 29 the replay forces
+are back at their epoch-0 level (the representation has drifted from MH-1 by ≈ 3 meV/Å on the
+replay frames, ≈ 20 % over the minimum). Over the same epochs the Default head was still improving,
+but slowly: prod forces 10.57 → 10.23 meV/Å over epochs 20 → 29 (≈ 0.04 meV/Å per epoch, energy
+flat at 1.16–1.19); f0 4.07 → 3.88. The trainer selects the checkpoint on the LAST head only
+(`mace/tools/train.py:213`, "consider only the last head for the checkpoint"), i.e. on Default, so
+the saved model is epoch 29 and the replay rise does not enter the selection. Reading: the run is
+past the point where the replay constrains it; continuing at constant lr 1e-4 buys ≈ 0.3 meV/Å of
+Default forces per 10 epochs at the price of further replay drift. Registered protocol (30 epochs,
+best = last) is kept for the four folds and prod; a decay tail (lr 1e-4 → 1e-5 over 10 epochs from
+the epoch-29 checkpoint) is the candidate if the replay drift is to be reclaimed — a protocol
+change, to be registered before use, and applied to all five runs or none. User decision pending.
+
 **W1.2 Feature export for the head.** Block-0 features of MH-1 are 512x0e+512x1o (n_scalars 512,
 n_vectors 512, from `products[0]`); `MACEDSCC.first_block` / `features` slice them; the head's
 feature-modulation readouts and the rank-1 descriptor are re-dimensioned by construction from
