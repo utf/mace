@@ -157,6 +157,14 @@ class MACEDSCC(nn.Module):
 
     # ----------------------------------------------------------------- learnables
 
+    def _need_sr(self) -> bool:
+        """v5 W2: `K_SR` enters `Gamma` only through `lambda_dir`; with `lambda_dir` held at
+        zero (LR-only, LR + U) its lattice sum and pair derivative are skipped."""
+        return getattr(self, "lambda_fixed", None) != 0.0
+
+    def _lr_route(self) -> str:
+        return getattr(self.kernel, "lr_route", "reciprocal")
+
     def lambda_dir(self) -> torch.Tensor:
         """`lambda_dir`: learned in `[0, lambda_max]`, or held at `lambda_fixed` (Arm 2+3
         couplings "LR-only" (0), "LR + U" (0) and "lambda_dir = 1 fixed")."""
@@ -376,7 +384,7 @@ class MACEDSCC(nn.Module):
             if self.route_b:
                 # v4.2: the gap regulariser acts on H0 - W with W from the pristine q0.
                 g_lr = gamma_lr(positions[nodes], cell[g], self.kernel.r_g, self.r_split,
-                                self.kernel.eps_inf, tol=self.kernel.tol)
+                                self.kernel.eps_inf, tol=self.kernel.tol, route=self._lr_route())
                 W = host_potential(g_lr, self.pattern_scale() * self.reference_charges(H, numbers))
                 H = H - torch.diag(W.repeat_interleave(4))
             n_up, n_dn = S_REF.counts(neutral_count(numbers))
@@ -513,9 +521,9 @@ class MACEDSCC(nn.Module):
                     # from lambda and U in gamma_matrix): detached, which halves the memory
                     # again at 159 atoms.
                     with torch.set_grad_enabled(not use_pairs):
-                        k_sr, k_lr = kernel_components(pos_b[g], cell[g], self.kernel)
+                        k_sr, k_lr = kernel_components(pos_b[g], cell[g], self.kernel, need_sr=self._need_sr())
                         if self.route_b:            # Gamma_LR likewise: detached under the pair route
-                            Ws.append(gamma_lr(pos_b[g], cell[g], self.kernel.r_g, self.r_split, self.kernel.eps_inf, tol=self.kernel.tol))
+                            Ws.append(gamma_lr(pos_b[g], cell[g], self.kernel.r_g, self.r_split, self.kernel.eps_inf, tol=self.kernel.tol, route=self._lr_route()))
                     gammas.append(gamma_matrix(k_sr, k_lr, self.lambda_dir(), self.u_eff()[sp_b[g]], self.kernel.eps_inf))
                 gamma = torch.stack(gammas)
                 W = None
@@ -560,7 +568,7 @@ class MACEDSCC(nn.Module):
                 dP_sym = 0.5 * (res.dP + res.dP.transpose(-1, -2))
                 if use_pairs:
                     with torch.no_grad():
-                        pairs = [kernel_pair_gradients(pos_b[g], cell[g], self.kernel) for g in range(num_graphs)]
+                        pairs = [kernel_pair_gradients(pos_b[g], cell[g], self.kernel, need_sr=self._need_sr()) for g in range(num_graphs)]
                     gamma_p = gamma_pair_derivative(torch.stack([d[0] for d in pairs]), torch.stack([d[1] for d in pairs]),
                                                     self.lambda_dir(), self.kernel.eps_inf)          # [B, n, n, 3]
                     n_site = torch.diagonal(dP_sym, dim1=-2, dim2=-1).reshape(num_graphs, n_nodes, 4).sum(-1)
@@ -575,7 +583,7 @@ class MACEDSCC(nn.Module):
                         # (Gamma_LR detached above, s and q0 attached as on the cotangent route).
                         with torch.no_grad():
                             d_w = torch.stack([gamma_lr_pair_gradient(pos_b[g], cell[g], self.kernel.r_g, self.r_split,
-                                                                      self.kernel.eps_inf, tol=self.kernel.tol)
+                                                                      self.kernel.eps_inf, tol=self.kernel.tol, route=self._lr_route())
                                                for g in range(num_graphs)])
                         A_w = -n_site.unsqueeze(-1) * sq0.unsqueeze(-2)
                         pair_grad = pair_grad + gradient_of_contraction(A_w, d_w).reshape(-1, 3)
@@ -618,7 +626,7 @@ class MACEDSCC(nn.Module):
                 use_pairs_f = (compute_force and not compute_stress
                                and getattr(self, "gamma_force_mode", "pairs") == "pairs")
                 with torch.set_grad_enabled(not use_pairs_f):        # as the D-SCC branches
-                    k_sr, k_lr = kernel_components(pos_g, cell_g, self.kernel)
+                    k_sr, k_lr = kernel_components(pos_g, cell_g, self.kernel, need_sr=self._need_sr())
                 if self.fscc == "matched":
                     gamma_f = gamma_matrix(k_sr, k_lr, self.lambda_dir(), self.u_eff()[sp_g], self.kernel.eps_inf)
                 else:                                              # full kernel: E_PBC / eps + diag(U)
@@ -633,7 +641,7 @@ class MACEDSCC(nn.Module):
                 if use_pairs_f:
                     # The kernel term's force from the pair derivatives (see the D-SCC branch):
                     # Gamma_F is linear in the components, with lambda_dir (matched) or 1 (full).
-                    d_sr, d_lr = kernel_pair_gradients(pos_g, cell_g, self.kernel)
+                    d_sr, d_lr = kernel_pair_gradients(pos_g, cell_g, self.kernel, need_sr=self._need_sr())
                     lam_f = self.lambda_dir() if self.fscc == "matched" else torch.ones((), dtype=H.dtype, device=device)
                     gamma_p = gamma_pair_derivative(d_sr, d_lr, lam_f, self.kernel.eps_inf)
                     if pair_grad is None:
@@ -652,7 +660,7 @@ class MACEDSCC(nn.Module):
             if self.coupling:
                 pos_g, cell_g, sp_g = positions[nodes], cell[g], species[nodes]
                 with torch.set_grad_enabled(not use_pairs):            # see the batched branch
-                    k_sr, k_lr = kernel_components(pos_g, cell_g, self.kernel)
+                    k_sr, k_lr = kernel_components(pos_g, cell_g, self.kernel, need_sr=self._need_sr())
                 gamma = gamma_matrix(k_sr, k_lr, self.lambda_dir(), self.u_eff()[sp_g],
                                      self.kernel.eps_inf)
                 W = None
@@ -662,7 +670,7 @@ class MACEDSCC(nn.Module):
                     # (H, dP) cotangent below; a detached q0 would be non-conservative).
                     with torch.set_grad_enabled(not use_pairs):      # see the batched branch
                         g_lr = gamma_lr(pos_g, cell_g, self.kernel.r_g, self.r_split, self.kernel.eps_inf,
-                                        tol=self.kernel.tol)
+                                        tol=self.kernel.tol, route=self._lr_route())
                     q0 = self.reference_charges(H, numbers)
                     sq0 = self.pattern_scale() * q0
                     W = host_potential(g_lr, sq0)
@@ -694,7 +702,7 @@ class MACEDSCC(nn.Module):
                 dq_fixed = res.dq.detach()
                 if use_pairs:
                     with torch.no_grad():
-                        d_sr, d_lr = kernel_pair_gradients(pos_g, cell_g, self.kernel)
+                        d_sr, d_lr = kernel_pair_gradients(pos_g, cell_g, self.kernel, need_sr=self._need_sr())
                     gamma_p = gamma_pair_derivative(d_sr, d_lr, self.lambda_dir(), self.kernel.eps_inf)
                     n_site = torch.diagonal(dP_sym).reshape(-1, 4).sum(-1)
                     A = -0.5 * res.dq.unsqueeze(-1) * res.dq.unsqueeze(0) - n_site.unsqueeze(-1) * dq_fixed.unsqueeze(0)
@@ -703,7 +711,7 @@ class MACEDSCC(nn.Module):
                     if self.route_b:                                   # see the batched branch
                         with torch.no_grad():
                             d_w = gamma_lr_pair_gradient(pos_g, cell_g, self.kernel.r_g, self.r_split,
-                                                         self.kernel.eps_inf, tol=self.kernel.tol)
+                                                         self.kernel.eps_inf, tol=self.kernel.tol, route=self._lr_route())
                         A_w = -n_site.unsqueeze(-1) * sq0.unsqueeze(0)
                         pair_grad = pair_grad.index_add(0, torch.arange(lo, hi, device=device), gradient_of_contraction(A_w, d_w))
                         cotangent_terms.append((W, -n_site))

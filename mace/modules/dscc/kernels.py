@@ -31,7 +31,7 @@ import torch
 from scipy.special import erfcinv
 
 from mace.modules.dscc.ewald import (COULOMB, EWALD_TOL, ewald_matrix, pair_gradient, self_term,
-                                     short_range_lattice_sum)
+                                     short_range_lattice_sum, reciprocal_matrix, reciprocal_pair_gradient)
 
 _SQRT_PI = math.sqrt(math.pi)
 REGIMES = ("A", "B")
@@ -48,6 +48,7 @@ class KernelConfig:
     r_d2: float = 3.6
     r_s: float = 6.5            # regime B range-separation width, A
     tol: float = EWALD_TOL
+    lr_route: str = "reciprocal"  # v5 W2 item 3: 'reciprocal' (direct k-space K_LR / Gamma_LR) or 'ewald' (the v4 route)
 
     def __post_init__(self) -> None:
         if self.regime not in REGIMES:
@@ -56,6 +57,8 @@ class KernelConfig:
             raise ValueError("regime A needs 0 < r_d1 < r_d2")
         if self.regime == "B" and self.r_s <= 2.0 * self.r_g:
             raise ValueError("regime B needs r_s > 2 r_g")
+        if self.lr_route not in ("reciprocal", "ewald"):
+            raise ValueError(f"unknown lr_route {self.lr_route!r}")
 
 
 def switch_c2(r: torch.Tensor, r1: float, r2: float) -> torch.Tensor:
@@ -107,29 +110,56 @@ def k_sr_regime_b(positions: torch.Tensor, cell: torch.Tensor, cfg: KernelConfig
                                    regime_b_cutoff(cfg) if r_c is None else r_c, pair_vectors=pair_vectors)
 
 
+def lr_route(cfg: KernelConfig) -> str:
+    """The long-range route of a config, 'reciprocal' for configs pickled before v5."""
+    return getattr(cfg, "lr_route", "reciprocal")
+
+
 def kernel_components(positions: torch.Tensor, cell: torch.Tensor, cfg: KernelConfig,
                       eta: Optional[float] = None,
-                      pair_vectors: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+                      pair_vectors: Optional[torch.Tensor] = None,
+                      need_sr: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
     """`(K_SR, K_LR)` with `K_SR + K_LR = E_PBC`. With `pair_vectors` both are functions of
-    the pair leaf `d0_ij = r_i - r_j` entry by entry (see `ewald.pair_gradient`)."""
+    the pair leaf `d0_ij = r_i - r_j` entry by entry (see `ewald.pair_gradient`). With
+    `need_sr=False` (v5 W2: `lambda_dir` held at zero, so `K_SR` never enters `Gamma`) the
+    short-range component is returned as zeros and its lattice sum is skipped."""
     if cfg.regime == "A":
         k_sr = k_sr_regime_a(positions, cell, cfg, pair_vectors=pair_vectors)
         k_lr = ewald_matrix(positions, cell, cfg.r_g, eta=eta, tol=cfg.tol, pair_vectors=pair_vectors) - k_sr
-    else:
-        k_sr = k_sr_regime_b(positions, cell, cfg, pair_vectors=pair_vectors)
-        # The Ewald kernel of the broad Gaussian erf(r / r_s) / r: two Gaussians of width
-        # r_s / 2 (pair width sqrt(2 (2 (r_s/2)^2)) = r_s).
+        return k_sr, k_lr
+    # Regime B: K_LR is the periodic kernel of the broad Gaussian erf(r / r_s) / r (two
+    # Gaussians of width r_s / 2, pair width r_s), evaluated in reciprocal space alone
+    # (v5 W2 item 3; the v4 Ewald route kept under lr_route = 'ewald', identical to tol).
+    if lr_route(cfg) == "ewald":
         k_lr = ewald_matrix(positions, cell, 0.5 * cfg.r_s, eta=eta, tol=cfg.tol, pair_vectors=pair_vectors)
+    else:
+        k_lr = reciprocal_matrix(positions, cell, cfg.r_s, tol=cfg.tol, pair_vectors=pair_vectors)
+    if need_sr:
+        k_sr = k_sr_regime_b(positions, cell, cfg, pair_vectors=pair_vectors)
+    else:
+        k_sr = torch.zeros_like(k_lr)
     return k_sr, k_lr
 
 
 def kernel_pair_gradients(positions: torch.Tensor, cell: torch.Tensor, cfg: KernelConfig,
-                          eta: Optional[float] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+                          eta: Optional[float] = None, need_sr: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
     """`(D_SR, D_LR)`, `[N, N, 3]` each: `d K_ij / d(r_i - r_j)` of the two kernel
-    components, detached constants of the geometry (two first-order backwards through the
-    lattice sums, no graph kept)."""
+    components, detached constants of the geometry. Regime B on the reciprocal route: `D_LR`
+    analytic through the structure factors, `D_SR` one first-order backward through the
+    short-range lattice sum (skipped, zeros, with `need_sr=False`); otherwise two backwards
+    through the lattice sums, no graph kept."""
     pos, cel = positions.detach(), cell.detach()
-    return pair_gradient(lambda d0: kernel_components(pos, cel, cfg, eta=eta, pair_vectors=d0), pos)
+    if cfg.regime == "B" and lr_route(cfg) != "ewald":
+        d_lr = reciprocal_pair_gradient(pos, cel, cfg.r_s, tol=cfg.tol)
+        if need_sr:
+            (d_sr,) = pair_gradient(lambda d0: (k_sr_regime_b(pos, cel, cfg, pair_vectors=d0),), pos)
+        else:
+            d_sr = torch.zeros_like(d_lr)
+        return d_sr, d_lr
+    if need_sr:
+        return pair_gradient(lambda d0: kernel_components(pos, cel, cfg, eta=eta, pair_vectors=d0), pos)
+    (d_lr,) = pair_gradient(lambda d0: (kernel_components(pos, cel, cfg, eta=eta, pair_vectors=d0, need_sr=False)[1],), pos)
+    return torch.zeros_like(d_lr), d_lr
 
 
 def gamma_pair_derivative(d_sr: torch.Tensor, d_lr: torch.Tensor, lambda_dir: torch.Tensor,
@@ -160,22 +190,29 @@ def phi_cc(gamma: torch.Tensor, dq: torch.Tensor) -> torch.Tensor:
 
 
 def gamma_lr(positions: torch.Tensor, cell: torch.Tensor, r_g: float, r_split: float,
-             eps_inf: float, eta: Optional[float] = None, tol: float = EWALD_TOL) -> torch.Tensor:
+             eps_inf: float, eta: Optional[float] = None, tol: float = EWALD_TOL,
+             route: str = "reciprocal") -> torch.Tensor:
     """Plan section 2.5: the Ewald matrix between a Gaussian of width `r_g` and one of
     width `r_split` (`r_split > r_g`, so `H0` owns the sharp near field), over `eps_inf`."""
     if r_split <= r_g:
         raise ValueError(f"r_split ({r_split}) must exceed r_g ({r_g})")
-    return ewald_matrix(positions, cell, r_g, r_split, eta=eta, tol=tol) / eps_inf
+    if route == "ewald":
+        return ewald_matrix(positions, cell, r_g, r_split, eta=eta, tol=tol) / eps_inf
+    # v5 W2 item 3: the combined pair width sqrt(2 (r_g^2 + r_split^2)), reciprocal space alone.
+    return reciprocal_matrix(positions, cell, math.sqrt(2.0 * (r_g ** 2 + r_split ** 2)), tol=tol) / eps_inf
 
 
 def gamma_lr_pair_gradient(positions: torch.Tensor, cell: torch.Tensor, r_g: float, r_split: float,
-                           eps_inf: float, eta: Optional[float] = None, tol: float = EWALD_TOL) -> torch.Tensor:
+                           eps_inf: float, eta: Optional[float] = None, tol: float = EWALD_TOL,
+                           route: str = "reciprocal") -> torch.Tensor:
     """Route B' under the pair force route: `d Gamma_LR_ij / d(r_i - r_j)`, the pair
     derivative of the `r_g`/`r_split` Ewald matrix over `eps_inf` -- a detached constant of
     the geometry (`[N, N, 3]`, one first-order backward, no graph kept)."""
     pos, cel = positions.detach(), cell.detach()
-    (d,) = pair_gradient(lambda d0: (ewald_matrix(pos, cel, r_g, r_split, eta=eta, tol=tol, pair_vectors=d0),), pos)
-    return d / eps_inf
+    if route == "ewald":
+        (d,) = pair_gradient(lambda d0: (ewald_matrix(pos, cel, r_g, r_split, eta=eta, tol=tol, pair_vectors=d0),), pos)
+        return d / eps_inf
+    return reciprocal_pair_gradient(pos, cel, math.sqrt(2.0 * (r_g ** 2 + r_split ** 2)), tol=tol) / eps_inf
 
 
 def centred_pattern(zstar_site: torch.Tensor) -> torch.Tensor:

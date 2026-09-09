@@ -181,4 +181,41 @@ overhead (items 2, 5, 7), the Ewald terms (item 3), the backward (items 1, 6); i
 half (one merged backward) is already in place since P4.3, so item 1 is about the training path
 and the 512-wide MH-1 features.
 
+**Item 3 — direct reciprocal `K_LR` and `Γ_LR` (done 2026-09-09; `ewald.reciprocal_matrix`,
+`ewald.reciprocal_pair_gradient`, `kernels.lr_route`, `KernelConfig.lr_route` = 'reciprocal'
+(default, also for models pickled before v5) or 'ewald' (the v4 route, kept for the gate);
+`tests/extensions/dscc/test_reciprocal.py`).** The periodic kernel of the broad Gaussian
+(pair width `r_s` = 6.5 Å) is evaluated in reciprocal space alone, `C[(4π/V) Σ_{G≠0}
+e^{−G² r_s²/4}/G² cos(G·r_ij) − π r_s²/V]`, the diagonal included; `Γ_LR` likewise with the
+combined width `sqrt(2 (r_g² + r_split²))` = 3.81 Å; the pair derivatives `D_LR`, `dΓ_LR/dr`
+analytically through the structure factors (three matrix products per component, no backward);
+stress by autograd through `G(h)`, `V(h)`, `c_G(h)`. With `lambda_dir` held at zero (LR-only,
+LR + U) `K_SR` and `D_SR` are skipped (`need_sr=False`; `K_SR` never enters `Γ` there). **Unit
+tests:** reciprocal = Ewald route to 1e-12 on a triclinic 7-atom cell (both widths, diagonal
+included), analytic pair gradient = autograd pair gradient to 1e-10 (and = the Ewald route's),
+cell derivative = finite differences to 1e-6 relative, cutoff convergence (production tol 1e-16
+against 1e-20: energy < 1e-10 eV, pair forces < 1e-8 eV/Å — the registered criterion; the
+1e-10 cutoff sits < 1e-6 eV / 1e-5 eV/Å from converged). On the 79-atom static cell the
+direct formula agrees with the v4 `K_LR` to 3e-14 (1.1e-13 at 319 atoms) in 2–3 ms against
+70–560 ms. **Agreement gate (`scratchpad/w2_gate_item3.py`, `~/runs/dscc/w2_item3_gate.json`;
+the registered frame set — five fold-3 held-out 79-atom charged frames 1622 / 1631 / 1659 /
+1670 / 1672, two fold-3 159-atom held-out frames, the 2×2×2 static tiling (energy only, on the
+CPU: the v4 lattice sums exceed 16 GB there); models B′ LR-only s3, Route A full s0, LR + U s1):**
+|ΔE| ≤ 3.6e-12 eV, |ΔF| ≤ 1.7e-14 eV/Å, |Δσ| ≤ 5.0e-17 eV/Å³ — the gate (1e-9 / 1e-7 / 1e-7)
+passed by three orders. **Phase-1 gates:** the D-SCC suite, 140 tests, passes on the new default.
+**Measured speed (per frame with forces, cold start, first-sight transients included):** B′
+LR-only 79 atoms 705–1155 ms → 527–600 ms, 159 atoms 1318–1440 → 1071–1172; full / LR + U (K_SR
+still needed) 545–611 → 498–574; 639 atoms energy-only on the CPU 24.8 → 20.6 s. The Ewald
+terms' 96 ms of the baseline profile fall to ≈ 5 ms on LR-only; the remaining cost is the SCF
+loop (items 2, 5, 7).
+
+**Convention flag (C13, for the user).** The outline's item-3 formula carries the constant
+`−π (r_s² − 4 r_g²)/Ω`; the code's `E_PBC` (all v4 results) carries the physical
+Gaussian-background convention, under which `K_LR = E_PBC − K_SR` has `−π r_s²/Ω` — the two
+differ by the uniform `4π r_g² C/Ω` (0.0616 eV per pair at 79 atoms, 0.0154 at 319), i.e. the
+item-4 `κ` differs by that amount and `E(+1) − E(0)` by `½ · 4π r_g² C/(eps_inf Ω) Q²` = 7.7 meV
+at 79 atoms (a 1/Ω term). Item 3 keeps the code's convention (verified to 1e-13 against the v4
+route and against W0.5's diagonal); the outline's constant is adopted only if the user rules
+that the Gaussian-width background term is to be dropped.
+
 ## W3–W6 — not opened.

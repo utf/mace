@@ -210,6 +210,61 @@ def ewald_matrix(positions: torch.Tensor, cell: torch.Tensor,
     return COULOMB * (real + recip + background)
 
 
+def reciprocal_matrix(positions: torch.Tensor, cell: torch.Tensor, width: float,
+                      tol: float = EWALD_TOL, pair_vectors: Optional[torch.Tensor] = None,
+                      k_chunk: int = 256) -> torch.Tensor:
+    """v5 W2 item 3: the periodic kernel of a pair of Gaussians with combined width `w`,
+    `sum_L erf(|r_ij + L| / w) / |r_ij + L|` with the neutralising background, evaluated in
+    reciprocal space ALONE: `C [(4 pi / V) sum_{k != 0} exp(-k^2 w^2 / 4) / k^2 cos(k . r_ij)
+    - pi w^2 / V]`, `[N, N]`, the diagonal included (its `r -> 0` limit is the Gaussian self
+    term). Equal to `ewald_matrix(s_i, s_j)` with `w = sqrt(2 (s_i^2 + s_j^2))` to `tol`: a
+    smooth Gaussian potential converges in reciprocal space by itself, and the real-space
+    remainder `ewald_matrix` still sums over ~100 images vanishes identically when the
+    splitting width equals the pair width. Differentiable in `positions` and `cell` (stress).
+    With `pair_vectors` the matrix is a function of the pair leaf entry by entry."""
+    if positions.dtype != torch.float64 or cell.dtype != torch.float64:
+        raise TypeError("the reciprocal matrix is evaluated in float64 (plan section 1)")
+    eta = 0.5 * float(width)
+    volume = torch.det(cell).abs()
+    k_c = reciprocal_cutoff(eta, float(volume.detach()), tol)
+    k = reciprocal_vectors(cell, k_c)                                      # [n_k, 3]
+    k2 = (k * k).sum(dim=-1)
+    weight = torch.exp(-(eta ** 2) * k2) / k2                              # [n_k]
+    if pair_vectors is None:
+        phase = positions @ k.transpose(0, 1)                              # [N, n_k]
+        c = torch.cos(phase) * weight.sqrt().unsqueeze(0)
+        s = torch.sin(phase) * weight.sqrt().unsqueeze(0)
+        recip = c @ c.transpose(0, 1) + s @ s.transpose(0, 1)
+    else:
+        n = positions.shape[0]
+        recip = torch.zeros(n, n, dtype=positions.dtype, device=positions.device)
+        for start in range(0, k.shape[0], k_chunk):
+            kk = k[start:start + k_chunk]
+            recip = recip + (torch.cos(pair_vectors @ kk.transpose(0, 1)) * weight[start:start + k_chunk]).sum(-1)
+    return COULOMB * ((4.0 * math.pi / volume) * recip - math.pi * float(width) ** 2 / volume)
+
+
+def reciprocal_pair_gradient(positions: torch.Tensor, cell: torch.Tensor, width: float,
+                             tol: float = EWALD_TOL) -> torch.Tensor:
+    """`D_ij = d M_ij / d(r_i - r_j)` of `reciprocal_matrix`, analytic through the structure
+    factors: `-(4 pi C / V) sum_k c_k k sin(k . (r_i - r_j))` with `sin(k . (r_i - r_j)) =
+    sin(k.r_i) cos(k.r_j) - cos(k.r_i) sin(k.r_j)`, `[N, N, 3]`, a detached constant of the
+    geometry (three matrix products per component, no backward)."""
+    pos, cel = positions.detach(), cell.detach()
+    eta = 0.5 * float(width)
+    volume = float(torch.det(cel).abs())
+    k = reciprocal_vectors(cel, reciprocal_cutoff(eta, volume, tol))
+    k2 = (k * k).sum(dim=-1)
+    weight = torch.exp(-(eta ** 2) * k2) / k2                              # [n_k]
+    phase = pos @ k.transpose(0, 1)                                        # [N, n_k]
+    c, s = torch.cos(phase), torch.sin(phase)
+    out = []
+    for comp in range(3):
+        wk = (weight * k[:, comp]).unsqueeze(0)                            # [1, n_k]
+        out.append((s * wk) @ c.transpose(0, 1) - (c * wk) @ s.transpose(0, 1))
+    return -(4.0 * math.pi * COULOMB / volume) * torch.stack(out, dim=-1)
+
+
 def self_term(width: Union[float, torch.Tensor]) -> torch.Tensor:
     """`C / (sqrt(pi) r_g)`: the Gaussian self-energy kernel on the diagonal."""
     return COULOMB / (_SQRT_PI * torch.as_tensor(width, dtype=torch.float64))
