@@ -48,6 +48,8 @@ def main() -> None:
     ap.add_argument("--coupling_mode", default="full", help="lr_only | lr_u | full | lambda1 (Arm 2+3)")
     ap.add_argument("--init_from", default="", help="Arm-1 winner checkpoint (model.pt) to start H0 from")
     ap.add_argument("--n_max", type=int, default=100)
+    ap.add_argument("--setup_batch_size", type=int, default=16, help="pristine-centre pass; peak memory only")
+    ap.add_argument("--base_cache_batch_size", type=int, default=8, help="E_base/F_base cache; peak memory only")
     ap.add_argument("--fscc", default="", help="Arm 4 comparator: matched | full (empty: D-SCC)")
     args = ap.parse_args()
 
@@ -63,6 +65,7 @@ def main() -> None:
                       batch_size=args.batch_size, coupling=bool(args.coupling), coupling_mode=args.coupling_mode, route_b=bool(args.route_b),
                       directional=bool(args.directional), regime=args.regime, gap_weight=args.gap_weight,
                       device=args.device, eval_every=args.eval_every,
+                      setup_batch_size=args.setup_batch_size, base_cache_batch_size=args.base_cache_batch_size,
                       static_cell_path=str(HERE / "static_pristine_cell.json"))
     base = torch.load(args.base, weights_only=False, map_location="cpu").double()
     model = MACEDSCC(base, r_cut=cfg.r_cut, directional=cfg.directional, coupling=cfg.coupling,

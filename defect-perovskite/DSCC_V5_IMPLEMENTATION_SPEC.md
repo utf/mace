@@ -922,9 +922,26 @@ against the old-base arms. Registered here, with the points the plan leaves open
   frames of its fold: 27.6 meV/Å per component overall, 52.4 in the 2–4 Å shell, 77.5 at the
   flanking Pb, 39.1 at the first-shell Cl, 26.4 in the pooled 4–8 Å shell. Sample-sized numbers,
   recorded only as evidence that the cross-base pass will run; the pass itself is not done.
-- *Not yet done, required before launch:* a timing smoke on one arm (base v2's 512-wide features
-  make each step more expensive than the old base's, against W2's five-fold solver speed-up, and
-  the queue layout depends on the balance); and the b3 tree is frozen at `be3c39b` until the Arm 4
+- *Cost and memory, measured 2026-09-10 03:20–03:40 on the local A4000 (16 GB), 64-frame subset,
+  batch 4.* Per epoch: Φ = 0 10.8 s over 17 batches (0.64 s/batch); LR-only 15.6 s warm
+  (0.92 s/batch, 12.3 SCF iterations per batch after the first epoch's 47.5). Scaled to a full
+  fold (≈ 785 charged training frames, 196 batches): **≈ 125 s/epoch for Φ = 0 and ≈ 180 s for
+  LR-only, so ≈ 2.1 h and ≈ 3.0 h per 60-epoch run**; the eighteen runs of W3 are ≈ 49 GPU-hours.
+  The coupled arm costs only 1.4× the uncoupled one — the W2 solver work is what makes that true.
+- *Memory: the setup pass was the whole high-water mark, and it is now configurable.* On base v2's
+  512-wide features the pristine-centre and base-cache passes at the campaign's hardcoded batch
+  sizes (16 and 8) peak at **12.64 GB allocated and do not fit a 16 GB card at all**; at batch 2
+  the same run peaks at **5.78 GB allocated / 6.60 GB reserved** and completes. `TrainConfig`
+  gained `setup_batch_size` (16) and `base_cache_batch_size` (8), defaults exactly the literals the
+  campaign ran with, exposed as `--setup_batch_size` / `--base_cache_batch_size`. These passes are
+  geometry-only caches computed once before training, so the batching cannot change a reported
+  number, and that was checked rather than assumed: two otherwise identical two-epoch runs (seed 3,
+  LR-only) at batch 8 and batch 2 agree to relative 3e-14 and 5e-13 on the epoch losses, 1e-14 on
+  the held-out force RMSE and 2.4e-15 absolute on every shell. **W3 therefore registers
+  `--setup_batch_size 2 --base_cache_batch_size 2`**, which turns one run per card into three on
+  b3's 24 GB cards and two on a 16 GB card. Wall clock for W3 on GPUs 4, 5 and 7 at three per
+  card: ≈ 6–8 h including contention.
+- *Not yet done, required before launch:* the b3 tree is frozen at `be3c39b` until the Arm 4
   F-SCC reading is written, so nothing can be launched there yet.
 
 ## W3–W6 — not opened.

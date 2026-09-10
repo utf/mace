@@ -60,6 +60,12 @@ class TrainConfig:
     warm_check_fraction: float = 0.05     # v4.5: per-epoch subsample re-run by continuation against the warm start
     eval_every: int = 5
     avg_window: int = 10              # W0.4 (v5): epochs whose parameters are averaged for the evaluation model
+    # Setup-pass batching. These passes are geometry-only and run once before training; their
+    # batch size changes no reported number, only the peak memory of `prepare`, which on the
+    # 512-wide base v2 features is the high-water mark of the whole run. Defaults are the
+    # literals the campaign ran with, so nothing moves unless a run sets them.
+    setup_batch_size: int = 16        # pristine-centre pass
+    base_cache_batch_size: int = 8    # E_base / F_base cache
     grad_clip: float = 10.0
     cache_base: bool = True           # E_base/F_base cached per frame; block 0 recomputed
     device: str = "cuda"
@@ -259,7 +265,7 @@ class Trainer:
     def prepare(self, pristine_indices: Sequence[int]) -> None:
         """Pristine centre and q0 reference from the pristine frames; the static cell batch."""
         ds = dd.atomic_data([self.frames[i] for i in pristine_indices], self.z_table, self.cfg.r_cut)
-        loader = torch_geometric.dataloader.DataLoader(ds, batch_size=16)
+        loader = torch_geometric.dataloader.DataLoader(ds, batch_size=self.cfg.setup_batch_size)
         self.model.set_pristine_centre([to_device(b, self.device) for b in loader])
         static = dd.atomic_data([static_cell_atoms(self.cfg.static_cell_path)], self.z_table, self.cfg.r_cut)
         self.static_batch = to_device(next(iter(torch_geometric.dataloader.DataLoader(static, batch_size=1))), self.device)
@@ -277,7 +283,7 @@ class Trainer:
         from mace.modules.models import ScaleShiftMACE
         ds = self._dataset(indices)
         k = 0
-        for b in torch_geometric.dataloader.DataLoader(ds, batch_size=8):
+        for b in torch_geometric.dataloader.DataLoader(ds, batch_size=self.cfg.base_cache_batch_size):
             batch = to_device(b, self.device)
             out = ScaleShiftMACE.forward(self.model.base, self.model._trunk_data(dict(batch)), training=False,
                                          compute_force=True)
