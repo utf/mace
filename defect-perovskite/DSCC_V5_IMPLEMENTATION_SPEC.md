@@ -881,4 +881,42 @@ three near-field categories partition the 2–4 Å shell (8 + 20 + 3 = 31) — a
 model over a single epoch reproduces the last epoch to 1e-16. The force RMSE of an untrained head
 on twelve frames is not a reading and is not recorded.
 
+**W3 protocol registered (2026-09-10 03:20, before any W3 run is launched).** The plan's W3 is
+three arms — Φ = 0, LR-only, B′ LR-only — over six seeds on base v2, read against each other and
+against the old-base arms. Registered here, with the points the plan leaves open resolved:
+
+- *Seeds and folds.* Seeds {0, 1, 2, 3, 4, 6} → folds {0, 1, 2, 3, 0, 2} (W0.3); the same seed is
+  the same fold, the same held-out set and the same pairing unit for every TOST (n = 6).
+- *Optimiser unchanged* from v4.3, as the v5 outline requires: 60 epochs, constant lr 2e-3,
+  batch 4, no schedule, no spike action. `avg_window` = 10, so each run writes both the
+  epoch-averaged and the last-epoch reading (W0.4).
+- *Initialisation.* The Arm-1 `h0_state.pt` files CANNOT be used: they were fitted to the old
+  base's feature width, and base v2's block-0 features are 512x0e+512x1o (W1.2). Every W3 head is
+  randomly initialised from its seed. Recorded as a forced deviation from the Arm 2+3 practice of
+  starting from the Arm-1 winner.
+- *Base.* `~/runs/base_v2_prod/base_v2_prod_base.pt` for every arm — the production base, not a
+  fold base. The fold bases exist for the W1.3 out-of-fold reading and for the proxy's spread
+  term, not for training heads.
+- *Which reading is compared.* Within W3, the epoch-averaged reading. Against the old-base arms,
+  the LAST-EPOCH reading of both, because no pre-v5 run has an averaged one and comparing an
+  averaged model with a final checkpoint would credit the averaging to the base change.
+- *Centre convention for the cross-base comparison.* The old-base arms' stored held-out files are
+  minimum-image (W0.1) and may not be compared with a vacancy-side reading. The old models
+  themselves are kept, so the comparison is made by RE-EVALUATING the old-base arms with the
+  current `evaluate` (vacancy-side centre, W0.2 shells) — an evaluation-only pass, no retraining,
+  permitted under "don't retrain any models". Until that pass exists there is no cross-base
+  number; the within-W3 comparison does not depend on it.
+- *Gates.* The C5 bound-state precondition on base v2 (Δ_c 0.5 eV, `N_loc` 4, ≥ 95 % of the
+  neutral-vacancy frames, thresholds unchanged from Arm 1); the root rule on the final model and
+  each of the last ten epochs (≤ 0.10) with SCF within `n_max` on ≥ 99 % of training frames; the
+  by-shell tables of W0.2; the far-field gate at `spec="v5"` for the B′ arm.
+- *Readout.* The D15 near-field comparison repeated on base v2: whether the base change moved the
+  2–4 Å flanking-Pb residual at 79 atoms at matched `d`. The W1.3 out-of-fold neutral floors are
+  the reference the head is read against — 79 atoms 7.89 overall, 11.38 in 2–4 Å, 15.13 at the
+  flanking Pb, per component.
+- *Not yet done, required before launch:* a timing smoke on one arm (base v2's 512-wide features
+  make each step more expensive than the old base's, against W2's five-fold solver speed-up, and
+  the queue layout depends on the balance); and the b3 tree is frozen at `be3c39b` until the Arm 4
+  F-SCC reading is written, so nothing can be launched there yet.
+
 ## W3–W6 — not opened.
