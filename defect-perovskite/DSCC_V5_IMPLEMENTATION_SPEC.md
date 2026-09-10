@@ -1081,4 +1081,39 @@ against the old-base arms. Registered here, with the points the plan leaves open
 - *Not yet done, required before launch:* the b3 tree is frozen at `be3c39b` until the Arm 4
   F-SCC reading is written, so nothing can be launched there yet.
 
+### W3 first result — the Φ = 0 arm on base v2 (2026-09-10 10:47, six seeds complete)
+
+Cross-base, last-epoch reading on both sides as registered (no pre-v5 run has an epoch average),
+forces per component in meV/Å, paired by seed, `tau` = 1.7, n = 6:
+
+| reading | old base median | base v2 median | mean d | one-sided 95 % | verdict |
+|---|---|---|---|---|---|
+| full per-atom | 23.03 | **18.79** | +3.53 | [+0.66, +6.40] | **superior** |
+| 2–4 Å | 39.40 | 34.29 | +3.60 | [−2.61, +9.81] | inconclusive |
+| 4–8 Å | 21.62 | 17.94 | +2.97 | [−0.12, +6.06] | inconclusive |
+| 8–10 Å | 20.20 | **14.44** | +5.68 | [+4.76, +6.59] | **superior** |
+| 10–12 Å | 12.71 | **10.09** | +2.36 | [+0.42, +4.31] | **superior** |
+| > 12 Å | 8.67 | **6.86** | +1.58 | [+0.72, +2.45] | **superior** |
+
+Per seed (old → new): 21.2→18.0, 23.8→16.5, 23.1→19.6, 22.6→15.0, 24.0→**25.2**, 23.0→22.2 —
+five of six improve, seed 4 does not.
+
+**The structure of the gain is the finding, not its size.** The base change is decisive in the FAR
+field — 8–10 Å improves by 5.68 meV/Å with a lower bound of +4.76, a margin of nearly three
+`tau` — and is NOT resolved in the near field, where the 2–4 and 4–8 Å shells improve by a similar
+absolute amount but carry a seed spread that swallows it. That is the same shape as D15's reading
+on the old base: the near-field residual is the part that no change of this kind has yet moved.
+The far-field gain is consistent with W1's base comparison, where base v2's advantage on charged
+frames also grew with distance once the near field is excluded.
+
+**The epoch-averaged reading costs about 1.2 meV/Å** (median 19.97 against 18.79 last-epoch) and
+is worse than the last epoch on every seed. The runs are still descending at epoch 59, so the
+average over the last ten epochs mixes in visibly worse models. This does not bias the cross-base
+table above (last-epoch on both sides, as registered) and it is applied identically to every W3
+arm, so within-W3 comparisons stay fair; but it means the registered evaluation model understates
+this arm in absolute terms, and the remedy if one is wanted is more epochs, not a different
+reading. Recorded for the user before the arm comparison is read.
+
+Coupled arms (Route A LR-only, Route B′ LR-only) still running; W3 selection waits for all three.
+
 ## W3–W6 — not opened.
