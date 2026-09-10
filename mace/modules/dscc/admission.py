@@ -66,6 +66,11 @@ class AdmissionConfig:
     n_min: int = 3              # out-of-fold neutral frames per bin
     s_tol: float = 0.05         # eV/A on |s0| + z SE
     z: float = 2.0
+    # The header scopes this test to the charged window, but the campaign code fitted `s0` over
+    # ALL out-of-fold neutral frames of the size, lever arm included. Both readings are kept:
+    # False reproduces every recorded v4 number; True fits only the neutral frames whose `d`
+    # lies inside the charged window, which is what the header describes (W1.3, 2026-09-10).
+    s0_window_only: bool = False
     base_protocol: str = "cf_base_4fold_seed0"
 
 
@@ -109,7 +114,12 @@ def admission_table(charged_d: Dict[int, Sequence[float]], charged_resid: Dict[i
             bins.append((float(a), float(b), count))
             if count < cfg.n_min:
                 coverage = False
-        s0, s0_se, _ = slope_with_se(d0, r0) if d0.size else (float("nan"), float("inf"), float("nan"))
+        if cfg.s0_window_only and d0.size:
+            inside = (d0 >= lo) & (d0 <= hi)
+            d0s, r0s = d0[inside], r0[inside]
+        else:
+            d0s, r0s = d0, r0
+        s0, s0_se, _ = slope_with_se(d0s, r0s) if d0s.size else (float("nan"), float("inf"), float("nan"))
         sq, sq_se, _ = slope_with_se(dq_, rq)
         if not coverage:
             admitted, reason = False, "coverage failed: s0 unmeasurable in the charged window"
@@ -117,7 +127,7 @@ def admission_table(charged_d: Dict[int, Sequence[float]], charged_resid: Dict[i
             admitted, reason = False, f"|s0| + z SE = {abs(s0) + cfg.z * s0_se:.4f} > s_tol {cfg.s_tol}"
         else:
             admitted, reason = True, "admitted"
-        out[size] = SizeAdmission(size_class=size, n_charged=int(dq_.size), n_neutral_oof=int(d0.size),
+        out[size] = SizeAdmission(size_class=size, n_charged=int(dq_.size), n_neutral_oof=int(d0s.size),
                                   window=(lo, hi), bins=bins, coverage=coverage, s0=s0, s0_se=s0_se,
                                   sQ=sq, sQ_se=sq_se, admitted=admitted, reason=reason)
     return out

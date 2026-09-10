@@ -48,3 +48,23 @@ def test_slope_with_se_and_admission_decisions():
     assert not table3[2].admitted and "s_tol" in table3[2].reason
     rec = adm.table_record(table, cfg, fold=0)
     assert rec["fold"] == 0 and set(rec["sizes"]) == {"1", "2"}
+
+
+def test_s0_window_only_fits_the_charged_window_and_defaults_to_the_campaign_reading():
+    """W1.3 (2026-09-10): the module header scopes `s0` to the charged window; the campaign code
+    fitted every out-of-fold neutral frame. Both readings are available and the default is the
+    recorded one, so no v4 number moves."""
+    import numpy as np
+    from mace.modules.dscc import admission as adm
+    # neutral frames on 3.0-6.0; a real slope below 4.5 and none above it
+    d0 = np.concatenate([np.linspace(3.0, 4.4, 40), np.linspace(4.6, 6.0, 40)])
+    r0 = np.where(d0 < 4.5, 0.5 * (d0 - 3.0), 0.7)
+    charged = {79: list(np.linspace(4.6, 6.0, 20))}
+    resid = {79: list(np.zeros(20))}
+    wide = adm.admission_table(charged, resid, {79: list(d0)}, {79: list(r0)},
+                               adm.AdmissionConfig(s_tol=1.0, n_min=1))[79]
+    narrow = adm.admission_table(charged, resid, {79: list(d0)}, {79: list(r0)},
+                                 adm.AdmissionConfig(s_tol=1.0, n_min=1, s0_window_only=True))[79]
+    assert wide.n_neutral_oof == 80 and narrow.n_neutral_oof == 40
+    assert abs(wide.s0) > 0.1                     # the lever arm below the window drives the slope
+    assert abs(narrow.s0) < 1e-9                  # inside the window the residual is flat

@@ -432,7 +432,8 @@ train on it):
 | 80 (pristine) | 612 | 3.63 | — | — | — | — | — | — | — | — |
 
 Fold spread at 79 atoms is 7.70–8.11 overall and 10.75–12.11 in the 2–4 Å shell; at 80 atoms
-3.61–3.64. The 159-atom row rests on four frames per fold and its fold spread (5.79–18.16) is
+3.61–3.64. (The admission table's `n_neutral_oof` at 79 atoms is 1153, not the 1174 of this table:
+the 21 frames without an identifiable flanking pair have no `d` and drop out of the slope fit.) The 159-atom row rests on four frames per fold and its fold spread (5.79–18.16) is
 noise, not structure. Twenty-one of the 1174 79-atom frames have no identifiable flanking pair and
 carry no shell reading. The near-field ordering of D15 survives on neutral data and on the new
 base: the flanking Pb pair is the hardest site (15.13 against 5.59 for the rest of its own shell),
@@ -449,11 +450,30 @@ is unmeasurable there. At 159 atoms there are 17 neutral out-of-fold frames agai
 window: twelve of twelve bins are under `n_min`, and no coverage test can pass on this data. No
 new DFT is allowed in v5, so the gap cannot be closed by sampling.
 
-*Slope.* `s0` (out-of-fold neutral residual against `d`) is −0.0237 ± 0.0030 eV/Å at 79 atoms, so
-`|s0| + 2 SE` = 0.0297 against the registered `s_tol` = 0.018 — a fail in its own right, on every
-fold separately (fold 0 0.0338, fold 1 0.0470, fold 2 0.0348, fold 3 0.0274). At 159 atoms
-`s0` = 0.1433 ± 0.0356, `|s0| + 2 SE` = 0.2145. For the record `sQ` = 0.0901 ± 0.0077 at 79 and
-−0.0571 ± 0.0026 at 159.
+*Slope, and a code-versus-spec discrepancy found while reading it.* `admission.py`'s header scopes
+the test to "within the charged window of the collective coordinate `d`", but the campaign code
+fitted `s0` over ALL out-of-fold neutral frames of the size — at 79 atoms 1153 frames spanning
+3.68–6.02 Å, of which only 378 lie inside the charged window, the rest supplying a 1.25 Å lever arm
+below any charged frame. Both readings are now available (`AdmissionConfig.s0_window_only`,
+default False so every recorded v4 number reproduces; test in `test_admission.py`) and both are
+reported here:
+
+| size | fit | frames | `s0` eV/Å | SE | `\|s0\| + 2 SE` | vs 0.018 | vs 0.05 |
+|---|---|---|---|---|---|---|---|
+| 79 | all neutral (registered) | 1153 | −0.0237 | 0.0030 | 0.0297 | fail | pass |
+| 79 | charged window only | 378 | −0.0007 | 0.0130 | 0.0268 | fail | pass |
+| 159 | all neutral (registered) | 17 | +0.1433 | 0.0356 | 0.2145 | fail | fail |
+| 159 | charged window only | 13 | +0.2547 | 0.0595 | 0.3738 | fail | fail |
+
+The decision is the same under both fits, so the conclusion is robust — but the reason differs and
+that matters for what comes next. Over the full neutral range the 79-atom base carries a genuine
+energy-shape slope (−0.024 eV/Å, eight standard errors from zero). Restricted to where the charged
+frames actually live it is indistinguishable from zero (−0.0007 ± 0.0130): there the failure is
+driven entirely by the standard error, i.e. by how few neutral frames sit in that window, not by a
+measured bias. Per fold, in-window, `s0` runs −0.0542 to +0.0338 with SE ≈ 0.024 — every fold
+consistent with zero individually and every fold failing 0.018 on precision alone. At 159 atoms the
+in-window slope is large and significant (+0.2547 ± 0.0595): that size fails on a measured bias.
+For the record `sQ` = 0.0901 ± 0.0077 at 79 and −0.0571 ± 0.0026 at 159.
 
 *Sensitivity, so the decision surface is visible* (the registered reading is the first row):
 
@@ -463,6 +483,9 @@ fold separately (fold 0 0.0338, fold 1 0.0470, fold 2 0.0348, fold 3 0.0274). At
 | full | 0.05 | fail | no | no |
 | `d` < 6.13 Å (950 of 1019 frames, 93 %) | 0.018 | pass | no (0.0297 > 0.018) | no |
 | `d` < 6.13 Å | 0.05 | pass | yes | no |
+
+The coverage pass under restriction is marginal: the top bin of the sub-window holds exactly three
+out-of-fold neutral frames, `n_min` itself.
 
 So at 79 atoms the outcome turns on two rulings that are the user's, not ours: whether the charged
 set may be restricted to the neutral-supported sub-window, and which `s_tol` applies (W0.6 took
