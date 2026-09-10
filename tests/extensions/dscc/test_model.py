@@ -487,13 +487,22 @@ class TestPairForcePath:
         batch = _batch([VACP])
         m.gamma_force_mode = "autograd"
         ref = m(dict(batch), compute_force=True)                          # inference: cotangent route
+        # ONE FIXED POINT FOR ALL THREE FORWARDS. This test is about the force ROUTES
+        # agreeing at a given SCF solution, not about which solution the iteration finds:
+        # the toy has no bound state, and at A1's `eta = 0.5` its Phi = 0 start converges to
+        # two different branches from the inference and training paths (dq apart by 0.26,
+        # energy by 0.55 eV, both flagged converged), which is the multi-valuedness the
+        # registered `single_valued` check exists to catch. Warm-starting every forward at
+        # the inference solution pins the branch; without it the assertion below measures
+        # branch selection instead of the routes.
+        warm = [ref["dq"].detach()]
         params = [p for p in m.parameters() if p.requires_grad]
         torch.manual_seed(3)
         target = ref["forces"].detach() + 0.01 * torch.randn_like(ref["forces"])
         grads = {}
         for mode in ("pairs", "autograd"):
             m.gamma_force_mode = mode
-            out = m(dict(batch), training=True, compute_force=True)
+            out = m(dict(batch), training=True, compute_force=True, warm_start=warm)
             assert float((out["forces"] - ref["forces"]).abs().max()) < 1e-9, mode
             assert out["forces"].requires_grad
             loss = ((out["forces"] - target) ** 2).sum()

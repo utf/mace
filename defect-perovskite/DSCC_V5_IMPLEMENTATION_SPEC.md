@@ -1177,6 +1177,57 @@ been read.** A1 names it as W4's entry gate and W3's gates already list it. It i
 on trained heads, so it cannot be read until the A1-form heads exist — it does not block
 implementation, and it does block adoption of any W3 result.
 
+### A1 implementation (2026-09-10 13:30, committed, suite green)
+
+`3a98e05` registers the amendment, `a879576` the values, `e1b5709` the code; HEAD before A1
+is tagged **`pre-a1`**. What changed in the runtime path:
+
+- `SlaterKosterH.on_site` is `eps0[Z] + Delta_Z tanh(e_Z(h_i))`; the `centre` argument, the
+  `centre_form` switch and both retired forms are **gone**, not deprecated. `H0` has no
+  `centre` buffer, no `centre_set`, no `set_centre`, and needs no setup call before its first
+  forward.
+- `Delta` is an `[n_el, 2]` **buffer** (a registered bound is not something the fit may
+  widen), filled by `delta_from_baselines(eps0, 0.40)` = 3.079 eV.
+- `H0.site_coefficients` adds A1's `b_i = b_Z(1 + β tanh g_Z(h_i))` and `a_i = a_Z(1 + β tanh
+  f_Z(h_i))` over their own species embedding. At `β = 0` the readout is **not evaluated**:
+  W4's species-coefficient variant is the species model exactly, with no gradient path left
+  open (tested).
+- `l2_weight · Σ_terms mean(tanh²)` is in the loss, pooled over every `H0` of a step (SCF
+  iterations and the gap regulariser included) rather than averaged per call, and logged per
+  epoch as `l2`.
+- `saturation_report` writes the `|tanh| > 0.95` fraction per term and species plus the
+  §2.10 readout at the flanking Pb into `held_final.json` and `held_final_avg.json`.
+- `set_pristine_centre` → `set_pristine_reference`, which now does only what A1 keeps: the
+  pristine composition, the atom count, and Route B′'s `q0` charge reference. Its feature
+  pass is deleted, which also removes the setup pass that was the run's memory high-water
+  mark.
+- `static_cell.py`'s local `centre` → `median_shift` (a fractional-coordinate median, not a
+  feature mean) so the static check can be exact.
+
+**Tests** (`tests/extensions/dscc/test_a1.py`, 11 new): A1's static check is on
+**identifiers, parsed**, not on text — grepping the source would fail on the amendment's own
+record of what was removed, and passing that grep would mean deleting the history rather than
+the code. Exemptions are named in the test: `q0_pristine`, `pristine_atoms`, `pristine_gap`,
+`static_pristine_cell`, `vacancy_centre`. Also: zero-readout limit to 1e-12 against a
+species-default `H0` **built in the test** from `eps0` and `v0·radial` (comparing one `H0`
+against another only proves the code agrees with itself); `β = 0` inertness; the bound
+`b_i/b_Z ∈ [0.5, 1.5]`; `batched` ≡ per-graph with the factors on; the L2 pooling and its
+gradient; and `Delta`'s rule, its buffer status and its host-freedom. Full suite 167 tests
+green.
+
+**Finding, recorded because it is about A1's `η` and not about A1's code: `η = 0.5` makes the
+toy fixture's SCF multi-valued.** `TestPairForcePath[B-True]` failed after the change. The
+cause is not the force routes — `pairs` and `autograd` agree with each other **exactly**
+(both differ from the inference reference by the identical 0.3136) — it is that the inference
+and training forwards converge to **different fixed points** from the same Φ = 0 start: dq
+apart by 0.256, energy by 0.55 eV, 3 iterations against 21, both flagged converged. Forcing
+`η = ln 3` with everything else at A1 values restores agreement to 6e−13, and forcing
+`Δ = 3.0` at `η = 0.5` does not. The test now warm-starts all three forwards at the inference
+solution, which is what it always meant to test (force routes at a given fixed point, not
+branch selection). **The programme consequence: the registered single-valued ceiling (0.10)
+and the warm-start check are the things to watch in W3's two coupled arms under the narrower
+`η`.** This is a toy with no bound state, so it is a flag, not a prediction.
+
 ### W3 first result — the Φ = 0 arm on base v2 (2026-09-10 10:47, six seeds complete)
 
 Cross-base, last-epoch reading on both sides as registered (no pre-v5 run has an epoch average),
