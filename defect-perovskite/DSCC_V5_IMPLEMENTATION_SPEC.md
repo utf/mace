@@ -376,8 +376,25 @@ nearly coincide (0.65 vs 0.40 at 79 atoms) whereas the old base's differ by a fa
 (6.69 vs 1.31): base v2's isolated-atom references are close to the labels' own, the old base's
 are not. (iii) The one place the old base is better is the 159-atom NEUTRAL set — 6.5 against
 11.0 meV/Å, and worse in every shell — on SEVENTEEN frames, the same seventeen whose fold spread
-in W1.3 ran 5.8 to 18.2. We do not read a 17-frame difference as a finding; it is flagged for the
-W4 size work rather than explained. Note that at 159 atoms with CHARGE base v2 is ahead again
+in W1.3 ran 5.8 to 18.2. Followed up per frame
+(`defect-perovskite/base159.py`): the reversal is SYSTEMATIC, not a few frames — base v2 is worse
+on 15 of the 17, and the distributions barely overlap (old 3.0–13.8, v2 5.1–19.3 meV/Å per
+component; v2's best frame is worse than the old base's median). It is uniform across shells, far
+field included, so it is a global fit difference at that size and not a defect-local one. On the
+17 CHARGED 159-atom frames the order reverses again and base v2 is both better and much tighter
+(11.3–33.8 against 7.8–48.9), so it does not carry into the charged set.
+*A hypothesis raised and killed the same hour, recorded so it is not raised again.* Base v2's
+receptive field is 12.0 Å (r_max 6.0, two interactions) against the 79-atom cell's shortest axis
+of 11.3 Å, while the old base's is 10.0 Å and fits inside it; the natural guess was that base v2
+learned a self-image-wrapped environment on the small cells (99 % of the data) and mistransfers it
+to the 159-atom cell. **The label-free test refutes the mechanism as stated**
+(`defect-perovskite/base_extensivity.py`): tiling a 79-atom frame 1×1×2 and comparing against
+twice the single-cell prediction gives EXACTLY zero difference for both bases, to 0.0000 meV/atom
+and 0.0000 meV/Å — as it must, since tiling a periodic cell reproduces the same infinite crystal,
+so the test cannot remove a self-image and proves only that neither base has an extensivity bug.
+The cause of the 159-atom neutral reversal is therefore UNKNOWN. It is flagged for the W4 size work
+rather than explained, and no receptive-field claim should be repeated without a test that
+actually discriminates. Note that at 159 atoms with CHARGE base v2 is ahead again
 (22.1 against 30.0), so the effect does not survive into the charged set.
 (iv) The charged-frame ENERGY error of both bases (19–42 meV/atom) is not a defect of either: a
 base predicts the neutral-state energy and the charge physics is exactly what the head supplies.
