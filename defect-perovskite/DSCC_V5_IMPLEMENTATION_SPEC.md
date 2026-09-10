@@ -947,6 +947,31 @@ against the old-base arms. Registered here, with the points the plan leaves open
   on FORCES only.** C13 changed the energy background, so an old-base energy and a v5 energy are
   not the same quantity and must never be differenced; forces and fixed points are unchanged by
   C13, which is what makes the force comparison legitimate. Output `~/runs/dscc/w3_oldbase_reeval.json`.
+
+  **Complete 2026-09-10 04:32, all 18 runs, 727 s.** Medians over the six seeds, per component in
+  meV/Å, on the vacancy-side centre and the W0.2 shells:
+
+  | old-base arm | overall | 2–4 | 4–8 | 8–10 | 10–12 | >12 | flanking Pb | first-shell Cl | rest of 2–4 |
+  |---|---|---|---|---|---|---|---|---|---|
+  | Φ = 0 | 23.03 | 39.40 | 21.62 | 20.20 | 12.71 | 8.67 | 54.23 | 32.41 | 23.67 |
+  | LR-only (route A) | 24.05 | 42.39 | 22.89 | 20.59 | 13.07 | 9.07 | 60.39 | 34.00 | 29.35 |
+  | B′ LR-only | 18.97 | 34.65 | 17.84 | 14.13 | 12.04 | 8.53 | 50.33 | 27.44 | 20.60 |
+
+  *The pass reproduces the recorded campaign numbers exactly*, which is the strongest regression
+  check the W2 programme has had: the overall force RMSE does not depend on the centre convention,
+  and the v4 record's medians (Φ = 0 23.0, route-A LR-only 24.1 with range 21.5–32.1, B′ LR-only
+  19.0 with seed spread 0.5) come back as 23.03, 24.05 (21.5–32.1) and 18.97. Every W2 change and
+  the C13 convention therefore left trained-model forces untouched, measured on eighteen trained
+  models rather than on gate frames. Only the shell decomposition moves, which is the point of the
+  new centre.
+
+  Paired TOST over the six seeds at `tau` = 1.7 (positive mean d favours the second arm):
+  Φ = 0 against route-A LR-only is **inconclusive** on all three keys (overall −2.63,
+  [−5.81, +0.56]) — the wide LR-only seed spread swallows it, and the v4.3 rule's "choose the
+  simpler when inconclusive" is what selected Φ = 0. Φ = 0 against B′ LR-only is **superior on
+  every key** (overall +4.20, [+3.37, +5.03]; 2–4 +4.56; 4–8 +4.12), reproducing D14's selection
+  under the corrected centre and the v5 statistics. These are the numbers the W3 arms are read
+  against, arm by arm and seed by seed.
 - *Feasibility check that preceded it* (2026-09-10 03:19, `defect-perovskite/w3_oldbase_check.py`).
   An Arm 2+3 model (`dscc_arm23_B_A_lr_only_s0`, old base, trained before C13 and before every W2
   change) loads into the current code unchanged — `MACEDSCC`, `n_scalars` 128, r_max 5.0, coupling
