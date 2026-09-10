@@ -1051,3 +1051,57 @@ suite are the only additions that stay.
 Last v8 commit `06c04c8`; full old defect suite 689 passed. The s14a wave: s1/s3/s4/s6
 finished before cancellation, s2 stopped on the §3.1 gauge guard (gap floor), s5 was killed
 on cancellation. No analysis of these runs.
+
+## 5. Arm 4 — matched-kernel F-SCC comparators (P3.3, complete 2026-09-10 05:16)
+
+*Old base, minimum-image centre, old energy convention (v5 W0.7: this is a separate record and
+is not compared with any v5 number). Three seeds, 60 epochs, the Arm 2+3 protocol, `lambda_dir`
+and `U_eff` learned. Both sides of every comparison below are pre-`3a6a05c` files, so the shell
+readings are on one convention; the overall force RMSE does not depend on the centre at all.*
+
+**Gates.** All three runs completed 60 epochs with no unconverged frames, the single-valuedness
+check at 0 % on every epoch ≥ 1 and 0 % on the held-out check, and no loss spike acted on.
+
+**Forces, per component (meV/Å), against the D14 winner `B_Bp_lr_only` on the same seeds.**
+
+| seed | F-SCC matched | D-SCC B′ LR-only | difference |
+|---|---|---|---|
+| 0 | 19.75 | 19.02 | +0.73 |
+| 1 | 17.68 | 19.06 | −1.38 |
+| 2 | 18.41 | 18.92 | −0.50 |
+| median | 18.41 | 19.02 | |
+
+Paired over the three seeds: mean difference −0.38 meV/Å, one-sided 95 % interval
+[−2.17, +1.40] at `tau` = 1.7 — **inconclusive**, and with n = 3 it cannot be otherwise: the
+standard error alone is 0.6. Every seed is inside the registered margin. **On these labels the
+held-out forces do not distinguish full SCC from differential SCC.**
+
+**The trained couplings are the result.** Under the same protocol, on the same `H0` and the same
+data, the two functionals go opposite ways:
+
+| arm | `lambda_dir` | `U_eff` (Cl, Cs, Pb) eV | `N_eff` p50 | `R_eff` p50 Å |
+|---|---|---|---|---|
+| F-SCC matched, s0 / s1 / s2 | 0.565 / 0.633 / 0.746 | 0.035, 0.135, **0.545** / 0.021, 0.124, **0.448** / 0.035, 0.126, **0.537** | 2.06 / 2.02 / 2.10 | 3.06 / 2.89 / 3.13 |
+| D-SCC full, s0 / s1 / s2 | 0.006 / 0.018 / 0.012 | 0.287, 0.087, 0.105 / 0.981, 0.096, 0.178 / 0.326, 0.092, 0.068 | 2.01 / 1.98 / 2.00 | 2.75 / 2.72 / 2.83 |
+| D-SCC B′ LR-only, s0 / s1 / s2 | 0 (not learned) | 0 (not learned) | 2.03 / 1.95 / 1.94 | 2.69 / 2.70 / 2.82 |
+
+F-SCC **keeps** the feedback on — `lambda_dir` 0.57–0.75 and a hub `U_eff(Pb)` of 0.45–0.55 eV —
+where the D-SCC optimiser drove the same parameters to 0.006–0.018 and 0.07–0.18 eV (C10/D12).
+The D-SCC arm reaches the same force accuracy only by switching its own coupling off; the F-SCC
+arm reaches it with a physically substantial coupling in place. That is the Arm 4 finding.
+
+**Decision (1)–(6), as far as the data support them.** (a) Full versus differential SCC is not
+resolved by forces at these sizes and seed counts — the difference is inside `tau_phys` on every
+seed. (b) The §2.10 discriminating test — opposite `N_eff` / `R_eff` trends against `lambda_dir`
+within each functional — **cannot be run**: D-SCC left no `lambda_dir` range to trend against
+(0.006–0.018 over three seeds) and the three F-SCC seeds span only 0.57–0.75, too narrow and too
+few against the seed noise. Between the functionals the sign is at least consistent with the
+forecast — the F-SCC carrier is slightly more extended (`R_eff` 2.89–3.13 Å against 2.72–2.83 at
+λ ≈ 0.01 and 2.69–2.82 at λ = 0) while `N_eff` is ≈ 2.0 in every arm — but that is a
+between-functional difference at a fifty-fold difference in λ, not the registered within-functional
+trend, and it is recorded as suggestive only. (c) Decision (4) is unreadable for B′ (no sparse B′
+path, P4.2). (d) Decision (5) reads the D14 benchmark (7.0 / 8.6×), unchanged. (e) The full-kernel
+F-SCC comparator and the frozen-coupling variant were never queued and are not run.
+
+Artefacts: `~/runs/dscc/dscc_arm4_matched_s{0,1,2}/`, `~/runs/dscc/arm4_readout.json`,
+`scratchpad/arm4_read.py`. **P3.3 is closed; the b3 tree freeze at `be3c39b` is lifted.**
