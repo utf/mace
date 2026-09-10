@@ -137,6 +137,20 @@ class H0(nn.Module):
         self.gauge_shift = 0.0
         self.site_shift: Optional[torch.Tensor] = None
 
+    def __setstate__(self, state) -> None:
+        """Refuse a pre-A1 pickle rather than score it silently in the wrong form.
+
+        `torch.save(model)` pickles the module, and unpickling restores `_buffers` whether or
+        not `__init__` would have created them -- so a checkpoint trained with the pristine
+        centre loads here with its `centre` buffer intact and then runs the UNCENTRED
+        `on_site` on centred weights, with no error and no warning. The tracker says such a
+        checkpoint is scored at the `pre-a1` tag; this makes it so instead of asking."""
+        super().__setstate__(state)
+        if "centre" in getattr(self, "_buffers", {}):
+            raise RuntimeError(
+                "this checkpoint was trained before v5 amendment A1 (it carries the removed "
+                "reference buffer); score it at the `pre-a1` tag, where its form still exists")
+
     # ------------------------------------------------------------- pieces
 
     def coefficients(self):

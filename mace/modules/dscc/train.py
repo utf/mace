@@ -379,7 +379,15 @@ class Trainer:
         `vacancy_centre_full` rule already identifies. Sampled rather than exhaustive: it is a
         diagnostic on a saturating nonlinearity, not a mean anyone tests against."""
         self.model.eval()
-        sample = list(indices)[:max(1, int(n_frames))]
+        # EVENLY ACROSS SIZE CLASS, not the first `n_frames`: the held-out indices run in
+        # frame order, the 79-atom frames come first, and the section 2.10 readout at the
+        # flanking Pb is a 79-versus-159 quantity in W4. Taking the head of the list would
+        # report a sample that never sees the larger cell.
+        by_size: Dict[int, List[int]] = {}
+        for i in indices:
+            by_size.setdefault(len(self.frames[i]), []).append(int(i))
+        per = max(1, int(n_frames) // max(len(by_size), 1))
+        sample = [i for _, group in sorted(by_size.items()) for i in group[:per]]
         ds = self._dataset(sample)
         loader = torch_geometric.dataloader.DataLoader(ds, batch_size=1)
         pooled: Dict[str, list] = {}

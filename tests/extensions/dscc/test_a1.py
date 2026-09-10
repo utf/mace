@@ -94,6 +94,30 @@ class TestStaticCheck:
         assert torch.isfinite(H).all()
 
 
+class TestPreA1Checkpoints:
+    def test_a_pre_a1_pickle_is_refused_rather_than_scored_in_the_wrong_form(self, tmp_path):
+        """The failure this prevents is SILENT: unpickling restores `_buffers` whatever
+        `__init__` would have made, so a centred checkpoint would load and then run the
+        uncentred `on_site` on centred weights, with no error anywhere."""
+        import io
+        import pickle
+
+        m = H0(ZS, feature_dim=8, n_vectors=6, hidden=16)
+        state = m.__getstate__() if hasattr(m, "__getstate__") else dict(m.__dict__)
+        buf = io.BytesIO()
+        torch.save(m, buf)
+        buf.seek(0)
+        ok = torch.load(buf, weights_only=False)                 # a post-A1 pickle loads
+        assert not hasattr(ok, "centre")
+        # The same model as it would have been pickled before A1.
+        m.register_buffer("centre", torch.zeros(len(ZS), 8))
+        buf = io.BytesIO()
+        torch.save(m, buf)
+        buf.seek(0)
+        with pytest.raises(RuntimeError, match="pre-a1"):
+            torch.load(buf, weights_only=False)
+
+
 class TestZeroReadoutLimit:
     def test_zeroing_every_readout_gives_the_species_default_hamiltonian(self):
         """A1: "with all readouts forced to zero the model equals the species-default `H0` to

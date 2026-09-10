@@ -1199,8 +1199,13 @@ is tagged **`pre-a1`**. What changed in the runtime path:
   §2.10 readout at the flanking Pb into `held_final.json` and `held_final_avg.json`.
 - `set_pristine_centre` → `set_pristine_reference`, which now does only what A1 keeps: the
   pristine composition, the atom count, and Route B′'s `q0` charge reference. Its feature
-  pass is deleted, which also removes the setup pass that was the run's memory high-water
-  mark.
+  pass is deleted — one of the two base forwards over the pristine set, so setup is faster;
+  the `q0` pass remains and the per-batch memory peak is unchanged, so the registered 7.2 GB
+  and `--gpu_memory_fraction 0.42` stand.
+- `H0.__setstate__` refuses a pre-A1 pickle. Unpickling restores `_buffers` whether or not
+  `__init__` would create them, so a centred checkpoint would otherwise load at HEAD and run
+  the uncentred `on_site` on centred weights — silently, with no error. The tag is now
+  enforced rather than merely recorded.
 - `static_cell.py`'s local `centre` → `median_shift` (a fractional-coordinate median, not a
   feature mean) so the static check can be exact.
 
