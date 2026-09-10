@@ -11,6 +11,7 @@ the record of what was launched.
     python defect-perovskite/dscc_make_w3_queue.py --out ~/runs/w3_queue.txt
 """
 import argparse
+import math
 
 FOLD_OF = {0: 0, 1: 1, 2: 2, 3: 3, 4: 0, 6: 2}          # W0.3: seed -> outer fold
 ARMS = [("phi0", "--coupling 0 --route_b 0"),
@@ -28,7 +29,8 @@ ap.add_argument("--base_float32", type=int, default=1,
                      "peak falls from 11.6 to 7.2 GB, so two runs share a 23.5 GB card")
 ap.add_argument("--gpu_memory_fraction", type=float, default=0.42,
                 help="two runs per 24 GB card with the float32 base (7.2 GB peak, 7.9 reserved)")
-ap.add_argument("--eta", type=float, default=0.5, help="A1 registered SK modulation bound")
+ap.add_argument("--eta", type=float, default=math.log(3.0),
+                help="SK modulation bound; ln 3 by the 2026-09-10 ruling (A1 wrote 0.5)")
 ap.add_argument("--beta_b", type=float, default=0.0, help="A1: rank-2 environment bound; 0 in W3")
 ap.add_argument("--beta_a", type=float, default=0.0, help="A1: rank-1 environment bound; 0 in W3")
 ap.add_argument("--delta_frac", type=float, default=0.40, help="A1: Delta_Z / baseline spread")

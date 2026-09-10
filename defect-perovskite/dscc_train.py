@@ -61,7 +61,7 @@ def main() -> None:
     ap.add_argument("--setup_batch_size", type=int, default=16, help="pristine-reference pass; peak memory only")
     # v5 amendment A1 (registered 2026-09-10). Defaults are the registered W3 values.
     ap.add_argument("--eta", type=float, default=ETA_DEFAULT,
-                    help="SK modulation bound, exp(eta tanh m); A1 registers 0.5 (pre-A1 ran ln 3)")
+                    help="SK modulation bound, exp(eta tanh m); ln 3 by the 2026-09-10 ruling")
     ap.add_argument("--beta_b", type=float, default=0.0,
                     help="rank-2 environment bound; 0 in W3 (species b_Z), moved by the W4 factorial")
     ap.add_argument("--beta_a", type=float, default=0.0, help="rank-1 environment bound; 0 in W3")

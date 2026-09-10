@@ -1096,6 +1096,34 @@ not a W3 result**: they stand as recorded, on the centred form, and W3 proper re
 form. The cross-base numbers in that section keep their value as a base comparison, since both
 sides used the centred head.
 
+### Ruling: `η` back to ln 3 (user, 2026-09-10 13:40)
+
+The amendment's literal `η = 0.5` is **overruled**; the SK modulation bound returns to
+`ln 3 = 1.0986`, `×[1/3, 3]`. `ETA_DEFAULT` is `HOP_LOG_BETA_DEFAULT` again and the queue
+generator writes `--eta 1.0986` on every line. **Every other A1 value stands**: no pristine
+reference anywhere, `Δ_Z = 3.079` eV, `β_b = β_a = 0` for W3, the readouts, the L2 at 1.8e−6.
+
+Superseded by this ruling, and archived rather than deleted at
+`~/runs/dscc/a1_eta05/` (six Φ = 0 runs, epochs 4–16 of 60, plus the queue file and log):
+
+- Matched-epoch held force RMSE against the pre-A1 base-v2 Φ = 0 runs, per component:
+  epoch 4, all six seeds, paired mean **+1.68 ± 0.31** meV/Å (same sign every seed);
+  epoch 9, three seeds, **+1.04 ± 1.02**. Not a registered reading and not a clean
+  attribution — the runs carried the centre removal and the narrower `η` together — but
+  the sign was consistent and it is the only measurement anyone has of `η = 0.5` on real
+  data. Recorded so the choice is not re-litigated from memory.
+- The gap regulariser held at 2.399–2.400 against the registered 2.40 on every seed with no
+  pristine centre, which is the term A1's change most exposed.
+- The L2 ran four to five orders below the force loss (2.5e−10 to 8.1e−8 against 1.4–2.2e−5):
+  inert, as designed, since the corrections never approached the bound.
+- The toy-fixture multi-valuedness recorded below was an `η = 0.5` effect and does not apply
+  to the relaunched configuration. The branch pin added to `TestPairForcePath` stays anyway:
+  the test had been asserting branch selection by accident, and a bound it does not choose
+  should not decide whether it measures what it says.
+
+W3 relaunched on (A1 form, `η = ln 3`) — same eighteen runs, same names `dscc_w3a1_*`, the
+names freed by the archive move.
+
 ### A1 registration — the values the amendment leaves to us (2026-09-10 12:40, written before any A1 code)
 
 A1 asks for six items to be registered before W3 opens. Four are ours to propose; two A1

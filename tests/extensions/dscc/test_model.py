@@ -489,12 +489,13 @@ class TestPairForcePath:
         ref = m(dict(batch), compute_force=True)                          # inference: cotangent route
         # ONE FIXED POINT FOR ALL THREE FORWARDS. This test is about the force ROUTES
         # agreeing at a given SCF solution, not about which solution the iteration finds:
-        # the toy has no bound state, and at A1's `eta = 0.5` its Phi = 0 start converges to
-        # two different branches from the inference and training paths (dq apart by 0.26,
-        # energy by 0.55 eV, both flagged converged), which is the multi-valuedness the
-        # registered `single_valued` check exists to catch. Warm-starting every forward at
-        # the inference solution pins the branch; without it the assertion below measures
-        # branch selection instead of the routes.
+        # the toy has no bound state, and at `eta = 0.5` its Phi = 0 start converged to two
+        # different branches from the inference and training paths (dq apart by 0.26, energy
+        # by 0.55 eV, both flagged converged), which is the multi-valuedness the registered
+        # `single_valued` check exists to catch. `eta` is back at ln 3 and the assertion
+        # passes without the pin, but the pin stays: the test asserted branch selection by
+        # accident for as long as it did not have one, and a bound this test does not choose
+        # should not be able to decide whether it is measuring what it says.
         warm = [ref["dq"].detach()]
         params = [p for p in m.parameters() if p.requires_grad]
         torch.manual_seed(3)

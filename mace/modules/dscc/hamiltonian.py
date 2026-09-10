@@ -56,7 +56,15 @@ ON_SITE_RANGE_DEFAULT = 3.0
 # species-level coefficients) and moved by W4's factorial. `delta_frac`: `Delta_Z` as a
 # fraction of the spread of the species onsite baselines. `readout_hidden`: one hidden layer
 # for `g_Z` and `f_Z`, A1's "one hidden layer of registered width".
-ETA_DEFAULT = 0.5
+#
+# `eta` RULED BACK TO ln 3 (user, 2026-09-10 13:40), reverting the amendment's literal
+# `eta = 0.5`. A1's annotation on that line is "(unchanged form, reference removed)" and the
+# SK modulation never carried a reference, so nothing on it needed changing; 0.5 also lands
+# near `HOP_LOG_BETA_RANGE_EQUIVALENT` (ln 1.5), roughly undoing the Stage A' widening that a
+# measurement had asked for -- the cohort sat AT the narrower stop on the vacancy-flanking
+# Pb-Pb bond, where `sech^2 ~ 0` makes a parameter look like it is learning when it is not.
+# A1's other registered values (beta, Delta_Z, the readouts, the L2) stand unchanged.
+ETA_DEFAULT = HOP_LOG_BETA_DEFAULT
 BETA_ENV_DEFAULT = 0.5
 READOUT_HIDDEN_DEFAULT = 64
 ELEM_DIM_ENV = 8
