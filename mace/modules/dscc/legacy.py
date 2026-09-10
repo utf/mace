@@ -230,7 +230,13 @@ DELTA_FRACTION_DEFAULT = 0.40
 # thermal-noise objection does not apply to an ensemble statistic. With standardised inputs
 # the constant part IS the bias, so the gap regulariser acts on the bias alone and every
 # direction of `w` is free.
-FEATURE_SD_FLOOR = 1e-4        # relative to the species' median channel sd: dead channels
+# A channel the base does not vary across the ensemble carries no information, so its
+# standardised value is ZERO -- not `(h - mu)/tiny`, which amplifies numerical noise without
+# bound. The first implementation floored the sd instead and a symmetry-perfect test cell,
+# where every atom of a species is equivalent and every sd is ~0, drove `H0` to nonsense and
+# the SCF to non-convergence. Below this fraction of the species' median channel sd, the
+# channel is dead and is zeroed.
+FEATURE_SD_FLOOR = 1e-3
 
 
 # The LIVE setting, read by every fill, every entropy and the density-response backward.
@@ -447,6 +453,9 @@ class SlaterKosterH(nn.Module):
         # checkpoint; identity until `set_feature_stats` is called.
         self.register_buffer("feat_mean", torch.zeros(num_elements, feature_dim))
         self.register_buffer("feat_sd", torch.ones(num_elements, feature_dim))
+        # `1/sd` on live channels, 0 on dead ones -- a multiply, so a dead channel is exactly
+        # zero rather than a division by something near zero.
+        self.register_buffer("feat_scale", torch.ones(num_elements, feature_dim))
         self.register_buffer("feat_stats_set", torch.tensor(False))
         self.hop = _mlp([2 * feature_dim + 2 * elem_dim, hidden, hidden, len(BOND_TYPES)],
                         final_scale=0.05)
@@ -596,27 +605,33 @@ class SlaterKosterH(nn.Module):
     def set_feature_stats(self, mean: torch.Tensor, sd: torch.Tensor) -> Dict[str, int]:
         """Freeze the per-species channel mean and sd of the training ensemble.
 
-        Channels with no variation across the ensemble would divide by ~0, so the sd is
-        floored at `FEATURE_SD_FLOOR` times that species' median channel sd; the count of
-        floored channels is returned, because a large count means the base is giving the head
-        dead channels and that is worth seeing rather than silently dividing."""
-        floored = {}
+        A channel the base does not vary across the ensemble is DEAD: it is zeroed, not
+        divided by. The threshold is `FEATURE_SD_FLOOR` times that species' median channel sd.
+        The count of dead channels is returned, because a large count means the base is
+        handing the head channels it cannot use, and that is worth seeing.
+
+        A species whose every channel is dead -- a symmetry-perfect cell, where all its atoms
+        are equivalent -- standardises to all zeros, so its readouts contribute their bias and
+        nothing else. Degenerate, but finite and stable, which is the point."""
+        dead = {}
         for z in range(self.feat_mean.shape[0]):
             m, s_ = mean[z].to(self.feat_mean.dtype), sd[z].to(self.feat_sd.dtype)
-            med = s_.median()
-            lo = FEATURE_SD_FLOOR * med if float(med) > 0 else torch.tensor(1.0, dtype=s_.dtype, device=s_.device)
-            floored[z] = int((s_ < lo).sum())
+            med = float(s_.median())
+            lo = FEATURE_SD_FLOOR * med
+            alive = s_ > lo if med > 0 else torch.zeros_like(s_, dtype=torch.bool)
+            dead[z] = int((~alive).sum())
             self.feat_mean[z] = m
-            self.feat_sd[z] = torch.clamp(s_, min=float(lo))
+            self.feat_sd[z] = torch.where(alive, s_, torch.ones_like(s_))
+            self.feat_scale[z] = torch.where(alive, 1.0 / s_.clamp_min(1e-30), torch.zeros_like(s_))
         self.feat_stats_set.fill_(True)
-        return floored
+        return dead
 
     def standardise(self, feats: torch.Tensor, species: torch.Tensor) -> torch.Tensor:
         """`(h - mu_Z) / sd_Z`. Identity while the stats are unset (a freshly constructed
         module), which is why `MACEDSCC` refuses to run without them."""
         if not bool(self.feat_stats_set):
             return feats
-        return (feats - self.feat_mean[species].to(feats.dtype)) / self.feat_sd[species].to(feats.dtype)
+        return (feats - self.feat_mean[species].to(feats.dtype)) * self.feat_scale[species].to(feats.dtype)
 
     # ------------------------------------------------------- A1: the L2 on tanh outputs
 

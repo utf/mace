@@ -63,9 +63,13 @@ def model():
         m.h0.vector_mix.normal_(0.0, 0.3)
         m.h0.alpha.fill_(0.5)
         m.h0.beta.fill_(0.5)
-    _p = _batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])
-    m.set_pristine_reference([_p])
-    m.set_feature_stats([_p])
+    m.set_pristine_reference([_batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])])
+    # A1.1's statistics are ENSEMBLE statistics: rattled frames, not the symmetry-perfect
+    # cell. On an unrattled cell every atom of a species is equivalent, every channel has
+    # zero variance and standardises to zero, and the resulting `H0` is so degenerate that
+    # the frontier window stops reproducing the dense solve.
+    m.set_feature_stats([_batch([_frame(_perovskite(rattle=0.05, seed=s), [0, 0, 0, 0], 0)])
+                         for s in (11, 12, 13)])
     return m
 
 
@@ -123,7 +127,12 @@ class TestChargedState:
         atoms = VACP
         out = model(_batch([atoms]), compute_force=False, compute_stress=True)
         volume = atoms.get_volume()
-        h = 1e-4
+        # h = 1e-5, not 1e-4; the assertion tolerance is unchanged. A1.1's standardisation
+        # made the on-site corrections real, raising the third strain derivative until the
+        # central difference's O(h^2) truncation exceeded 1e-7. Measured worst component:
+        # 1.70e-7 at h = 1e-4, 3.86e-8 at 3e-5, 5.10e-10 at 1e-5, 3.62e-10 at 3e-6 -- it
+        # converges, so the analytic stress is right and the reference was the coarse side.
+        h = 1e-5
         for i, j in ((0, 0), (1, 2), (2, 2)):
             e = []
             for sign in (1.0, -1.0):
@@ -191,7 +200,12 @@ def _coupled(regime="A", route_b=False, seed=0):
         m.u_raw.fill_(-1.0)
     pristine = _batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])
     m.set_pristine_reference([pristine])
-    m.set_feature_stats([pristine])
+    # A1.1's statistics are ENSEMBLE statistics: rattled frames, not the symmetry-perfect
+    # cell. On an unrattled cell every atom of a species is equivalent, every channel has
+    # zero variance and standardises to zero, and the resulting `H0` is so degenerate that
+    # the frontier window stops reproducing the dense solve.
+    m.set_feature_stats([_batch([_frame(_perovskite(rattle=0.05, seed=s), [0, 0, 0, 0], 0)])
+                         for s in (11, 12, 13)])
     return m
 
 
@@ -224,7 +238,12 @@ class TestCoupledHead:
         out = coupled(_batch([VACP]), compute_force=False, compute_stress=True)
         warm = [out["dq"].detach()]
         volume = VACP.get_volume()
-        h = 1e-4
+        # h = 1e-5, not 1e-4; the assertion tolerance is unchanged. A1.1's standardisation
+        # made the on-site corrections real, raising the third strain derivative until the
+        # central difference's O(h^2) truncation exceeded 1e-7. Measured worst component:
+        # 1.70e-7 at h = 1e-4, 3.86e-8 at 3e-5, 5.10e-10 at 1e-5, 3.62e-10 at 3e-6 -- it
+        # converges, so the analytic stress is right and the reference was the coarse side.
+        h = 1e-5
         for i, j in ((0, 0), (0, 2)):
             e = []
             for sign in (1.0, -1.0):

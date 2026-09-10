@@ -25,7 +25,12 @@ def _model(route_b, tol_q):
         m.u_raw.fill_(-1.0)
     pristine = _batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])
     m.set_pristine_reference([pristine])
-    m.set_feature_stats([pristine])
+    # A1.1's statistics are ENSEMBLE statistics: rattled frames, not the symmetry-perfect
+    # cell. On an unrattled cell every atom of a species is equivalent, every channel has
+    # zero variance and standardises to zero, and the resulting `H0` is so degenerate that
+    # the frontier window stops reproducing the dense solve.
+    m.set_feature_stats([_batch([_frame(_perovskite(rattle=0.05, seed=s), [0, 0, 0, 0], 0)])
+                         for s in (11, 12, 13)])
     return m
 
 
@@ -64,7 +69,15 @@ def test_all_six_strain_components():
     out = m(_batch([VACP]), compute_force=False, compute_stress=True)
     warm = [out["dq"].detach()]
     volume = VACP.get_volume()
-    h = 1e-4
+    # h = 1e-5, not 1e-4. The assertion tolerance below is unchanged; the STEP is what was
+    # too coarse. A1.1's standardisation made the on-site corrections real (they had
+    # collapsed to 0.1 eV without it), which raised the third strain derivative and pushed
+    # the central difference's O(h^2) truncation past 1e-7. Measured on the xx component:
+    # error 1.70e-7 at h = 1e-4, 3.35e-8 at 5e-5, 6.24e-10 at 2e-5, 5.17e-10 at 1e-5 -- it
+    # converges, so the analytic stress is right and the reference was the coarse side.
+    # Tightening the SCF (1e-10 -> 1e-13) moves the difference by 4e-13, so the solver
+    # residual is not involved, and no pair sits within 2h of either cutoff at this step.
+    h = 1e-5
     for i, j in ((0, 0), (1, 1), (2, 2), (0, 1), (0, 2), (1, 2)):
         e = []
         for sign in (1.0, -1.0):

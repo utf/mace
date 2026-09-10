@@ -57,8 +57,8 @@ class TestStaticCheck:
 
         centre_ok = {"vacancy_centre", "vacancy_centre_full"}
         pristine_ok = {"q0_pristine", "pristine_atoms", "pristine_gap",
-                       "set_pristine_reference", "pristine_indices", "pristine",
-                       "static_pristine_cell"}
+                       "set_pristine_reference", "pristine_indices", "pristine_batches",
+                       "pristine", "static_pristine_cell"}
         offenders = []
         for path in sorted(RUNTIME.glob("*.py")):
             tree = ast.parse(path.read_text())
@@ -293,14 +293,35 @@ class TestA11Standardisation:
         assert all(p is not m.sk.feat_mean and p is not m.sk.feat_sd for p in m.parameters())
         assert not m.sk.feat_mean.requires_grad and not m.sk.feat_sd.requires_grad
 
-    def test_dead_channels_are_floored_and_counted(self):
+    def test_dead_channels_are_zeroed_not_amplified(self):
+        """A channel the base does not vary carries no information. Dividing by its (near
+        zero) sd amplifies numerical noise without bound -- the first implementation floored
+        the sd instead of zeroing the channel, and a symmetry-perfect cell then drove `H0` to
+        nonsense and the SCF to non-convergence. The test that caught it is
+        `test_sparse.py::test_sparse_scf_and_frontier_forces_match_the_dense_model`."""
         m = H0(ZS, feature_dim=8, n_vectors=6, hidden=16)
         sd = torch.ones(3, 8)
-        sd[:, :3] = 0.0                      # channels the base never varies
-        floored = m.sk.set_feature_stats(torch.zeros(3, 8), sd)
-        assert all(v == 3 for v in floored.values())
-        assert float(m.sk.feat_sd.min()) > 0.0
-        assert torch.isfinite(m.sk.standardise(torch.zeros(3, 8), torch.tensor([0, 1, 2]))).all()
+        sd[:, :3] = 1e-12                    # channels the base never varies
+        dead = m.sk.set_feature_stats(torch.zeros(3, 8), sd)
+        assert all(v == 3 for v in dead.values())
+        x = torch.full((3, 8), 1e-11)
+        h = m.sk.standardise(x, torch.tensor([0, 1, 2]))
+        assert float(h[:, :3].abs().max()) == 0.0          # zeroed, not 1e-11/1e-12 = 10
+        assert torch.isfinite(h).all()
+
+    def test_a_species_with_no_variation_at_all_is_finite_and_stable(self):
+        """Every channel dead -- an unrattled cell, all atoms of a species equivalent. The
+        readouts then contribute their bias and nothing else: degenerate, but finite."""
+        m = H0(ZS, feature_dim=8, n_vectors=6, hidden=16)
+        dead = m.sk.set_feature_stats(torch.randn(3, 8), torch.zeros(3, 8))
+        assert all(v == 8 for v in dead.values())
+        h = m.sk.standardise(torch.randn(5, 8) * 1e3, torch.tensor([0, 1, 2, 2, 0]))
+        assert float(h.abs().max()) == 0.0
+        atoms = _perovskite(rattle=0.05)
+        species, scalars, vectors, positions, cell, ei, S = _inputs(atoms, m.r_cut)
+        m.sk.set_feature_stats(torch.zeros(3, 8), torch.zeros(3, 8))
+        H = m(scalars, vectors, species, ei, gr.edge_vectors(positions, cell, ei, S))
+        assert torch.isfinite(H).all()
 
     def test_identity_until_set_so_a_fresh_module_still_builds(self):
         m = H0(ZS, feature_dim=8, n_vectors=6, hidden=16)

@@ -23,7 +23,7 @@ section 2.6 plugs into `solve` in Phase 1.
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import torch
 from e3nn import o3
@@ -419,7 +419,7 @@ class MACEDSCC(nn.Module):
         return int(sp.shape[0])
 
     @torch.no_grad()
-    def set_feature_stats(self, batches: Sequence[Dict[str, torch.Tensor]]) -> Dict[str, object]:
+    def set_feature_stats(self, batches: Iterable[Dict[str, torch.Tensor]]) -> Dict[str, object]:
         """A1.1: per-species channel mean and sd of the base's block-0 invariants over the
         TRAINING ensemble, computed once and frozen into the checkpoint.
 
@@ -451,9 +451,9 @@ class MACEDSCC(nn.Module):
                              "standardised by statistics that do not exist")
         mean = total / count.unsqueeze(-1)
         var = (total_sq / count.unsqueeze(-1) - mean ** 2).clamp_min(0.0)
-        floored = self.h0.sk.set_feature_stats(mean, var.sqrt())
+        dead = self.h0.sk.set_feature_stats(mean, var.sqrt())
         report = {"atoms_per_species": {int(self.atomic_numbers[i]): int(count[i]) for i in range(n_el)},
-                  "floored_channels": {int(self.atomic_numbers[i]): int(floored[i]) for i in range(n_el)},
+                  "dead_channels": {int(self.atomic_numbers[i]): int(dead[i]) for i in range(n_el)},
                   "mean_norm": {int(self.atomic_numbers[i]): float(mean[i].norm()) for i in range(n_el)},
                   "median_abs_mean_over_sd": {
                       int(self.atomic_numbers[i]):

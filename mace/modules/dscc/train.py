@@ -273,18 +273,31 @@ class Trainer:
         input statistics over the training ensemble; the static cell batch."""
         ds = dd.atomic_data([self.frames[i] for i in pristine_indices], self.z_table, self.cfg.r_cut)
         loader = torch_geometric.dataloader.DataLoader(ds, batch_size=self.cfg.setup_batch_size)
-        self.model.set_pristine_reference([to_device(b, self.device) for b in loader])
+        pristine_batches = [to_device(b, self.device) for b in loader]
+        self.model.set_pristine_reference(pristine_batches)
         # A1.1: per-species channel statistics of the base's block-0 invariants. TRAINING
         # frames plus the pristine cells (thermal ensemble, defect and pristine, as
         # registered); the held-out fold is excluded.
-        stat_idx = list(self.train_idx) + list(pristine_indices)
-        stat_ds = dd.atomic_data([self.frames[i] for i in stat_idx], self.z_table, self.cfg.r_cut)
-        stat_loader = torch_geometric.dataloader.DataLoader(stat_ds, batch_size=self.cfg.setup_batch_size)
-        self.feature_stats = self.model.set_feature_stats([to_device(b, self.device) for b in stat_loader])
-        logging.info("A1.1 feature stats over %d frames: atoms %s, |mu|/sd median %s, floored channels %s",
-                     len(stat_idx), self.feature_stats["atoms_per_species"],
+        #
+        # The pristine graphs are REUSED rather than rebuilt, and the charged ones are
+        # streamed rather than materialised. Building a second 1400-frame dataset at
+        # `r_cut` 10 and holding every batch on the GPU at once made setup the longest part
+        # of the run; this halves the neighbour-list work and keeps one batch resident.
+        train_ds = dd.atomic_data([self.frames[i] for i in self.train_idx], self.z_table, self.cfg.r_cut)
+        train_loader = torch_geometric.dataloader.DataLoader(train_ds, batch_size=self.cfg.setup_batch_size)
+
+        def stat_batches():
+            for b in pristine_batches:
+                yield b
+            for b in train_loader:
+                yield to_device(b, self.device)
+
+        self.feature_stats = self.model.set_feature_stats(stat_batches())
+        self.feature_stats["n_frames"] = len(self.train_idx) + len(pristine_indices)
+        logging.info("A1.1 feature stats over %d frames: atoms %s, |mu|/sd median %s, dead channels %s",
+                     self.feature_stats["n_frames"], self.feature_stats["atoms_per_species"],
                      {k: round(v, 1) for k, v in self.feature_stats["median_abs_mean_over_sd"].items()},
-                     self.feature_stats["floored_channels"])
+                     self.feature_stats["dead_channels"])
         static = dd.atomic_data([static_cell_atoms(self.cfg.static_cell_path)], self.z_table, self.cfg.r_cut)
         self.static_batch = to_device(next(iter(torch_geometric.dataloader.DataLoader(static, batch_size=1))), self.device)
         # The static cell never moves: its base features are geometry-only, cached once.
