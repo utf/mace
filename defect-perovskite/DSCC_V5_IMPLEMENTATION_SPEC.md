@@ -1096,6 +1096,42 @@ not a W3 result**: they stand as recorded, on the centred form, and W3 proper re
 form. The cross-base numbers in that section keep their value as a base comparison, since both
 sides used the centred head.
 
+### §8 2× benchmark on base v2 + the A1 head (2026-09-10 15:05, idle A4000, Φ = 0)
+
+Base alone against base + head, energy and forces per step, warm-started along consecutive
+charged frames, no SCF (Φ = 0 arm). Head weights are `dscc_w3a1_phi0_s0` at epoch ~20; the
+ratio is architectural, and with coupling off there is no solver whose iteration count could
+depend on the weights (`scf_iterations_median` 0 on both sizes).
+
+| size | frames | base (ms) | base + head (ms) | ratio median | ratio p95 | criterion |
+|---|---|---|---|---|---|---|
+| 79 | 100 | 39.8 | 78.9 | **1.94** | **2.21** | fails on p95 |
+| 159 | 16 | 68.0 | 142.7 | **2.11** | **8.93** | fails on both |
+
+Recorded against the Arm-1 reading on the old base (79: median 2.07, p95 2.22, 100 frames;
+159: median 1.96, p95 5.79, 16 frames). **The 79-atom median improving 2.07 → 1.94 is not the
+head getting cheaper — it is the denominator getting dearer.** Base v2 is 512-wide at r_max
+6.0 against the old base's 128-wide at r_max 5.0, so the same head is a smaller fraction of a
+larger base forward. Read as an absolute cost the head is unchanged: about one base forward.
+
+- 159 atoms has only sixteen charged frames in the whole dataset, so the v4.3 amendment's
+  "re-measure with ≥ 100 frames per size" **cannot be met at that size** with this data. The
+  p95 there is one or two frames out of sixteen and moved 5.79 → 8.93 between the two bases;
+  at n = 16 that is a single frame changing places and it should not be read as a trend.
+- The engineering item registered in v4.3 is still **not done**: "compute base features and
+  head features in one graph with a single backward (no early-block recomputation)". The head
+  recomputes the base's first block for its derivatives, so part of the head's cost is a
+  second pass over work the base already did. That is the lever if the criterion matters; it
+  is a code change that moves no trained number.
+- `dscc_benchmark.py` was fixed here: it predated W1's float32 base and fed the base float64
+  inputs, which now crashes outright (`both inputs should have same dtype`). The base leg is
+  timed in the base's own precision with the cast OUTSIDE the timed region — that is what a
+  base-only MD step costs, and putting the cast inside would charge the denominator for work
+  the comparison does not do. The model leg pays its own casts, which is correct: they are
+  part of what the head costs. Reports `base_dtype`, `r_max_base`, `r_cut_head`.
+
+Artefacts `~/runs/dscc/bench_a1_79.json`, `bench_a1_159.json`.
+
 ### Ruling: `η` back to ln 3 (user, 2026-09-10 13:40)
 
 The amendment's literal `η = 0.5` is **overruled**; the SK modulation bound returns to

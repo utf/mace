@@ -52,9 +52,19 @@ def main() -> None:
         d = dd.atomic_data([atoms], z_table, cutoff)
         return next(iter(torch_geometric.dataloader.DataLoader(d, batch_size=1))).to(args.device).to_dict()
 
+    # W1 (v5) put the frozen base in float32 with the head in float64. The base-alone leg is
+    # timed IN THE BASE'S OWN PRECISION, cast outside the timed region: that is what a
+    # base-only MD step costs, and putting the cast inside would charge the denominator for
+    # work the comparison does not do. The model leg pays its own casts, which is correct --
+    # they are part of what the head costs.
+    base_dtype = model.base_dtype()
+
+    def base_batch(atoms):
+        return model._cast_floats(batch(atoms, float(base.r_max)), base_dtype)
+
     # warm-up
     b = batch(frames[0], model.r_cut); model(b, compute_force=True)
-    ScaleShiftMACE.forward(base, batch(frames[0], float(base.r_max)), compute_force=True); sync()
+    ScaleShiftMACE.forward(base, base_batch(frames[0]), compute_force=True); sync()
     if args.tol_q is not None:
         import dataclasses
         model.scf_options = dataclasses.replace(model.scf_options, tol_q=args.tol_q, tol_q_inference=args.tol_q)
@@ -62,7 +72,7 @@ def main() -> None:
     warm = None
     history = []
     for atoms in frames:
-        bb = batch(atoms, float(base.r_max))
+        bb = base_batch(atoms)
         sync(); t0 = time.perf_counter()
         ScaleShiftMACE.forward(base, bb, compute_force=True); sync()
         t_base.append(time.perf_counter() - t0)
@@ -78,6 +88,7 @@ def main() -> None:
     ratio = np.array(t_head) / np.array(t_base)
     report = {"model": args.model, "device": args.device, "hardware": torch.cuda.get_device_name(0) if args.device.startswith("cuda") else "cpu",
               "n_frames": len(frames), "size": args.size, "coupling": bool(model.coupling), "route_b": bool(model.route_b),
+              "base_dtype": str(base_dtype), "r_max_base": float(base.r_max), "r_cut_head": float(model.r_cut),
               "base_ms_median": 1000 * float(np.median(t_base)), "model_ms_median": 1000 * float(np.median(t_head)),
               "ratio_median": float(np.median(ratio)), "ratio_p95": float(np.percentile(ratio, 95)),
               "scf_iterations_median": float(np.median(iters)) if iters else None, "predictor": bool(args.predictor), "tol_q": float(model.scf_options.tol_q_inference if args.tol_q is None else args.tol_q),
