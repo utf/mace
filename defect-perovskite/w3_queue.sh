@@ -1,9 +1,14 @@
 #!/bin/bash
-# W3 queue on b3: up to THREE runs per GPU on 4, 5, 7 (a run peaks at 6.6 GB reserved with the
-# registered setup batching; 3 x 6.6 = 19.8 GB of 24). Never touches GPUs 0-3. Selects by UUID
-# (GPU 6 is off the bus). One line of the queue file per run, dropped as it is launched.
+# W3 queue on b3: ONE run per GPU on 4, 5, 7 (a training step on base v2 peaks at 11.6 GB, so two
+# do not share a 23.5 GB card). Never touches GPUs 0-3. Selects by UUID (GPU 6 is off the bus).
+# One line of the queue file per run, dropped as it is launched.
 W=/home/alex/src/mace/.claude/worktrees/size-extensivity
-Q=$HOME/runs/w3_queue.txt; L=$HOME/runs/w3_queue.log; PER_GPU=3; HEADROOM=7500
+Q=${W3_QUEUE:-$HOME/runs/w3_queue.txt}; L=${W3_LOG:-$HOME/runs/w3_queue.log}
+PER_GPU=${W3_PER_GPU:-1}; HEADROOM=${W3_HEADROOM:-13000}
+# One run per card: a training step on base v2 peaks at 11.6 GB (measured on the full data set,
+# both arms). expandable_segments keeps the reserved pool at the live size -- without it the
+# many small setup batches fragment it to 14.2 GB against 6.5 GB live.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 while true; do
   line=$(grep -v -E "^\s*(#|$)" $Q 2>/dev/null | head -1)
   [ -z "$line" ] && { echo "$(date '+%F %T') queue empty, exiting" >> $L; exit 0; }

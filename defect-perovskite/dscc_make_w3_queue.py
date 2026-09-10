@@ -18,13 +18,19 @@ ap.add_argument("--epochs", type=int, default=60)
 ap.add_argument("--base", default="/home/alex/runs/base_v2_prod/base_v2_prod_base.pt")
 ap.add_argument("--setup_batch_size", type=int, default=2)
 ap.add_argument("--base_cache_batch_size", type=int, default=2)
-ap.add_argument("--gpu_memory_fraction", type=float, default=0.30,
-                help="three runs per 24 GB card; the cap bounds the caching allocator")
+ap.add_argument("--gpu_memory_fraction", type=float, default=0.65,
+                help="one run per 24 GB card: a step on base v2 peaks at 11.6 GB (measured, "
+                     "both arms; the base forward on 159-atom batches dominates, not the solver). "
+                     "The cap is insurance, not packing.")
 ap.add_argument("--skip", default="", help="run names already launched, comma separated")
+ap.add_argument("--arms", default="", help="restrict to these arms (phi0, lr_only, bp_lr_only), comma separated")
 args = ap.parse_args()
 
 lines = []
+wanted = {x for x in args.arms.split(",") if x}
 for arm, flags in ARMS:
+    if wanted and arm not in wanted:
+        continue
     for seed, fold in FOLD_OF.items():
         name = f"dscc_w3_{arm}_s{seed}"
         if name in {x for x in args.skip.split(",") if x}:
