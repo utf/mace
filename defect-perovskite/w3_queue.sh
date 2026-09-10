@@ -5,6 +5,11 @@
 W=/home/alex/src/mace/.claude/worktrees/size-extensivity
 Q=${W3_QUEUE:-$HOME/runs/w3_queue.txt}; L=${W3_LOG:-$HOME/runs/w3_queue.log}
 PER_GPU=${W3_PER_GPU:-1}; HEADROOM=${W3_HEADROOM:-13000}
+# Which cards to use. Never 0-3. Default 4 5 7; set W3_GPUS when a card has fallen off the
+# bus -- GPU 6 has been off the bus throughout, and GPU 7 joined it on 2026-09-10, taking
+# six running jobs with it (a card that faults kills the driver context of every job on the
+# machine, not just its own: "unspecified launch failure" on 4 and 5 at the same second).
+GPUS=${W3_GPUS:-"4 5 7"}
 # One run per card: a training step on base v2 peaks at 11.6 GB (measured on the full data set,
 # both arms). expandable_segments keeps the reserved pool at the live size -- without it the
 # many small setup batches fragment it to 14.2 GB against 6.5 GB live.
@@ -12,7 +17,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 while true; do
   line=$(grep -v -E "^\s*(#|$)" $Q 2>/dev/null | head -1)
   [ -z "$line" ] && { echo "$(date '+%F %T') queue empty, exiting" >> $L; exit 0; }
-  for g in 4 5 7; do
+  for g in $GPUS; do
     read -r used total < <(nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv,noheader,nounits 2>/dev/null | awk -F', ' -v g=$g '$1==g {print $2, $3}')
     [ -z "$used" ] && continue
     uuid=$(nvidia-smi --query-gpu=index,uuid --format=csv,noheader 2>/dev/null | awk -F', ' -v g=$g '$1==g {print $2}')
