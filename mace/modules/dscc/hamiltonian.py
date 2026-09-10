@@ -182,7 +182,7 @@ class H0(nn.Module):
         pre = readout(torch.cat([self.sk.standardise(scalars, species),
                                  self.elem_env(species).to(scalars.dtype)], dim=-1))
         t = torch.tanh(pre).squeeze(-1)
-        self.sk._reg_store(name, t)
+        self.sk._reg_store(name, pre)
         return 1.0 + float(bound) * t
 
     def site_coefficients(self, scalars: torch.Tensor, species: torch.Tensor):

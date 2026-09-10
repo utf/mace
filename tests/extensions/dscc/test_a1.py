@@ -344,3 +344,60 @@ class TestA11Standardisation:
         assert const_part > 10 * env_part                      # raw: the constant dominates
         std = (raw - raw.mean(0)) / raw.std(0, unbiased=False)
         assert float((std.mean(0) @ w).abs()) < 1e-5           # standardised: no constant left
+
+
+class TestSaturationBarrier:
+    """The guard rail added after seed 0 of the first A1.1 arm diverged into saturation."""
+
+    def _pre(self, m, value):
+        """Force every readout pre-activation to `value` by zeroing the weights and setting
+        the final bias, so the barrier and L2 can be read at a known operating point."""
+        with torch.no_grad():
+            for mod in (m.sk.site, m.sk.hop, m.g_read, m.f_read):
+                last = [x for x in mod.modules() if isinstance(x, torch.nn.Linear)][-1]
+                last.weight.zero_()
+                last.bias.fill_(value)
+
+    def test_an_l2_on_the_tanh_output_cannot_rescue_a_saturated_unit(self):
+        """The reason the barrier is on the pre-activation. `d/dpre tanh(pre)^2` is
+        `2 tanh sech^2`, which vanishes as `|pre|` grows -- the restoring force disappears
+        exactly where it is needed. `d/dpre relu(|pre| - knee)^2` grows instead."""
+        for pre_value, expect_l2_grad in ((0.5, 0.5), (6.0, 1e-4)):
+            pre = torch.tensor([pre_value], dtype=torch.float64, requires_grad=True)
+            g_l2 = torch.autograd.grad((torch.tanh(pre) ** 2).sum(), pre)[0].abs().item()
+            pre2 = torch.tensor([pre_value], dtype=torch.float64, requires_grad=True)
+            g_bar = torch.autograd.grad(((pre2.abs() - 2.0).clamp_min(0.0) ** 2).sum(), pre2)[0].abs().item()
+            if pre_value < 2.0:
+                assert g_bar == 0.0                       # silent in normal operation
+            else:
+                assert g_l2 < 1e-4 and g_bar > 5.0        # L2 dead, barrier strong
+
+    def test_the_barrier_is_zero_in_normal_operation_and_bites_at_saturation(self):
+        atoms = _perovskite(rattle=0.05)
+        m = _model(beta_b=0.5)
+        species, scalars, vectors, positions, cell, ei, S = _inputs(atoms, m.r_cut)
+        ev = gr.edge_vectors(positions, cell, ei, S)
+        m.sk.collect_regularisation(True)
+        self._pre(m, 0.05)                                 # a healthy run sits here
+        m(scalars, vectors, species, ei, ev)
+        assert max(float(v) for v in m.sk.barrier().values()) == 0.0
+        m.sk.reset_regularisation()
+        self._pre(m, 4.0)                                  # where seed 0 ended up
+        m(scalars, vectors, species, ei, ev)
+        bar = m.sk.barrier()
+        assert min(float(v) for v in bar.values()) == pytest.approx(4.0, rel=1e-6)
+        # 1e-3 * 4 per term against a force loss of ~1e-5: a hard stop, as intended.
+        assert 1e-3 * sum(float(v) for v in bar.values()) > 100 * 1e-5
+
+    def test_the_l2_still_reads_the_tanh_and_both_come_from_one_store(self):
+        atoms = _perovskite(rattle=0.05)
+        m = _model()
+        species, scalars, vectors, positions, cell, ei, S = _inputs(atoms, m.r_cut)
+        m.sk.collect_regularisation(True)
+        self._pre(m, 1.0)
+        m(scalars, vectors, species, ei, gr.edge_vectors(positions, cell, ei, S))
+        reg, bar = m.sk.regularisation(), m.sk.barrier()
+        assert set(reg) == set(bar)
+        expect = float(torch.tanh(torch.tensor(1.0)) ** 2)
+        assert float(reg["site"]) == pytest.approx(expect, rel=1e-6)
+        assert float(bar["site"]) == 0.0

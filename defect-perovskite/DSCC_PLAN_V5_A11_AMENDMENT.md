@@ -92,6 +92,59 @@ restored is the ability to *place* the correction, not the size of it.
 **Caveat kept in view**: one seed, eight epochs, and the two comparators are 60-epoch numbers.
 The six-seed arm settles it; nothing above is a registered reading.
 
+## A1.2 — stability: cosine LR decay and a saturation barrier (2026-09-10 21:45)
+
+**Why.** Seed 0 of the first A1.1 arm (constant lr 2e-3, 60 epochs, local A4000) **diverged at
+epoch 37 and never recovered.**
+
+| epoch | train force | p95 on-site shift | held RMSE |
+|---|---|---|---|
+| 24 | 4.30e−6 | 0.087 eV | 15.36 |
+| 34 | 9.95e−6 | 0.060 eV | 22.27 |
+| 36 | 1.11e−5 | 0.061 eV | — |
+| **38** | **2.03e−3** | **3.076 eV** | — |
+| 59 | 2.78e−5 | 3.076 eV | **46.40** |
+
+The loss rose 180× in two epochs and every bounded correction hit its bound (3.076 against
+Δ_Z = 3.079; final saturation 0.518 on-site, 0.685 hop). Twenty further epochs relaxed the
+loss from 5.7e−5 to 2.8e−5 without escaping. Finals 46.40 / 46.34 against the centred head's
+17.99 / 18.87 — the worst of the three forms, having been the best of the three at every
+checkpoint from epoch 4 to 34 (15.36 at epoch 24 beats the centred head's *converged* 17.99).
+
+**What it says about A1.1.** Standardisation gave the readouts real gradient signal, so a loss
+spike can now drive them somewhere the inert unstandardised readouts could never reach. A1.1
+is more capable AND less stable; both follow from the same change. Grad clipping at 10.0 did
+not catch it.
+
+**Fix 1 — cosine LR decay over the whole run**, `lr` → `lr_final_fraction · lr` (0.05, so
+2e-3 → 1e-4). NOT the deferred register's "2e-3 → 2e-4 over the last 20 epochs": that leaves
+forty epochs of constant-lr training and the spike was at epoch 37. Cosine rather than step
+because a discontinuous LR moves the parameters between epochs and this model warm-starts its
+SCF from the previous epoch's fixed point.
+
+**Fix 2 — a one-sided barrier on the readout PRE-ACTIVATIONS**, `sat_weight ·
+mean(relu(|pre| − knee)²)`, knee 2.0, weight 1e−3.
+
+The form matters and the obvious choice does not work. **An L2 on the tanh output cannot
+rescue a saturated unit**: `d/dpre tanh(pre)² = 2 tanh(pre) sech²(pre)`, and `sech² → 0` as
+`|pre| → ∞`, so the restoring force vanishes exactly where it is needed — as does the data
+gradient, for the same reason. A saturated unit is a dead unit with no route back, which is
+why seed 0 sat at the bound for twenty epochs. The barrier is on `|pre|`, where the gradient
+`2(|pre| − knee)` **grows** with the excursion, and one-sided so it is identically zero in
+normal operation: healthy runs sit at `|pre| ≈ 0.05` against a knee of 2.0 (`|tanh(2)| =
+0.964`). At the `|pre| ≈ 4` of the divergence it contributes ~1e−3 against a force loss of
+1e−5 — a hard stop. It is a guard rail, not a regulariser; if it ever fires in a healthy run
+that is itself the finding.
+
+Held in reserve, not implemented: spike detection with epoch rollback (§9 deferred register).
+Two stability changes at once is already the limit of what stays attributable.
+
+**Protocol consequence, stated plainly.** The A1.1 arm is re-run under the new schedule, so
+its comparison against the centred and unstandardised arms — both constant-lr — now carries a
+schedule difference as well as the head-form difference. The alternative was comparing against
+an arm we have watched diverge. The pre-A1 and A1 arms stay as recorded; if the schedule is
+later suspected of carrying the result, the cheap control is one constant-lr A1.1 seed.
+
 ## η, closed
 `η = 0.5` in A1 was a transcription error against an already registered value; `η = ln 3`
 stands. Since nothing approaches either bound on base v2, the choice is moot. **Corollary,

@@ -239,6 +239,26 @@ DELTA_FRACTION_DEFAULT = 0.40
 FEATURE_SD_FLOOR = 1e-3
 
 
+# THE SATURATION TRAP, and why an L2 on the tanh output cannot get you out of it.
+#
+# Seed 0 of the first A1.1 arm diverged at epoch 37 under constant lr 2e-3: the train force
+# loss jumped 180x in two epochs, every bounded correction slammed into its bound (p95 on-site
+# shift 0.061 -> 3.076 eV against a 3.079 eV bound; saturation fractions 0.52 on-site, 0.68
+# hop), and twenty further epochs never escaped -- the held-out RMSE ended at 46.4 against
+# 15.4 at epoch 24.
+#
+# It cannot escape by construction. The registered L2 penalises `tanh(pre)^2`, whose gradient
+# with respect to the pre-activation is `2 tanh(pre) sech^2(pre)`, and `sech^2 -> 0` as
+# `|pre| -> inf`. The restoring force vanishes exactly where it is needed, and so does the
+# data gradient, for the same reason. A saturated unit is a dead unit with no route back.
+#
+# The barrier is therefore on the PRE-ACTIVATION, where the gradient `2(|pre| - knee)` grows
+# rather than vanishes, and one-sided so that it is identically zero in normal operation:
+# the healthy runs sit at `|pre| ~ 0.05`, and the knee at 2.0 corresponds to |tanh| = 0.964.
+# It is a guard rail, not a regulariser -- it should never fire in a run that behaves.
+SATURATION_KNEE = 2.0
+
+
 # The LIVE setting, read by every fill, every entropy and the density-response backward.
 _FAMILY = SMEARING_FAMILY
 
@@ -543,7 +563,7 @@ class SlaterKosterH(nn.Module):
         pre = self.hop(sym)
         self._audit_store("hop", pre)
         if getattr(self, "_reg", False):
-            self._reg_store("hop", torch.tanh(pre))
+            self._reg_store("hop", pre)
         correction = self.modulation(pre)
         radial = self.radial(r, species_i, species_j)
         if radial.dim() == 1:
@@ -649,19 +669,29 @@ class SlaterKosterH(nn.Module):
     def reset_regularisation(self) -> None:
         self._reg_bin = {}
 
-    def _reg_store(self, name: str, t: torch.Tensor) -> None:
+    def _reg_store(self, name: str, pre: torch.Tensor) -> None:
+        """Takes the PRE-ACTIVATION, not the tanh: the barrier needs the unsquashed value,
+        and `tanh` of it is what the L2 wants, so storing `pre` serves both."""
         if not getattr(self, "_reg", False):
             return
         prev = getattr(self, "_reg_bin", None)
         if prev is None:
             prev = self._reg_bin = {}
-        s, n = (t ** 2).sum(), int(t.numel())
+        knee = float(getattr(self, "saturation_knee", SATURATION_KNEE))
+        s_l2 = (torch.tanh(pre) ** 2).sum()
+        s_bar = ((pre.abs() - knee).clamp_min(0.0) ** 2).sum()
+        n = int(pre.numel())
         old = prev.get(name)
-        prev[name] = (s, n) if old is None else (old[0] + s, old[1] + n)
+        prev[name] = (s_l2, s_bar, n) if old is None else (old[0] + s_l2, old[1] + s_bar, old[2] + n)
 
     def regularisation(self) -> Dict[str, torch.Tensor]:
         """`mean(tanh^2)` per term over everything seen since the last reset."""
-        return {k: v[0] / max(v[1], 1) for k, v in getattr(self, "_reg_bin", {}).items()}
+        return {k: v[0] / max(v[2], 1) for k, v in getattr(self, "_reg_bin", {}).items()}
+
+    def barrier(self) -> Dict[str, torch.Tensor]:
+        """`mean(relu(|pre| - knee)^2)` per term: zero in normal operation, and its gradient
+        GROWS with the excursion instead of vanishing the way the L2's does."""
+        return {k: v[1] / max(v[2], 1) for k, v in getattr(self, "_reg_bin", {}).items()}
 
     def on_site(self, feats, species, madelung: Optional[torch.Tensor] = None):
         """`[n_nodes, 2]`: the s and p levels, `eps_Z + delta_Z tanh(e_Z(h_i))` (A1).
@@ -681,7 +711,7 @@ class SlaterKosterH(nn.Module):
         pre_site = self.site(torch.cat([self.standardise(feats, species), e], dim=-1))
         self._audit_store("site", pre_site)
         corr = torch.tanh(pre_site)
-        self._reg_store("site", corr)
+        self._reg_store("site", pre_site)
         levels = self.eps0[species] + self.delta[species].to(corr.dtype) * corr
         if madelung is not None:
             levels = levels + madelung.reshape(-1, 1)

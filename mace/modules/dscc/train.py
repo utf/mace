@@ -54,6 +54,24 @@ class TrainConfig:
     # L_conv = 8.94e-6 the median converged train force loss of the six archived pre-A1
     # Phi = 0 seeds: the penalty is 5 % of the converged force loss at |tanh| = 0.5.
     l2_weight: float = 1.8e-6
+    # Stability, registered 2026-09-10 after seed 0 of the first A1.1 arm diverged at epoch
+    # 37 under constant lr and never came back (see `legacy.SATURATION_KNEE`).
+    #
+    # `lr_schedule`: cosine over the whole run to `lr_final_fraction * lr`. Not the deferred
+    # register's "2e-3 -> 2e-4 over the last 20 epochs", which leaves forty epochs of spiky
+    # constant-lr training and tames only the tail; the spike that killed seed 0 was at
+    # epoch 37. Cosine rather than step because a discontinuity in the LR moves the
+    # parameters between epochs, and this model warm-starts its SCF from the previous
+    # epoch's fixed point.
+    #
+    # `sat_weight`, `saturation_knee`: the one-sided barrier on the readout pre-activations.
+    # Zero in normal operation (healthy runs sit at |pre| ~ 0.05 against a knee of 2.0), and
+    # at the |pre| ~ 4 of the divergence it contributes ~1e-3 against a force loss of 1e-5 --
+    # a hard stop, which is the point of a guard rail.
+    lr_schedule: str = "cosine"       # cosine | constant
+    lr_final_fraction: float = 0.05   # cosine floor, as a fraction of `lr`
+    sat_weight: float = 1e-3
+    saturation_knee: float = 2.0
     e_gap: float = 2.40               # registered host gap (static lattice, C2)
     coupling: bool = False            # Arm 1: Phi = 0
     coupling_mode: str = "full"       # Arm 2+3: lr_only | lr_u | full | lambda1
@@ -382,7 +400,9 @@ class Trainer:
         l_gap = self.cfg.gap_weight * ((gap - self.cfg.e_gap) ** 2).sum()
         reg = self.model.h0.sk.regularisation()
         l_l2 = self.cfg.l2_weight * sum(reg.values()) if reg else l_force.new_zeros(())
-        loss = self.cfg.force_weight * l_force + l_gap + l_l2
+        bar = self.model.h0.sk.barrier()
+        l_sat = self.cfg.sat_weight * sum(bar.values()) if bar else l_force.new_zeros(())
+        loss = self.cfg.force_weight * l_force + l_gap + l_l2 + l_sat
         loss.backward()
         params = [p for p in self.model.parameters() if p.requires_grad]
         torch.nn.utils.clip_grad_norm_(params, self.cfg.grad_clip)
@@ -390,7 +410,7 @@ class Trainer:
         diag = out.get("diagnostics", {})
         conv = diag.get("converged", [])
         return {"loss": float(loss), "force": float(l_force), "gap": float(gap[0]),
-                "l2": float(l_l2),
+                "l2": float(l_l2), "sat": float(l_sat),
                 "unconverged": int(sum(1 for c in conv if c is False)),
                 "scf_iterations": int(sum(diag.get("iterations", []))),
                 "scf_fills": int(sum(diag.get("fills", []))),
@@ -591,7 +611,12 @@ class Trainer:
         optimizer = torch.optim.Adam(params, lr=cfg.lr, weight_decay=cfg.weight_decay)
         # A1: collect the tanh outputs of every bounded term for the weak L2. On for training
         # only -- `evaluate` reads saturation directly and does not need the accumulator.
-        self.model.h0.sk.collect_regularisation(bool(cfg.l2_weight))
+        self.model.h0.sk.collect_regularisation(bool(cfg.l2_weight) or bool(cfg.sat_weight))
+        self.model.h0.sk.saturation_knee = float(cfg.saturation_knee)
+        scheduler = None
+        if cfg.lr_schedule == "cosine":
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=cfg.epochs, eta_min=cfg.lr * cfg.lr_final_fraction)
         ds = self._dataset(self.train_idx)
         sizes = [len(self.frames[i]) for i in self.train_idx]
         sampler = dd.SizeGroupedSampler(sizes, cfg.batch_size, seed=cfg.seed)
@@ -607,7 +632,7 @@ class Trainer:
         for epoch in range(cfg.epochs):
             sampler.set_epoch(epoch)
             t0 = time.time()
-            stats = {"loss": 0.0, "force": 0.0, "gap": 0.0, "l2": 0.0, "unconverged": 0, "n": 0, "scf_iterations": 0, "scf_fills": 0, "warm": 0}
+            stats = {"loss": 0.0, "force": 0.0, "gap": 0.0, "l2": 0.0, "sat": 0.0, "unconverged": 0, "n": 0, "scf_iterations": 0, "scf_fills": 0, "warm": 0}
             # C5 (v4.2 / v4.5): the registered subsample at the start of the epoch -- the
             # warm start against the full continuation (zero start against the continuation
             # for frames without a stored dq, i.e. every frame in epoch 0); frames that fail
@@ -626,12 +651,13 @@ class Trainer:
                 batch = to_device(torch_geometric.dataloader.Batch.from_data_list([ds[j] for j in local_batch]), self.device)
                 frame_indices = [self.train_idx[j] for j in local_batch]
                 s = self.step(batch, frame_indices, optimizer)
-                for key in ("loss", "force", "l2", "unconverged", "scf_iterations", "scf_fills", "warm"):
+                for key in ("loss", "force", "l2", "sat", "unconverged", "scf_iterations", "scf_fills", "warm"):
                     stats[key] += s[key]
                 stats["gap"] = s["gap"]; stats["n"] += 1
             sv = sv_pre
             entry = {"epoch": epoch, "loss": stats["loss"] / max(stats["n"], 1), "force": stats["force"] / max(stats["n"], 1),
-                     "l2": stats["l2"] / max(stats["n"], 1), "gap": stats["gap"], "unconverged": stats["unconverged"], "single_valued": sv,
+                     "l2": stats["l2"] / max(stats["n"], 1), "sat": stats["sat"] / max(stats["n"], 1),
+                     "lr": float(optimizer.param_groups[0]["lr"]), "gap": stats["gap"], "unconverged": stats["unconverged"], "single_valued": sv,
                      "scf_iterations_per_batch": stats["scf_iterations"] / max(stats["n"], 1),
                      "scf_fills_per_batch": stats["scf_fills"] / max(stats["n"], 1),
                      "warm_batches": stats["warm"], "batches": stats["n"],
@@ -655,13 +681,15 @@ class Trainer:
             if (epoch + 1) % cfg.eval_every == 0 or epoch == cfg.epochs - 1:
                 entry["held"] = {k: v for k, v in self.evaluate(self.held_idx, "held").items() if k != "energies"}
             history.append(entry)
-            logging.info("epoch %d loss %.4e force %.4e l2 %.2e dEp95 %.3f gap %.3f unconv %d sv %s scf/batch %.1f fills/batch %.1f warm %d/%d lambda %.3f s %.3f held %s (%.0fs)",
-                         epoch, entry["loss"], entry["force"], entry["l2"],
+            logging.info("epoch %d loss %.4e force %.4e l2 %.2e sat %.2e lr %.2e dEp95 %.3f gap %.3f unconv %d sv %s scf/batch %.1f fills/batch %.1f warm %d/%d lambda %.3f s %.3f held %s (%.0fs)",
+                         epoch, entry["loss"], entry["force"], entry["l2"], entry["sat"], entry["lr"],
                          entry["on_site_shift_eV_p95"] or 0.0, entry["gap"], entry["unconverged"], sv,
                          entry["scf_iterations_per_batch"], entry["scf_fills_per_batch"], entry["warm_batches"], entry["batches"],
                          entry["lambda_dir"], entry["s"], entry.get("held", {}).get("force_rmse"), entry["time"])
             json.dump(history, open(self.run_dir / "history.json", "w"), indent=1, default=str)
             torch.save(self.model, self.run_dir / "model.pt")
+            if scheduler is not None:
+                scheduler.step()          # per epoch, AFTER the epoch it applied to is logged
             if avg_window and epoch >= cfg.epochs - avg_window:
                 avg_sum = average_into(avg_sum, self.model); avg_n += 1
             if sv is not None and sv["fraction"] > cfg.single_valued_ceiling:

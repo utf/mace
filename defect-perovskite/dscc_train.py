@@ -69,6 +69,13 @@ def main() -> None:
                     help="Delta_Z as a fraction of the spread of the species onsite baselines")
     ap.add_argument("--l2_weight", type=float, default=1.8e-6,
                     help="A1's weak L2 on the tanh outputs, per term")
+    ap.add_argument("--lr_schedule", default="cosine", help="cosine | constant")
+    ap.add_argument("--lr_final_fraction", type=float, default=0.05,
+                    help="cosine floor as a fraction of --lr")
+    ap.add_argument("--sat_weight", type=float, default=1e-3,
+                    help="one-sided barrier on the readout pre-activations (0 disables)")
+    ap.add_argument("--saturation_knee", type=float, default=2.0,
+                    help="|pre| beyond which the barrier acts; |tanh(2)| = 0.964")
     ap.add_argument("--base_cache_batch_size", type=int, default=8, help="E_base/F_base cache; peak memory only")
     ap.add_argument("--fscc", default="", help="Arm 4 comparator: matched | full (empty: D-SCC)")
     args = ap.parse_args()
@@ -90,7 +97,9 @@ def main() -> None:
                       directional=bool(args.directional), regime=args.regime, gap_weight=args.gap_weight,
                       device=args.device, eval_every=args.eval_every,
                       setup_batch_size=args.setup_batch_size, base_cache_batch_size=args.base_cache_batch_size,
-                      l2_weight=args.l2_weight,
+                      l2_weight=args.l2_weight, lr_schedule=args.lr_schedule,
+                      lr_final_fraction=args.lr_final_fraction,
+                      sat_weight=args.sat_weight, saturation_knee=args.saturation_knee,
                       static_cell_path=str(HERE / "static_pristine_cell.json"))
     base = torch.load(args.base, weights_only=False, map_location="cpu")
     base = base.float() if args.base_float32 else base.double()
@@ -100,8 +109,10 @@ def main() -> None:
                      eta=args.eta, beta_b=args.beta_b, beta_a=args.beta_a,
                      delta_frac=args.delta_frac,
                      scf=ScfOptions(n_max=args.n_max)).to(args.device)
-    logging.info("A1: eta %.4f beta_b %.2f beta_a %.2f delta_Z %.3f eV l2 %.2e",
-                 args.eta, args.beta_b, args.beta_a, float(model.h0.sk.delta[0, 0]), args.l2_weight)
+    logging.info("A1: eta %.4f beta_b %.2f beta_a %.2f delta_Z %.3f eV l2 %.2e | "
+                 "lr %s -> %.1e, barrier %.1e beyond |pre| %.1f",
+                 args.eta, args.beta_b, args.beta_a, float(model.h0.sk.delta[0, 0]), args.l2_weight,
+                 args.lr_schedule, args.lr * args.lr_final_fraction, args.sat_weight, args.saturation_knee)
     if args.init_from:
         model.load_h0_from(args.init_from)
         logging.info("H0 initialised from %s", args.init_from)
