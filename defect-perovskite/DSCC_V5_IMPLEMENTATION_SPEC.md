@@ -1096,6 +1096,87 @@ not a W3 result**: they stand as recorded, on the centred form, and W3 proper re
 form. The cross-base numbers in that section keep their value as a base comparison, since both
 sides used the centred head.
 
+### A1 registration — the values the amendment leaves to us (2026-09-10 12:40, written before any A1 code)
+
+A1 asks for six items to be registered before W3 opens. Four are ours to propose; two A1
+fixes itself. **Two readings below need a user ruling before launch, not before code**, and
+both are marked ⚑.
+
+**⚑ 1. `η` (SK hopping modulation bound) — A1 says 0.5; the running code says ln 3 = 1.0986.**
+`t_ij = t^SK(r)·exp(η·tanh(m(h_i,h_j)))` is the code's `hop_log_beta`, and its registered
+value has been `ln 3` (×[1/3, 3]) since Stage A′, where it was widened deliberately: the
+trained cohort sat **at** the narrower stop on the vacancy-flanking Pb–Pb bond (ss-σ pinned
+low, pp-σ and pp-π pinned high, in every d bin), a parameter at its stop has `sech² ≈ 0`
+gradient, and a scaling what-if on that bond moved F4 from −0.061 to −0.090 while the force
+loss fell. `η = 0.5` gives ×[0.607, 1.649] — narrower than what that measurement said was
+binding. A1's own annotation on that line is "(unchanged form, reference removed)", and the
+SK term never had a reference to remove, so the value may not have been the intent.
+**Registered as A1 states: `η = 0.5`**, because it is the user's number and because A1's
+required hop saturation fraction is exactly the diagnostic that tests whether 0.5 binds —
+running ln 3 against their number would foreclose that test. Exposed as `--eta`; flipping it
+back is one flag and a full W3 re-run (≈ 11 h wall on three cards).
+
+**⚑ 2. Which terms are ON in W3.** A1 replaces the centred clauses of §2.1 (scalar onsite,
+SK) *and* the W4 formula. The `b_i(h_i)` / `a_i(h_i)` readouts belong to W4 — A1's own
+restated factorial still lists "+ rank-2 with species `b_Z` (β = 0)" as a W4 variant.
+**Registered reading: W3 runs `β_b = β_a = 0`** — the reference-free scalar onsite and SK,
+with the directional block at its species-level coefficients, i.e. today's architecture minus
+the centring. The readouts are built, tested and registered now and enter at W4. Running W3
+at β = 0.5 would fold W4's capacity question into the head baseline and leave W4's "full"
+variant already spent. `beta_b` and `beta_a` are separate floats so W4 can move them
+independently; both are written into every run record.
+
+**3. Readout architectures and widths.** `e_Z` and `m_{ZZ'}` are the existing MLPs, unchanged:
+`site = [F+8 → 64 → 64 → 2]`, `hop = [2F+16 → 64 → 64 → 4]`, SiLU, final layer scaled by 0.05.
+`g_Z` and `f_Z` are new, A1's "one hidden layer of registered width": `[F+8 → 64 → 1]`, SiLU,
+final layer (weights **and** bias) scaled by 0.05, over a species embedding of their own
+(`elem_env`, dim 8) so that turning a readout off cannot perturb the SK path. `F = 512`
+(base v2 block-0 invariants). Near-zero init means the A1 head starts exactly at the
+species-default form, which is the W4 `β = 0` variant — the factorial's own baseline.
+
+**4. `β` = 0.5** (A1), on both `(1 + β tanh)` factors; `b_i ∈ [0.5 b_Z, 1.5 b_Z]`.
+
+**5. `Δ_Z`.** Rule: the population standard deviation of the `2·n_el` Harrison onsite
+baselines of the model's elements, times a registered fraction `c = 0.40`, shared across both
+shells, stored as an `[n_el, 2]` buffer filled uniformly so a per-species rule can replace it
+without an interface change. For CsPbCl3 (Cl −24.63/−11.74, Cs −3.36/−1.80, Pb −15.19/−8.04):
+spread = **7.696 eV**, **Δ_Z = 3.079 eV** for every species. Chosen so that A1 changes the
+FORM and not the capacity: the current registered `on_site_range` is 3.0 eV, itself set by a
+saturation audit, and 3.079 is within 3 % of it. Recorded alternative, so the user sees what
+they would be choosing: reading `Δ_Z` as species Z's own s–p splitting gives Cl 12.89, Pb
+7.15, Cs 1.56 eV before the fraction — at any `c` that keeps Cl sane it cuts **Pb** below
+today's 3.0 (c = 0.25 → Pb 1.79 eV), and the flanking-Pb residual is the programme's open
+question, so we do not propose it.
+
+**6. L2 weights per term.** Rule registered here, number computed from neutral training
+history only (no held-out result opened): `w = 0.05 · L_conv / 0.25`, i.e. the penalty is 5 %
+of the converged force loss when a term sits at `mean tanh² = 0.25`. `L_conv` = median over
+the six archived pre-A1 Φ = 0 seeds of their median last-10-epoch **train** force loss =
+8.94e−6 (per seed 8.45, 7.42, 9.42, 5.45, 15.01, 12.54 e−6). **`w = 1.8e−6`, the same for
+every term** (`e`, `m` in W3; `g`, `f` inherit it at W4). Penalty = `w · Σ_terms mean(tanh²)`,
+logged per epoch beside `force` and `gap`. Calibrating at epoch 1 was rejected: the init loss
+is orders of magnitude above converged, so an epoch-1 calibration becomes a large pull once
+training settles.
+
+**7. Foundation embedding dimension (form only, nothing built).** Species embedding of width
+8 (the existing `elem_dim`), one shared readout per term taking `(embedding, h_i)`; `b_Z, a_Z,
+Δ_Z, ε_Z` become outputs of that embedding rather than per-species tables. Bounds and L2
+unchanged. `Δ_Z`'s rule above is already host-free — it reads the Harrison table, not the host.
+
+**Compatibility, forced.** A1's static check ("no runtime module reads pristine feature
+statistics") and the codebase's usual `getattr` back-compatibility branch cannot both exist:
+a legacy branch would put `centre` back in the H0 assembly path, which is the symbol the test
+asserts absent. So the `centre` argument is removed from `SlaterKosterH.on_site` outright and
+HEAD before A1 is tagged **`pre-a1`** (`3a98e05`). Any re-evaluation of a pre-A1 checkpoint —
+the old-base re-eval, `arm4_read`, the cross-base comparison — runs at that tag. Consequence,
+stated plainly: **the old-base regression check and the base-v2-vs-old-base comparison are
+frozen at their recorded numbers**; they will not be recomputed under A1 code.
+
+**Still outstanding and unchanged by A1: the C5 bound-state precondition on base v2 has never
+been read.** A1 names it as W4's entry gate and W3's gates already list it. It is a diagnostic
+on trained heads, so it cannot be read until the A1-form heads exist — it does not block
+implementation, and it does block adoption of any W3 result.
+
 ### W3 first result — the Φ = 0 arm on base v2 (2026-09-10 10:47, six seeds complete)
 
 Cross-base, last-epoch reading on both sides as registered (no pre-v5 run has an epoch average),
