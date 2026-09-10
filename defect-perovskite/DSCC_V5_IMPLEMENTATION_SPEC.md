@@ -992,9 +992,26 @@ against the old-base arms. Registered here, with the points the plan leaves open
   number, and that was checked rather than assumed: two otherwise identical two-epoch runs (seed 3,
   LR-only) at batch 8 and batch 2 agree to relative 3e-14 and 5e-13 on the epoch losses, 1e-14 on
   the held-out force RMSE and 2.4e-15 absolute on every shell. **W3 therefore registers
-  `--setup_batch_size 2 --base_cache_batch_size 2`**, which turns one run per card into three on
-  b3's 24 GB cards and two on a 16 GB card. Wall clock for W3 on GPUs 4, 5 and 7 at three per
-  card: ≈ 6–8 h including contention.
+  `--setup_batch_size 2 --base_cache_batch_size 2`.** *Correction, 2026-09-10 06:10: the packing
+  claim in the first version of this line was wrong and is retracted.* That 5.78 GB was measured
+  with `--subset 64`, which also shrinks the pristine set (32 frames instead of 639) and the base
+  cache, so it never exercised the real setup pass. **On the full data set a training step peaks at
+  11.6 GB allocated for BOTH arms** (Φ = 0 11.55, LR-only 11.59), so the base forward on the
+  159-atom batches dominates and the solver does not: two runs do not share a 23.5 GB card. Three
+  facts came out of the sizing, all measured on b3:
+  (i) without `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` the many small setup batches
+  fragment the reserved pool to 14.2 GB against 6.5 GB live, and one run then starves the next —
+  this is what killed the first launch attempt at 05:24; with it, reserved tracks live (6.69 vs
+  6.47 through setup, 11.98 vs 11.59 through training);
+  (ii) the setup batching still matters, because the pristine-centre pass at batch 16 does not fit
+  a 16 GB card at all;
+  (iii) `dscc_train.py --gpu_memory_fraction` was added to bound the allocator (no numerical
+  effect); at one run per card it is insurance, set to 0.65.
+  **Layout as launched (2026-09-10 06:11): one run per card.** b3 GPUs 4/5/7 take the twelve
+  coupled runs (`w3_queue.sh`, `PER_GPU=1`, `HEADROOM=13000`); the local A4000 takes the six Φ = 0
+  runs one at a time (`scratchpad/w3_queue_local.sh`, fraction 0.85). Expected ≈ 12 h for both
+  halves. Three runs launched at 05:24 under the wrong packing were killed during setup and their
+  directories removed; no number was read from them.
 - *Not yet done, required before launch:* the b3 tree is frozen at `be3c39b` until the Arm 4
   F-SCC reading is written, so nothing can be launched there yet.
 
