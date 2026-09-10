@@ -48,6 +48,10 @@ def main() -> None:
     ap.add_argument("--coupling_mode", default="full", help="lr_only | lr_u | full | lambda1 (Arm 2+3)")
     ap.add_argument("--init_from", default="", help="Arm-1 winner checkpoint (model.pt) to start H0 from")
     ap.add_argument("--n_max", type=int, default=100)
+    ap.add_argument("--gpu_memory_fraction", type=float, default=0.0,
+                    help="cap this process at a fraction of the GPU so several runs share a card; "
+                         "0 disables. The cap bounds the caching allocator, which otherwise grows "
+                         "to fill an idle card and starves the next process.")
     ap.add_argument("--setup_batch_size", type=int, default=16, help="pristine-centre pass; peak memory only")
     ap.add_argument("--base_cache_batch_size", type=int, default=8, help="E_base/F_base cache; peak memory only")
     ap.add_argument("--fscc", default="", help="Arm 4 comparator: matched | full (empty: D-SCC)")
@@ -58,6 +62,10 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s",
                         handlers=[logging.StreamHandler(), logging.FileHandler(run_dir / "train.log")])
     torch.set_default_dtype(torch.float64)
+    if args.gpu_memory_fraction > 0 and args.device.startswith("cuda") and torch.cuda.is_available():
+        torch.cuda.set_per_process_memory_fraction(args.gpu_memory_fraction, 0)
+        logging.info("GPU memory capped at fraction %.2f (%.1f GB)", args.gpu_memory_fraction,
+                     args.gpu_memory_fraction * torch.cuda.get_device_properties(0).total_memory / 1e9)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
