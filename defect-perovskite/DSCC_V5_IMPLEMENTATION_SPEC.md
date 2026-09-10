@@ -1081,6 +1081,21 @@ against the old-base arms. Registered here, with the points the plan leaves open
 - *Not yet done, required before launch:* the b3 tree is frozen at `be3c39b` until the Arm 4
   F-SCC reading is written, so nothing can be launched there yet.
 
+## A1 — reference-free environment dependence (user amendment, 2026-09-10 12:15)
+
+Received verbatim as `defect-perovskite/DSCC_PLAN_V5_A1_AMENDMENT.md`; it removes pristine
+centring from every environment-dependent term of `H0` and applies "to W3 onward".
+
+**State when it arrived, recorded because it conflicts with "registration before W3 opens":
+W3 was already open.** The Φ = 0 arm had completed all six seeds and been read; the six Route A
+LR-only runs were at epochs 20–26 of 60; the six Route B′ runs had not started. The coupled runs
+were killed on arrival rather than spend four more hours on a superseded form, and every
+pre-amendment artefact is archived under `~/runs/dscc/pre_a1/` (six Φ = 0 complete, six LR-only
+partial). **The completed Φ = 0 arm and its two readings above are therefore a PRE-A1 BASELINE,
+not a W3 result**: they stand as recorded, on the centred form, and W3 proper re-opens on the A1
+form. The cross-base numbers in that section keep their value as a base comparison, since both
+sides used the centred head.
+
 ### W3 first result — the Φ = 0 arm on base v2 (2026-09-10 10:47, six seeds complete)
 
 Cross-base, last-epoch reading on both sides as registered (no pre-v5 run has an epoch average),
