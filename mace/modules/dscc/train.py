@@ -280,13 +280,14 @@ class Trainer:
         self.write_record()
 
     def _fill_base_cache(self, indices: Sequence[int]) -> None:
-        from mace.modules.models import ScaleShiftMACE
         ds = self._dataset(indices)
         k = 0
         for b in torch_geometric.dataloader.DataLoader(ds, batch_size=self.cfg.base_cache_batch_size):
             batch = to_device(b, self.device)
-            out = ScaleShiftMACE.forward(self.model.base, self.model._trunk_data(dict(batch)), training=False,
-                                         compute_force=True)
+            # `base_forward` runs the base in its own precision and returns float64 (the base
+            # may be float32; the cache and every head quantity stay float64).
+            out = self.model.base_forward(self.model._trunk_data(dict(batch)), training=False,
+                                          compute_force=True)
             ptr = batch["ptr"]
             for g in range(int(ptr.numel() - 1)):
                 lo, hi = int(ptr[g]), int(ptr[g + 1])

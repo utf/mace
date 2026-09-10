@@ -294,6 +294,33 @@ class MACEDSCC(nn.Module):
 
     # ----------------------------------------------------------------- base
 
+    def base_dtype(self) -> torch.dtype:
+        """The frozen base's own precision. The head is always float64; the base may be
+        float32 (it was fine-tuned in float32, so float64 adds arithmetic precision, not
+        fidelity), which halves the activation memory of its forward and backward."""
+        for p_ in self.base.parameters():
+            return p_.dtype
+        return torch.float64
+
+    @staticmethod
+    def _cast_floats(d: Dict[str, torch.Tensor], dtype: torch.dtype) -> Dict[str, torch.Tensor]:
+        """Every floating tensor to `dtype`; integer tensors and non-tensors untouched. The
+        cast is differentiable, so gradients reach the float64 positions through it."""
+        return {k: (v.to(dtype) if torch.is_tensor(v) and v.is_floating_point() else v)
+                for k, v in d.items()}
+
+    def base_forward(self, data: Dict[str, torch.Tensor], **kwargs):
+        """`ScaleShiftMACE.forward` on the frozen base in the BASE's precision, with every
+        floating output returned in the head's float64. The single entry point to the base, so
+        the precision split lives in one place."""
+        from mace.modules.models import ScaleShiftMACE
+        dtype = self.base_dtype()
+        if dtype == torch.float64:
+            return ScaleShiftMACE.forward(self.base, data, **kwargs)
+        out = ScaleShiftMACE.forward(self.base, self._cast_floats(data, dtype), **kwargs)
+        return {k: (v.to(torch.float64) if torch.is_tensor(v) and v.is_floating_point() else v)
+                for k, v in out.items()}
+
     def _trunk_data(self, data: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """The base's own graph: the head graph's edges no longer than `r_max`."""
         sender, receiver = data["edge_index"][0], data["edge_index"][1]
@@ -312,6 +339,9 @@ class MACEDSCC(nn.Module):
         so the second interaction and the readouts are not evaluated in training."""
         from mace.modules.utils import prepare_graph
         base = self.base
+        dtype = self.base_dtype()
+        if dtype != torch.float64:
+            data = self._cast_floats(data, dtype)
         ctx = prepare_graph(data, compute_virials=False, compute_stress=False,
                             compute_displacement=False, lammps_mliap=False)
         node_feats = base.node_embedding(data["node_attrs"])
@@ -323,7 +353,8 @@ class MACEDSCC(nn.Module):
                                               edge_attrs=edge_attrs, edge_feats=edge_feats,
                                               edge_index=data["edge_index"], cutoff=cutoff, first_layer=True,
                                               lammps_class=ikw.lammps_class, lammps_natoms=ikw.lammps_natoms)
-        return base.products[0](node_feats=node_feats, sc=sc, node_attrs=data["node_attrs"])
+        out = base.products[0](node_feats=node_feats, sc=sc, node_attrs=data["node_attrs"])
+        return out.to(torch.float64) if dtype != torch.float64 else out
 
     def features(self, node_feats: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Block-0 scalars `[N, n_s]` and polar vectors `[N, n_v, 3]`."""
@@ -338,7 +369,7 @@ class MACEDSCC(nn.Module):
         also the pristine composition (sum rule) and atom count. Returns atoms averaged."""
         feats, species, sizes = [], [], []
         for data in batches:
-            out = ScaleShiftMACE.forward(self.base, self._trunk_data(dict(data)), training=False,
+            out = self.base_forward(self._trunk_data(dict(data)), training=False,
                                          compute_force=False)
             scalars, _ = self.features(out["node_feats"])
             feats.append(scalars.detach())
@@ -353,7 +384,7 @@ class MACEDSCC(nn.Module):
         # Route B' diagnostic reference: the pristine q0 per species (with the centre set).
         q0_all, sp_all = [], []
         for data in batches:
-            out = ScaleShiftMACE.forward(self.base, self._trunk_data(dict(data)), training=False,
+            out = self.base_forward(self._trunk_data(dict(data)), training=False,
                                          compute_force=False)
             sc_, vec_ = self.features(out["node_feats"])
             sp_ = data["node_attrs"].argmax(dim=-1)
@@ -440,7 +471,7 @@ class MACEDSCC(nn.Module):
         num_graphs = len(states)
         if all(s.is_reference for s in states):
             # D5: never enter the head at S_ref -- the base's outputs, bit-identically.
-            out = ScaleShiftMACE.forward(self.base, self._trunk_data(dict(data)), training=training,
+            out = self.base_forward(self._trunk_data(dict(data)), training=training,
                                          compute_force=compute_force, compute_stress=compute_stress)
             out["head_energy"] = torch.zeros(num_graphs, dtype=torch.float64, device=out["energy"].device)
             out["energy_uncalibrated"] = out["energy"]
@@ -484,7 +515,7 @@ class MACEDSCC(nn.Module):
             e_base = data["dscc_base_energy"].reshape(num_graphs).to(torch.float64)
             f_base = data["dscc_base_forces"].to(torch.float64)
         else:
-            out = ScaleShiftMACE.forward(self.base, self._trunk_data(strained), training=training,
+            out = self.base_forward(self._trunk_data(strained), training=training,
                                          compute_force=False)
             node_feats, e_base, f_base = out["node_feats"], out["energy"], None
         scalars, vectors = self.features(node_feats)

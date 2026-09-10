@@ -48,6 +48,11 @@ def main() -> None:
     ap.add_argument("--coupling_mode", default="full", help="lr_only | lr_u | full | lambda1 (Arm 2+3)")
     ap.add_argument("--init_from", default="", help="Arm-1 winner checkpoint (model.pt) to start H0 from")
     ap.add_argument("--n_max", type=int, default=100)
+    ap.add_argument("--base_float32", type=int, default=0,
+                    help="run the FROZEN base in float32 while the head stays float64. The base "
+                         "was fine-tuned in float32, so this costs no fidelity to the trained "
+                         "model; it halves the activation memory of the base forward/backward, "
+                         "which is the run's high-water mark on base v2.")
     ap.add_argument("--gpu_memory_fraction", type=float, default=0.0,
                     help="cap this process at a fraction of the GPU so several runs share a card; "
                          "0 disables. The cap bounds the caching allocator, which otherwise grows "
@@ -75,7 +80,9 @@ def main() -> None:
                       device=args.device, eval_every=args.eval_every,
                       setup_batch_size=args.setup_batch_size, base_cache_batch_size=args.base_cache_batch_size,
                       static_cell_path=str(HERE / "static_pristine_cell.json"))
-    base = torch.load(args.base, weights_only=False, map_location="cpu").double()
+    base = torch.load(args.base, weights_only=False, map_location="cpu")
+    base = base.float() if args.base_float32 else base.double()
+    logging.info("base precision: %s (head float64)", next(base.parameters()).dtype)
     model = MACEDSCC(base, r_cut=cfg.r_cut, directional=cfg.directional, coupling=cfg.coupling,
                      route_b=cfg.route_b, kernel=KernelConfig(regime=cfg.regime),
                      scf=ScfOptions(n_max=args.n_max)).to(args.device)
