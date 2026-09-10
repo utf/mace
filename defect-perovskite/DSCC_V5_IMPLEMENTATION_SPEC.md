@@ -940,9 +940,17 @@ against the old-base arms. Registered here, with the points the plan leaves open
   (`dscc_arm23_B_A_lr_only_s0`, old base, trained before C13 and before every W2 change) loads
   into the current code unchanged — `MACEDSCC`, `n_scalars` 128, r_max 5.0, coupling on — and
   `evaluate` runs on it with the vacancy-side centre and the W0.2 shells. On 24 held-out charged
-  frames of its fold: 27.6 meV/Å per component overall, 52.4 in the 2–4 Å shell, 77.5 at the
-  flanking Pb, 39.1 at the first-shell Cl, 26.4 in the pooled 4–8 Å shell. Sample-sized numbers,
-  recorded only as evidence that the cross-base pass will run; the pass itself is not done.
+- *Old-base re-evaluation, the full pass* (`defect-perovskite/w3_oldbase_reeval.py`, started
+  2026-09-10 04:19 on the local A4000): the three arms W3 repeats — Φ = 0, LR-only and B′ LR-only,
+  six seeds each — re-read on their own held-out charged frames (≈ 262 per fold) under the current
+  `evaluate`. All eighteen models are mirrored locally, so b3 is not touched. **The comparison is
+  on FORCES only.** C13 changed the energy background, so an old-base energy and a v5 energy are
+  not the same quantity and must never be differenced; forces and fixed points are unchanged by
+  C13, which is what makes the force comparison legitimate. Output `~/runs/dscc/w3_oldbase_reeval.json`.
+- *Feasibility check that preceded it* (2026-09-10 03:19, `defect-perovskite/w3_oldbase_check.py`).
+  An Arm 2+3 model (`dscc_arm23_B_A_lr_only_s0`, old base, trained before C13 and before every W2
+  change) loads into the current code unchanged — `MACEDSCC`, `n_scalars` 128, r_max 5.0, coupling
+  on — and `evaluate` runs on it with the vacancy-side centre and the W0.2 shells.
 - *Cost and memory, measured 2026-09-10 03:20–03:40 on the local A4000 (16 GB), 64-frame subset,
   batch 4.* Per epoch: Φ = 0 10.8 s over 17 batches (0.64 s/batch); LR-only 15.6 s warm
   (0.92 s/batch, 12.3 SCF iterations per batch after the first epoch's 47.5). Scaled to a full
