@@ -21,7 +21,7 @@ LOG=${HANDOFF_LOG:-$HOME/runs/b3_handoff.log}
 PROBE=${GPU_PROBE:-/tmp/gpu_probe.py}
 
 echo "$(date '+%F %T') waiting for b3" >> $LOG
-until timeout 8 ssh -o ConnectTimeout=5 -o BatchMode=yes b3 'echo alive' >/dev/null 2>&1; do sleep 30; done
+until timeout 8 ssh -o ConnectTimeout=5 -o BatchMode=yes b3 'echo alive' >/dev/null 2>&1; do sleep ${HANDOFF_POLL:-3600}; done
 echo "$(date '+%F %T') b3 reachable; syncing and probing GPUs" >> $LOG
 git -C $W archive HEAD | ssh b3 "tar -x -C $W --warning=no-timestamp"
 scp -q "$PROBE" b3:/tmp/gpu_probe.py
