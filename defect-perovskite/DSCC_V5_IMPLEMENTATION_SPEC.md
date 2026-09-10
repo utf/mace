@@ -314,6 +314,30 @@ best = last) is kept for the four folds and prod; a decay tail (lr 1e-4 → 1e-5
 the epoch-29 checkpoint) is the candidate if the replay drift is to be reclaimed — a protocol
 change, to be registered before use, and applied to all five runs or none. User decision pending.
 
+**W1 v2 complete: all five bases (2026-09-10 01:02 b3 clock).** Thirty epochs each, best = last,
+float32, 10 : 10 weights, lr 1e-4, EMA 0.9999, cuEquivariance. Validation at epoch 29, per
+component:
+
+| run | split | energy meV/atom | forces meV/Å | stress meV/Å³ | replay forces meV/Å |
+|---|---|---|---|---|---|
+| prod | the 154-frame gate split | 1.16 | 10.23 | 0.16 | 17.11 |
+| f0 | fold 0 valid (153 pristine) | 0.43 | 3.88 | 0.11 | 16.49 |
+| f1 | fold 1 valid | 0.55 | 3.88 | 0.12 | 16.45 |
+| f2 | fold 2 valid | 0.49 | 3.89 | 0.12 | 16.70 |
+| f3 | fold 3 valid | 0.47 | 3.89 | 0.12 | 17.32 |
+
+The four cross-fit bases agree to 0.01 meV/Å on forces and 0.12 meV/atom on energy: the fold
+split contributes almost nothing to the base, which is the condition the cross-fit spread term of
+the W0.6 proxy relies on. Every run shows the same replay drift (minimum near epoch 8–11, back to
+its epoch-0 level by 29). prod's larger numbers are its split, not its quality: it is read on the
+mixed 154-frame set the old base's gate numbers came from, while each fold is read on 153
+pristine 80-atom frames. Wall clock: 20:49 to 01:02 on three GPUs, the last fold co-located.
+
+**Co-location measurement (b3, Quadro RTX 6000, 24 GB).** One fine-tune holds 4.4 GB and 12–19 %
+of a card. Two on one card cost about 5 % per epoch (3.67 → 3.8–3.9 min) and double throughput;
+fold 3 was launched alongside fold 1 on GPU 5 at 22:59 rather than waiting for a free card, which
+moved the last fold from ≈ 03:30 to 01:02. Three per card is the expected comfortable ceiling.
+
 **W1.2 Feature export for the head.** Block-0 features of MH-1 are 512x0e+512x1o (n_scalars 512,
 n_vectors 512, from `products[0]`); `MACEDSCC.first_block` / `features` slice them; the head's
 feature-modulation readouts and the rank-1 descriptor are re-dimensioned by construction from
