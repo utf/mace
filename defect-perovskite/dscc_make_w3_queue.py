@@ -35,6 +35,11 @@ ap.add_argument("--beta_b", type=float, default=0.0, help="A1: rank-2 environmen
 ap.add_argument("--beta_a", type=float, default=0.0, help="A1: rank-1 environment bound; 0 in W3")
 ap.add_argument("--delta_frac", type=float, default=0.40, help="A1: Delta_Z / baseline spread")
 ap.add_argument("--l2_weight", type=float, default=1.8e-6, help="A1: weak L2 per tanh term")
+ap.add_argument("--tag", default="w3a11",
+                help="run-name prefix: w3a1 = A1 as first run (no input standardisation, "
+                     "superseded), w3a11 = A1.1 (standardised readout inputs). Distinct tags "
+                     "keep the arms from colliding in ~/runs/dscc and keep each form's "
+                     "record readable on its own.")
 ap.add_argument("--skip", default="", help="run names already launched, comma separated")
 ap.add_argument("--arms", default="", help="restrict to these arms (phi0, lr_only, bp_lr_only), comma separated")
 args = ap.parse_args()
@@ -45,7 +50,7 @@ for arm, flags in ARMS:
     if wanted and arm not in wanted:
         continue
     for seed, fold in FOLD_OF.items():
-        name = f"dscc_w3a1_{arm}_s{seed}"
+        name = f"dscc_{args.tag}_{arm}_s{seed}"
         if name in {x for x in args.skip.split(",") if x}:
             continue
         lines.append(f"{name}|--seed {seed} --fold {fold} --epochs {args.epochs} --directional 1 "

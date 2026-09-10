@@ -50,7 +50,7 @@ def main():
         run = Path(run)
         # `w3a1` is the A1 form (v5 amendment A1), `w3` the superseded centred one; both
         # parse so a pre-A1 archive can still be read, and `form` keeps them apart.
-        m = re.match(r"dscc_(?P<form>w3a1|w3)_(?P<arm>phi0|lr_only|bp_lr_only)_s(?P<seed>\d+)$", run.name)
+        m = re.match(r"dscc_(?P<form>w3a11|w3a1|w3)_(?P<arm>phi0|lr_only|bp_lr_only)_s(?P<seed>\d+)$", run.name)
         if m is None or not (run / "held_final.json").exists():
             continue
         arm, seed = m["arm"], int(m["seed"])
