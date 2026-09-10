@@ -202,6 +202,37 @@ DECAY_LOG_BETA_DEFAULT = math.log(2.0)
 DELTA_FRACTION_DEFAULT = 0.40
 
 
+# v5 amendment A1.1: PER-SPECIES INPUT STANDARDISATION, and why the readouts do not work
+# without it.
+#
+# A1 removed the pristine centre from `tanh[h(x_i) - h(xbar_Z)]`. The physics argument was
+# right -- the neutral null is algebraic, so nothing was protected by vanishing in the bulk --
+# but the subtraction was doing a second, numerical job: it fed the nonlinearity a DEVIATION.
+# A linear readout on raw features splits as
+#
+#     w . x_i + b  =  [w . xbar_Z + b]  +  w . (x_i - xbar_Z),
+#
+# a species-constant part and an environment part. Growing `w` to capture the environment also
+# moves the constant, which is a species-dependent onsite shift -- it moves the relative
+# Pb/Cl/Cs levels and the gap, so the gap regulariser and the spectral structure of `H0` resist
+# it. The bias can compensate in principle, but the two are coupled through a large,
+# ill-conditioned direction, and the optimiser's answer is to keep `w` tiny.
+#
+# MEASURED on base v2 (120 frames, 9600 atoms, 512 channels): ||xbar_Z|| over the median
+# ||x_i - xbar_Z|| is 29.2 (Cl), 45.7 (Cs), 37.1 (Pb), and the median per-channel |mu|/sd is
+# 18.6 / 28.1 / 20.8. The A1 run's on-site corrections duly never exceeded 0.105 eV against a
+# 3.079 eV bound, where the centred head reached 2.99 eV.
+#
+# The fix keeps A1's reference-free form: standardise the readout inputs per species with
+# statistics of the TRAINING ENSEMBLE (mean and sd per channel over all training atoms of that
+# species, thermal frames, defect and pristine), computed once and frozen. This is data
+# normalisation, not a host reference: it does not tie the model to a pristine cell, and A1's
+# thermal-noise objection does not apply to an ensemble statistic. With standardised inputs
+# the constant part IS the bias, so the gap regulariser acts on the bias alone and every
+# direction of `w` is free.
+FEATURE_SD_FLOOR = 1e-4        # relative to the species' median channel sd: dead channels
+
+
 # The LIVE setting, read by every fill, every entropy and the density-response backward.
 _FAMILY = SMEARING_FAMILY
 
@@ -412,6 +443,11 @@ class SlaterKosterH(nn.Module):
         # `on_site_range` here; `H0` overwrites it with the registered rule once the Harrison
         # baselines are in place.
         self.register_buffer("delta", torch.full((num_elements, 2), float(on_site_range)))
+        # A1.1: per-species input standardisation. Buffers, so they travel with the
+        # checkpoint; identity until `set_feature_stats` is called.
+        self.register_buffer("feat_mean", torch.zeros(num_elements, feature_dim))
+        self.register_buffer("feat_sd", torch.ones(num_elements, feature_dim))
+        self.register_buffer("feat_stats_set", torch.tensor(False))
         self.hop = _mlp([2 * feature_dim + 2 * elem_dim, hidden, hidden, len(BOND_TYPES)],
                         final_scale=0.05)
         self.site = _mlp([feature_dim + elem_dim, hidden, hidden, 2], final_scale=0.05)
@@ -487,8 +523,12 @@ class SlaterKosterH(nn.Module):
             float(self.decay_log_beta) * torch.tanh(u))
 
     def integrals(self, feats_i, feats_j, r, species_i, species_j) -> torch.Tensor:
-        """The four radial integrals per edge, [n_edges, 4]."""
+        """The four radial integrals per edge, [n_edges, 4]. A1.1: each end is standardised
+        by ITS OWN species before the symmetric combination, so the pair descriptor is built
+        from deviations rather than from two large species means."""
         e_i, e_j = self.elem(species_i), self.elem(species_j)
+        feats_i = self.standardise(feats_i, species_i)
+        feats_j = self.standardise(feats_j, species_j)
         sym = torch.cat([feats_i + feats_j, (feats_i - feats_j).abs(),
                          e_i + e_j, (e_i - e_j).abs()], dim=-1)
         pre = self.hop(sym)
@@ -550,6 +590,34 @@ class SlaterKosterH(nn.Module):
         if getattr(self, "_audit", False):
             self._audit_bin.setdefault(name, []).append(value.detach().reshape(-1).cpu())
 
+    # ------------------------------------------------- A1.1: input standardisation
+
+    @torch.no_grad()
+    def set_feature_stats(self, mean: torch.Tensor, sd: torch.Tensor) -> Dict[str, int]:
+        """Freeze the per-species channel mean and sd of the training ensemble.
+
+        Channels with no variation across the ensemble would divide by ~0, so the sd is
+        floored at `FEATURE_SD_FLOOR` times that species' median channel sd; the count of
+        floored channels is returned, because a large count means the base is giving the head
+        dead channels and that is worth seeing rather than silently dividing."""
+        floored = {}
+        for z in range(self.feat_mean.shape[0]):
+            m, s_ = mean[z].to(self.feat_mean.dtype), sd[z].to(self.feat_sd.dtype)
+            med = s_.median()
+            lo = FEATURE_SD_FLOOR * med if float(med) > 0 else torch.tensor(1.0, dtype=s_.dtype, device=s_.device)
+            floored[z] = int((s_ < lo).sum())
+            self.feat_mean[z] = m
+            self.feat_sd[z] = torch.clamp(s_, min=float(lo))
+        self.feat_stats_set.fill_(True)
+        return floored
+
+    def standardise(self, feats: torch.Tensor, species: torch.Tensor) -> torch.Tensor:
+        """`(h - mu_Z) / sd_Z`. Identity while the stats are unset (a freshly constructed
+        module), which is why `MACEDSCC` refuses to run without them."""
+        if not bool(self.feat_stats_set):
+            return feats
+        return (feats - self.feat_mean[species].to(feats.dtype)) / self.feat_sd[species].to(feats.dtype)
+
     # ------------------------------------------------------- A1: the L2 on tanh outputs
 
     def collect_regularisation(self, on: bool = True) -> None:
@@ -595,7 +663,7 @@ class SlaterKosterH(nn.Module):
         constant on one species is a shift of that species' baseline, which `eps0` already
         parameterises."""
         e = self.elem(species)
-        pre_site = self.site(torch.cat([feats, e], dim=-1))
+        pre_site = self.site(torch.cat([self.standardise(feats, species), e], dim=-1))
         self._audit_store("site", pre_site)
         corr = torch.tanh(pre_site)
         self._reg_store("site", corr)

@@ -65,6 +65,11 @@ ON_SITE_RANGE_DEFAULT = 3.0
 # Pb-Pb bond, where `sech^2 ~ 0` makes a parameter look like it is learning when it is not.
 # A1's other registered values (beta, Delta_Z, the readouts, the L2) stand unchanged.
 ETA_DEFAULT = HOP_LOG_BETA_DEFAULT
+# A1.1: the readout final layer at 0.1x the default initialisation, so corrections start near
+# zero and grow. The campaign before A1.1 used 0.05 on raw (unstandardised) inputs; on
+# standardised inputs 0.1 is the registered value and the initial correction is still well
+# under 0.1 eV.
+READOUT_INIT_SCALE = 0.1
 BETA_ENV_DEFAULT = 0.5
 READOUT_HIDDEN_DEFAULT = 64
 ELEM_DIM_ENV = 8
@@ -137,8 +142,8 @@ class H0(nn.Module):
         # (weights AND bias) scaled by 0.05, so the head starts at the species-level
         # coefficients -- which is exactly W4's `beta = 0` variant.
         self.elem_env = nn.Embedding(num_elements, ELEM_DIM_ENV)
-        self.g_read = _mlp([feature_dim + ELEM_DIM_ENV, readout_hidden, 1], final_scale=0.05)
-        self.f_read = _mlp([feature_dim + ELEM_DIM_ENV, readout_hidden, 1], final_scale=0.05)
+        self.g_read = _mlp([feature_dim + ELEM_DIM_ENV, readout_hidden, 1], final_scale=READOUT_INIT_SCALE)
+        self.f_read = _mlp([feature_dim + ELEM_DIM_ENV, readout_hidden, 1], final_scale=READOUT_INIT_SCALE)
         # Test knobs (plan section 5 gates): `H0 -> H0 + a I` for the gauge gate, and a
         # per-site level shift `[N]` that binds a carrier on chosen sites for the tiling
         # ladder. Neither is a parameter; both are None/0 in production.
@@ -174,7 +179,8 @@ class H0(nn.Module):
         graph rather than multiplying by one."""
         if not bound:
             return None
-        pre = readout(torch.cat([scalars, self.elem_env(species).to(scalars.dtype)], dim=-1))
+        pre = readout(torch.cat([self.sk.standardise(scalars, species),
+                                 self.elem_env(species).to(scalars.dtype)], dim=-1))
         t = torch.tanh(pre).squeeze(-1)
         self.sk._reg_store(name, t)
         return 1.0 + float(bound) * t
@@ -208,16 +214,17 @@ class H0(nn.Module):
         scalars = scalars.to(torch.float64)
         out: dict = {}
         e = self.sk.elem(species)
-        t_site = torch.tanh(self.sk.site(torch.cat([scalars, e], dim=-1)))          # [N, 2]
+        h = self.sk.standardise(scalars, species)
+        t_site = torch.tanh(self.sk.site(torch.cat([h, e], dim=-1)))                # [N, 2]
         terms = {"on_site": (t_site, species)}
-        env = torch.cat([scalars, self.elem_env(species).to(scalars.dtype)], dim=-1)
+        env = torch.cat([h, self.elem_env(species).to(scalars.dtype)], dim=-1)
         if self.beta_b:
             terms["rank2"] = (torch.tanh(self.g_read(env)), species)
         if self.beta_a:
             terms["rank1"] = (torch.tanh(self.f_read(env)), species)
         if edge_index is not None:
             src, dst = edge_index[0], edge_index[1]
-            sym = torch.cat([scalars[src] + scalars[dst], (scalars[src] - scalars[dst]).abs(),
+            sym = torch.cat([h[src] + h[dst], (h[src] - h[dst]).abs(),
                              self.sk.elem(species[src]) + self.sk.elem(species[dst]),
                              (self.sk.elem(species[src]) - self.sk.elem(species[dst])).abs()], dim=-1)
             terms["hop"] = (torch.tanh(self.sk.hop(sym)), species[src])
@@ -230,6 +237,18 @@ class H0(nn.Module):
                 if bool(sel.any()):
                     per[int(z)] = float(sat[sel].mean())
             out[name + "_by_species"] = per
+        # A1.1's registered per-epoch diagnostic: the p95 on-site correction per species, in
+        # eV. This is the number that stayed under 0.105 eV through the whole A1 run and is
+        # expected to reach several hundred meV within the first epochs with standardisation.
+        shift = (t_site.abs() * self.sk.delta[species].to(t_site.dtype))
+        out["on_site_shift_eV_p95"] = float(torch.quantile(shift.reshape(-1), 0.95))
+        out["on_site_shift_eV_max"] = float(shift.max())
+        per_z = {}
+        for z_i, z in enumerate(self.atomic_numbers):
+            sel = species == z_i
+            if bool(sel.any()):
+                per_z[int(z)] = float(torch.quantile(shift[sel].reshape(-1), 0.95))
+        out["on_site_shift_eV_p95_by_species"] = per_z
         if sites is not None and bool(sites.any()):
             out["site_on_site"] = [float(x) for x in t_site[sites].reshape(-1)]
             if self.beta_b:

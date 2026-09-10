@@ -125,6 +125,11 @@ class MACEDSCC(nn.Module):
         self.init_from: Optional[str] = None
         self.s_max = float(S_MAX_DEFAULT)
         self.s_raw = nn.Parameter(torch.zeros((), dtype=torch.float64))       # s_max sigmoid(0) = 1
+        # A1.1: the readouts must see standardised features. A model that runs without the
+        # statistics reproduces the A1 failure silently (corrections that never leave 0.1 eV),
+        # so this is a hard guard rather than a default. Set False only for unit tests that
+        # build an `H0` directly and do not care about conditioning.
+        self.require_feature_stats = True
         self.register_buffer("q0_pristine", torch.zeros(n_el, dtype=torch.float64))   # species means
         self.register_buffer("pristine_atoms", torch.tensor(0, dtype=torch.long))
         # C_Q: one constant per formal charge, with its record (plan section 6); both in
@@ -413,6 +418,49 @@ class MACEDSCC(nn.Module):
                 self.q0_pristine[s_] = q0[sp == s_].mean()
         return int(sp.shape[0])
 
+    @torch.no_grad()
+    def set_feature_stats(self, batches: Sequence[Dict[str, torch.Tensor]]) -> Dict[str, object]:
+        """A1.1: per-species channel mean and sd of the base's block-0 invariants over the
+        TRAINING ensemble, computed once and frozen into the checkpoint.
+
+        Training frames only -- the caller passes them. The features are label-free, so a
+        held-out frame would not leak a label, but ensemble statistics fitted on the
+        evaluation set are the kind of thing that is indefensible later for no gain now.
+
+        Accumulated as sums and sums of squares in float64 over species, which is exact
+        enough here (the channel means are O(10) and the deviations O(0.3), so the
+        catastrophic-cancellation regime of the naive formula is far away, and the
+        alternative would be two passes over the base)."""
+        n_el, n_s = len(self.atomic_numbers), self.n_scalars
+        dev = self.q0_pristine.device
+        total = torch.zeros(n_el, n_s, dtype=torch.float64, device=dev)
+        total_sq = torch.zeros(n_el, n_s, dtype=torch.float64, device=dev)
+        count = torch.zeros(n_el, dtype=torch.float64, device=dev)
+        for data in batches:
+            out = self.base_forward(self._trunk_data(dict(data)), training=False, compute_force=False)
+            scalars, _ = self.features(out["node_feats"])
+            scalars = scalars.detach().to(torch.float64)
+            sp = data["node_attrs"].argmax(dim=-1)
+            total = total.index_add(0, sp, scalars)
+            total_sq = total_sq.index_add(0, sp, scalars ** 2)
+            count = count.index_add(0, sp, torch.ones_like(sp, dtype=torch.float64))
+        seen = count > 0
+        if not bool(seen.all()):
+            missing = [self.atomic_numbers[i] for i in range(n_el) if not bool(seen[i])]
+            raise ValueError(f"no training atoms of Z = {missing}; their readouts would be "
+                             "standardised by statistics that do not exist")
+        mean = total / count.unsqueeze(-1)
+        var = (total_sq / count.unsqueeze(-1) - mean ** 2).clamp_min(0.0)
+        floored = self.h0.sk.set_feature_stats(mean, var.sqrt())
+        report = {"atoms_per_species": {int(self.atomic_numbers[i]): int(count[i]) for i in range(n_el)},
+                  "floored_channels": {int(self.atomic_numbers[i]): int(floored[i]) for i in range(n_el)},
+                  "mean_norm": {int(self.atomic_numbers[i]): float(mean[i].norm()) for i in range(n_el)},
+                  "median_abs_mean_over_sd": {
+                      int(self.atomic_numbers[i]):
+                      float((mean[i].abs() / self.h0.sk.feat_sd[i].to(torch.float64)).median())
+                      for i in range(n_el)}}
+        return report
+
     # ----------------------------------------------------------------- gap (plan 6)
 
     def pristine_gap(self, data: Dict[str, torch.Tensor],
@@ -466,6 +514,12 @@ class MACEDSCC(nn.Module):
         """`warm_start`: per-graph `dq` to start the solve from (root-rule initialisation
         iii, along a trajectory; also what a derivative check on a multi-branch landscape
         needs to stay on one branch). Production uses the continuation (D11)."""
+        if self.require_feature_stats and not bool(self.h0.sk.feat_stats_set):
+            raise RuntimeError(
+                "the readout input statistics are not set (v5 amendment A1.1): call "
+                "set_feature_stats on the training frames first. Running without them is the "
+                "A1 failure -- the species mean is ~30x the thermal deviation on base v2, the "
+                "readout weights stay tiny and the on-site corrections never leave 0.1 eV")
         num_graphs = int(data["ptr"].numel() - 1)
         states = states_from_batch(data["carrier_counts"].view(num_graphs, -1))
         # Forces and stress are derivatives: they need autograd even inside a no_grad

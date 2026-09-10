@@ -63,7 +63,9 @@ def model():
         m.h0.vector_mix.normal_(0.0, 0.3)
         m.h0.alpha.fill_(0.5)
         m.h0.beta.fill_(0.5)
-    m.set_pristine_reference([_batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])])
+    _p = _batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])
+    m.set_pristine_reference([_p])
+    m.set_feature_stats([_p])
     return m
 
 
@@ -189,6 +191,7 @@ def _coupled(regime="A", route_b=False, seed=0):
         m.u_raw.fill_(-1.0)
     pristine = _batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])
     m.set_pristine_reference([pristine])
+    m.set_feature_stats([pristine])
     return m
 
 

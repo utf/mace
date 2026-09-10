@@ -267,3 +267,59 @@ class TestDelta:
         assert float(d2.max()) == pytest.approx(2.0 * float(d1.max()), rel=1e-6)
         assert float(np.std([-24.63, -11.74, -3.36, -1.80, -15.19, -8.04])) == pytest.approx(
             float(d1.max()) / 0.40, rel=1e-5)
+
+
+class TestA11Standardisation:
+    """v5 amendment A1.1: per-species input standardisation for the reference-free readouts."""
+
+    def test_standardise_whitens_per_species_and_is_frozen(self):
+        torch.manual_seed(0)
+        m = H0(ZS, feature_dim=8, n_vectors=6, hidden=16)
+        species = torch.tensor([0, 0, 1, 1, 2, 2, 2, 2])
+        # A species-mean far larger than the deviation around it: base v2's actual regime
+        # (||mu|| / median ||x - mu|| = 29-46, per-channel |mu|/sd = 19-28).
+        x = torch.randn(8, 8) * 0.3
+        x = x + torch.tensor([10.0, -9.0, 11.0])[species].unsqueeze(-1)
+        mean = torch.stack([x[species == z].mean(0) for z in range(3)])
+        sd = torch.stack([x[species == z].std(0, unbiased=False) for z in range(3)])
+        m.sk.set_feature_stats(mean, sd)
+        h = m.sk.standardise(x, species)
+        for z in range(3):
+            assert float(h[species == z].mean().abs()) < 1e-9
+            assert float(h[species == z].std(unbiased=False).mean()) == pytest.approx(1.0, abs=1e-6)
+        # A buffer, not a parameter: frozen after computation, and it travels with the model.
+        assert "sk.feat_mean" in dict(m.named_buffers()) and "sk.feat_sd" in dict(m.named_buffers())
+        # By identity, not by shape: `elem`'s embedding weight happens to share the shape.
+        assert all(p is not m.sk.feat_mean and p is not m.sk.feat_sd for p in m.parameters())
+        assert not m.sk.feat_mean.requires_grad and not m.sk.feat_sd.requires_grad
+
+    def test_dead_channels_are_floored_and_counted(self):
+        m = H0(ZS, feature_dim=8, n_vectors=6, hidden=16)
+        sd = torch.ones(3, 8)
+        sd[:, :3] = 0.0                      # channels the base never varies
+        floored = m.sk.set_feature_stats(torch.zeros(3, 8), sd)
+        assert all(v == 3 for v in floored.values())
+        assert float(m.sk.feat_sd.min()) > 0.0
+        assert torch.isfinite(m.sk.standardise(torch.zeros(3, 8), torch.tensor([0, 1, 2]))).all()
+
+    def test_identity_until_set_so_a_fresh_module_still_builds(self):
+        m = H0(ZS, feature_dim=8, n_vectors=6, hidden=16)
+        x = torch.randn(4, 8)
+        sp = torch.tensor([0, 1, 2, 2])
+        assert float((m.sk.standardise(x, sp) - x).abs().max()) == 0.0
+
+    def test_the_conditioning_argument_is_what_the_fix_addresses(self):
+        """With a large species mean, the same readout weights give a pre-activation dominated
+        by the constant part on raw features and by the environment on standardised ones. This
+        is the mechanism A1.1 records, stated as a test rather than as prose."""
+        torch.manual_seed(0)
+        n_ch = 64
+        w = torch.randn(n_ch) / n_ch ** 0.5
+        mu = torch.full((n_ch,), 3.0)
+        dev = torch.randn(200, n_ch) * 0.1
+        raw = dev + mu
+        const_part = float((w @ mu).abs())
+        env_part = float((dev @ w).abs().mean())
+        assert const_part > 10 * env_part                      # raw: the constant dominates
+        std = (raw - raw.mean(0)) / raw.std(0, unbiased=False)
+        assert float((std.mean(0) @ w).abs()) < 1e-5           # standardised: no constant left

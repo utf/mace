@@ -269,11 +269,22 @@ class Trainer:
         return dd.atomic_data([self.frames[i] for i in indices], self.z_table, self.cfg.r_cut)
 
     def prepare(self, pristine_indices: Sequence[int]) -> None:
-        """Pristine composition and q0 reference from the pristine frames; the static cell
-        batch. A1 removed the feature-mean pass this used to open with."""
+        """Pristine composition and q0 reference from the pristine frames; A1.1's readout
+        input statistics over the training ensemble; the static cell batch."""
         ds = dd.atomic_data([self.frames[i] for i in pristine_indices], self.z_table, self.cfg.r_cut)
         loader = torch_geometric.dataloader.DataLoader(ds, batch_size=self.cfg.setup_batch_size)
         self.model.set_pristine_reference([to_device(b, self.device) for b in loader])
+        # A1.1: per-species channel statistics of the base's block-0 invariants. TRAINING
+        # frames plus the pristine cells (thermal ensemble, defect and pristine, as
+        # registered); the held-out fold is excluded.
+        stat_idx = list(self.train_idx) + list(pristine_indices)
+        stat_ds = dd.atomic_data([self.frames[i] for i in stat_idx], self.z_table, self.cfg.r_cut)
+        stat_loader = torch_geometric.dataloader.DataLoader(stat_ds, batch_size=self.cfg.setup_batch_size)
+        self.feature_stats = self.model.set_feature_stats([to_device(b, self.device) for b in stat_loader])
+        logging.info("A1.1 feature stats over %d frames: atoms %s, |mu|/sd median %s, floored channels %s",
+                     len(stat_idx), self.feature_stats["atoms_per_species"],
+                     {k: round(v, 1) for k, v in self.feature_stats["median_abs_mean_over_sd"].items()},
+                     self.feature_stats["floored_channels"])
         static = dd.atomic_data([static_cell_atoms(self.cfg.static_cell_path)], self.z_table, self.cfg.r_cut)
         self.static_batch = to_device(next(iter(torch_geometric.dataloader.DataLoader(static, batch_size=1))), self.device)
         # The static cell never moves: its base features are geometry-only, cached once.
@@ -313,6 +324,7 @@ class Trainer:
         """The run record (every registered number, strata, folds), written before training."""
         record = {"config": asdict(self.cfg), "strata": self.strata_record, "n_train": len(self.train_idx),
                   "n_held": len(self.held_idx), "fold_of": {str(k): v for k, v in self.fold_of.items()},
+                  "feature_stats": getattr(self, "feature_stats", None),
                   "model_extra_state": self.model.get_extra_state()}
         json.dump(record, open(self.run_dir / "run_record.json", "w"), indent=1, default=str)
 
@@ -620,12 +632,19 @@ class Trainer:
             if over and epoch >= 1:
                 self.sv_ceiling_exceeded_epochs.append(epoch)
             entry["sv_ceiling_exceeded"] = over and epoch >= 1
+            # A1.1's registered per-epoch check: the p95 on-site correction in eV. It stayed
+            # under 0.105 eV for the whole A1 run; standardised, it is expected to reach
+            # several hundred meV within the first epochs.
+            sat = self.saturation_report(self.held_idx, n_frames=4)
+            entry["on_site_shift_eV_p95"] = sat.get("on_site_shift_eV_p95")
+            entry["on_site_shift_eV_p95_by_species"] = sat.get("on_site_shift_eV_p95_by_species")
             entry["sv_init_diagnostic"] = epoch == 0
             if (epoch + 1) % cfg.eval_every == 0 or epoch == cfg.epochs - 1:
                 entry["held"] = {k: v for k, v in self.evaluate(self.held_idx, "held").items() if k != "energies"}
             history.append(entry)
-            logging.info("epoch %d loss %.4e force %.4e l2 %.2e gap %.3f unconv %d sv %s scf/batch %.1f fills/batch %.1f warm %d/%d lambda %.3f s %.3f held %s (%.0fs)",
-                         epoch, entry["loss"], entry["force"], entry["l2"], entry["gap"], entry["unconverged"], sv,
+            logging.info("epoch %d loss %.4e force %.4e l2 %.2e dEp95 %.3f gap %.3f unconv %d sv %s scf/batch %.1f fills/batch %.1f warm %d/%d lambda %.3f s %.3f held %s (%.0fs)",
+                         epoch, entry["loss"], entry["force"], entry["l2"],
+                         entry["on_site_shift_eV_p95"] or 0.0, entry["gap"], entry["unconverged"], sv,
                          entry["scf_iterations_per_batch"], entry["scf_fills_per_batch"], entry["warm_batches"], entry["batches"],
                          entry["lambda_dir"], entry["s"], entry.get("held", {}).get("force_rmse"), entry["time"])
             json.dump(history, open(self.run_dir / "history.json", "w"), indent=1, default=str)
