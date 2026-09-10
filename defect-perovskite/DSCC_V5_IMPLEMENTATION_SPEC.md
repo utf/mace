@@ -338,6 +338,55 @@ of a card. Two on one card cost about 5 % per epoch (3.67 → 3.8–3.9 min) and
 fold 3 was launched alongside fold 1 on GPU 5 at 22:59 rather than waiting for a free card, which
 moved the last fold from ≈ 03:30 to 01:02. Three per card is the expected comfortable ceiling.
 
+**Base v2 against the old base, by data set and by range to the defect (2026-09-10 08:35,
+`defect-perovskite/base_compare.py`, `~/runs/base_compare.json`).** Both PRODUCTION bases, the
+same 2877 frames, the same code, forces per component in meV/Å, energies in meV/atom after a
+per-species offset fitted by ordinary least squares on the neutral frames of each base separately
+(the two carry different isolated-atom references, so a raw difference is a per-composition
+constant; the raw median is given in brackets).
+
+| data set | frames | old base E | base v2 E | old base F | base v2 F |
+|---|---|---|---|---|---|
+| pristine, 80 atoms | 639 | 1.15 (2.93) | **0.30** (0.94) | 6.82 | **5.05** |
+| neutral vacancy, 79 | 1174 | 1.31 (6.69) | **0.40** (0.65) | 13.07 | **10.96** |
+| neutral vacancy, 159 | 17 | 3.08 (8.02) | **0.74** (0.63) | **6.51** | 10.96 |
+| charged vacancy, 79 | 1030 | 42.16 (49.02) | **38.37** (37.66) | 53.65 | **33.22** |
+| charged vacancy, 159 | 17 | 24.58 (29.52) | **18.89** (19.00) | 29.95 | **22.14** |
+
+Force RMSE by range from the vacancy (per component, meV/Å; the 2–4 Å shell split into the
+flanking Pb pair, the first-shell Cl and the rest):
+
+| data set | base | 2–4 | 4–8 | 8–10 | 10–12 | >12 | flanking Pb | first Cl | rest of 2–4 |
+|---|---|---|---|---|---|---|---|---|---|
+| neutral 79 | old | 21.0 | 12.5 | 10.7 | 9.7 | 8.9 | 31.1 | 17.3 | 12.4 |
+| neutral 79 | v2 | **20.0** | **10.0** | **8.8** | **7.1** | **6.5** | 34.0 | **13.5** | **9.2** |
+| neutral 159 | old | **15.5** | **7.2** | **5.7** | **4.4** | **3.7** | **23.7** | **10.3** | **13.0** |
+| neutral 159 | v2 | 26.9 | 11.0 | 10.4 | 8.6 | 4.7 | 43.1 | 18.2 | 12.8 |
+| charged 79 | old | 120.3 | 49.4 | 24.2 | 12.9 | 10.5 | 181.2 | 91.4 | 60.6 |
+| charged 79 | v2 | **74.9** | **30.4** | **15.3** | **8.9** | **8.0** | **106.1** | **61.8** | **37.6** |
+| charged 159 | old | 98.6 | 33.6 | 16.5 | 10.0 | 5.0 | 170.8 | 51.2 | 33.8 |
+| charged 159 | v2 | **66.4** | **26.1** | **14.3** | **8.6** | **4.5** | **110.2** | **40.6** | **27.9** |
+
+**Reading.** (i) Base v2 wins almost everywhere, and by most on the frames that matter: on the
+1030 charged 79-atom frames it takes the force error from 53.7 to 33.2 meV/Å per component, a
+38 % reduction, and the near-field 2–4 Å shell from 120 to 75. The gain grows towards the defect
+(flanking Pb 181 → 106) — the opposite of what a base that merely fits the bulk better would do.
+(ii) Energies improve by a factor 3–4 on every neutral set, and base v2's RAW and ALIGNED medians
+nearly coincide (0.65 vs 0.40 at 79 atoms) whereas the old base's differ by a factor five
+(6.69 vs 1.31): base v2's isolated-atom references are close to the labels' own, the old base's
+are not. (iii) The one place the old base is better is the 159-atom NEUTRAL set — 6.5 against
+11.0 meV/Å, and worse in every shell — on SEVENTEEN frames, the same seventeen whose fold spread
+in W1.3 ran 5.8 to 18.2. We do not read a 17-frame difference as a finding; it is flagged for the
+W4 size work rather than explained. Note that at 159 atoms with CHARGE base v2 is ahead again
+(22.1 against 30.0), so the effect does not survive into the charged set.
+(iv) The charged-frame ENERGY error of both bases (19–42 meV/atom) is not a defect of either: a
+base predicts the neutral-state energy and the charge physics is exactly what the head supplies.
+It is recorded as the level the head works against, not as a base error.
+**Caveat on provenance:** both are production bases, so every neutral frame is in-sample for both
+and those rows measure fit, not generalisation. Base v2's out-of-fold neutral numbers are the
+W1.3 table (7.89 meV/Å per component at 79 atoms against the 10.96 in-sample figure here); the old
+base has no fold siblings, so no out-of-fold comparison exists for it and none is implied.
+
 **W1.2 Feature export for the head.** Block-0 features of MH-1 are 512x0e+512x1o (n_scalars 512,
 n_vectors 512, from `products[0]`); `MACEDSCC.first_block` / `features` slice them; the head's
 feature-modulation readouts and the rank-1 descriptor are re-dimensioned by construction from
