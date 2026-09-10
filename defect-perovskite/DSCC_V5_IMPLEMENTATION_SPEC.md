@@ -416,6 +416,82 @@ identical across folds. With five 159-atom neutral frames per fold against 0.2 �
 limitation of the data, and the 159-atom energy admission will read "unmeasurable", not "refused".
 One-shot driver `defect-perovskite/w13_run.sh` (fetch f1–f3, stage 1 → 1b → 2, log `~/runs/w13.log`).
 
+## W1.3 RESULT (2026-09-10 01:34; `~/runs/w1_oof_stage1.json`, `w1_proxy_thresholds.json`, `w1_charged.json`)
+
+**Gate 1, validation vs the current base: PASS** (recorded above: 1.16 meV/atom and 10.23 meV/Å
+per component against 4.9 and 11.8).
+
+**Gate 2, out-of-fold neutral force floors by shell** (per component, median over frames,
+vacancy-side centre; all four folds pooled, each neutral frame read by the one base that did not
+train on it):
+
+| size | frames | overall | 2–4 Å | 4–8 | 8–10 | 10–12 | >12 | flanking Pb | first-shell Cl | rest of 2–4 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 79 | 1174 | 7.89 | 11.38 | 7.39 | 7.11 | 5.77 | 4.83 | 15.13 | 9.54 | 5.59 |
+| 159 | 17 | 8.69 | 17.98 | 9.38 | 9.80 | 6.43 | 4.12 | 25.69 | 9.79 | 9.62 |
+| 80 (pristine) | 612 | 3.63 | — | — | — | — | — | — | — | — |
+
+Fold spread at 79 atoms is 7.70–8.11 overall and 10.75–12.11 in the 2–4 Å shell; at 80 atoms
+3.61–3.64. The 159-atom row rests on four frames per fold and its fold spread (5.79–18.16) is
+noise, not structure. Twenty-one of the 1174 79-atom frames have no identifiable flanking pair and
+carry no shell reading. The near-field ordering of D15 survives on neutral data and on the new
+base: the flanking Pb pair is the hardest site (15.13 against 5.59 for the rest of its own shell),
+and the error falls monotonically outwards.
+
+**Gate 3, `s0(L) ± SE`, coverage, and the admission decision — CHARGED ENERGIES ARE NOT ADMITTED
+AT EITHER SIZE, on two independent grounds.**
+
+*Coverage.* At 79 atoms the charged frames span `d` = 4.93–6.80 Å; the out-of-fold neutral frames
+span 3.68–6.02 and their 0.2 Å bin counts run 152, 97, 84, 33, 9, 3, then **0, 0, 0, 0** above
+6.13 Å. The neutral geometries never reach the stretched flanking Pb–Pb distances the +1 state
+explores, so four of the ten bins of the charged window have no neutral support at all and `s0`
+is unmeasurable there. At 159 atoms there are 17 neutral out-of-fold frames against a 2.3 Å
+window: twelve of twelve bins are under `n_min`, and no coverage test can pass on this data. No
+new DFT is allowed in v5, so the gap cannot be closed by sampling.
+
+*Slope.* `s0` (out-of-fold neutral residual against `d`) is −0.0237 ± 0.0030 eV/Å at 79 atoms, so
+`|s0| + 2 SE` = 0.0297 against the registered `s_tol` = 0.018 — a fail in its own right, on every
+fold separately (fold 0 0.0338, fold 1 0.0470, fold 2 0.0348, fold 3 0.0274). At 159 atoms
+`s0` = 0.1433 ± 0.0356, `|s0| + 2 SE` = 0.2145. For the record `sQ` = 0.0901 ± 0.0077 at 79 and
+−0.0571 ± 0.0026 at 159.
+
+*Sensitivity, so the decision surface is visible* (the registered reading is the first row):
+
+| charged window | `s_tol` | coverage at 79 | 79 admitted | 159 admitted |
+|---|---|---|---|---|
+| full (registered) | 0.018 (registered) | fail | **no** | no |
+| full | 0.05 | fail | no | no |
+| `d` < 6.13 Å (950 of 1019 frames, 93 %) | 0.018 | pass | no (0.0297 > 0.018) | no |
+| `d` < 6.13 Å | 0.05 | pass | yes | no |
+
+So at 79 atoms the outcome turns on two rulings that are the user's, not ours: whether the charged
+set may be restricted to the neutral-supported sub-window, and which `s_tol` applies (W0.6 took
+0.018, the v4 `tau_noise_shape`; `AdmissionConfig`'s own pre-v5 default was 0.05). At 159 atoms
+nothing changes the answer. **Forces are admitted at every size** by the registered rule, so W3
+is not blocked; W5's charged-energy claims are.
+
+**Gate 3b, the proxy tables.** Thresholds (95th percentiles on out-of-fold neutral frames):
+`u_F` = 218.4 / 293.5 / 17.7 meV/Å and `u_E` = 3.01 / 4.31 / 0.41 meV/atom at 79 / 159 / 80 atoms.
+The registered `u_F` is 98 % foundation-disagreement, exactly as flagged before opening, and the
+charged set passes it 100 % at both sizes — the vacuous pass we predicted, recorded as such. The
+components carry the information:
+
+| size | force spread term within its threshold | energy proxy within `u_E` | energy proxy median vs `u_E` |
+|---|---|---|---|
+| 79 | 75 % | **0 %** | 7.65 vs 3.01 meV/atom |
+| 159 | 100 % | 6 % | 4.36 vs 4.31 |
+
+The two instruments agree with the admission table: the forces largely transfer to charged
+geometries (three quarters of frames inside the neutral spread envelope, per-frame p95 median
+2.14 against a 2.78 meV/Å threshold), while the energies do not — not one 79-atom charged frame
+sits inside the neutral energy envelope, and it misses by a factor 2.5. The species alignment of
+W0.6a.3 works as intended (energy disagreement 3.89 → 1.27 meV/atom RMS after the fit).
+
+**Reading.** The base passes W1 for forces and fails it for charged energies at both sizes. This
+is a property of the data, not of base v2: the neutral frames do not reach the geometries the
+charged state occupies, and no new DFT is permitted. Nothing further is launched pending the
+user's ruling on the two knobs above and on what W5 may claim.
+
 ## W2 — efficiency
 
 **Baseline profile (2026-09-09, `scratchpad/w2_profile.py`; B′ LR-only s3, eleven held-out 79-atom
