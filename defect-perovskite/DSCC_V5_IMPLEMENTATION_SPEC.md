@@ -450,6 +450,27 @@ is unmeasurable there. At 159 atoms there are 17 neutral out-of-fold frames agai
 window: twelve of twelve bins are under `n_min`, and no coverage test can pass on this data. No
 new DFT is allowed in v5, so the gap cannot be closed by sampling.
 
+*Why the coverage fails — the two charge states barely overlap in `d`.* This is not
+under-sampling that a reweighting could repair. At 79 atoms the out-of-fold neutral frames have
+`d` = 4.71 ± 0.47 Å and the charged frames 5.57 ± 0.31 Å: the distributions are offset by 0.86 Å,
+nearly two neutral standard deviations, and only 378 of 1153 neutral frames fall inside the
+charged range at all while 109 charged frames (10.7 %) lie beyond the neutral maximum. Counts per
+0.4 Å bin, neutral against charged:
+
+| `d` Å | 3.6 | 4.0 | 4.4 | 4.8 | 5.2 | 5.6 | 6.0 | 6.4 |
+|---|---|---|---|---|---|---|---|---|
+| neutral out-of-fold | 77 | 265 | 288 | 332 | 162 | 28 | 1 | 0 |
+| charged | 0 | 0 | 0 | 47 | 616 | 240 | 93 | 23 |
+
+At 159 atoms the same offset appears (neutral 5.53 ± 0.76, charged 6.09 ± 0.69, 29 % of charged
+frames beyond the neutral maximum) on seventeen frames a side. The physics is the expected one:
+removing the electron from the Cl vacancy leaves the flanking Pb pair less screened and it relaxes
+outward, so the +1 manifold sits at systematically larger `d` than any neutral frame the base was
+trained on. Restricting the charged set to `d` < 6.13 Å keeps 93 % of the frames but does not put
+them where the neutral data are — that sub-window holds 949 charged frames against 191 neutral
+ones. Any W5 energy claim on this base is an extrapolation in the one coordinate the defect
+energy depends on, whichever way the two knobs above are ruled.
+
 *Slope, and a code-versus-spec discrepancy found while reading it.* `admission.py`'s header scopes
 the test to "within the charged window of the collective coordinate `d`", but the campaign code
 fitted `s0` over ALL out-of-fold neutral frames of the size — at 79 atoms 1153 frames spanning
