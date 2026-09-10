@@ -914,6 +914,14 @@ against the old-base arms. Registered here, with the points the plan leaves open
   2–4 Å flanking-Pb residual at 79 atoms at matched `d`. The W1.3 out-of-fold neutral floors are
   the reference the head is read against — 79 atoms 7.89 overall, 11.38 in 2–4 Å, 15.13 at the
   flanking Pb, per component.
+- *Old-base re-evaluation is feasible* (checked 2026-09-10 03:19,
+  `defect-perovskite/w3_oldbase_check.py`, evaluation only, nothing rewritten). An Arm 2+3 model
+  (`dscc_arm23_B_A_lr_only_s0`, old base, trained before C13 and before every W2 change) loads
+  into the current code unchanged — `MACEDSCC`, `n_scalars` 128, r_max 5.0, coupling on — and
+  `evaluate` runs on it with the vacancy-side centre and the W0.2 shells. On 24 held-out charged
+  frames of its fold: 27.6 meV/Å per component overall, 52.4 in the 2–4 Å shell, 77.5 at the
+  flanking Pb, 39.1 at the first-shell Cl, 26.4 in the pooled 4–8 Å shell. Sample-sized numbers,
+  recorded only as evidence that the cross-base pass will run; the pass itself is not done.
 - *Not yet done, required before launch:* a timing smoke on one arm (base v2's 512-wide features
   make each step more expensive than the old base's, against W2's five-fold solver speed-up, and
   the queue layout depends on the balance); and the b3 tree is frozen at `be3c39b` until the Arm 4
