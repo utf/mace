@@ -1114,6 +1114,26 @@ arm, so within-W3 comparisons stay fair; but it means the registered evaluation 
 this arm in absolute terms, and the remedy if one is wanted is more epochs, not a different
 reading. Recorded for the user before the arm comparison is read.
 
+**The registered W3 readout, answered for this arm (2026-09-10 10:55).** "Whether the base change
+moved the 2–4 Å flanking-Pb residual at 79 atoms at matched `d`" — the two arms are read on the
+SAME held-out frames per seed, so `d` is matched by construction. Paired over the six seeds:
+
+| 2–4 Å category | old base | base v2 | mean d | one-sided 95 % | verdict | per-seed base v2 |
+|---|---|---|---|---|---|---|
+| flanking Pb pair | 54.23 | 49.59 | +2.63 | [−6.55, +11.81] | **inconclusive** | 47, 46, 52, 39, 68, 64 |
+| first-shell Cl | 32.41 | 27.81 | +4.57 | [−0.75, +9.88] | inconclusive | 27, 23, 29, 20, 38, 29 |
+| rest of the shell | 23.67 | 19.20 | +5.22 | [+1.52, +8.93] | **superior** | 17, 24, 15, 13, 23, 21 |
+
+**No: the base change does not move the flanking-Pb residual.** The ordinary atoms of the same
+shell improve decisively (+5.22, lower bound +1.52), the first-shell Cl improves by a similar
+amount but is not resolved, and the flanking Pb pair — the site D15 identified — is unmoved within
+a seed spread that runs 39 to 68 meV/Å. This is not a counting limitation: the flanking category
+pools 519 atoms over the held-out set (two per frame × 262 frames); it is seed spread. The reading
+is the same one D15 reached on the old base and Arm 1 reached before it: the near-field residual at
+the flanking Pb is owned by something the electrostatic arms and now the base change all leave
+alone, and by D15's evidence it is a property of the 79-atom labels and cell rather than of the
+model. Recorded as the third independent arrival at that conclusion.
+
 Coupled arms (Route A LR-only, Route B′ LR-only) still running; W3 selection waits for all three.
 
 ## W3–W6 — not opened.
