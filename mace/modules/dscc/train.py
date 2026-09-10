@@ -48,6 +48,12 @@ class TrainConfig:
     r_cut: float = 10.0
     force_weight: float = 1.0
     gap_weight: float = 1.0           # L_gap = gap_weight (E_gap_model - E_gap)^2, eV^-2
+    # v5 amendment A1: the weak L2 on the tanh outputs that replaces the pristine centre as
+    # the thing keeping corrections near the element default. `L_l2 = l2_weight * sum_terms
+    # mean(tanh^2)`, the same weight on every term. Registered 1.8e-6 = 0.05 * L_conv / 0.25,
+    # L_conv = 8.94e-6 the median converged train force loss of the six archived pre-A1
+    # Phi = 0 seeds: the penalty is 5 % of the converged force loss at |tanh| = 0.5.
+    l2_weight: float = 1.8e-6
     e_gap: float = 2.40               # registered host gap (static lattice, C2)
     coupling: bool = False            # Arm 1: Phi = 0
     coupling_mode: str = "full"       # Arm 2+3: lr_only | lr_u | full | lambda1
@@ -64,7 +70,7 @@ class TrainConfig:
     # batch size changes no reported number, only the peak memory of `prepare`, which on the
     # 512-wide base v2 features is the high-water mark of the whole run. Defaults are the
     # literals the campaign ran with, so nothing moves unless a run sets them.
-    setup_batch_size: int = 16        # pristine-centre pass
+    setup_batch_size: int = 16        # pristine-reference pass
     base_cache_batch_size: int = 8    # E_base / F_base cache
     grad_clip: float = 10.0
     cache_base: bool = True           # E_base/F_base cached per frame; block 0 recomputed
@@ -263,10 +269,11 @@ class Trainer:
         return dd.atomic_data([self.frames[i] for i in indices], self.z_table, self.cfg.r_cut)
 
     def prepare(self, pristine_indices: Sequence[int]) -> None:
-        """Pristine centre and q0 reference from the pristine frames; the static cell batch."""
+        """Pristine composition and q0 reference from the pristine frames; the static cell
+        batch. A1 removed the feature-mean pass this used to open with."""
         ds = dd.atomic_data([self.frames[i] for i in pristine_indices], self.z_table, self.cfg.r_cut)
         loader = torch_geometric.dataloader.DataLoader(ds, batch_size=self.cfg.setup_batch_size)
-        self.model.set_pristine_centre([to_device(b, self.device) for b in loader])
+        self.model.set_pristine_reference([to_device(b, self.device) for b in loader])
         static = dd.atomic_data([static_cell_atoms(self.cfg.static_cell_path)], self.z_table, self.cfg.r_cut)
         self.static_batch = to_device(next(iter(torch_geometric.dataloader.DataLoader(static, batch_size=1))), self.device)
         # The static cell never moves: its base features are geometry-only, cached once.
@@ -339,6 +346,7 @@ class Trainer:
     def step(self, batch, frame_indices: Sequence[int], optimizer) -> Dict[str, float]:
         self.model.train()
         optimizer.zero_grad(set_to_none=True)
+        self.model.h0.sk.reset_regularisation()      # A1: the L2 pools over every H0 of the step
         out = self.model(self._attach_base(batch, frame_indices), training=True, compute_force=True,
                          warm_start=self._warm_starts(frame_indices))
         self._store(out, batch, frame_indices)
@@ -347,7 +355,9 @@ class Trainer:
         l_force = force_loss(out, batch, weights)
         gap = self.model.pristine_gap(self.static_batch, getattr(self, "static_features", None))
         l_gap = self.cfg.gap_weight * ((gap - self.cfg.e_gap) ** 2).sum()
-        loss = self.cfg.force_weight * l_force + l_gap
+        reg = self.model.h0.sk.regularisation()
+        l_l2 = self.cfg.l2_weight * sum(reg.values()) if reg else l_force.new_zeros(())
+        loss = self.cfg.force_weight * l_force + l_gap + l_l2
         loss.backward()
         params = [p for p in self.model.parameters() if p.requires_grad]
         torch.nn.utils.clip_grad_norm_(params, self.cfg.grad_clip)
@@ -355,10 +365,53 @@ class Trainer:
         diag = out.get("diagnostics", {})
         conv = diag.get("converged", [])
         return {"loss": float(loss), "force": float(l_force), "gap": float(gap[0]),
+                "l2": float(l_l2),
                 "unconverged": int(sum(1 for c in conv if c is False)),
                 "scf_iterations": int(sum(diag.get("iterations", []))),
                 "scf_fills": int(sum(diag.get("fills", []))),
                 "warm": int(bool(diag.get("warm_started", False)))}
+
+    @torch.no_grad()
+    def saturation_report(self, indices: Sequence[int], n_frames: int = 8) -> Dict[str, object]:
+        """A1's bounds report: the fraction of `|tanh| > 0.95` per term and species over a
+        sample of held-out frames, plus the section 2.10 readout of `tanh(e_Z(h_i))` (and
+        `tanh(g_Z(h_i))` when the rank-2 bound is on) AT THE FLANKING Pb -- the two sites the
+        `vacancy_centre_full` rule already identifies. Sampled rather than exhaustive: it is a
+        diagnostic on a saturating nonlinearity, not a mean anyone tests against."""
+        self.model.eval()
+        sample = list(indices)[:max(1, int(n_frames))]
+        ds = self._dataset(sample)
+        loader = torch_geometric.dataloader.DataLoader(ds, batch_size=1)
+        pooled: Dict[str, list] = {}
+        flank_site: Dict[str, list] = {}
+        for j, b in enumerate(loader):
+            batch = to_device(b, self.device)
+            feats = self.model.first_block(self.model._trunk_data(dict(batch)))
+            scalars, _ = self.model.features(feats)
+            species = batch["node_attrs"].argmax(dim=-1)
+            a = self.frames[sample[j]]
+            found = vacancy_centre_full(batch["positions"], batch["cell"].view(-1, 3, 3)[0],
+                                        a.get_atomic_numbers())
+            sites = None
+            if found is not None:
+                sites = torch.zeros(int(species.shape[0]), dtype=torch.bool, device=species.device)
+                sites[torch.as_tensor(found[1], device=species.device)] = True
+            rep_ = self.model.h0.saturation(scalars, species, batch["edge_index"], sites)
+            for key, value in rep_.items():
+                (flank_site if key.startswith("site_") else pooled).setdefault(key, []).append(value)
+        out: Dict[str, object] = {}
+        for key, values in pooled.items():
+            if isinstance(values[0], dict):
+                out[key] = {z: float(np.mean([v[z] for v in values if z in v]))
+                            for z in sorted({z for v in values for z in v})}
+            else:
+                out[key] = float(np.mean(values))
+        for key, values in flank_site.items():
+            flat = [x for v in values for x in v]
+            out[key] = {"mean_abs": float(np.mean(np.abs(flat))), "max_abs": float(np.max(np.abs(flat))),
+                        "n": len(flat)}
+        out["n_frames"] = len(sample)
+        return out
 
     def evaluate(self, indices: Sequence[int], tag: str) -> Dict[str, object]:
         """Force RMSE (eV/A) overall and by distance shell from the vacancy (label-free:
@@ -503,6 +556,9 @@ class Trainer:
         torch.manual_seed(cfg.seed)
         params = [p for p in self.model.parameters() if p.requires_grad]
         optimizer = torch.optim.Adam(params, lr=cfg.lr, weight_decay=cfg.weight_decay)
+        # A1: collect the tanh outputs of every bounded term for the weak L2. On for training
+        # only -- `evaluate` reads saturation directly and does not need the accumulator.
+        self.model.h0.sk.collect_regularisation(bool(cfg.l2_weight))
         ds = self._dataset(self.train_idx)
         sizes = [len(self.frames[i]) for i in self.train_idx]
         sampler = dd.SizeGroupedSampler(sizes, cfg.batch_size, seed=cfg.seed)
@@ -518,7 +574,7 @@ class Trainer:
         for epoch in range(cfg.epochs):
             sampler.set_epoch(epoch)
             t0 = time.time()
-            stats = {"loss": 0.0, "force": 0.0, "gap": 0.0, "unconverged": 0, "n": 0, "scf_iterations": 0, "scf_fills": 0, "warm": 0}
+            stats = {"loss": 0.0, "force": 0.0, "gap": 0.0, "l2": 0.0, "unconverged": 0, "n": 0, "scf_iterations": 0, "scf_fills": 0, "warm": 0}
             # C5 (v4.2 / v4.5): the registered subsample at the start of the epoch -- the
             # warm start against the full continuation (zero start against the continuation
             # for frames without a stored dq, i.e. every frame in epoch 0); frames that fail
@@ -537,12 +593,12 @@ class Trainer:
                 batch = to_device(torch_geometric.dataloader.Batch.from_data_list([ds[j] for j in local_batch]), self.device)
                 frame_indices = [self.train_idx[j] for j in local_batch]
                 s = self.step(batch, frame_indices, optimizer)
-                for key in ("loss", "force", "unconverged", "scf_iterations", "scf_fills", "warm"):
+                for key in ("loss", "force", "l2", "unconverged", "scf_iterations", "scf_fills", "warm"):
                     stats[key] += s[key]
                 stats["gap"] = s["gap"]; stats["n"] += 1
             sv = sv_pre
             entry = {"epoch": epoch, "loss": stats["loss"] / max(stats["n"], 1), "force": stats["force"] / max(stats["n"], 1),
-                     "gap": stats["gap"], "unconverged": stats["unconverged"], "single_valued": sv,
+                     "l2": stats["l2"] / max(stats["n"], 1), "gap": stats["gap"], "unconverged": stats["unconverged"], "single_valued": sv,
                      "scf_iterations_per_batch": stats["scf_iterations"] / max(stats["n"], 1),
                      "scf_fills_per_batch": stats["scf_fills"] / max(stats["n"], 1),
                      "warm_batches": stats["warm"], "batches": stats["n"],
@@ -560,8 +616,8 @@ class Trainer:
             if (epoch + 1) % cfg.eval_every == 0 or epoch == cfg.epochs - 1:
                 entry["held"] = {k: v for k, v in self.evaluate(self.held_idx, "held").items() if k != "energies"}
             history.append(entry)
-            logging.info("epoch %d loss %.4e force %.4e gap %.3f unconv %d sv %s scf/batch %.1f fills/batch %.1f warm %d/%d lambda %.3f s %.3f held %s (%.0fs)",
-                         epoch, entry["loss"], entry["force"], entry["gap"], entry["unconverged"], sv,
+            logging.info("epoch %d loss %.4e force %.4e l2 %.2e gap %.3f unconv %d sv %s scf/batch %.1f fills/batch %.1f warm %d/%d lambda %.3f s %.3f held %s (%.0fs)",
+                         epoch, entry["loss"], entry["force"], entry["l2"], entry["gap"], entry["unconverged"], sv,
                          entry["scf_iterations_per_batch"], entry["scf_fills_per_batch"], entry["warm_batches"], entry["batches"],
                          entry["lambda_dir"], entry["s"], entry.get("held", {}).get("force_rmse"), entry["time"])
             json.dump(history, open(self.run_dir / "history.json", "w"), indent=1, default=str)
@@ -571,6 +627,7 @@ class Trainer:
             if sv is not None and sv["fraction"] > cfg.single_valued_ceiling:
                 logging.warning("single-valuedness failing fraction %.3f exceeds the ceiling %.3f", sv["fraction"], cfg.single_valued_ceiling)
         final = self.evaluate(self.held_idx, "held_final")
+        final["saturation"] = self.saturation_report(self.held_idx)      # A1 bounds report
         # v4.5: "failure fails the arm" -- the run-level flag the report reads.
         final["sv_ceiling_exceeded_epochs"] = list(self.sv_ceiling_exceeded_epochs)
         final["arm_failed_single_valuedness"] = bool(self.sv_ceiling_exceeded_epochs)
@@ -582,6 +639,7 @@ class Trainer:
         if avg_sum is not None and avg_n > 0:
             saved = load_average(self.model, avg_sum, avg_n)
             avg = self.evaluate(self.held_idx, "held_final_avg")
+            avg["saturation"] = self.saturation_report(self.held_idx)
             avg["avg_epochs"] = avg_n
             json.dump(avg, open(self.run_dir / "held_final_avg.json", "w"), indent=1, default=str)
             torch.save(self.model, self.run_dir / "model_avg.pt")

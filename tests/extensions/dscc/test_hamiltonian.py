@@ -41,7 +41,6 @@ def _model(directional=True, seed=1):
         m.vector_mix.normal_(0.0, 0.5)
         m.alpha.fill_(0.7)
         m.beta.fill_(-0.4)
-    m.set_centre(torch.zeros(4, 8), torch.tensor([0, 1, 2, 2]))
     return m
 
 
@@ -138,13 +137,13 @@ class TestControl:
         species, scalars, vectors, positions, cell, ei, S = _inputs(atoms, full.r_cut)
         Hf = _h(full, species, scalars, vectors, positions, cell, ei, S)
         Hs = _h(scalar_only, species, scalars, None, positions, cell, ei, S)
-        block = full.directional_block(vectors, species, ei, gr.edge_vectors(positions, cell, ei, S))
+        block = full.directional_block(scalars, vectors, species, ei, gr.edge_vectors(positions, cell, ei, S))
         assert float((Hf - Hs - block).abs().max()) < 1e-12
         assert float(block.abs().max()) > 1e-3
         # Harrison initialisation: anion p below the cation p levels at start.
         eps0 = full.sk.eps0.detach()
         assert eps0[ZS.index(17), 1] < eps0[ZS.index(82), 1] < eps0[ZS.index(55), 1]
-        assert not bool(H0(ZS, feature_dim=8, n_vectors=6, hidden=16).centre_set)
+        assert not hasattr(H0(ZS, feature_dim=8, n_vectors=6, hidden=16), "centre")
 
 
 class TestBatched:

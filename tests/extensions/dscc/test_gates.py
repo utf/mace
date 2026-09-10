@@ -24,7 +24,7 @@ def _model(route_b, tol_q):
         m.lambda_raw.fill_(0.0)
         m.u_raw.fill_(-1.0)
     pristine = _batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])
-    m.set_pristine_centre([pristine])
+    m.set_pristine_reference([pristine])
     return m
 
 

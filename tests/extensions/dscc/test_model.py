@@ -63,7 +63,7 @@ def model():
         m.h0.vector_mix.normal_(0.0, 0.3)
         m.h0.alpha.fill_(0.5)
         m.h0.beta.fill_(0.5)
-    m.set_pristine_centre([_batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])])
+    m.set_pristine_reference([_batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])])
     return m
 
 
@@ -188,7 +188,7 @@ def _coupled(regime="A", route_b=False, seed=0):
         m.lambda_raw.fill_(0.0)                  # lambda_dir = lambda_max / 2
         m.u_raw.fill_(-1.0)
     pristine = _batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])
-    m.set_pristine_centre([pristine])
+    m.set_pristine_reference([pristine])
     return m
 
 

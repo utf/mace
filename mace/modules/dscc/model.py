@@ -31,8 +31,8 @@ from torch import nn
 
 from mace.modules.models import ScaleShiftMACE
 from mace.modules.dscc.fill import SIGMA_S
-from mace.modules.dscc.hamiltonian import (A_MAX_DEFAULT, B_MAX_DEFAULT, H0, Q_CUT_DEFAULT,
-                                           R_CUT_DEFAULT)
+from mace.modules.dscc.hamiltonian import (A_MAX_DEFAULT, B_MAX_DEFAULT, DELTA_FRACTION_DEFAULT,
+                                           ETA_DEFAULT, H0, Q_CUT_DEFAULT, R_CUT_DEFAULT)
 from mace.modules.dscc.ewald import gradient_of_contraction
 from mace.modules.dscc.kernels import (KernelConfig, gamma_lr, gamma_matrix, gamma_pair_derivative, host_potential,
                                        kernel_components, kernel_pair_gradients, gamma_lr_pair_gradient)
@@ -79,6 +79,8 @@ class MACEDSCC(nn.Module):
                  u_max: Optional[Dict[int, float]] = None, r_split: float = R_SPLIT_DEFAULT,
                  q_cut: float = Q_CUT_DEFAULT, a_max: float = A_MAX_DEFAULT,
                  b_max: float = B_MAX_DEFAULT, hidden: int = 64,
+                 eta: float = ETA_DEFAULT, beta_b: float = 0.0, beta_a: float = 0.0,
+                 delta_frac: float = DELTA_FRACTION_DEFAULT,
                  scf: Optional[ScfOptions] = None) -> None:
         super().__init__()
         self.scf_options = scf or ScfOptions()
@@ -101,7 +103,8 @@ class MACEDSCC(nn.Module):
         self.n_scalars, self.n_vectors = n_s, n_v
         self.h0 = H0(self.atomic_numbers, feature_dim=n_s, n_vectors=n_v, r_cut=self.r_cut,
                      q_cut=q_cut, directional=directional, a_max=a_max, b_max=b_max,
-                     hidden=hidden)
+                     hidden=hidden, eta=eta, beta_b=beta_b, beta_a=beta_a,
+                     delta_frac=delta_frac)
         n_el = len(self.atomic_numbers)
         u_max = dict(u_max or U_MAX_GFN1)
         self.register_buffer("u_max", torch.tensor([float(u_max[z]) for z in self.atomic_numbers],
@@ -206,9 +209,10 @@ class MACEDSCC(nn.Module):
         self.u_raw.requires_grad_(not self.u_zero)
 
     def load_h0_from(self, path: str) -> None:
-        """Arm 2+3 start from the Arm-1 winner: the trained `H0` (parameters and pristine
-        centre) from a saved `MACEDSCC` or from its `h0_state.pt` (a plain state dict, the
-        form that survives the deletion sweep); the coupling learnables keep their inits."""
+        """Arm 2+3 start from the Arm-1 winner: the trained `H0` from a saved `MACEDSCC` or
+        from its `h0_state.pt` (a plain state dict, the form that survives the deletion
+        sweep); the coupling learnables keep their inits. Pre-A1 checkpoints carry a `centre`
+        buffer this `H0` no longer has and load only at the `pre-a1` tag."""
         obj = torch.load(path, weights_only=False, map_location=self.u_max.device)
         if isinstance(obj, dict) and "h0" in obj:
             self.h0.load_state_dict(obj["h0"])
@@ -364,24 +368,26 @@ class MACEDSCC(nn.Module):
         return scalars, vectors
 
     @torch.no_grad()
-    def set_pristine_centre(self, batches: Sequence[Dict[str, torch.Tensor]]) -> int:
-        """Plan 2.1: the per-species first-block feature means over the pristine cell(s);
-        also the pristine composition (sum rule) and atom count. Returns atoms averaged."""
-        feats, species, sizes = [], [], []
+    def set_pristine_reference(self, batches: Sequence[Dict[str, torch.Tensor]]) -> int:
+        """The pristine composition (sum rule), the atom count, and Route B''s `q0` reference.
+
+        v5 amendment A1 REMOVED THE OTHER JOB THIS DID. It used to also average the
+        first-block features per species and store them in `H0` as the centre of every
+        bounded correction; that reference is gone from the runtime path, and with it the
+        setup pass that computed it. What is left is host geometry and a charge reference,
+        not feature statistics: `pristine_atoms` for the size classes, and `q0_pristine`, the
+        reference-fill site charge of the pristine cell, which is Route B''s `R_eff`
+        diagnostic and not read by `H0` at all. The name changed with the job.
+
+        Returns the number of pristine atoms seen."""
+        sizes = []
         for data in batches:
-            out = self.base_forward(self._trunk_data(dict(data)), training=False,
-                                         compute_force=False)
-            scalars, _ = self.features(out["node_feats"])
-            feats.append(scalars.detach())
-            species.append(data["node_attrs"].argmax(dim=-1))
             ptr = data["ptr"]
             sizes.extend(int(x) for x in (ptr[1:] - ptr[:-1]).tolist())
-        if not feats:
+        if not sizes:
             raise ValueError("no pristine frames")
-        scalars, species_t = torch.cat(feats), torch.cat(species)
-        self.h0.set_centre(scalars, species_t)
         self.pristine_atoms.fill_(min(sizes))
-        # Route B' diagnostic reference: the pristine q0 per species (with the centre set).
+        # Route B' diagnostic reference: the pristine q0 per species.
         q0_all, sp_all = [], []
         for data in batches:
             out = self.base_forward(self._trunk_data(dict(data)), training=False,
@@ -405,7 +411,7 @@ class MACEDSCC(nn.Module):
         for s_ in range(len(self.atomic_numbers)):
             if bool((sp == s_).any()):
                 self.q0_pristine[s_] = q0[sp == s_].mean()
-        return int(scalars.shape[0])
+        return int(sp.shape[0])
 
     # ----------------------------------------------------------------- gap (plan 6)
 

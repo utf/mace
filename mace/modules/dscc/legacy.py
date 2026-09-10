@@ -177,26 +177,29 @@ HOP_LOG_BETA_RANGE_EQUIVALENT = math.log(1.5)
 DECAY_LOG_BETA_DEFAULT = math.log(2.0)
 
 
-# Section 2.1 of the speed cycle's spec: WHERE THE CENTRE IS SUBTRACTED.
+# v5 amendment A1: THE CENTRE IS GONE. Both retired forms subtracted a pristine species
+# feature mean inside or outside the tanh,
 #
-#   "output"    corr_i = gamma [ tanh h(x_i) - tanh h(xbar_s) ]     (Stage A', retired)
-#   "argument"  corr_i = gamma   tanh[ h(x_i) - h(xbar_s) ]         (this cycle)
+#   "output"    corr_i = gamma [ tanh h(x_i) - tanh h(xbar_s) ]     (Stage A')
+#   "argument"  corr_i = gamma   tanh[ h(x_i) - h(xbar_s) ]         (Stage B .. pre-A1)
 #
-# The output form measured F10 at 0 of 6 and the reason was structural rather than
-# statistical: centring the OUTPUT leaves the correction invariant to a constant shift of
-# `h`, so nothing in the loss stops `h` drifting until every atom of a species is past
-# |tanh| = 0.98, where the difference of two saturated tanhs is identically zero and the
-# channel is dead. Two of six seeds ran Cl into that state and three ran Cs into it. Moving
-# the subtraction inside the tanh keeps the same two properties -- zero on the pristine cell,
-# invariant to a constant shift of h -- while making saturation a property of the DEVIATION,
-# which is bounded by the data rather than free to drift.
+# and A1 removes both: the on-site correction is `delta_Z tanh(e_Z(h_i))`, with a bias in
+# the readout in place of the reference and a weak L2 on the tanh output in place of the
+# "zero on the pristine cell" property. The reasons are in the amendment: the neutral null
+# is algebraic, so nothing is protected by vanishing in the bulk; a static-cell feature mean
+# is ill-defined under thermal noise and does not exist for a foundation model.
 #
-# Both forms stay reachable because the Stage B cohort was trained with the first, and
-# re-scoring it through the second would report numbers that model never computed.
-CENTRE_FORMS = ("output", "argument")
-
-
-CENTRE_FORM_DEFAULT = "argument"
+# The argument for keeping a legacy branch (the codebase idiom: models pickled before an
+# attribute existed must keep evaluating) is refused HERE and only here, because A1's static
+# check asserts that no runtime module reads pristine feature statistics -- a `getattr`
+# fallback would put the symbol back in the assembly path and make the test a lie. Pre-A1
+# checkpoints are scored at the `pre-a1` tag instead.
+#
+# `delta_Z`, the per-species on-site half-width, replaces the single `on_site_range` scalar.
+# It is a registered fraction of the spread of the species onsite baselines (A1); the scalar
+# survives as the constructor default that fills the buffer uniformly, so a per-species rule
+# can be registered later without an interface change.
+DELTA_FRACTION_DEFAULT = 0.40
 
 
 # The LIVE setting, read by every fill, every entropy and the density-response backward.
@@ -360,8 +363,7 @@ class SlaterKosterH(nn.Module):
                  hop_form: str = HOP_FORM_DEFAULT,
                  hop_log_beta: float = HOP_LOG_BETA_DEFAULT,
                  decay_learned: bool = False,
-                 decay_log_beta: float = DECAY_LOG_BETA_DEFAULT,
-                 centre_form: str = CENTRE_FORM_DEFAULT) -> None:
+                 decay_log_beta: float = DECAY_LOG_BETA_DEFAULT) -> None:
         super().__init__()
                 
         if envelope not in ENVELOPES:
@@ -370,12 +372,8 @@ class SlaterKosterH(nn.Module):
         if hop_form not in HOP_FORMS:
             raise ValueError(f"unknown hopping modulation {hop_form!r}; expected one of "
                              f"{sorted(HOP_FORMS)}")
-        if centre_form not in CENTRE_FORMS:
-            raise ValueError(f"unknown centre form {centre_form!r}; expected one of "
-                             f"{sorted(CENTRE_FORMS)}")
         self.hop_form = str(hop_form)
         self.hop_log_beta = float(hop_log_beta)
-        self.centre_form = str(centre_form)
         self.decay_length, self.r_cut = float(decay_length), float(r_cut)
         self.envelope = str(envelope)
         # Section 2.3: the envelope's anchor, per species pair, from the universal covalent
@@ -409,6 +407,11 @@ class SlaterKosterH(nn.Module):
         self.v0_raw = nn.Parameter(eta.reshape(1, 1, 4) * scale.unsqueeze(-1))
         # Two on-site levels per species, one per shell.
         self.eps0 = nn.Parameter(torch.zeros(num_elements, 2))
+        # A1: the on-site half-width per species and shell. A BUFFER, not a parameter: it is
+        # a registered bound, not something the fit may widen. Filled uniformly from
+        # `on_site_range` here; `H0` overwrites it with the registered rule once the Harrison
+        # baselines are in place.
+        self.register_buffer("delta", torch.full((num_elements, 2), float(on_site_range)))
         self.hop = _mlp([2 * feature_dim + 2 * elem_dim, hidden, hidden, len(BOND_TYPES)],
                         final_scale=0.05)
         self.site = _mlp([feature_dim + elem_dim, hidden, hidden, 2], final_scale=0.05)
@@ -490,6 +493,8 @@ class SlaterKosterH(nn.Module):
                          e_i + e_j, (e_i - e_j).abs()], dim=-1)
         pre = self.hop(sym)
         self._audit_store("hop", pre)
+        if getattr(self, "_reg", False):
+            self._reg_store("hop", torch.tanh(pre))
         correction = self.modulation(pre)
         radial = self.radial(r, species_i, species_j)
         if radial.dim() == 1:
@@ -545,37 +550,56 @@ class SlaterKosterH(nn.Module):
         if getattr(self, "_audit", False):
             self._audit_bin.setdefault(name, []).append(value.detach().reshape(-1).cpu())
 
-    def on_site(self, feats, species, madelung: Optional[torch.Tensor] = None,
-                centre: Optional[torch.Tensor] = None):
-        """`[n_nodes, 2]`: the s and p levels.
+    # ------------------------------------------------------- A1: the L2 on tanh outputs
+
+    def collect_regularisation(self, on: bool = True) -> None:
+        """Accumulate `sum(tanh^2)` and a count per term, ATTACHED, for A1's weak L2.
+
+        Separate from `audit`, which detaches and moves to the CPU because it is a
+        diagnostic. This one is in the loss, so it stays on the graph, and it stores two
+        scalars per term rather than every value: a training step evaluates `H0` several
+        times (SCF iterations, the gap regulariser) and the penalty is the pooled mean over
+        all of them, not a per-call mean averaged again."""
+        self._reg = bool(on)
+        self._reg_bin = {}
+
+    def reset_regularisation(self) -> None:
+        self._reg_bin = {}
+
+    def _reg_store(self, name: str, t: torch.Tensor) -> None:
+        if not getattr(self, "_reg", False):
+            return
+        prev = getattr(self, "_reg_bin", None)
+        if prev is None:
+            prev = self._reg_bin = {}
+        s, n = (t ** 2).sum(), int(t.numel())
+        old = prev.get(name)
+        prev[name] = (s, n) if old is None else (old[0] + s, old[1] + n)
+
+    def regularisation(self) -> Dict[str, torch.Tensor]:
+        """`mean(tanh^2)` per term over everything seen since the last reset."""
+        return {k: v[0] / max(v[1], 1) for k, v in getattr(self, "_reg_bin", {}).items()}
+
+    def on_site(self, feats, species, madelung: Optional[torch.Tensor] = None):
+        """`[n_nodes, 2]`: the s and p levels, `eps_Z + delta_Z tanh(e_Z(h_i))` (A1).
 
         The Madelung shift is added to BOTH shells identically. It is the electrostatic
         potential at a site and has no angular-momentum dependence; giving the shells
         different shifts would be inventing a crystal-field term and calling it electrostatics.
 
-        `centre`, when given, is `[num_elements, feature_dim]`: the mean first-block feature
-        of each species over the pristine reference cell (Stage A' section 2.1). The
-        correction becomes its DEVIATION from the pristine environment,
-
-            corr_i = gamma * [ tanh h(x_i) - tanh h(xbar_s(i)) ],
-
-        which is zero on every atom whose feature equals its species mean, and removes the
-        species-constant mode that b4 measured (+0.27 eV on every atom) and the joint run
-        regrew after zero-init -- not by initialisation this time, but by construction.
-        """
+        NO REFERENCE. The species-constant mode that the centre used to remove (b4 measured
+        +0.27 eV on every atom) is now absorbed where it belongs: a constant per species is
+        the readout's own bias against `eps0`, the two are redundant by one constant per
+        species, and the bound plus the L2 keep that redundancy harmless. A constant on every
+        level of every atom is a gauge shift the energy expression is invariant to; a
+        constant on one species is a shift of that species' baseline, which `eps0` already
+        parameterises."""
         e = self.elem(species)
         pre_site = self.site(torch.cat([feats, e], dim=-1))
         self._audit_store("site", pre_site)
-        if centre is None:
-            corr = torch.tanh(pre_site)
-        else:
-            pre_centre = self.site(torch.cat([centre.to(feats.dtype)[species], e], dim=-1))
-            # `getattr`: a model pickled before the form existed ran the output form.
-            if getattr(self, "centre_form", "output") == "argument":
-                corr = torch.tanh(pre_site - pre_centre)
-            else:
-                corr = torch.tanh(pre_site) - torch.tanh(pre_centre)
-        levels = self.eps0[species] + self.on_site_range * corr
+        corr = torch.tanh(pre_site)
+        self._reg_store("site", corr)
+        levels = self.eps0[species] + self.delta[species].to(corr.dtype) * corr
         if madelung is not None:
             levels = levels + madelung.reshape(-1, 1)
         return levels

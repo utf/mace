@@ -213,9 +213,12 @@ def static_pristine_cell(frames: Sequence, tol: float = SITE_TOL, log: bool = Tr
             d = frac - (scaled[match] + shift)
             d -= np.round(d)
             disp[k, match] = d
-        centre = np.median(disp, axis=0)
-        shift_max = float(np.linalg.norm(centre @ cell_mean, axis=1).max())
-        scaled = scaled + centre
+        # `median_shift`, not `centre`: A1's static check bans that identifier from the
+        # runtime path, and a median displacement in fractional coordinates is a different
+        # thing entirely from the feature mean the amendment removed.
+        median_shift = np.median(disp, axis=0)
+        shift_max = float(np.linalg.norm(median_shift @ cell_mean, axis=1).max())
+        scaled = scaled + median_shift
         scaled -= np.floor(scaled)
         if shift_max < MEDIAN_TOL:
             break

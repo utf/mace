@@ -52,11 +52,12 @@ def csr_hamiltonian(h0_module, scalars: torch.Tensor, vectors: Optional[torch.Te
         rows = (src.cpu().numpy()[:, None, None] * ORBITALS_PER_ATOM + o[None, :, None]).repeat(ORBITALS_PER_ATOM, axis=2).reshape(-1)
         cols = (dst.cpu().numpy()[:, None, None] * ORBITALS_PER_ATOM + o[None, None, :]).repeat(ORBITALS_PER_ATOM, axis=1).reshape(-1)
         H = sps.coo_matrix((blocks.reshape(-1), (rows, cols)), shape=(4 * n, 4 * n)).tocsr()
-        levels = sk.on_site(scalars, species, None, centre=h0_module.centre)
+        levels = sk.on_site(scalars, species, None)
         diag = torch.cat([levels[:, :1], levels[:, 1:].expand(-1, 3)], dim=-1).reshape(-1).cpu().numpy()
         H = H + sps.diags(diag)
         if h0_module.directional and vectors is not None:
-            site = h0_module.directional_site_blocks(vectors, species, edge_index, edge_vector).cpu().numpy()
+            site = h0_module.directional_site_blocks(scalars, vectors, species, edge_index,
+                                                     edge_vector).cpu().numpy()
             idx = np.arange(n)[:, None, None] * ORBITALS_PER_ATOM
             r2 = (idx + o[None, :, None]).repeat(ORBITALS_PER_ATOM, axis=2).reshape(-1)
             c2 = (idx + o[None, None, :]).repeat(ORBITALS_PER_ATOM, axis=1).reshape(-1)
@@ -308,12 +309,12 @@ def frontier_forces(h0_module, scalars: torch.Tensor, vectors: Optional[torch.Te
     v = sk.integrals(scalars[src], scalars[dst], r, species[src], species[dst])
     blocks = sk_block(direction, v)                                        # [E, 4, 4], attached
     cot_edges = torch.einsum("eak,k,ebk->eab", P_site[src], w, P_site[dst])   # dP restricted to (src, dst) blocks
-    levels = sk.on_site(scalars, species, None, centre=h0_module.centre)   # [N, 2], attached
+    levels = sk.on_site(scalars, species, None)                            # [N, 2], attached
     cot_levels = torch.einsum("nak,k,nak->na", P_site, w, P_site)          # diagonal of dP per orbital, [N, 4]
     cot_levels2 = torch.stack([cot_levels[:, 0], cot_levels[:, 1:].sum(-1)], dim=-1)                              # [N, 2]
     tensors, cots = [blocks, levels], [cot_edges, cot_levels2]
     if h0_module.directional and vectors is not None:
-        site = h0_module.directional_site_blocks(vectors, species, edge_index, edge_vector)     # [N, 4, 4]
+        site = h0_module.directional_site_blocks(scalars, vectors, species, edge_index, edge_vector)
         cot_site = torch.einsum("nak,k,nbk->nab", P_site, w, P_site)
         tensors.append(site); cots.append(cot_site)
     if gamma is not None and dq is not None:

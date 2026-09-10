@@ -18,6 +18,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
 from mace.modules.dscc import data as dd                      # noqa: E402
+from mace.modules.dscc.hamiltonian import DELTA_FRACTION_DEFAULT, ETA_DEFAULT   # noqa: E402
 from mace.modules.dscc.kernels import KernelConfig            # noqa: E402
 from mace.modules.dscc.model import MACEDSCC                  # noqa: E402
 from mace.modules.dscc.scf import ScfOptions                  # noqa: E402
@@ -57,7 +58,17 @@ def main() -> None:
                     help="cap this process at a fraction of the GPU so several runs share a card; "
                          "0 disables. The cap bounds the caching allocator, which otherwise grows "
                          "to fill an idle card and starves the next process.")
-    ap.add_argument("--setup_batch_size", type=int, default=16, help="pristine-centre pass; peak memory only")
+    ap.add_argument("--setup_batch_size", type=int, default=16, help="pristine-reference pass; peak memory only")
+    # v5 amendment A1 (registered 2026-09-10). Defaults are the registered W3 values.
+    ap.add_argument("--eta", type=float, default=ETA_DEFAULT,
+                    help="SK modulation bound, exp(eta tanh m); A1 registers 0.5 (pre-A1 ran ln 3)")
+    ap.add_argument("--beta_b", type=float, default=0.0,
+                    help="rank-2 environment bound; 0 in W3 (species b_Z), moved by the W4 factorial")
+    ap.add_argument("--beta_a", type=float, default=0.0, help="rank-1 environment bound; 0 in W3")
+    ap.add_argument("--delta_frac", type=float, default=DELTA_FRACTION_DEFAULT,
+                    help="Delta_Z as a fraction of the spread of the species onsite baselines")
+    ap.add_argument("--l2_weight", type=float, default=1.8e-6,
+                    help="A1's weak L2 on the tanh outputs, per term")
     ap.add_argument("--base_cache_batch_size", type=int, default=8, help="E_base/F_base cache; peak memory only")
     ap.add_argument("--fscc", default="", help="Arm 4 comparator: matched | full (empty: D-SCC)")
     args = ap.parse_args()
@@ -79,13 +90,18 @@ def main() -> None:
                       directional=bool(args.directional), regime=args.regime, gap_weight=args.gap_weight,
                       device=args.device, eval_every=args.eval_every,
                       setup_batch_size=args.setup_batch_size, base_cache_batch_size=args.base_cache_batch_size,
+                      l2_weight=args.l2_weight,
                       static_cell_path=str(HERE / "static_pristine_cell.json"))
     base = torch.load(args.base, weights_only=False, map_location="cpu")
     base = base.float() if args.base_float32 else base.double()
     logging.info("base precision: %s (head float64)", next(base.parameters()).dtype)
     model = MACEDSCC(base, r_cut=cfg.r_cut, directional=cfg.directional, coupling=cfg.coupling,
                      route_b=cfg.route_b, kernel=KernelConfig(regime=cfg.regime),
+                     eta=args.eta, beta_b=args.beta_b, beta_a=args.beta_a,
+                     delta_frac=args.delta_frac,
                      scf=ScfOptions(n_max=args.n_max)).to(args.device)
+    logging.info("A1: eta %.4f beta_b %.2f beta_a %.2f delta_Z %.3f eV l2 %.2e",
+                 args.eta, args.beta_b, args.beta_a, float(model.h0.sk.delta[0, 0]), args.l2_weight)
     if args.init_from:
         model.load_h0_from(args.init_from)
         logging.info("H0 initialised from %s", args.init_from)

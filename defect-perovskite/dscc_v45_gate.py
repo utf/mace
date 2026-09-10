@@ -40,7 +40,7 @@ frames = load_frames(f"{HERE}/dataset_pbe/train.xyz", f"{HERE}/dataset_pbe/valid
 metas = [dd.frame_meta(i, a, "CsPbCl3", pristine_atoms=80) for i, a in enumerate(frames)]
 pristine = [m.index for m in metas if m.n_atoms == 80 and m.state.Q == 0][:16]
 z = AtomicNumberTable(model.atomic_numbers)
-model.set_pristine_centre([to_device(b, DEV) for b in tg.dataloader.DataLoader(dd.atomic_data([frames[i] for i in pristine], z, 10.0), batch_size=16)])
+model.set_pristine_reference([to_device(b, DEV) for b in tg.dataloader.DataLoader(dd.atomic_data([frames[i] for i in pristine], z, 10.0), batch_size=16)])
 sets = {79: [m.index for m in metas if m.state.Q != 0 and m.n_atoms == 79][:args.n79],
         159: [m.index for m in metas if m.state.Q != 0 and m.n_atoms == 159][:args.n159]}
 params = [p for p in model.parameters() if p.requires_grad]
