@@ -145,6 +145,64 @@ schedule difference as well as the head-form difference. The alternative was com
 an arm we have watched diverge. The pre-A1 and A1 arms stay as recorded; if the schedule is
 later suspected of carrying the result, the cheap control is one constant-lr A1.1 seed.
 
+## A1.3 — the environment shift moves inside the tanh (user ruling, 2026-09-11)
+
+**A1's form starves its own readouts from a cold start.** `b_i = b_Z (1 + β tanh g_Z(h_i))`
+gives the readout a gradient `∂b_i/∂g = β·b_Z·sech²`, proportional to the very coefficient it
+modulates — and `b_Z = b_max tanh(beta_Z)` is initialised at **zero**. Measured: gradient
+exactly 0.0 at step 0, and `b_Z` reaches only ≈ 0.14 after 60 epochs of W3, so `g_Z` would
+train the whole run at about one seventh of the available signal. `f_Z` is gated the same way
+behind `a_Z`. The W4 factorial would have measured that starvation and reported it as "the
+capacity is not needed"; the `rank2 ≈ spec` agreement seen to three digits at epoch 9 of the
+first W4 attempt is explained by this, structurally, and is not evidence about the physics.
+
+Warm-starting W4 from a trained W3 head was proposed and **rejected by the user**: production
+does not warm-start, so the factorial must measure a cold start, and warm-starting would hide
+the defect rather than fix it. Correct call — the fix belongs in the parameterisation.
+
+**Registered form (replaces A1's multiplicative modulation):**
+
+```
+b_i = b_max · tanh( beta_Z + β_b · tanh(g_Z(h_i)) )
+a_i = a_max · tanh( alpha_Z + β_a · tanh(f_Z(h_i)) )
+```
+
+- `∂b_i/∂g = b_max·β·sech²(·)·sech²(g)` — **independent of `b_Z`**, 0.5 at initialisation.
+- Inner `tanh` bounds the environment's shift of the pre-activation by `β`; outer `tanh`
+  bounds the coefficient by `b_max`. **Both of A1's bounds survive.** A first draft put the
+  raw readout inside the outer tanh; that was rejected on inspection because an unbounded MLP
+  output could then drive `b_i` across `[−b_max, b_max]` including sign flips, losing the
+  bounded *relative* modulation A1 intends.
+- `β = 0` gives `b_max tanh(beta_Z)` = the species coefficient **exactly**.
+
+**Scope: W4 only. W3 is untouched, verified rather than assumed** — at `β_b = β_a = 0` the
+coefficients are bit-identical (`==`, not `approx`) to the species values and the readouts are
+absent from the autograd graph (`torch.autograd.grad` returns `None`). The W3 arms running on
+both machines need no restart and stay comparable to everything recorded.
+
+**Deviation from A1 as written, recorded:** A1 specifies a fractional modulation of the
+species value, `b_i ∈ [0.5 b_Z, 1.5 b_Z]`. This is additive in the pre-activation instead, so
+the bound is `|b_i| ≤ b_max` with the environment shifting the pre-activation by at most `β`.
+Ruled by the user 2026-09-11.
+
+### The dead-term audit that prompted it
+
+A gradient audit over every learnable in `H0` (generic cotangent, standardisation on):
+
+| term | status before | after |
+|---|---|---|
+| `vector_mix` | DEAD | live (3.92) — was gated by `a_i ≈ 0`; now immediate when `β_a > 0` |
+| `g_read.*` | DEAD | live (1.10 – 23.1) |
+| `f_read.*` | DEAD | live (6.8e−6 – 0.177) |
+| `elem_env` | DEAD | live (1.07e−3) |
+
+Live from the first step both before and after: `eps0`, `v0_raw`, `decay_u`, `elem`, the `hop`
+MLP, the `site` MLP, `alpha`, `beta`. Nothing is frozen. **The distinction the audit draws:
+the rank-1 case was a MUTUAL deadlock (`vector_mix`×`alpha`, both zero, permanent); these were
+SEQUENTIAL gates behind coefficients that start at zero — not fatal, but starved for the whole
+run.** The audit exists because the rank-1 deadlock was found by accident, and accident is not
+a method.
+
 ## η, closed
 `η = 0.5` in A1 was a transcription error against an already registered value; `η = ln 3`
 stands. Since nothing approaches either bound on base v2, the choice is moot. **Corollary,

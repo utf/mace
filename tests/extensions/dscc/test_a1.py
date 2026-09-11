@@ -172,15 +172,36 @@ class TestEnvironmentFactors:
         _, b_off2 = off.site_coefficients(s_req2, species)
         assert torch.autograd.grad(b_off2.sum(), s_req2, allow_unused=True)[0] is None
 
-    def test_the_factor_stays_inside_its_bound(self):
+    def test_the_coefficient_and_its_environment_shift_stay_bounded(self):
+        """`b_i = b_max tanh(beta_Z + beta_b tanh g)`: the outer tanh bounds the coefficient
+        by `b_max`, the inner one bounds the environment's shift of the pre-activation by
+        `beta_b`."""
         atoms = _perovskite(rattle=0.05)
         m = _model(beta_b=0.5, beta_a=0.5)
         species, scalars, vectors, positions, cell, ei, S = _inputs(atoms, m.r_cut)
         a_i, b_i = m.site_coefficients(scalars.to(torch.float64), species)
-        a_z, b_z = m.coefficients()
-        for got, ref in ((a_i, a_z[species]), (b_i, b_z[species])):
-            ratio = got / ref.to(got.dtype)
-            assert float(ratio.min()) > 0.5 - 1e-9 and float(ratio.max()) < 1.5 + 1e-9
+        assert float(a_i.abs().max()) < m.a_max and float(b_i.abs().max()) < m.b_max
+        shift = m.env_shift(m.g_read, m.beta_b, scalars.to(torch.float64), species, "rank2")
+        assert float(shift.abs().max()) <= m.beta_b + 1e-12
+
+    def test_the_readout_gradient_does_not_depend_on_the_species_coefficient(self):
+        """The defect this form exists to remove. Under `b_Z (1 + beta tanh g)` the readout
+        gradient is `beta * b_Z * sech^2`, and `b_Z` is initialised at zero -- the readout
+        starts with exactly no signal and is still ~7x starved after 60 epochs. Inside the
+        tanh the gradient is `b_max * beta * sech^2(.) * sech^2(g)`, independent of `b_Z`."""
+        atoms = _perovskite(rattle=0.05)
+        species, scalars, vectors, positions, cell, ei, S = _inputs(atoms, _model().r_cut)
+        grads = []
+        for b_z_value in (0.0, 0.4):          # beta_Z at its initialisation, and grown
+            m = _model(beta_b=0.5)
+            with torch.no_grad():
+                m.beta.fill_(b_z_value)
+            last = [x for x in m.g_read.modules() if isinstance(x, torch.nn.Linear)][-1]
+            _, b_i = m.site_coefficients(scalars.to(torch.float64), species)
+            g = torch.autograd.grad(b_i.sum(), last.bias, allow_unused=True)[0]
+            grads.append(0.0 if g is None else float(g.abs().max()))
+        assert grads[0] > 0.0                                   # live at beta_Z = 0
+        assert abs(grads[0] - grads[1]) / max(grads) < 0.5      # not proportional to b_Z
 
     def test_batched_matches_per_graph_with_the_environment_factors_on(self):
         """The two assembly paths must stay matrix-identical: A1 adds a term to both."""

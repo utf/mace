@@ -19,9 +19,12 @@ entering the on-site p-p block. `a_Z = a_max tanh(alpha[Z])`, `b_Z = b_max tanh(
 are bounded species-level coefficients, and under A1 each carries an optional bounded
 environment factor from its own readout,
 
-    b_i = b_Z (1 + beta_b tanh(g_Z(h_i))),    a_i = a_Z (1 + beta_a tanh(f_Z(h_i))),
+    b_i = b_max tanh( beta_Z + beta_b tanh(g_Z(h_i)) ),     a_i likewise,
 
-reference-free like the scalar term. `beta_b = beta_a = 0` recovers the species-level
+reference-free like the scalar term, with the environment's bounded shift INSIDE the tanh
+rather than multiplying the species coefficient (see `site_coefficients` for why: the
+multiplicative form's readout gradient is proportional to the coefficient it modulates, and
+that coefficient starts at zero). `beta_b = beta_a = 0` recovers the species-level
 coefficients exactly and is the registered W3 setting; W4's factorial moves them
 independently. With `directional=False` the block is identically absent: the scalar-only
 control of Arm 1.
@@ -191,28 +194,47 @@ class H0(nn.Module):
         """`(a[Z], b[Z])`, bounded, species level."""
         return self.a_max * torch.tanh(self.alpha), self.b_max * torch.tanh(self.beta)
 
-    def env_factor(self, readout: nn.Module, bound: float, scalars: torch.Tensor,
-                   species: torch.Tensor, name: str) -> Optional[torch.Tensor]:
-        """A1's `1 + bound * tanh(readout(h_i, Z_i))`, `[N]`, or None when the bound is zero.
-
-        None rather than a tensor of ones: the factorial's "species coefficient" variant
-        must not evaluate the readout, so that turning the term off removes it from the
-        graph rather than multiplying by one."""
+    def env_shift(self, readout: nn.Module, bound: float, scalars: torch.Tensor,
+                  species: torch.Tensor, name: str) -> Optional[torch.Tensor]:
+        """`bound * tanh(readout(h_i, Z_i))`, `[N]`: the environment's bounded shift of the
+        coefficient's PRE-ACTIVATION. None when the bound is zero, so the factorial's
+        "species coefficient" variant does not evaluate the readout at all and turning the
+        term off removes it from the graph rather than adding a zero."""
         if not bound:
             return None
         pre = readout(torch.cat([self.sk.standardise(scalars, species),
                                  self.elem_env(species).to(scalars.dtype)], dim=-1))
-        t = torch.tanh(pre).squeeze(-1)
         self.sk._reg_store(name, pre)
-        return 1.0 + float(bound) * t
+        return float(bound) * torch.tanh(pre).squeeze(-1)
 
     def site_coefficients(self, scalars: torch.Tensor, species: torch.Tensor):
-        """`(a_i, b_i)`, `[N]` each: the species coefficients with A1's environment factors."""
-        a_z, b_z = self.coefficients()
-        a_i, b_i = a_z[species].to(scalars.dtype), b_z[species].to(scalars.dtype)
-        fa = self.env_factor(self.f_read, self.beta_a, scalars, species, "rank1")
-        fb = self.env_factor(self.g_read, self.beta_b, scalars, species, "rank2")
-        return (a_i if fa is None else a_i * fa), (b_i if fb is None else b_i * fb)
+        """`(a_i, b_i)`, `[N]` each: the bounded coefficients with their environment shift
+        INSIDE the tanh,
+
+            b_i = b_max tanh( beta_Z + beta_b tanh(g_Z(h_i)) ),   a_i likewise.
+
+        WHY NOT A1's `b_Z (1 + beta tanh g)`. That form's gradient on the readout is
+        `beta * b_Z * sech^2`, proportional to the species coefficient it modulates -- and
+        `b_Z = b_max tanh(beta_Z)` is initialised at ZERO. The readout therefore starts with
+        exactly no gradient and, after 60 epochs of W3, `b_Z` reaches only ~0.14, so it
+        trains all run at about a seventh of the signal. The W4 factorial would have measured
+        that starvation rather than the capacity. Warm-starting from a trained head would
+        hide it rather than fix it, and production does not warm-start.
+
+        Inside the tanh, `d b_i / d g = b_max * beta * sech^2(.) * sech^2(g)` = `b_max*beta`
+        at initialisation and never depends on `b_Z`. The inner tanh keeps the environment's
+        shift bounded by `beta` -- A1's bounded-modulation intent -- and the outer one keeps
+        `|b_i| <= b_max` as before. At `beta = 0` this is `b_max tanh(beta_Z)`, the species
+        coefficient EXACTLY, so W3 and the factorial's `spec` cell are unchanged."""
+        a_pre = self.alpha[species].to(scalars.dtype)
+        b_pre = self.beta[species].to(scalars.dtype)
+        sa = self.env_shift(self.f_read, self.beta_a, scalars, species, "rank1")
+        sb = self.env_shift(self.g_read, self.beta_b, scalars, species, "rank2")
+        if sa is not None:
+            a_pre = a_pre + sa
+        if sb is not None:
+            b_pre = b_pre + sb
+        return self.a_max * torch.tanh(a_pre), self.b_max * torch.tanh(b_pre)
 
     @torch.no_grad()
     def zero_readouts(self) -> None:
