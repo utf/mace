@@ -70,6 +70,25 @@ ETA_DEFAULT = HOP_LOG_BETA_DEFAULT
 # standardised inputs 0.1 is the registered value and the initial correction is still well
 # under 0.1 eV.
 READOUT_INIT_SCALE = 0.1
+# THE RANK-1 DEADLOCK, found 2026-09-11 and fixed here.
+#
+# `sp_block = a_Z * (vector_mix[Z] . vectors)`. Both `alpha` (through `a_Z = a_max tanh
+# alpha`) and `vector_mix` were zero-initialised, and each one's gradient is proportional to
+# the OTHER: d/d alpha goes as `vector_mix`, d/d vector_mix goes as `a_Z`. Zero times zero is
+# a saddle the optimiser can never leave, so the rank-1 s-p block was identically zero after
+# 60 epochs in EVERY production run of the campaign (measured: |vector_mix| and |alpha| both
+# exactly 0.0 in the converged W3 Phi = 0 and B' heads). `beta`/`b_Z` escaped only because it
+# multiplies the GEOMETRIC quadrupole `Q_i`, which is nonzero whatever the parameters do.
+#
+# No test caught it because the fixtures break the deadlock by hand
+# (`test_hamiltonian._model` sets `vector_mix.normal_(0, 0.5)` and `alpha.fill_(0.7)`).
+#
+# The fix initialises `vector_mix` off zero, fan-in scaled, and LEAVES `alpha` AT ZERO. The
+# block therefore still starts exactly absent -- `a_Z = 0` makes the s-p block identically
+# zero, so the neutral null and every Phase-1 gate are untouched -- but `d/d alpha` is now
+# nonzero and the term can be learned, which is what "starts absent and is learned" was
+# always meant to mean.
+VECTOR_MIX_INIT = 1.0        # in units of 1/sqrt(n_vectors)
 BETA_ENV_DEFAULT = 0.5
 READOUT_HIDDEN_DEFAULT = 64
 ELEM_DIM_ENV = 8
@@ -133,7 +152,9 @@ class H0(nn.Module):
         # Directional block: a per-species combination of the l = 1 channels and the two
         # bounded coefficients. Zero-initialised: the block starts absent and is learned.
         self.vector_mix = nn.Parameter(torch.zeros(num_elements, n_vectors))
-        self.alpha = nn.Parameter(torch.zeros(num_elements))
+        with torch.no_grad():
+            self.vector_mix.normal_(0.0, VECTOR_MIX_INIT / max(n_vectors, 1) ** 0.5)
+        self.alpha = nn.Parameter(torch.zeros(num_elements))          # block starts absent
         self.beta = nn.Parameter(torch.zeros(num_elements))
         # A1: the rank-2 and rank-1 environment readouts, `g_Z` and `f_Z`. Their own species
         # embedding, not the SK one: with `beta_b = beta_a = 0` the readouts are not

@@ -401,3 +401,50 @@ class TestSaturationBarrier:
         expect = float(torch.tanh(torch.tensor(1.0)) ** 2)
         assert float(reg["site"]) == pytest.approx(expect, rel=1e-6)
         assert float(bar["site"]) == 0.0
+
+
+class TestRank1Deadlock:
+    """`vector_mix` and `alpha` were both zero-initialised, and each one's gradient is
+    proportional to the other, so the rank-1 s-p block could never leave zero. Measured in
+    the converged W3 heads: |vector_mix| and |alpha| exactly 0.0 after 60 epochs."""
+
+    def _grads(self, zero_vector_mix):
+        torch.manual_seed(0)
+        m = H0(ZS, feature_dim=8, n_vectors=6, r_cut=6.0, hidden=16)
+        if zero_vector_mix:
+            with torch.no_grad():
+                m.vector_mix.zero_()                      # the pre-fix initialisation
+        atoms = _perovskite(rattle=0.05)
+        species, scalars, vectors, positions, cell, ei, S = _inputs(atoms, m.r_cut)
+        H = m(scalars, vectors, species, ei, gr.edge_vectors(positions, cell, ei, S))
+        # A GENERIC cotangent. `(H**2).sum()` would be the wrong probe: its gradient is `2H`,
+        # which is identically zero at the s-p entries exactly because the block starts
+        # absent, so it reports no gradient whether or not the deadlock is fixed. A real
+        # loss reaches `H` through the eigendecomposition and has no such null.
+        torch.manual_seed(7)
+        loss = (H * torch.randn_like(H)).sum()
+        g_alpha, g_mix = torch.autograd.grad(loss, [m.alpha, m.vector_mix], allow_unused=True)
+        return (0.0 if g_alpha is None else float(g_alpha.abs().max()),
+                0.0 if g_mix is None else float(g_mix.abs().max()))
+
+    def test_zero_vector_mix_is_a_saddle_the_optimiser_cannot_leave(self):
+        g_alpha, g_mix = self._grads(zero_vector_mix=True)
+        assert g_alpha == 0.0 and g_mix == 0.0
+
+    def test_the_fixed_initialisation_gives_alpha_a_gradient(self):
+        g_alpha, _ = self._grads(zero_vector_mix=False)
+        assert g_alpha > 0.0
+
+    def test_the_block_still_starts_exactly_absent(self):
+        """`alpha` stays at zero, so `a_Z = 0` and the s-p block is identically zero at
+        initialisation -- the neutral null and the Phase-1 gates are untouched."""
+        torch.manual_seed(0)
+        m = H0(ZS, feature_dim=8, n_vectors=6, r_cut=6.0, hidden=16)
+        assert float(m.alpha.abs().max()) == 0.0
+        assert float(m.vector_mix.abs().max()) > 0.0
+        atoms = _perovskite(rattle=0.05)
+        species, scalars, vectors, positions, cell, ei, S = _inputs(atoms, m.r_cut)
+        blocks = m.directional_site_blocks(scalars, vectors.to(torch.float64), species, ei,
+                                           gr.edge_vectors(positions, cell, ei, S))
+        assert float(blocks[:, 0, 1:].abs().max()) == 0.0      # s-p block exactly absent
+        assert float(blocks[:, 1:, 1:].abs().max()) == 0.0     # b_Z = 0 at init too

@@ -1160,6 +1160,64 @@ Superseded by this ruling, and archived rather than deleted at
 W3 relaunched on (A1 form, `η = ln 3`) — same eighteen runs, same names `dscc_w3a1_*`, the
 names freed by the archive move.
 
+### C5 read at last, and the rank-1 deadlock (2026-09-11)
+
+**C5 could not be run against a float32 base.** `bound_state_precondition` called
+`ScaleShiftMACE.forward(model.base, ...)` directly with float64 inputs and died with "both
+inputs should have same dtype" — the same incompatibility `dscc_benchmark.py` had. That, not
+oversight, is why the gate stayed open from W3 onward. Routed through `base_forward`
+(`715bb9d`).
+
+**Result: A1.2 fails C5 on every head, and the failure is SEPARATION, not localisation.**
+The gate is `separation >= 0.5 eV AND n_eff <= 4.0`, per frame, on >= 95 % of 1191
+neutral-vacancy frames.
+
+| head | pass fraction | separation p50 (meV) | N_eff p50 |
+|---|---|---|---|
+| Φ = 0 s0 | 0.718 | 599 | 1.66 |
+| Φ = 0 s1 | 0.081 | 404 | 1.53 |
+| Φ = 0 s2 | 0.034 | 408 | 1.34 |
+| Φ = 0 s3 | 0.207 | 440 | 1.44 |
+| Φ = 0 s4 | 0.000 | 126 | 2.82 |
+| Φ = 0 s6 | 0.000 | 331 | 1.33 |
+| B′ s0 | 0.382 | 477 | 1.32 |
+
+**The localisation half passes on every seed**: `N_eff` 1.32–2.82 against a ceiling of 4.0,
+tighter than Arm 1's full `H0` on the old base (2.2–2.5) and far tighter than its scalar-only
+control (up to 6.1). The carrier is tight; the level is not gapped. Seed 0 shows the shape:
+its median separation (599 meV) clears 500, yet only 855/1191 frames pass, so the
+distribution straddles the threshold rather than the state being absent. **Correction to our
+first reading of this table, recorded because it was wrong in substance: we described it as
+"losing the bound state", which the N_eff column contradicts.**
+
+**The rank-1 deadlock.** `sp_block = a_Z · (vector_mix[Z] · vectors)`, with `alpha` (through
+`a_Z = a_max tanh alpha`) and `vector_mix` BOTH zero-initialised, and each one's gradient
+proportional to the other. Zero times zero is a saddle the optimiser cannot leave, so the
+rank-1 s–p block has been **identically zero after 60 epochs in every production run of the
+campaign** — measured, `|vector_mix|` and `|alpha|` exactly 0.0 in the converged W3 Φ = 0 and
+B′ heads. `beta`/`b_Z` escapes only because it multiplies the geometric quadrupole `Q_i`,
+which is nonzero whatever the parameters do. No test caught it: the fixtures break the
+deadlock by hand (`test_hamiltonian._model` sets `vector_mix.normal_(0, 0.5)`,
+`alpha.fill_(0.7)`).
+
+Consequences: W4's `rank1` and `full` variants would have measured nothing (`f_Z`'s gradient
+is also ∝ a_Z = 0); the rank-2 readout `g_Z` is *starved* rather than useless (its gradient is
+∝ b_Z ≈ 0.03 early), so the observed rank2 ≈ spec agreement at epoch 9 is not evidence that
+the capacity is unneeded; and **Arm 1's attribution of the Pb–Pb bound state to "the
+directional block" must be narrowed to the rank-2 quadrupole term**, the only half that was
+ever active.
+
+Fix: `vector_mix` initialised fan-in scaled off zero, `alpha` left at zero, so the block still
+starts exactly absent (tested: s–p and p–p entries identically zero at init, so the neutral
+null and the Phase-1 gates are untouched) while `∂L/∂alpha` is now nonzero. Three tests pin
+it. A first version of the gradient test was itself wrong — it used `(H²).sum()`, whose
+cotangent `2H` vanishes at the s–p entries *because* the block starts absent, reporting no
+gradient either way; a generic cotangent is the correct probe.
+
+**Since the rank-1 term is a separation mechanism (Arm 1: the p_σ/p_π splitting at the
+flanking Pb), whether the fix recovers C5 is the primary readout of the W3 re-run — not the
+forces.** Suite 179 green.
+
 ### A1 registration — the values the amendment leaves to us (2026-09-10 12:40, written before any A1 code)
 
 A1 asks for six items to be registered before W3 opens. Four are ours to propose; two A1
