@@ -56,7 +56,10 @@ def main() -> None:
         for b in torch_geometric.dataloader.DataLoader(ds, batch_size=8):
             batches.append(b.to(args.device).to_dict())
         pre = precondition.bound_state_precondition(model, batches)
-        pre.pop("records", None)
+        # KEEP the per-frame records. They were being dropped, so every change to `Delta_c`
+        # cost a fresh 1191-frame sweep per model (~6 min of CPU each); with the separation
+        # and n_eff of every frame saved, re-thresholding is arithmetic. Two floats a frame.
+        # (`bound_state_precondition` already returns them as dicts.)
         print(Path(w).name, "precondition", pre["passed"], f"{pre['pass_fraction']:.3f}",
               f"sep p50 {1000*pre['separation_p50']:.0f} meV, N_eff p50 {pre['n_eff_p50']:.2f}", flush=True)
         if args.no_ladder:

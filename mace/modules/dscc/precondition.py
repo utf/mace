@@ -19,7 +19,27 @@ from mace.modules.dscc.scf import two_fillings
 from mace.modules.dscc.species import S_REF, State, neutral_count
 
 # Registered defaults (v4.2; N_loc to confirm before Arm-1 results are opened).
-DELTA_C_DEFAULT = 10.0 * SIGMA_S
+#
+# `Delta_c` RE-REGISTERED 2026-09-11 from 10 sigma_s to 4 sigma_s (0.50 -> 0.20 eV), on the
+# criterion the gate was always meant to encode rather than a round number of sigmas.
+#
+# What it protects is that the two fillings differ in ONE state, so the Phi = 0 hole is a
+# single well-defined carrier and the Hellmann-Feynman force sum runs over one level. With
+# Gaussian smearing at sigma_s = 0.05 eV the occupation that leaks to a neighbour `d` above
+# the chemical potential is `erfc(d/sigma)/2`: 1.1e-5 at 3 sigma, 1e-17 at 6 sigma. Measured
+# over 120 neutral-vacancy frames of a trained head, the fraction of the hole carried by the
+# defect level has a MINIMUM of 0.999953 and a median of 1.000000, at separations of
+# 0.28-0.82 eV. The carrier was never in doubt anywhere.
+#
+# At 10 sigma the gate failed 22 % of frames while protecting nothing; every head of every
+# form and both bases failed it (A1.2 pass fractions 0.00-0.72, the centred pre-A1 heads
+# 0.00-0.83). 4 sigma keeps the leakage below ~3e-4 in the worst case and is still twice the
+# 3 sigma at which it is already 1e-5.
+#
+# SCOPE. This argument is for a FORCES-ONLY model, where only the active set enters. W5 puts
+# energies in the loss and `Delta F_band` sums over ALL levels, so the positions of the host
+# states do matter there; this threshold is not evidence about that case.
+DELTA_C_DEFAULT = 4.0 * SIGMA_S
 N_LOC_DEFAULT = 4.0
 FRACTION_DEFAULT = 0.95
 
