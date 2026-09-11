@@ -57,13 +57,14 @@ def bound_state_precondition(model, batches: Sequence[Dict[str, torch.Tensor]],
                              cfg: PreconditionConfig = PreconditionConfig()) -> Dict[str, object]:
     """The precondition over neutral-vacancy batches (the caller selects frames at `S_ref`
     with a vacancy by composition): per-frame records, the pass fraction and the verdict."""
-    from mace.modules.models import ScaleShiftMACE
-
     records: List[FrameRecord] = []
     for data in batches:
         with torch.no_grad():
-            out = ScaleShiftMACE.forward(model.base, model._trunk_data(dict(data)), training=False,
-                                         compute_force=False)
+            # `base_forward`, not `ScaleShiftMACE.forward`: W1 put the frozen base in float32
+            # with the head in float64, and the raw call hands a float32 base its float64
+            # inputs ("both inputs should have same dtype"). The wrapper casts in and back.
+            out = model.base_forward(model._trunk_data(dict(data)), training=False,
+                                     compute_force=False)
             scalars, vectors = model.features(out["node_feats"])
             species = data["node_attrs"].argmax(dim=-1)
             positions, cell = data["positions"], data["cell"].view(-1, 3, 3)
