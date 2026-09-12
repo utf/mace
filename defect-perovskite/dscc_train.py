@@ -73,7 +73,7 @@ def main() -> None:
     ap.add_argument("--lr_final_fraction", type=float, default=0.05,
                     help="cosine floor as a fraction of --lr")
     ap.add_argument("--energy_weight", type=float, default=0.0,
-                    help="W5: energies in the loss, total-cell eV with C_Q profiled out (3e-4 registered)")
+                    help="W5: energies in the loss, total-cell eV with C_Q profiled out; 1.0 = parity")
     ap.add_argument("--c_q_momentum", type=float, default=0.9)
     ap.add_argument("--sat_weight", type=float, default=1e-3,
                     help="one-sided barrier on the readout pre-activations (0 disables)")

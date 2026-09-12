@@ -78,11 +78,15 @@ class TrainConfig:
     # running mean and subtracted. Fitting it by gradient descent would let it absorb shape
     # error into itself, which is exactly what the between-size metric later has to detect.
     #
-    # `energy_weight` 3e-4: at the forces-only solution the 79-atom residual after `C_Q` is
-    # 0.0997 eV, so the squared term is 9.9e-3 eV^2 and 3e-4 puts the energy contribution at
-    # ~3e-6, level with the converged force loss. Energies therefore start as an equal
-    # partner rather than a perturbation or a swamp.
-    energy_weight: float = 0.0        # 0 disables; 3e-4 is the registered exploratory value
+    # `energy_weight` 1.0: MEASURED, with the same stratum weights as the force term, the two
+    # contributions are 2.99e-5 and 2.90e-5 at epoch 0 -- already parity at unit weight. An
+    # earlier 3e-4 was not a physical trade-off at all, only compensation for an unweighted
+    # energy mean against a stratum-weighted force term (the `w_g` sum to ~0.01 per batch),
+    # and it is gone. Note the balance TILTS toward energies as training proceeds: the force
+    # term falls to ~3e-6 while the energy term does not fall as fast, so late in training
+    # energies dominate roughly 30:1. 0.03 is the conservative alternative, balanced at the
+    # converged solution instead of at the start.
+    energy_weight: float = 0.0        # 0 disables; 1.0 = parity with the force term
     c_q_momentum: float = 0.9
     e_gap: float = 2.40               # registered host gap (static lattice, C2)
     coupling: bool = False            # Arm 1: Phi = 0
@@ -427,7 +431,13 @@ class Trainer:
                 self.c_q_running[key] = m_batch if prev is None else (
                     self.cfg.c_q_momentum * prev + (1 - self.cfg.c_q_momentum) * m_batch)
                 centred = resid[sel] - self.c_q_running[key]
-                l_energy = l_energy + self.cfg.energy_weight * (centred ** 2).mean()
+                # THE SAME STRATUM WEIGHTS AS THE FORCE TERM. The plan registers the energy
+                # loss "registered strata", and a plain mean here would not be: the force
+                # term carries `w_g` that sum to ~0.01 over a batch (two strata, totals 1,
+                # frames normalised within), so an unweighted energy mean is ~100x louder per
+                # unit of relative error, and `energy_weight` would silently absorb the
+                # mismatch instead of expressing a physical trade-off.
+                l_energy = l_energy + self.cfg.energy_weight * (weights[sel] * centred ** 2).sum()
         reg = self.model.h0.sk.regularisation()
         l_l2 = self.cfg.l2_weight * sum(reg.values()) if reg else l_force.new_zeros(())
         bar = self.model.h0.sk.barrier()
