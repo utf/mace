@@ -72,6 +72,9 @@ def main() -> None:
     ap.add_argument("--lr_schedule", default="cosine", help="cosine | constant")
     ap.add_argument("--lr_final_fraction", type=float, default=0.05,
                     help="cosine floor as a fraction of --lr")
+    ap.add_argument("--energy_weight", type=float, default=0.0,
+                    help="W5: energies in the loss, total-cell eV with C_Q profiled out (3e-4 registered)")
+    ap.add_argument("--c_q_momentum", type=float, default=0.9)
     ap.add_argument("--sat_weight", type=float, default=1e-3,
                     help="one-sided barrier on the readout pre-activations (0 disables)")
     ap.add_argument("--saturation_knee", type=float, default=2.0,
@@ -100,6 +103,7 @@ def main() -> None:
                       l2_weight=args.l2_weight, lr_schedule=args.lr_schedule,
                       lr_final_fraction=args.lr_final_fraction,
                       sat_weight=args.sat_weight, saturation_knee=args.saturation_knee,
+                      energy_weight=args.energy_weight, c_q_momentum=args.c_q_momentum,
                       static_cell_path=str(HERE / "static_pristine_cell.json"))
     base = torch.load(args.base, weights_only=False, map_location="cpu")
     base = base.float() if args.base_float32 else base.double()

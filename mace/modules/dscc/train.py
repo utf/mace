@@ -72,6 +72,18 @@ class TrainConfig:
     lr_final_fraction: float = 0.05   # cosine floor, as a fraction of `lr`
     sat_weight: float = 1e-3
     saturation_knee: float = 2.0
+    # W5 (exploratory, 2026-09-12): energies in the loss. Total-cell eV residuals with `C_Q`
+    # PROFILED OUT rather than learned -- `C_Q` is one constant per formal charge and its
+    # closed form under a quadratic loss is the mean residual, so it is tracked as a detached
+    # running mean and subtracted. Fitting it by gradient descent would let it absorb shape
+    # error into itself, which is exactly what the between-size metric later has to detect.
+    #
+    # `energy_weight` 3e-4: at the forces-only solution the 79-atom residual after `C_Q` is
+    # 0.0997 eV, so the squared term is 9.9e-3 eV^2 and 3e-4 puts the energy contribution at
+    # ~3e-6, level with the converged force loss. Energies therefore start as an equal
+    # partner rather than a perturbation or a swamp.
+    energy_weight: float = 0.0        # 0 disables; 3e-4 is the registered exploratory value
+    c_q_momentum: float = 0.9
     e_gap: float = 2.40               # registered host gap (static lattice, C2)
     coupling: bool = False            # Arm 1: Phi = 0
     coupling_mode: str = "full"       # Arm 2+3: lr_only | lr_u | full | lambda1
@@ -257,6 +269,7 @@ class Trainer:
         self.run_dir = Path(run_dir)
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.z_table = tools.AtomicNumberTable(model.atomic_numbers)
+        self.c_q_running: Dict[int, float] = {}
         self.device = cfg.device
         charged = [m for m in self.metas if m.state.Q != 0]
         self.train_idx = [m.index for m in charged if fold_of.get(m.index) != cfg.fold]
@@ -398,11 +411,28 @@ class Trainer:
         l_force = force_loss(out, batch, weights)
         gap = self.model.pristine_gap(self.static_batch, getattr(self, "static_features", None))
         l_gap = self.cfg.gap_weight * ((gap - self.cfg.e_gap) ** 2).sum()
+        l_energy = l_force.new_zeros(())
+        if self.cfg.energy_weight:
+            resid = out["energy_uncalibrated"] - batch["energy"]
+            # Charge from the frame metadata, not decoded from `carrier_counts`: the metas
+            # carry `state.Q` exactly and W5's whole point is that `C_Q` is per formal charge.
+            charges = torch.tensor([self.metas[i].state.Q for i in frame_indices],
+                                   device=resid.device)
+            for q in torch.unique(charges):
+                sel = charges == q
+                key = int(q)
+                # detached running mean = the closed-form C_Q for the current model
+                m_batch = float(resid[sel].mean().detach())
+                prev = self.c_q_running.get(key)
+                self.c_q_running[key] = m_batch if prev is None else (
+                    self.cfg.c_q_momentum * prev + (1 - self.cfg.c_q_momentum) * m_batch)
+                centred = resid[sel] - self.c_q_running[key]
+                l_energy = l_energy + self.cfg.energy_weight * (centred ** 2).mean()
         reg = self.model.h0.sk.regularisation()
         l_l2 = self.cfg.l2_weight * sum(reg.values()) if reg else l_force.new_zeros(())
         bar = self.model.h0.sk.barrier()
         l_sat = self.cfg.sat_weight * sum(bar.values()) if bar else l_force.new_zeros(())
-        loss = self.cfg.force_weight * l_force + l_gap + l_l2 + l_sat
+        loss = self.cfg.force_weight * l_force + l_gap + l_l2 + l_sat + l_energy
         loss.backward()
         params = [p for p in self.model.parameters() if p.requires_grad]
         torch.nn.utils.clip_grad_norm_(params, self.cfg.grad_clip)
@@ -410,7 +440,7 @@ class Trainer:
         diag = out.get("diagnostics", {})
         conv = diag.get("converged", [])
         return {"loss": float(loss), "force": float(l_force), "gap": float(gap[0]),
-                "l2": float(l_l2), "sat": float(l_sat),
+                "l2": float(l_l2), "sat": float(l_sat), "energy": float(l_energy),
                 "unconverged": int(sum(1 for c in conv if c is False)),
                 "scf_iterations": int(sum(diag.get("iterations", []))),
                 "scf_fills": int(sum(diag.get("fills", []))),
@@ -632,7 +662,7 @@ class Trainer:
         for epoch in range(cfg.epochs):
             sampler.set_epoch(epoch)
             t0 = time.time()
-            stats = {"loss": 0.0, "force": 0.0, "gap": 0.0, "l2": 0.0, "sat": 0.0, "unconverged": 0, "n": 0, "scf_iterations": 0, "scf_fills": 0, "warm": 0}
+            stats = {"loss": 0.0, "force": 0.0, "gap": 0.0, "l2": 0.0, "sat": 0.0, "energy": 0.0, "unconverged": 0, "n": 0, "scf_iterations": 0, "scf_fills": 0, "warm": 0}
             # C5 (v4.2 / v4.5): the registered subsample at the start of the epoch -- the
             # warm start against the full continuation (zero start against the continuation
             # for frames without a stored dq, i.e. every frame in epoch 0); frames that fail
@@ -651,12 +681,14 @@ class Trainer:
                 batch = to_device(torch_geometric.dataloader.Batch.from_data_list([ds[j] for j in local_batch]), self.device)
                 frame_indices = [self.train_idx[j] for j in local_batch]
                 s = self.step(batch, frame_indices, optimizer)
-                for key in ("loss", "force", "l2", "sat", "unconverged", "scf_iterations", "scf_fills", "warm"):
+                for key in ("loss", "force", "l2", "sat", "energy", "unconverged", "scf_iterations", "scf_fills", "warm"):
                     stats[key] += s[key]
                 stats["gap"] = s["gap"]; stats["n"] += 1
             sv = sv_pre
             entry = {"epoch": epoch, "loss": stats["loss"] / max(stats["n"], 1), "force": stats["force"] / max(stats["n"], 1),
                      "l2": stats["l2"] / max(stats["n"], 1), "sat": stats["sat"] / max(stats["n"], 1),
+                     "energy": stats["energy"] / max(stats["n"], 1),
+                     "c_q_running": dict(self.c_q_running),
                      "lr": float(optimizer.param_groups[0]["lr"]), "gap": stats["gap"], "unconverged": stats["unconverged"], "single_valued": sv,
                      "scf_iterations_per_batch": stats["scf_iterations"] / max(stats["n"], 1),
                      "scf_fills_per_batch": stats["scf_fills"] / max(stats["n"], 1),
