@@ -563,7 +563,18 @@ class Trainer:
                 energies.append({"index": indices[k - 1], "n": hi - lo, "d": d,
                                  "resid_uncal": float(out["energy_uncalibrated"][g] - batch["energy"][g])})
         rms = lambda v: (float(np.sqrt(v[0] / v[1])) if v[1] else None)
+        # Energy RMSE after the closed-form `C_Q` (the mean residual), per size. Computed
+        # here so it survives into the per-epoch history: `fit` strips `energies` from the
+        # entry, so previously only the finals carried any energy number at all.
+        e_after_cq = {}
+        for size in sorted({e["n"] for e in energies}):
+            r = np.array([e["resid_uncal"] for e in energies if e["n"] == size])
+            if r.size:
+                e_after_cq[str(size)] = {"n": int(r.size), "c_q": float(r.mean()),
+                                         "rmse_eV": float(np.sqrt(((r - r.mean()) ** 2).mean())),
+                                         "meV_per_atom": float(1000 * np.sqrt(((r - r.mean()) ** 2).mean()) / size)}
         report = {"tag": tag, "force_rmse": float(np.sqrt(sq / max(n_atoms, 1))),
+                  "energy_after_cq": e_after_cq,
                   "shell_rmse": {f"{a_}-{b_}": rms(v) for (a_, b_), v in shells.items()},
                   "shell_counts": {f"{a_}-{b_}": v[1] for (a_, b_), v in shells.items()},
                   "near_rmse": {k: rms(v) for k, v in near.items()},
