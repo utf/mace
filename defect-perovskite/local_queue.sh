@@ -11,7 +11,13 @@ Q=${LQ_QUEUE:-$HOME/runs/w3a11_queue.txt}; L=${LQ_LOG:-$HOME/runs/local_queue.lo
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 while true; do
   line=$(grep -v -E "^\s*(#|$)" $Q 2>/dev/null | head -1)
-  [ -z "$line" ] && { echo "$(date '+%F %T') queue empty, exiting" >> $L; exit 0; }
+  if [ -z "$line" ]; then
+    # WAIT, don't exit. Exiting on an empty queue has twice left this machine idle while b3
+    # still had a backlog, because work appended later found no runner. LQ_IDLE_EXIT=1
+    # restores the old behaviour for a one-shot batch.
+    [ -n "${LQ_IDLE_EXIT:-}" ] && { echo "$(date '+%F %T') queue empty, exiting" >> $L; exit 0; }
+    sleep "${LQ_POLL:-60}"; continue
+  fi
   name=${line%%|*}; margs=${line#*|}
   echo "$(date '+%F %T') starting $name" >> $L
   python3 $W/defect-perovskite/dscc_train.py --name "$name" \
