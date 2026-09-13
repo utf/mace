@@ -2824,3 +2824,65 @@ were run in the unit suite on toy weights (255 passed, `tests/extensions/dscc`),
 trained checkpoints; that is what the phrase covers here. And O3.2's epoch-0 loss is NOT
 expected to equal O3.1's -- `A` takes gradients from the first step -- the bit-for-bit property
 is the first forward at `A = 0`, which is gated in `test_screening.py`, not an epoch aggregate.
+
+## W7 — base v3: MACE-MH-1's architecture trained FROM SCRATCH, plain and with LES
+
+*(User instruction, 2026-09-13 night: "retrain the base using the same configuration (width,
+non linear blocks etc) as the MACE-MH-1 model we fine tuned earlier but this time from scratch
+... follow the mace documentation to get the best strategy. Secondly, train a MACE-LES model
+using the same configuration also from scratch ... report the errors using the same error table
+as the last time we trained base v2.")*
+
+**Registered before the runs (2026-09-13 23:00).** Two models, one change between them:
+
+| | `base_v3_scratch` | `base_v3_les` |
+|---|---|---|
+| model class | `ScaleShiftMACE` | `MACELES` (latent Ewald summation) |
+| everything else | identical | identical |
+
+**Architecture = MH-1's, read off the checkpoint rather than retyped.**
+`extract_config_mace_model` on `~/.cache/mace/macemh1model` gives the values, and every one is
+passed explicitly: `r_max` 6.0, 10 Bessel, polynomial cutoff p = 5, `max_ell` 3, TWO
+`RealAgnosticResidualNonLinearInteractionBlock`s, hidden `512x0e+512x1o`, edge irreps
+`128x0e+128x1o` with `use_edge_irreps_first`, element-agnostic product, correlation 3,
+`MLP_irreps` `16x0e`, silu, Bessel radial with radial MLP `[64, 64, 64]`, Agnesi distance
+transform, ZBL pair repulsion, `apply_cutoff` False. **The match is verified by construction,
+not asserted**: the saved model is re-read with the same function and diffed against MH-1's
+config; the only permitted differences are the ones a single-material three-element model must
+have (`num_elements` 3 not 89, one head not six, the atomic energies, and the scale/shift and
+`avg_num_neighbors` refitted from this data). The first smoke FAILED that diff on
+`apply_cutoff` (MH-1 False, the code's default True) and it is now passed explicitly — which is
+the reason the diff exists.
+
+**Training = the README's from-scratch recipe, NOT base v2's fine-tune settings.** lr 1e-2,
+amsgrad, `ReduceLROnPlateau`, EMA 0.99, grad clip 10, Stage Two over the last 20 % of epochs,
+batch 8, float32, cuEquivariance, seed 1. Loss `stress` (energy 1 / forces 100 / stress 1;
+Stage Two 1000 / 100 / 10) because the labels carry `REF_stress` and the base v2 table has a
+stress column — the documented from-scratch weighting plus the label the data already has, not
+a hybrid with base v2's 10 : 10 : 1 fine-tune weights.
+
+**E0s: the SAME estimated isolated-atom energies base v2 used** (Cl −0.7159, Cs +0.5417,
+Pb −0.1022 eV), carried as `IsolatedAtom` frames in `train_iso.xyz` at `config_weight` 1000 and
+kept as training points. They came from the foundation model's residuals, so they are a
+constant reference and not DFT — used here precisely because sharing base v2's reference is
+what makes the energy columns comparable. Data: `dataset_e0/train_iso.xyz` (1619 = 1616 neutral
++ 3 isolated atoms) and `valid.xyz` (154), the same files and the same split as base v2. **No
+new DFT, neutral frames only**, as the programme requires.
+
+**One code change, made deliberately and recorded.** `model_script_utils.py` built `MACELES`
+with `atomic_inter_shift = [0.0] * len(heads)` while the `ScaleShiftMACE` branch uses the
+fitted `args.mean`. Under `rms_forces_scaling` that shift is the training set's mean per-atom
+interaction energy, so discarding it starts the model that far from its target: **measured on
+this data, the LES smoke's initial validation energy RMSE was 1870 meV/atom against the plain
+model's 205 for the same architecture.** That is a handicap the LES term has nothing to do
+with, and it would confound the comparison the user asked for at equal epochs. The MACELES
+branch now passes `args.mean`, as its sibling does.
+
+**Epoch budget, and the deviation from the documented heuristic, registered before launch.**
+The README's rule of thumb is ~200 k gradient updates (1619 frames / batch 8 × 1000 epochs =
+202 k). Measured epoch time on b3 at 512 channels is ~84 s WITH an O3.2 job co-resident, so
+1000 epochs is ≈ 23 h and does not fit one night on one card. The runs are therefore set to the
+largest epoch count that completes by morning, with Stage Two kept at 80 % of it, and the
+shortfall against the heuristic is recorded here rather than discovered in the morning. A
+from-scratch 512-channel model on 1619 frames is not expected to match a fine-tune of a 89-element
+foundation model; **if it does not, that is the finding**, not something to be tuned away.

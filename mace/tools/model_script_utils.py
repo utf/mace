@@ -441,7 +441,13 @@ def _build_model(
             interaction_cls_first=modules.interaction_classes[args.interaction_first],
             MLP_irreps=o3.Irreps(args.MLP_irreps),
             atomic_inter_scale=args.std,
-            atomic_inter_shift=[0.0] * len(heads),
+            # The FITTED shift, as the ScaleShiftMACE branch uses, not a hard 0. With
+            # `rms_forces_scaling` the shift is the training set's mean per-atom interaction
+            # energy; discarding it starts the model that far from its target -- measured on
+            # this data, initial validation energy RMSE 1870 meV/atom against 205 for the same
+            # architecture WITH the shift -- which is a handicap the LES term has nothing to
+            # do with, and which confounds any LES-versus-plain comparison at equal epochs.
+            atomic_inter_shift=args.mean,
             radial_MLP=ast.literal_eval(args.radial_MLP),
             radial_type=args.radial_type,
             heads=heads,
