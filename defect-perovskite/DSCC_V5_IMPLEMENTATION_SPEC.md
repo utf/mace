@@ -2709,3 +2709,64 @@ smokes: 2 epochs at `--subset 60` and at `--subset 300` clean, then ONE FULL epo
 held set (258 frames at 79 atoms and 4 at 159) because a `--subset` held split is all one size
 -- which is precisely the blind spot that killed O3's first launch four minutes in. Suite: 254
 passed, 0 failed, including 22 new gates in `tests/extensions/dscc/test_screening.py`.
+
+### O3.1 RESULT (wave complete 2026-09-13 22:31 b3 clock, six seeds, all six finished clean)
+
+**G1, the registered adoption gate.** Paired by seed/fold, `tau` = 1.7 meV/A per component,
+the trainer's per-atom force-error VECTOR RMS divided by `sqrt 3`:
+
+| seed (fold) | W6 | O3 | O3.1 | O3.1 - W6 | O3 - O3.1 |
+|---|---:|---:|---:|---:|---:|
+| 0 (0) | 11.22 | 18.82 | 14.59 | +3.37 | +4.23 |
+| 1 (1) | 11.62 | 19.71 | 14.22 | +2.60 | +5.49 |
+| 2 (2) | 11.58 | 18.55 | 15.06 | +3.48 | +3.49 |
+| 3 (3) | 11.23 | 20.48 | 14.82 | +3.59 | +5.67 |
+| 4 (0) | 12.02 | 18.53 | 14.28 | +2.26 | +4.25 |
+| 6 (2) | 11.84 | 18.79 | 14.17 | +2.33 | +4.62 |
+| **median** | **11.60** | **18.81** | **14.44** | | |
+
+- **vs W6** (`d = W6 - O3.1`): mean **-2.937**, se 0.247, 90 % CI [-3.436, -2.439] ->
+  **INFERIOR**. Every seed the same sign. O3.1 is worse than the shipped head by **2.94 meV/A
+  per component, 1.7 x tau**. **O3.1 IS NOT ADOPTABLE.**
+- **vs O3** (`d = O3 - O3.1`): mean **+4.626**, se 0.338, 90 % CI [+3.945, +5.307] ->
+  **SUPERIOR**, 2.7 x tau.
+
+**This answers the question O3.1 was registered to ask, and it answers it in the middle.** The
+registration said: "If it closes most of [O3's 7.56 meV/A gap], the descriptor is sound and the
+saturation was the cost; if it closes little, the head-owned basis or the deleted modulation is
+carrying the loss." **A1.1 standardisation closed 4.63 of 7.56 -- 61 %.** So the saturation was
+the larger half and the descriptor is not the problem; **2.94 meV/A is still unaccounted for,
+and the one capability O3 deleted and O3.1 did not restore is the hopping's environment
+dependence.** That is what O3.2 puts back, and it is the arm already queued.
+
+**G2a, energy RMSE at 79 atoms** (margin 0.10 meV/atom, one-sided 95 %): mean `d` **-0.058**,
+se 0.017, upper bound **-0.025** -- O3.1 is *better* than W6 on energies at every seed.
+**PASS.** Worth stating plainly because it separates the two channels: the decoupled head is
+not globally worse, it is worse **on forces**.
+
+| seed (fold) | 0 (0) | 1 (1) | 2 (2) | 3 (3) | 4 (0) | 6 (2) |
+|---|---:|---:|---:|---:|---:|---:|
+| W6 | 0.4752 | 0.5739 | 0.5119 | 0.4996 | 0.5183 | 0.5373 |
+| O3.1 | 0.4486 | 0.4618 | 0.4920 | 0.4074 | 0.4403 | 0.5171 |
+
+**G2b, between-size after one `C_Q`: NOT RESOLVABLE on this split, and the estimator is what
+fails, not the arm.** Taking the difference of the two sizes' fitted `C_Q`, O3.1 spans
+-15.1 to +12.1 meV against the `|.| <= 10` gate -- but the SHIPPED W6 cohort spans -0.4 to
++20.5 meV on the same estimator and the same frames. The held split carries **4 frames at 159
+atoms against 258 at 79**, so the 159 intercept is a four-point mean; neither cohort's spread
+is a statement about between-size extensivity at this sample size. Recorded as unresolved
+rather than scored either way. Fixing it needs a held split with a usable 159 count, which is
+a change to the data plan and is not made silently here.
+
+**Turn-on: the saturation is GONE, which is what A1.1 was for.** Median over the six seeds of
+the on-site term: saturated fraction **0.000** (O3's was 0.40, i.e. 40 % of atoms AT the
+barrier knee), p95 shift **0.740 eV** against W6's 0.846 and the half-width `Delta_Z` = 3.079,
+max shift 1.595 eV against W6's 0.923. So the correction is live, of the same order as the
+shipped head's, and nowhere near its bound. The Stage-2 no-systematic-saturation rule, which
+disqualified O3 independently of G1, is **satisfied**.
+
+**Reading, stated as what it is.** Standardising the input fixed the saturation completely and
+bought 61 % of the force gap. The remainder is not a saturation problem and not an energy
+problem; it is specific to forces, which is where a two-body hopping with no environment
+dependence would be expected to lose -- the force is where the angular structure of the bond
+enters. O3.2 is the test of that reading and it is running.
