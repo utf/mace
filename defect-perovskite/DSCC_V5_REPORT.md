@@ -267,6 +267,62 @@ Confirming which extrapolation is physically right needs DFT at 319+ atoms, whic
 forbids. What is established is the models' internal size behaviour and the qualitative failure of
 Φ=0, not a validated dilute-limit energy.
 
+## Ladder v6 — separating the two finite-size laws
+
+The convergence study above went through a false start worth recording, because it is a general
+trap. **The finite-size law depends on what is allowed to move.** With ions frozen, a charge in a
+periodic cell follows the ε∞ Madelung law — which is exactly what `E_M` encodes. Once the ions
+relax, the lattice screens the charge too and the leading coefficient becomes the static one,
+−Cα/2ε₀; with ε₀ several times ε∞ (order 20 against 4 in this material) the fully relaxed slope is
+a *fraction* of the ε∞ value, not 100 % of it. In 16–45 Å cells the relaxation field is clipped by
+the periodic images, so each cell sits at a different point between the two laws and cell shape
+controls how much is clipped. No single 1/L coefficient exists to fit. That is why fitting relaxed
+cells gave slopes that moved with the cell set, and why a "77 % of exact" reading against the ε∞
+reference was meaningless.
+
+The fix is two ladders, each testing one thing.
+
+### Part 1 — frozen-core embedding (the decomposition)
+
+The defect core is relaxed **once**, in the 639-atom cell at fixed volume, and then embedded
+rigid in larger pristine tilings: atoms within `R_core` of the vacancy carry the relaxed
+displacements, everything beyond sits at pristine positions. The local geometry is then identical
+in every cell and inside the training domain, and only the periodic environment changes with size.
+Energies only — no forces, no gradients, CPU eigendecomposition — so the 2879-atom cell (11516
+orbitals) costs 76 s.
+
+| tiling | n | L (Å) | α | dE (eV) | remainder after subtracting the **exact** monopole |
+|---|--:|--:|--:|--:|--:|
+| 2,2,2 | 639 | 28.64 | 2.7225 | −2.7928 | −2.6217 (check, not fitted) |
+| 2,2,3 | 959 | 32.79 | 2.8335 | −2.7769 | **−2.6214** |
+| 3,3,3 | 2159 | 42.96 | 2.7225 | −2.7343 | **−2.6203** |
+| 3,3,4 | 2879 | 47.29 | 2.8344 | −2.7277 | **−2.6198** |
+
+**The remainder is flat to 1.6 meV over a 4.5× range in volume.** Fit: `E∞ = −2.6191 ± 0.0002 eV`,
+`c = −79.4 ± 11.0 eV·Å³`, residuals ±0.1 meV. The leading term is the exact ε∞ monopole —
+confirmed, not fitted — and no 1/L term is needed beyond it. An `R_core` sweep at 6 / 8 / 10 Å
+gives `E∞` = −2.6170 / −2.6191 / −2.6203 eV, a **3.3 meV spread**, so the answer does not depend on
+the truncation radius. After removing the model's own C13 second-moment term (+22.6 eV·Å³, part of
+`E_M` by construction) the intrinsic 1/L³ coefficient is −102 eV·Å³.
+
+**E∞(frozen core) = −2.619 ± 0.003 eV.**
+
+### Part 2 — relaxation ladder (ionic screening)
+
+`ΔE_relax(L) = E_relaxed(L) − E_embedded(L)`, started from the embedded structure so only the far
+field moves, on near-cubic cells. Its 1/L coefficient is `(Cα/2)(1/ε∞ − 1/ε₀)`, so fitting it with
+ε₀ as the single free parameter turns the ladder into a **label-free measurement of the model's
+static dielectric response** — a direct test of the physics the host term was built to supply. A
+slope near zero would mean the far-field ionic response is missing.
+
+The fully relaxed dilute limit is then `E∞(frozen) + ΔE_relax(∞)`, each with its own uncertainty.
+
+**Cost.** Part 1 is cheap: the whole eight-cell ladder including the `R_core` sweep took under four
+minutes. Part 2 is the expensive half — a BFGS step is 3.8 s at 639 atoms and 6.0 s at 959, and
+the force path scales as n³ through the eigendecomposition, so 2879 atoms is ~160 s per step and
+exceeds a 16 GB card. The 959 cell is running; whether the second relaxation cell is worth its
+hours is a judgement call, since it only sharpens ε₀ in a two-parameter fit.
+
 ## Practical implications
 
 - **Forces and same-charge energy differences are what this model gives.** 11.6 meV/Å per

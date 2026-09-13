@@ -2069,3 +2069,64 @@ unrelaxed cells. On relaxed geometry the two agree within their uncertainties, a
 model-to-model differences at any single cell are smaller than either model's own energy error.
 The surviving statement is narrower: the two electrostatic arms agree with each other; a head
 without electrostatics does not converge at all.
+
+## Ladder v6 — frozen-core embedding (coadvisor design, 2026-09-13)
+
+**Why the relaxed ladder fitted badly, and why its 77 % meant nothing.** The finite-size law
+depends on what is allowed to move. With ions frozen, a charge in a periodic cell follows the
+`eps_inf` Madelung law -- exactly what `E_M` encodes. With ions relaxed the lattice screens the
+charge too and the leading coefficient becomes the STATIC one, `-C alpha / 2 eps_0`; with
+`eps_0` several times `eps_inf` (order 20 against 4) the fully relaxed slope is a fraction of the
+`eps_inf` value, not 100 % of it. In 16-45 A cells the relaxation field is clipped, so each cell
+sits at a different point between the two laws and cell shape controls how much is clipped. No
+single `1/L` coefficient exists to fit. That is what the relaxed ladder showed, and it is why
+77 % should never have been read against the `eps_inf` reference. The ideal-lattice ladder fitted
+well because it IS the frozen-ion case.
+
+Two ladders now, each testing one thing.
+
+### Part 1 — frozen-core embedding ladder (`defect-perovskite/dscc_embed_ladder.py`)
+
+The core is relaxed once (in the 639-atom cell, fixed volume) and embedded RIGID in larger
+pristine tilings: atoms within `R_core` of the vacancy carry the relaxed displacements, everything
+beyond sits at pristine positions. The local geometry is then identical in every cell and inside
+the training domain; only the periodic environment changes with size. The core's polarisation is
+compensated by a bound surface charge at `R_core`, so the object still carries `+1` and its images
+interact through the unrelaxed medium -- the leading term is the `eps_inf` monopole whatever
+`R_core` is. Energies only, `no_grad`, CPU eigendecomposition, no forces and no contractions: the
+2879-atom cell (11516 orbitals) costs 76 s.
+
+*Gate:* embedding the full core back into its own cell moves 639 of 639 atoms with none missing
+and reproduces that structure's energy.
+
+**Result, `R_core` = 8 A** (639 kept as a check, not in the fit -- its shortest dimension is 22 A):
+
+| tiling | n | L (A) | alpha | dE (eV) | remainder after the EXACT monopole |
+|---|--:|--:|--:|--:|--:|
+| 2,2,2 | 639 | 28.64 | 2.7225 | -2.7928 | -2.6217 (check) |
+| 2,2,3 | 959 | 32.79 | 2.8335 | -2.7769 | **-2.6214** |
+| 3,3,3 | 2159 | 42.96 | 2.7225 | -2.7343 | **-2.6203** |
+| 3,3,4 | 2879 | 47.29 | 2.8344 | -2.7277 | **-2.6198** |
+
+**The remainder is flat to 1.6 meV across a 4.5x range in volume**, and the 639 check sits 1.9 meV
+from the fit. `E_inf = -2.6191 +- 0.0002 eV`, `c = -79.4 +- 11.0 eV.A^3`, fit residuals +-0.1 meV.
+The leading term is the exact `eps_inf` monopole -- confirmed, not fitted. The two-parameter form
+needs no `1/L` term; forcing one (three points, three parameters) is unconstrained and is NOT read
+as a D13 measurement.
+
+**`R_core` sweep {6, 8, 10 A} on 959 and 2159:** `E_inf` = -2.6170 / -2.6191 / -2.6203 eV, a
+**3.3 meV spread** -- the dilute limit is insensitive to the truncation radius. The `c` values
+(-55, -79, -417) are not comparable: the 6 and 10 A fits have two cells each, and with `1/L^3`
+differences of ~1.6e-5 A^-3 a 1 meV energy error moves `c` by ~60 eV.A^3. Only the three-cell
+`c = -79 +- 11` is meaningful; after removing the model's own C13 second moment (+22.6 eV.A^3,
+inside `E_M` by construction) the intrinsic part is **-102 eV.A^3**.
+
+**`E_inf`(frozen core) = -2.619 +- 0.003 eV**, the `R_core` spread taken as the uncertainty.
+
+### Part 2 — relaxation ladder (ionic screening), in progress
+
+`dE_relax(L) = E_relaxed(L) - E_embedded(L)` starting from the embedded structure, near-cubic
+cells only (959 and 2879), fitted as `dE_relax(inf) + (C alpha / 2)(1/eps_inf - 1/eps_0)/L` with
+`eps_0` the single free parameter besides the constant -- a label-free test of the model's
+far-field ionic response. A slope near zero would mean that response is missing.
+(`defect-perovskite/dscc_relax_ladder.py`.)
