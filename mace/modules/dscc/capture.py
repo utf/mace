@@ -206,6 +206,12 @@ class GraphedStep:
                  base_capacity: Optional[int] = None, warmup: int = 3) -> None:
         import math as _math
         from mace.modules.dscc.ewald import madelung_self, reciprocal_plan
+        if getattr(model, "screened", False):
+            raise ValueError(
+                "capture is not available for the screened head (O3.2): its triplet list is "
+                "built with `nonzero`, so the shapes are data dependent and a replay would "
+                "silently reuse the captured frame's triplets. Registered as a follow-up "
+                "alongside the analytic three-body force; neither is on the training path")
         if not (model.decoupled and model.scf_free and not model.coupling):
             raise ValueError("capture is for the decoupled SCF-free head (O3): the coupled "
                              "head solves, and a head that reads the base cannot be split "

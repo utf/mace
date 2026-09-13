@@ -45,6 +45,11 @@ def csr_hamiltonian(h0_module, scalars: torch.Tensor, vectors: Optional[torch.Te
         src, dst = edge_index[0], edge_index[1]
         r = edge_vector.norm(dim=-1).clamp_min(1e-9)
         direction = edge_vector / r.unsqueeze(-1)
+        if getattr(sk, "screen", None) is not None:
+            raise NotImplementedError(
+                "the sparse/windowed assembly evaluates the two-body `integrals` and would "
+                "silently drop O3.2's three-body screening; build the dense H for a screened "
+                "head, or extend this path first")
         v = sk.integrals(scalars[src], scalars[dst], r, species[src], species[dst])
         blocks = sk_block(direction, v).cpu().numpy()                     # [E, 4, 4]
         n = int(species.shape[0])
@@ -306,6 +311,11 @@ def frontier_forces(h0_module, scalars: torch.Tensor, vectors: Optional[torch.Te
     src, dst = edge_index[0], edge_index[1]
     r = edge_vector.norm(dim=-1).clamp_min(1e-9)
     direction = edge_vector / r.unsqueeze(-1)
+    if getattr(sk, "screen", None) is not None:
+        raise NotImplementedError(
+            "the sparse/windowed assembly evaluates the two-body `integrals` and would "
+            "silently drop O3.2's three-body screening; build the dense H for a screened "
+            "head, or extend this path first")
     v = sk.integrals(scalars[src], scalars[dst], r, species[src], species[dst])
     blocks = sk_block(direction, v)                                        # [E, 4, 4], attached
     cot_edges = torch.einsum("eak,k,ebk->eab", P_site[src], w, P_site[dst])   # dP restricted to (src, dst) blocks

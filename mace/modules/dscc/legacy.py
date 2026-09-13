@@ -404,6 +404,123 @@ def fermi_fill(eps: torch.Tensor, n_electrons, t_el: float = T_EL,
     return occupation_of((eps - _col(mu)) / t_el, family)
 
 
+# --------------------------------------------------------------------- O3.2
+
+# O3.2's three-body bond screening, registered in the plan as the single follow-up arm and
+# specified in the tracker before it ran:
+#
+#     S_ij^{(Z',l)} = (1/N_ref) sum_{k in Z'} g(r_ik) g(r_jk) P_l(cos theta_ikj)
+#
+# with `theta_ikj` the angle AT k -- the apex of the triangle, not at either bond end. It is
+# the one quantity a two-body hopping cannot see: whether the space between i and j is
+# occupied. O3 deleted the hopping's environment dependence altogether (`hop_modulation =
+# False`, and it read <= 1.2x on every bond); this restores it from geometry instead of from
+# the base's features, which is what keeps O3's "nothing from the base enters H0" property.
+R_S3_DEFAULT = 4.5      # = Q_CUT_DEFAULT: first shell and the Cs neighbours, not the second Pb
+SCREEN_LMAX = 2         # matches the head's existing angular content (the rank-2 on-site block)
+SCREEN_NORM = 6.0       # octahedral coordination, so a full first shell gives S ~ O(1)
+
+
+class BondScreening(nn.Module):
+    """`S_ij` and the pre-activation it feeds, for every edge of a (possibly batched) graph.
+
+    WHAT IT MULTIPLIES. Nothing new: `t_ij = v0 * radial(r_ij) * exp(eta tanh(pre_ij))` is the
+    head's existing bounded log-form modulation, and this supplies `pre_ij` where W6 supplied
+    it from an MLP over base features. `pre_ij = A[Z_i, Z_j] . S_ij`, a LINEAR contraction --
+    no MLP -- of nine geometric invariants per bond (three species x `l = 0, 1, 2`).
+
+    `A` IS ZERO-INITIALISED, so a screened head starts bit-for-bit at its unscreened parent.
+    That is the arm's entry gate and it is what makes a failure attributable.
+
+    HERMITICITY. `S_ij = S_ji` by construction: `g(r_ik) g(r_jk)` is symmetric under swapping
+    the ends and the angle at `k` does not care which end is named first. `A` is symmetrised
+    in the species pair (`0.5 (A + A^T)`) for the same reason, so the reversed edge gets the
+    same `pre` and `sk_block` keeps `H` Hermitian by construction rather than by a later
+    symmetrisation. Both are gated.
+
+    WHICH TRIPLETS. An edge `e = i -> j` is paired with every edge `f = i -> k` that shares
+    its sender, which is what makes the enumeration periodic-correct: `k` is a specific image,
+    reached through an edge that already carries the right shift, and `r_jk = |d_f - d_e|`
+    then needs no second neighbour list. Two exact filters keep the count down --
+    `r_ik < r_s3` (otherwise `g(r_ik) = 0`) and `r_ij < 2 r_s3` (otherwise no `k` can be
+    inside `r_s3` of both ends, by the triangle inequality). Neither is an approximation.
+    At `r_cut = 10`, `r_s3 = 4.5` and 79 atoms that is ~70k triplets against the ~1M a naive
+    pairing would build.
+    """
+
+    def __init__(self, num_elements: int, r_s3: float = R_S3_DEFAULT,
+                 lmax: int = SCREEN_LMAX) -> None:
+        super().__init__()
+        self.num_elements = int(num_elements)
+        self.r_s3 = float(r_s3)
+        self.lmax = int(lmax)
+        if self.lmax not in (0, 1, 2):
+            raise ValueError(f"bond screening is registered for l <= 2, got {lmax}")
+        self.n_channels = self.num_elements * (self.lmax + 1)
+        # [n_el, n_el, n_chan, 4]: one pre-activation per Slater-Koster integral type.
+        self.A = nn.Parameter(torch.zeros(self.num_elements, self.num_elements,
+                                          self.n_channels, len(BOND_TYPES)))
+
+    def taper(self, r: torch.Tensor) -> torch.Tensor:
+        """`g(r) = (1 - (r/r_s3)^6)^2` inside `r_s3`, exactly zero outside -- H0's own taper,
+        so the head keeps one smoothness class across hoppings, descriptor and screening."""
+        x = (r / self.r_s3).clamp(max=1.0)
+        return (1.0 - x ** 6) ** 2
+
+    def invariants(self, edge_index: torch.Tensor, edge_vector: torch.Tensor,
+                   species: torch.Tensor) -> torch.Tensor:
+        """`S`, `[n_edges, n_channels]`, channel `Z' * (lmax + 1) + l`."""
+        src, dst = edge_index[0], edge_index[1]
+        n_edges = int(src.shape[0])
+        n_nodes = int(species.shape[0])
+        dtype, device = edge_vector.dtype, edge_vector.device
+        S = torch.zeros(n_edges * self.n_channels, dtype=dtype, device=device)
+        r = edge_vector.norm(dim=-1)
+        scr = (r < self.r_s3).nonzero(as_tuple=False).reshape(-1)          # f = i -> k
+        tgt = (r < 2.0 * self.r_s3).nonzero(as_tuple=False).reshape(-1)    # e = i -> j
+        if int(scr.numel()) == 0 or int(tgt.numel()) == 0:
+            return S.reshape(n_edges, self.n_channels)
+        # Group the screeners by their sender, so node i's are a contiguous run.
+        order = torch.argsort(src[scr], stable=True)
+        scr = scr[order]
+        count = torch.bincount(src[scr], minlength=n_nodes)
+        offset = torch.cumsum(count, 0) - count
+        per = count[src[tgt]]                       # screeners available to each target edge
+        total = int(per.sum())
+        if total == 0:
+            return S.reshape(n_edges, self.n_channels)
+        e = torch.repeat_interleave(tgt, per)
+        start = torch.cumsum(per, 0) - per
+        pos = (torch.arange(total, device=device)
+               - torch.repeat_interleave(start, per))
+        f = scr[torch.repeat_interleave(offset[src[tgt]], per) + pos]
+        # `f == e` is the third atom BEING j: no triangle, and r_jk = 0. Dropped by weight,
+        # not by a mask on the index, so the shapes stay static.
+        live = (e != f).to(dtype)
+        d_e, d_f = edge_vector[e], edge_vector[f]
+        k_to_j = d_e - d_f                                   # R_j - R_k
+        r_ik = r[f]
+        r_jk = k_to_j.norm(dim=-1).clamp_min(1e-9)
+        # The angle AT k, between (k -> i) = -d_f and (k -> j).
+        cos = (((-d_f) * k_to_j).sum(-1) / (r_ik * r_jk)).clamp(-1.0, 1.0)
+        g = self.taper(r_ik) * self.taper(r_jk) * live / SCREEN_NORM
+        legendre = [torch.ones_like(cos), cos, 1.5 * cos * cos - 0.5][: self.lmax + 1]
+        P = torch.stack(legendre, dim=-1)                    # [T, lmax + 1]
+        z_k = species[dst[f]]
+        base = e * self.n_channels + z_k * (self.lmax + 1)
+        idx = base.unsqueeze(-1) + torch.arange(self.lmax + 1, device=device)
+        S = S.index_add(0, idx.reshape(-1), (g.unsqueeze(-1) * P).reshape(-1))
+        return S.reshape(n_edges, self.n_channels)
+
+    def forward(self, edge_index: torch.Tensor, edge_vector: torch.Tensor,
+                species: torch.Tensor) -> torch.Tensor:
+        """`pre_ij`, `[n_edges, 4]`, ready for the head's `modulation`."""
+        S = self.invariants(edge_index, edge_vector, species)
+        A = self.A.to(S.dtype)
+        A = 0.5 * (A + A.transpose(0, 1))                    # Hermiticity, by construction
+        return torch.einsum("ec,ecb->eb", S, A[species[edge_index[0]], species[edge_index[1]]])
+
+
 class SlaterKosterH(nn.Module):
     """Assembles the s+p Hamiltonian from Stage 2's radial scales and bounded corrections.
 
@@ -421,8 +538,14 @@ class SlaterKosterH(nn.Module):
                  hop_log_beta: float = HOP_LOG_BETA_DEFAULT,
                  decay_learned: bool = False,
                  decay_log_beta: float = DECAY_LOG_BETA_DEFAULT,
-                 readout_init_scale: Optional[float] = None) -> None:
+                 readout_init_scale: Optional[float] = None,
+                 screened: bool = False, r_s3: float = R_S3_DEFAULT) -> None:
         super().__init__()
+        # O3.2: the three-body screening, when the arm is on. `None` -- not a disabled
+        # module -- when it is off, so an unscreened checkpoint has no parameter for it and
+        # `state_dict` round trips between the arms are a shape error rather than a silent
+        # zero.
+        self.screen = BondScreening(num_elements, r_s3) if screened else None
                 
         if envelope not in ENVELOPES:
             raise ValueError(f"unknown radial envelope {envelope!r}; expected one of "
@@ -607,27 +730,40 @@ class SlaterKosterH(nn.Module):
         pre_u = self.hop(sym)
         return self.modulation(pre_u)[inverse], pre_u[inverse]
 
-    def integrals_fast(self, node_feats, node_species, src, dst, r) -> torch.Tensor:
+    def integrals_fast(self, node_feats, node_species, src, dst, r,
+                       screen_pre: Optional[torch.Tensor] = None) -> torch.Tensor:
         """`integrals` with the MLP deduplicated by node pair (O1). Same value; the gate
         `test_integrals_fast_matches_the_reference` holds it to 1e-12.
 
         O3 removes the modulation entirely (`hop_modulation = False`): `t_ij = t^SK(r_ij)`,
         i.e. `v0 * radial`, with no environment factor and therefore no MLP at all. It read
         <= 1.2x on every bond, and dropping it also deletes the float64 GEMM that O1 had just
-        made three times cheaper."""
-        if not getattr(self, "hop_modulation", True):
-            radial = self.radial(r, node_species[src], node_species[dst])
-            if radial.dim() == 1:
-                radial = radial.unsqueeze(-1)
-            return self.v0(node_species[src], node_species[dst]) * radial
-        correction, pre = self.pair_correction(node_feats, node_species, src, dst)
-        self._audit_store("hop", pre)
-        if getattr(self, "_reg", False):
-            self._reg_store("hop", pre)
+        made three times cheaper.
+
+        O3.2 puts an environment factor back, from GEOMETRY rather than from the base:
+        `screen_pre` is `A . S` from `BondScreening` and goes through the SAME bounded
+        `modulation`. The two sources ADD inside the one `tanh` when both are present, so a
+        screened W6-lineage head has one barrier and one saturation reading, not two.
+        """
         radial = self.radial(r, node_species[src], node_species[dst])
         if radial.dim() == 1:
             radial = radial.unsqueeze(-1)
-        return self.v0(node_species[src], node_species[dst]) * radial * correction
+        t_sk = self.v0(node_species[src], node_species[dst]) * radial
+        pre = None
+        if getattr(self, "hop_modulation", True):
+            _, pre = self.pair_correction(node_feats, node_species, src, dst)
+        if screen_pre is not None:
+            self._audit_store("screen", screen_pre)
+            if getattr(self, "_reg", False):
+                self._reg_store("screen", screen_pre)
+            pre = screen_pre if pre is None else pre + screen_pre
+        if pre is None:
+            return t_sk
+        if screen_pre is None:                 # W6's own audit key, unchanged
+            self._audit_store("hop", pre)
+            if getattr(self, "_reg", False):
+                self._reg_store("hop", pre)
+        return t_sk * self.modulation(pre)
 
     def modulation(self, pre: torch.Tensor) -> torch.Tensor:
         """The environment factor multiplying `v0 * radial`. Exactly 1 at `pre = 0`.
@@ -805,7 +941,9 @@ class SlaterKosterH(nn.Module):
         r = edge_vector.norm(dim=-1).clamp_min(1e-9)
         direction = edge_vector / r.unsqueeze(-1)
 
-        v = self.integrals_fast(node_feats, node_species, src, dst, r)
+        screen_pre = (self.screen(edge_index, edge_vector, node_species)
+                      if getattr(self, "screen", None) is not None else None)
+        v = self.integrals_fast(node_feats, node_species, src, dst, r, screen_pre)
         blocks = sk_block(direction, v)                       # [n_edges, 4, 4]
 
         H = torch.zeros(dim, dim, device=node_feats.device, dtype=node_feats.dtype)
@@ -845,7 +983,11 @@ class SlaterKosterH(nn.Module):
         src, dst = edge_index[0], edge_index[1]
         r = edge_vector.norm(dim=-1).clamp_min(1e-9)
         direction = edge_vector / r.unsqueeze(-1)
-        v = self.integrals_fast(node_feats, node_species, src, dst, r)
+        # O3.2: node indices are global across the batch here, which is exactly what the
+        # screening wants -- a triplet never crosses a graph because no edge does.
+        screen_pre = (self.screen(edge_index, edge_vector, node_species)
+                      if getattr(self, "screen", None) is not None else None)
+        v = self.integrals_fast(node_feats, node_species, src, dst, r, screen_pre)
         blocks = sk_block(direction, v)                        # [n_edges, 4, 4]
 
         dim = int(n_nodes) * ORBITALS_PER_ATOM

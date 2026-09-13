@@ -95,6 +95,12 @@ def main() -> None:
                     help="|pre| beyond which the barrier acts; |tanh(2)| = 0.964")
     ap.add_argument("--base_cache_batch_size", type=int, default=8, help="E_base/F_base cache; peak memory only")
     ap.add_argument("--fscc", default="", help="Arm 4 comparator: matched | full (empty: D-SCC)")
+    ap.add_argument("--screened", type=int, default=0,
+                    help="O3.2: three-body bond screening S_ij = sum_k g g P_l(cos theta_ikj) "
+                         "through the head's existing bounded modulation. Zero-initialised, so "
+                         "the run starts exactly at its unscreened parent")
+    ap.add_argument("--r_s3", type=float, default=4.5,
+                    help="the screening cutoff in Angstrom (registered: Q_CUT_DEFAULT)")
     args = ap.parse_args()
 
     run_dir = Path(args.run_dir)
@@ -113,6 +119,7 @@ def main() -> None:
                       batch_size=args.batch_size, coupling=bool(args.coupling), coupling_mode=args.coupling_mode,
                       route_b=bool(args.route_b) or bool(args.scf_free), scf_free=bool(args.scf_free),
                       decoupled=bool(args.decoupled),
+                      screened=bool(args.screened), r_s3=args.r_s3,
                       standardise_inputs=(None if args.standardise < 0 else bool(args.standardise)),
                       readout_init_scale=(None if args.readout_init_scale < 0 else args.readout_init_scale),
                       directional=bool(args.directional), regime=args.regime, gap_weight=args.gap_weight,
@@ -129,6 +136,7 @@ def main() -> None:
     model = MACEDSCC(base, r_cut=cfg.r_cut, directional=cfg.directional, coupling=cfg.coupling,
                      route_b=cfg.route_b, scf_free=cfg.scf_free, decoupled=cfg.decoupled,
                      n_radial=args.n_radial, standardise_inputs=cfg.standardise_inputs,
+                     screened=cfg.screened, r_s3=cfg.r_s3,
                      readout_init_scale=cfg.readout_init_scale,
                      kernel=KernelConfig(regime=cfg.regime),
                      eta=args.eta, beta_b=args.beta_b, beta_a=args.beta_a,
@@ -136,6 +144,11 @@ def main() -> None:
                      scf=ScfOptions(n_max=args.n_max)).to(args.device)
     logging.info("A1.1: standardisation %s, readout final scale %.3f",
                  "ON" if model.standardise_inputs else "OFF", float(model.h0.sk.readout_init_scale))
+    if model.screened:
+        n_a = int(model.h0.sk.screen.A.numel())
+        logging.info("O3.2: bond screening ON, r_s3 %.2f A, l <= %d, %d channels, %d new "
+                     "parameters (zero init: starts at the unscreened parent)",
+                     model.r_s3, model.h0.sk.screen.lmax, model.h0.sk.screen.n_channels, n_a)
     logging.info("A1: eta %.4f beta_b %.2f beta_a %.2f delta_Z %.3f eV l2 %.2e | "
                  "lr %s -> %.1e, barrier %.1e beyond |pre| %.1f",
                  args.eta, args.beta_b, args.beta_a, float(model.h0.sk.delta[0, 0]), args.l2_weight,

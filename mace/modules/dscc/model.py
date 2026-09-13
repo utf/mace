@@ -33,7 +33,8 @@ from torch import nn
 from mace.modules.models import ScaleShiftMACE
 from mace.modules.dscc.fill import SIGMA_S
 from mace.modules.dscc.hamiltonian import (A_MAX_DEFAULT, B_MAX_DEFAULT, DELTA_FRACTION_DEFAULT,
-                                           ETA_DEFAULT, H0, Q_CUT_DEFAULT, R_CUT_DEFAULT)
+                                           ETA_DEFAULT, H0, Q_CUT_DEFAULT, R_CUT_DEFAULT,
+                                           R_S3_DEFAULT)
 from mace.modules.dscc.analytic import assemble_compiled, h0_position_gradient, head_cotangent
 from mace.modules.dscc.ewald import (COULOMB, gradient_of_contraction, madelung_self,
                                      reciprocal_matrix_planned, reciprocal_pair_gradient_planned)
@@ -92,11 +93,14 @@ class MACEDSCC(nn.Module):
     # head at inference; set False to fall back to the autograd cotangent route, which is the
     # reference the gate compares against. Class level for the same pickle reason as above.
     analytic_head_forces: bool = True
+    # O3.2: the three-body bond screening. Class level for the same pickle reason as above.
+    screened: bool = False
 
     def __init__(self, base: nn.Module, *, r_cut: float = R_CUT_DEFAULT,
                  kernel: Optional[KernelConfig] = None, sigma_s: float = SIGMA_S,
                  coupling: bool = False, route_b: bool = False, scf_free: bool = False,
                  decoupled: bool = False, n_radial: int = 6, directional: bool = True,
+                 screened: bool = False, r_s3: float = R_S3_DEFAULT,
                  standardise_inputs: Optional[bool] = None,
                  readout_init_scale: Optional[float] = None,
                  lambda_0: float = LAMBDA_0_DEFAULT, lambda_max: float = LAMBDA_MAX_DEFAULT,
@@ -136,11 +140,16 @@ class MACEDSCC(nn.Module):
         # O3: the head owns its descriptor (Bessel x H0's taper, species-resolved l = 0)
         # and reads nothing from the base; the hopping modulation goes with it.
         self.decoupled = bool(decoupled)
+        # O3.2: the hopping's environment dependence, restored from GEOMETRY -- a linear
+        # contraction of the three-body invariants, through the head's existing bounded
+        # modulation, with no MLP and nothing from the base.
+        self.screened, self.r_s3 = bool(screened), float(r_s3)
         self.h0 = H0(self.atomic_numbers, feature_dim=n_s, n_vectors=n_v, r_cut=self.r_cut,
                      q_cut=q_cut, directional=directional, a_max=a_max, b_max=b_max,
                      hidden=hidden, eta=eta, beta_b=beta_b, beta_a=beta_a,
                      delta_frac=delta_frac, decoupled=self.decoupled, n_radial=n_radial,
-                     readout_init_scale=readout_init_scale)
+                     readout_init_scale=readout_init_scale,
+                     screened=self.screened, r_s3=self.r_s3)
         if self.decoupled:
             self.h0.sk.hop_modulation = False
         n_el = len(self.atomic_numbers)
@@ -190,6 +199,8 @@ class MACEDSCC(nn.Module):
                 "coupling": self.coupling, "route_b": self.route_b, "r_split": self.r_split,
                 "scf_free": getattr(self, "scf_free", False),
                 "decoupled": getattr(self, "decoupled", False),
+                "screened": getattr(self, "screened", False),
+                "r_s3": getattr(self, "r_s3", R_S3_DEFAULT),
                 "lambda_max": self.lambda_max, "c_q_table": dict(self.c_q_table),
                 "calibration_record": self.calibration_record,
                 "coupling_mode": getattr(self, "coupling_mode", "full"), "fscc": getattr(self, "fscc", ""),
@@ -203,6 +214,8 @@ class MACEDSCC(nn.Module):
         self.coupling, self.route_b = bool(state["coupling"]), bool(state["route_b"])
         self.scf_free = bool(state.get("scf_free", False))      # W6; absent in pre-W6 checkpoints
         self.decoupled = bool(state.get("decoupled", False))    # O3
+        self.screened = bool(state.get("screened", False))      # O3.2
+        self.r_s3 = float(state.get("r_s3", R_S3_DEFAULT))
         self.r_split, self.lambda_max = float(state["r_split"]), float(state["lambda_max"])
         self.c_q_table = {int(k): float(v) for k, v in state.get("c_q_table", {}).items()}
         self.calibration_record = state.get("calibration_record")
@@ -639,14 +652,22 @@ class MACEDSCC(nn.Module):
         never sees -- which is a silent wrong answer, not an error, once the shapes agree."""
         if not self.decoupled:
             return self.features(self.first_block(self._trunk_data(dict(data))))[0]
+        edge_vector = self.head_edge_vectors(data)
+        species = data["node_attrs"].argmax(dim=-1)
+        return self.h0.descriptor(species, data["edge_index"], edge_vector,
+                                  int(species.shape[0]))[0]
+
+    def head_edge_vectors(self, data: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """The head graph's edge vectors in float64, from `unit_shifts` and the cell.
+
+        One place, because a diagnostic that rebuilds them differently from the model is a
+        silent wrong answer once the shapes agree -- the same failure `readout_scalars`
+        exists to prevent for the readout inputs."""
         positions, cell = data["positions"], data["cell"].view(-1, 3, 3)
         sender, receiver = data["edge_index"][0], data["edge_index"][1]
         shifts = torch.einsum("ei,eij->ej", data["unit_shifts"].to(positions.dtype),
                               cell[data["batch"][sender]])
-        edge_vector = (positions[receiver] - positions[sender] + shifts).to(torch.float64)
-        species = data["node_attrs"].argmax(dim=-1)
-        return self.h0.descriptor(species, data["edge_index"], edge_vector,
-                                  int(species.shape[0]))[0]
+        return (positions[receiver] - positions[sender] + shifts).to(torch.float64)
 
     def pristine_gap(self, data: Dict[str, torch.Tensor],
                      cached_features: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
@@ -826,8 +847,15 @@ class MACEDSCC(nn.Module):
         # eager `_DensityMatrix` was 8 ms of the 159-atom step). Inference only -- under
         # `create_graph` the parameter gradient still needs the graph -- and forces only; the
         # stress keeps the cotangent route, which needs the strain graph anyway.
+        # O3.2 is REGISTERED as outside the analytic kernel: `h0_position_gradient` writes
+        # dH0/dR assuming `t_ij` depends on `r_ij` alone, and the screening makes it depend on
+        # every third atom's position -- a genuine three-body force term the closed form does
+        # not contain. A screened head falls back to the autograd cotangent route (gated
+        # against finite differences) until the kernel is extended; the training path never
+        # used the analytic route, so this costs the arm nothing.
         analytic = (uniform and self.decoupled and self.scf_free and not self.coupling
                     and compute_force and not compute_stress and not create
+                    and not getattr(self, "screened", False)
                     and getattr(self, "analytic_head_forces", True))
         analytic_pack = None
         if uniform:

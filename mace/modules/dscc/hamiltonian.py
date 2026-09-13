@@ -44,7 +44,7 @@ import torch
 from torch import nn
 
 from mace.modules.dscc.legacy import (DELTA_FRACTION_DEFAULT, HOP_LOG_BETA_DEFAULT,
-                                      ORBITALS_PER_ATOM, SlaterKosterH, _mlp,
+                                      ORBITALS_PER_ATOM, R_S3_DEFAULT, SlaterKosterH, _mlp,
                                       harrison_initialise)
 
 # Registered defaults (plan section 11: to register before use). `r_cut` is the old head's
@@ -203,7 +203,8 @@ class H0(nn.Module):
                  delta_frac: float = DELTA_FRACTION_DEFAULT,
                  readout_hidden: int = READOUT_HIDDEN_DEFAULT,
                  decoupled: bool = False, n_radial: int = N_RADIAL_DEFAULT,
-                 readout_init_scale: Optional[float] = None) -> None:
+                 readout_init_scale: Optional[float] = None,
+                 screened: bool = False, r_s3: float = R_S3_DEFAULT) -> None:
         super().__init__()
         self.atomic_numbers = [int(z) for z in atomic_numbers]
         num_elements = len(self.atomic_numbers)
@@ -220,11 +221,13 @@ class H0(nn.Module):
         self.a_max, self.b_max = float(a_max), float(b_max)
         self.eta, self.beta_b, self.beta_a = float(eta), float(beta_b), float(beta_a)
         self.delta_frac = float(delta_frac)
+        self.screened, self.r_s3 = bool(screened), float(r_s3)
         self.sk = SlaterKosterH(num_elements, feature_dim, atomic_numbers=self.atomic_numbers,
                                 r_cut=self.r_cut, envelope="exp", hop_form="log",
                                 decay_learned=True, hop_log_beta=self.eta,
                                 on_site_range=on_site_range, hidden=hidden,
-                                readout_init_scale=readout_init_scale)
+                                readout_init_scale=readout_init_scale,
+                                screened=self.screened, r_s3=self.r_s3)
         harrison_initialise(SimpleNamespace(h=self.sk), self.atomic_numbers)
         # A1: the on-site half-width, AFTER the Harrison baselines are in place (the rule
         # reads them). Registered fraction times their spread.
@@ -327,7 +330,8 @@ class H0(nn.Module):
     @torch.no_grad()
     def saturation(self, scalars: torch.Tensor, species: torch.Tensor,
                    edge_index: Optional[torch.Tensor] = None,
-                   sites: Optional[torch.Tensor] = None) -> dict:
+                   sites: Optional[torch.Tensor] = None,
+                   edge_vector: Optional[torch.Tensor] = None) -> dict:
         """A1's bounds report: the fraction of `|tanh| > 0.95` per term, per species, plus
         the section 2.10 readout at chosen `sites` (the flanking Pb). Terms `on_site` (2
         channels per atom), `rank2`/`rank1` (1 per atom, only where the bound is nonzero) and
@@ -343,10 +347,22 @@ class H0(nn.Module):
             terms["rank2"] = (torch.tanh(self.g_read(env)), species)
         if self.beta_a:
             terms["rank1"] = (torch.tanh(self.f_read(env)), species)
+        screen = getattr(self.sk, "screen", None)
+        if screen is not None and edge_index is not None and edge_vector is not None:
+            # O3.2. The registered reading for this arm: the modulation must not be reported
+            # as "learned" while sitting at its stop, which is the mistake O3 made with the
+            # on-site term. Keyed by the SENDER's species, as `hop` was.
+            pre_s = screen(edge_index, edge_vector.to(torch.float64), species)
+            terms["screen"] = (torch.tanh(pre_s), species[edge_index[0]])
+            out["screen_pre_abs_p95"] = float(torch.quantile(pre_s.abs().reshape(-1), 0.95))
+            out["screen_pre_abs_max"] = float(pre_s.abs().max())
+            out["screen_factor_p95"] = float(torch.quantile(
+                self.sk.modulation(pre_s).reshape(-1), 0.95))
         if edge_index is not None and not getattr(self.sk, "hop_modulation", True):
             # O3 removed the hopping modulation, so `sk.hop` is never evaluated by the model.
             # Reporting its saturation would put a live-looking number in every epoch log for
             # an MLP that does not run. Marked, not computed.
+            # Still "not applicable" under O3.2: the modulation is back but `sk.hop` is not.
             out["hop_not_applicable"] = 1.0
         elif edge_index is not None:
             src, dst = edge_index[0], edge_index[1]

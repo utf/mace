@@ -94,6 +94,8 @@ class TrainConfig:
     route_b: bool = False
     scf_free: bool = False             # W6: SCF-free (route B' pattern, no solve)
     decoupled: bool = False            # O3: head-owned atomic basis
+    screened: bool = False             # O3.2: three-body bond screening on the hoppings
+    r_s3: float = 4.5                  # its cutoff, = Q_CUT_DEFAULT
     standardise_inputs: Optional[bool] = None   # A1.1; None = the default for the head kind
     readout_init_scale: Optional[float] = None  # final-layer scale of the readouts
     directional: bool = True          # False: the scalar-only control
@@ -504,7 +506,8 @@ class Trainer:
             if found is not None:
                 sites = torch.zeros(int(species.shape[0]), dtype=torch.bool, device=species.device)
                 sites[torch.as_tensor(found[1], device=species.device)] = True
-            rep_ = self.model.h0.saturation(scalars, species, batch["edge_index"], sites)
+            rep_ = self.model.h0.saturation(scalars, species, batch["edge_index"], sites,
+                                            edge_vector=self.model.head_edge_vectors(batch))
             for key, value in rep_.items():
                 (flank_site if key.startswith("site_") else pooled).setdefault(key, []).append(value)
         out: Dict[str, object] = {}
