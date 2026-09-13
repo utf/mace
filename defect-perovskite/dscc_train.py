@@ -36,6 +36,10 @@ def main() -> None:
     ap.add_argument("--directional", type=int, default=1)
     ap.add_argument("--coupling", type=int, default=0)
     ap.add_argument("--route_b", type=int, default=0)
+    ap.add_argument("--decoupled", type=int, default=0,
+                    help="O3: head-owned atomic basis; nothing from the base enters H0 and the "
+                         "hopping modulation is removed")
+    ap.add_argument("--n_radial", type=int, default=6, help="O3 radial basis size")
     ap.add_argument("--scf_free", type=int, default=0,
                     help="W6: SCF-free model (E_host + E_M, no solve); implies route_b, forbids coupling")
     ap.add_argument("--regime", default="B")
@@ -100,6 +104,7 @@ def main() -> None:
     cfg = TrainConfig(name=args.name, seed=args.seed, fold=args.fold, epochs=args.epochs, lr=args.lr,
                       batch_size=args.batch_size, coupling=bool(args.coupling), coupling_mode=args.coupling_mode,
                       route_b=bool(args.route_b) or bool(args.scf_free), scf_free=bool(args.scf_free),
+                      decoupled=bool(args.decoupled),
                       directional=bool(args.directional), regime=args.regime, gap_weight=args.gap_weight,
                       device=args.device, eval_every=args.eval_every,
                       setup_batch_size=args.setup_batch_size, base_cache_batch_size=args.base_cache_batch_size,
@@ -112,7 +117,8 @@ def main() -> None:
     base = base.float() if args.base_float32 else base.double()
     logging.info("base precision: %s (head float64)", next(base.parameters()).dtype)
     model = MACEDSCC(base, r_cut=cfg.r_cut, directional=cfg.directional, coupling=cfg.coupling,
-                     route_b=cfg.route_b, scf_free=cfg.scf_free, kernel=KernelConfig(regime=cfg.regime),
+                     route_b=cfg.route_b, scf_free=cfg.scf_free, decoupled=cfg.decoupled,
+                     n_radial=args.n_radial, kernel=KernelConfig(regime=cfg.regime),
                      eta=args.eta, beta_b=args.beta_b, beta_a=args.beta_a,
                      delta_frac=args.delta_frac,
                      scf=ScfOptions(n_max=args.n_max)).to(args.device)

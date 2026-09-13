@@ -570,6 +570,58 @@ class SlaterKosterH(nn.Module):
             radial = radial.unsqueeze(-1)
         return self.v0(species_i, species_j) * radial * correction
 
+    def pair_correction(self, node_feats: torch.Tensor, species: torch.Tensor,
+                        src: torch.Tensor, dst: torch.Tensor):
+        """O1: the hopping MLP's environment factor, computed once per UNORDERED NODE PAIR.
+
+        `integrals` builds its descriptor from `feats_i + feats_j`, `|feats_i - feats_j|` and
+        the same for the species embedding -- all symmetric, and none of them a function of
+        `r`. So `pre` depends on the unordered pair of NODES alone, while the edge list
+        carries both directions and every periodic image of each pair: the MLP was being
+        evaluated 2-3x more often than it has distinct inputs. With a 2 x 512-wide input in
+        float64 that GEMM is the whole assembly cost (4.95 of 7.7 ms at 79 atoms).
+
+        `standardise` is likewise a per-NODE map and was being applied to 9122 edge rows
+        instead of 79 node rows.
+
+        Returns `(correction [n_edges, ...], pre_per_edge)` -- the second so the A1
+        regulariser and the audit see exactly the per-edge tensor they saw before.
+        """
+        s_node = self.standardise(node_feats, species)
+        e_node = self.elem(species)
+        lo = torch.minimum(src, dst)
+        hi = torch.maximum(src, dst)
+        key = lo * int(node_feats.shape[0]) + hi
+        uniq, inverse = torch.unique(key, return_inverse=True)
+        ulo, uhi = uniq // int(node_feats.shape[0]), uniq % int(node_feats.shape[0])
+        si, sj = s_node[ulo], s_node[uhi]
+        ei, ej = e_node[ulo], e_node[uhi]
+        sym = torch.cat([si + sj, (si - sj).abs(), ei + ej, (ei - ej).abs()], dim=-1)
+        pre_u = self.hop(sym)
+        return self.modulation(pre_u)[inverse], pre_u[inverse]
+
+    def integrals_fast(self, node_feats, node_species, src, dst, r) -> torch.Tensor:
+        """`integrals` with the MLP deduplicated by node pair (O1). Same value; the gate
+        `test_integrals_fast_matches_the_reference` holds it to 1e-12.
+
+        O3 removes the modulation entirely (`hop_modulation = False`): `t_ij = t^SK(r_ij)`,
+        i.e. `v0 * radial`, with no environment factor and therefore no MLP at all. It read
+        <= 1.2x on every bond, and dropping it also deletes the float64 GEMM that O1 had just
+        made three times cheaper."""
+        if not getattr(self, "hop_modulation", True):
+            radial = self.radial(r, node_species[src], node_species[dst])
+            if radial.dim() == 1:
+                radial = radial.unsqueeze(-1)
+            return self.v0(node_species[src], node_species[dst]) * radial
+        correction, pre = self.pair_correction(node_feats, node_species, src, dst)
+        self._audit_store("hop", pre)
+        if getattr(self, "_reg", False):
+            self._reg_store("hop", pre)
+        radial = self.radial(r, node_species[src], node_species[dst])
+        if radial.dim() == 1:
+            radial = radial.unsqueeze(-1)
+        return self.v0(node_species[src], node_species[dst]) * radial * correction
+
     def modulation(self, pre: torch.Tensor) -> torch.Tensor:
         """The environment factor multiplying `v0 * radial`. Exactly 1 at `pre = 0`.
 
@@ -735,8 +787,7 @@ class SlaterKosterH(nn.Module):
         r = edge_vector.norm(dim=-1).clamp_min(1e-9)
         direction = edge_vector / r.unsqueeze(-1)
 
-        v = self.integrals(node_feats[src], node_feats[dst], r,
-                           node_species[src], node_species[dst])
+        v = self.integrals_fast(node_feats, node_species, src, dst, r)
         blocks = sk_block(direction, v)                       # [n_edges, 4, 4]
 
         H = torch.zeros(dim, dim, device=node_feats.device, dtype=node_feats.dtype)
@@ -776,8 +827,7 @@ class SlaterKosterH(nn.Module):
         src, dst = edge_index[0], edge_index[1]
         r = edge_vector.norm(dim=-1).clamp_min(1e-9)
         direction = edge_vector / r.unsqueeze(-1)
-        v = self.integrals(node_feats[src], node_feats[dst], r,
-                           node_species[src], node_species[dst])
+        v = self.integrals_fast(node_feats, node_species, src, dst, r)
         blocks = sk_block(direction, v)                        # [n_edges, 4, 4]
 
         dim = int(n_nodes) * ORBITALS_PER_ATOM

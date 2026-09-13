@@ -49,6 +49,7 @@ from mace.modules.dscc.legacy import (DELTA_FRACTION_DEFAULT, HOP_LOG_BETA_DEFAU
 
 # Registered defaults (plan section 11: to register before use). `r_cut` is the old head's
 # 10 A; `q_cut` reaches the first shell and the Cs neighbours (Pb-Cl 2.8, Cs-Cl 3.5-4.1 A).
+N_RADIAL_DEFAULT = 6           # O3: the head's own radial basis size
 R_CUT_DEFAULT = 10.0
 Q_CUT_DEFAULT = 4.5
 A_MAX_DEFAULT = 1.0       # eV per unit |v|
@@ -124,6 +125,72 @@ def quadrupole_descriptor(edge_index: torch.Tensor, edge_vector: torch.Tensor, n
     return Q.index_add(0, sender[inside], contrib)
 
 
+class GeometricDescriptor(nn.Module):
+    """O3: the head's own atomic basis, so that nothing from the base enters `H0`.
+
+        A_i^(l) = sum_j c_{Z_i Z_j}^{(n,l)} R_n(r_ij) f_cut(r_ij) Y_l(rhat_ij),  l = 0, 1, 2
+
+    `R_n` is the orthogonal Bessel set on `[0, r_cut]` (`n = 1..N_r`, default 6) times H0's
+    own taper `(1 - (r/r_cut)^6)^2`, so the head carries ONE cutoff radius and one smoothness
+    class (C^1 at `r_cut`) across hoppings and descriptor alike. Harrison powers `(d/r)^n`
+    were considered and rejected: over a 2.8-6 A window they are a nearly collinear monomial
+    basis in `1/r`, ill conditioned by orders of magnitude and divergent at short range, and
+    nothing reads the coefficients (they feed bounded readouts), so the interpretability
+    argument that motivated them does not apply to a BASIS -- only to the hopping envelope,
+    which is one specific function and is unchanged.
+
+    `l = 0` is species-resolved and carries NO `c`: `A_{i,n,Z'} = sum_{j in Z'} R_n f_cut`,
+    `N_r x n_species` numbers per atom (18 for three species). The readout's first layer is
+    that projection, so a separate `c` for `l = 0` would be redundant. `c` remains for
+    `l = 1, 2`, where it defines the vector and the tensor.
+    """
+
+    def __init__(self, num_elements: int, r_cut: float, n_radial: int = N_RADIAL_DEFAULT) -> None:
+        super().__init__()
+        self.num_elements = int(num_elements)
+        self.r_cut = float(r_cut)
+        self.n_radial = int(n_radial)
+        # c_{Z Z'}^{(n,l)} for l = 1, 2; small init so the blocks start near absent, matching
+        # the production convention for `vector_mix` / `alpha` / `beta`.
+        self.c1 = nn.Parameter(torch.zeros(num_elements, num_elements, self.n_radial))
+        self.c2 = nn.Parameter(torch.zeros(num_elements, num_elements, self.n_radial))
+        with torch.no_grad():
+            self.c1.normal_(0.0, 1.0 / max(self.n_radial, 1) ** 0.5)
+            self.c2.normal_(0.0, 1.0 / max(self.n_radial, 1) ** 0.5)
+
+    def radial(self, r: torch.Tensor) -> torch.Tensor:
+        """`[n_edges, N_r]`: Bessel `sin(n pi r / r_cut) / r` times H0's taper."""
+        x = (r / self.r_cut).clamp(max=1.0)
+        taper = (1.0 - x ** 6) ** 2
+        n = torch.arange(1, self.n_radial + 1, dtype=r.dtype, device=r.device)
+        bessel = torch.sin(n.reshape(1, -1) * math.pi * x.reshape(-1, 1)) / r.clamp_min(1e-9).reshape(-1, 1)
+        return bessel * taper.reshape(-1, 1)
+
+    def forward(self, species: torch.Tensor, edge_index: torch.Tensor,
+                edge_vector: torch.Tensor, n_nodes: int):
+        """`(A0 [N, N_r * n_species], v [N, N_r, 3], Q [N, 3, 3])`."""
+        src, dst = edge_index[0], edge_index[1]
+        r = edge_vector.norm(dim=-1).clamp_min(1e-9)
+        R = self.radial(r)                                              # [E, N_r]
+        unit = edge_vector / r.unsqueeze(-1)
+        # l = 0, species resolved: sum over neighbours of each species, no c.
+        z_j = species[dst]
+        idx = src * self.num_elements + z_j
+        A0 = torch.zeros(n_nodes * self.num_elements, self.n_radial,
+                         dtype=R.dtype, device=R.device).index_add(0, idx, R)
+        A0 = A0.reshape(n_nodes, self.num_elements * self.n_radial)
+        # l = 1 and l = 2 carry c_{Z_i Z_j}^{(n,l)}.
+        c1 = self.c1.to(R.dtype)[species[src], z_j]                     # [E, N_r]
+        c2 = self.c2.to(R.dtype)[species[src], z_j]
+        w1 = (c1 * R).unsqueeze(-1) * unit.unsqueeze(-2)                # [E, N_r, 3]
+        v = torch.zeros(n_nodes, self.n_radial, 3, dtype=R.dtype, device=R.device).index_add(0, src, w1)
+        eye = torch.eye(3, dtype=R.dtype, device=R.device)
+        outer = unit.unsqueeze(-1) * unit.unsqueeze(-2) - eye / 3.0     # [E, 3, 3], traceless
+        w2 = (c2 * R).sum(-1).reshape(-1, 1, 1) * outer
+        Q = torch.zeros(n_nodes, 3, 3, dtype=R.dtype, device=R.device).index_add(0, src, w2)
+        return A0, v, Q
+
+
 class H0(nn.Module):
     """The runtime Hamiltonian for ONE graph (dense; the batched path stacks equal sizes)."""
 
@@ -134,10 +201,19 @@ class H0(nn.Module):
                  on_site_range: float = ON_SITE_RANGE_DEFAULT, hidden: int = 64,
                  eta: float = ETA_DEFAULT, beta_b: float = 0.0, beta_a: float = 0.0,
                  delta_frac: float = DELTA_FRACTION_DEFAULT,
-                 readout_hidden: int = READOUT_HIDDEN_DEFAULT) -> None:
+                 readout_hidden: int = READOUT_HIDDEN_DEFAULT,
+                 decoupled: bool = False, n_radial: int = N_RADIAL_DEFAULT) -> None:
         super().__init__()
         self.atomic_numbers = [int(z) for z in atomic_numbers]
         num_elements = len(self.atomic_numbers)
+        # O3: the head owns its descriptor and reads nothing from the base. The readout path
+        # is production's, unchanged -- only its INPUT changes, so a failed gate is
+        # attributable to the descriptor and not to normalisation.
+        self.decoupled = bool(decoupled)
+        if self.decoupled:
+            self.descriptor = GeometricDescriptor(num_elements, float(r_cut), n_radial)
+            feature_dim = n_radial * num_elements          # species-resolved l = 0
+            n_vectors = n_radial
         self.r_cut, self.q_cut = float(r_cut), float(q_cut)
         self.directional = bool(directional)
         self.a_max, self.b_max = float(a_max), float(b_max)
@@ -302,10 +378,10 @@ class H0(nn.Module):
 
     def directional_block(self, scalars: torch.Tensor, vectors: torch.Tensor,
                           species: torch.Tensor, edge_index: torch.Tensor,
-                          edge_vector: torch.Tensor) -> torch.Tensor:
+                          edge_vector: torch.Tensor, Q: Optional[torch.Tensor] = None) -> torch.Tensor:
         """`H_onsite_dir` as a dense `[4N, 4N]` block-diagonal matrix."""
         return torch.block_diag(*self.directional_site_blocks(scalars, vectors, species,
-                                                              edge_index, edge_vector))
+                                                              edge_index, edge_vector, Q))
 
     def batched(self, scalars: torch.Tensor, vectors: Optional[torch.Tensor], species: torch.Tensor,
                 edge_index: torch.Tensor, edge_vector: torch.Tensor, batch: torch.Tensor,
@@ -315,8 +391,12 @@ class H0(nn.Module):
         per-graph Python loop and its slicing -- which the training-step profile put at a
         third of the backward. `edge_index` is global (batch-concatenated), `batch` the
         graph of every node."""
-        scalars = scalars.to(torch.float64)
         edge_vector = edge_vector.to(torch.float64)
+        Q_geo = None
+        if self.decoupled:                 # O3: nothing from the base enters H0
+            scalars, vectors, Q_geo = self.geometric_inputs(
+                species, edge_index, edge_vector, int(species.shape[0]))
+        scalars = scalars.to(torch.float64)
         local = torch.arange(scalars.shape[0], device=scalars.device) - batch * n_nodes
         edge_graph = batch[edge_index[0]]
         H = self.sk.batched(scalars, species, edge_index, edge_vector, local, edge_graph, n_nodes, num_graphs)
@@ -330,7 +410,7 @@ class H0(nn.Module):
             if vectors is None:
                 raise ValueError("the directional block needs the base's l = 1 features")
             blocks = self.directional_site_blocks(scalars, vectors.to(torch.float64), species,
-                                                  edge_index, edge_vector)
+                                                  edge_index, edge_vector, Q_geo)
             # Scatter the [N, 4, 4] site blocks onto the block diagonals of [B, 4n, 4n].
             o = torch.arange(ORBITALS_PER_ATOM, device=H.device)
             rows = (local * ORBITALS_PER_ATOM).reshape(-1, 1, 1) + o.reshape(1, -1, 1)
@@ -346,15 +426,21 @@ class H0(nn.Module):
             H = H + float(self.gauge_shift) * eye
         return H
 
+    def geometric_inputs(self, species, edge_index, edge_vector, n_nodes):
+        """O3: `(A0, v, Q)` from geometry alone -- the head's inputs when `decoupled`."""
+        return self.descriptor(species, edge_index, edge_vector, n_nodes)
+
     def directional_site_blocks(self, scalars: torch.Tensor, vectors: torch.Tensor,
                                 species: torch.Tensor, edge_index: torch.Tensor,
-                                edge_vector: torch.Tensor) -> torch.Tensor:
+                                edge_vector: torch.Tensor, Q: Optional[torch.Tensor] = None
+                                ) -> torch.Tensor:
         """`H_onsite_dir` as `[N, 4, 4]` site blocks (global node indexing). `scalars` enters
         only through A1's environment factors, and only when their bounds are nonzero."""
         n = int(species.shape[0])
         a_i, b_i = self.site_coefficients(scalars.to(vectors.dtype), species)
         v = torch.einsum("nc,nca->na", self.vector_mix[species].to(vectors.dtype), vectors)
-        Q = quadrupole_descriptor(edge_index, edge_vector, n, self.q_cut)
+        if Q is None:                     # O3 passes its own l = 2 tensor
+            Q = quadrupole_descriptor(edge_index, edge_vector, n, self.q_cut)
         block = torch.zeros(n, ORBITALS_PER_ATOM, ORBITALS_PER_ATOM, dtype=vectors.dtype, device=vectors.device)
         sp = a_i.unsqueeze(-1) * v
         block[:, 0, 1:] = sp
@@ -369,8 +455,11 @@ class H0(nn.Module):
         are the base's first-block features (frozen w.r.t. base parameters, attached to
         positions and cell); `edge_index`, `edge_vector` the head's graph at `r_cut`."""
         n = int(species.shape[0])
-        scalars = scalars.to(torch.float64)
         edge_vector = edge_vector.to(torch.float64)
+        Q_geo = None
+        if self.decoupled:                 # O3, as in `batched`
+            scalars, vectors, Q_geo = self.geometric_inputs(species, edge_index, edge_vector, n)
+        scalars = scalars.to(torch.float64)
         H = self.sk(scalars, species, edge_index, edge_vector, madelung=None, n_nodes=n)
         levels = self.sk.on_site(scalars, species, None)
         diag = torch.cat([levels[:, :1], levels[:, 1:].expand(-1, 3)], dim=-1).reshape(-1)
@@ -379,7 +468,7 @@ class H0(nn.Module):
             if vectors is None:
                 raise ValueError("the directional block needs the base's l = 1 features")
             H = H + self.directional_block(scalars, vectors.to(torch.float64), species,
-                                           edge_index, edge_vector)
+                                           edge_index, edge_vector, Q_geo)
         H = 0.5 * (H + H.transpose(0, 1))
         if self.site_shift is not None:
             H = H + torch.diag(self.site_shift.to(H.dtype).to(H.device).repeat_interleave(ORBITALS_PER_ATOM))

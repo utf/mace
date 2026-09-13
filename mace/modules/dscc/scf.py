@@ -9,7 +9,7 @@ site charge difference `dq_i = -Tr(Pi_i dP)` (which sums to `Q` exactly).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import torch
 
@@ -55,7 +55,8 @@ class TwoFillings:
 
 
 def two_fillings(H: torch.Tensor, n_s: Tuple[int, int], n_ref: Tuple[int, int],
-                 sigma_s: float = SIGMA_S, eigh_device: str = "auto") -> TwoFillings:
+                 sigma_s: float = SIGMA_S, eigh_device: str = "auto",
+                 spectrum: Optional[Sequence[torch.Tensor]] = None) -> TwoFillings:
     """Fill one `H` at the state's and the reference's per-spin counts: one `eigh`, ONE
     chemical-potential solve for the distinct counts (v5 W2 item 5: it was eight), a spin
     channel whose counts agree in state and reference skipped exactly (its two fills would
@@ -65,8 +66,13 @@ def two_fillings(H: torch.Tensor, n_s: Tuple[int, int], n_ref: Tuple[int, int],
     levels, `dP` formed from the active vectors on demand. With gradients enabled (training,
     the attached pass) the eager fills with the divided-difference backward are used, so
     the training gradient is unchanged."""
-    with torch.no_grad():
-        eps, U = eigh_for(H, eigh_device)
+    if spectrum is None:
+        with torch.no_grad():
+            eps, U = eigh_for(H, eigh_device)
+    else:
+        # O2 (folded into O3): the caller already ran the eigendecomposition -- on the CPU,
+        # underneath the base's GPU window. Same numbers, computed earlier.
+        eps, U = (t.detach() for t in spectrum)
     spectrum = (eps, U)
     batch_shape = eps.shape[:-1]
     n_orb = eps.shape[-1]

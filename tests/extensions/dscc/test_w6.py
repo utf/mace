@@ -97,7 +97,7 @@ class TestTerms:
         cell = torch.tensor(np.array(VACP.get_cell()), dtype=torch.float64).reshape(1, 3, 3)
         with torch.no_grad():
             sol = two_fillings(H, counts_s, counts_r, w6.sigma_s)
-            _, _, _, dq, _ = w6.scf_free_terms(H, eigh_for(H, "auto"), counts_s, counts_r,
+            _, _, _, dq, _, _ = w6.scf_free_terms(H, eigh_for(H, "auto"), counts_s, counts_r,
                                                torch.zeros(1, n, dtype=torch.float64),
                                                pos, cell, torch.ones(1, dtype=torch.float64), False)
         assert float((dq - sol.dq).abs().max()) < 1e-10
@@ -287,3 +287,158 @@ class TestDerivatives:
             w6.scf_free_terms = original
         assert float((out["energy"] - detached["energy"]).abs()) < 1e-12
         assert float((out["forces"] - detached["forces"]).abs().max()) > 1e-4
+
+
+class TestO1FusedAssembly:
+    """O1: the hopping MLP deduplicated by unordered node pair. Its descriptor is symmetric
+    in (i, j) and carries no `r`, so it is a function of the node pair alone while the edge
+    list holds both directions and every periodic image -- 9122 edges collapse to 2872 pairs
+    on a 79-atom frame, and the float64 GEMM over a 2 x 512-wide input was the whole assembly
+    cost."""
+
+    def test_integrals_fast_matches_the_reference(self, w6):
+        batch = _batch([VACP])
+        out = w6.base_forward(w6._trunk_data(dict(batch)), compute_force=False)
+        scalars, _ = w6.features(out["node_feats"])
+        scalars = scalars.to(torch.float64)
+        species = batch["node_attrs"].argmax(dim=-1)
+        src, dst = batch["edge_index"][0], batch["edge_index"][1]
+        ev = batch["positions"][dst] - batch["positions"][src] + batch["shifts"]
+        r = ev.norm(dim=-1).clamp_min(1e-9)
+        sk = w6.h0.sk
+        ref = sk.integrals(scalars[src], scalars[dst], r, species[src], species[dst])
+        fast = sk.integrals_fast(scalars, species, src, dst, r)
+        assert float((fast - ref).abs().max()) < 1e-12 * max(float(ref.abs().max()), 1.0)
+
+    def test_the_deduplication_is_real(self, w6):
+        """If the edge list were already unique per pair the optimisation would be a no-op."""
+        batch = _batch([VACP])
+        src, dst = batch["edge_index"][0], batch["edge_index"][1]
+        n = int(batch["positions"].shape[0])
+        pairs = torch.unique(torch.minimum(src, dst) * n + torch.maximum(src, dst)).numel()
+        assert pairs < 0.6 * src.numel()
+
+
+# --------------------------------------------------------------------------- O3
+
+
+def _o3(seed=0, n_radial=4):
+    """O3: the decoupled head. Nothing from the base enters `H0` -- the descriptor is the
+    head's own (Bessel x taper, species-resolved `l = 0`), the hopping modulation is gone.
+    Built with the same off-zero `alpha`/`beta`/`vector_mix` as `_w6`, so the rank-1 and
+    rank-2 on-site blocks are live and their derivatives are exercised."""
+    m = MACEDSCC(_base(seed), r_cut=R_CUT, directional=True, hidden=16, coupling=False,
+                 route_b=True, scf_free=True, decoupled=True, n_radial=n_radial,
+                 kernel=KernelConfig(regime="B", r_g=1.0, r_s=5.0))
+    with torch.no_grad():
+        m.h0.vector_mix.normal_(0.0, 0.3)
+        m.h0.alpha.fill_(0.5)
+        m.h0.beta.fill_(0.5)
+        m.h0.descriptor.c1.normal_(0.0, 0.5)
+        m.h0.descriptor.c2.normal_(0.0, 0.5)
+    m.set_pristine_reference([_batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])])
+    return m
+
+
+@pytest.fixture(scope="module")
+def o3():
+    return _o3()
+
+
+class TestO3Decoupled:
+    def test_the_head_reads_nothing_from_the_base(self):
+        """Perturbing every base parameter must leave the HEAD energy bit-identical (the
+        base energy of course moves); the head is decoupled by construction, not by
+        a small number."""
+        m = _o3(seed=2)
+        batch = _batch([VACP])
+        before = float(m(dict(batch), compute_force=False)["head_energy"])
+        with torch.no_grad():
+            for p in m.base.parameters():
+                p.add_(0.05 * torch.randn_like(p))
+        after = float(m(dict(batch), compute_force=False)["head_energy"])
+        assert after == before
+
+    def test_no_feature_statistics_are_required(self, o3):
+        assert o3.require_feature_stats is False
+        assert not bool(o3.h0.sk.feat_stats_set)
+        assert float(o3(_batch([VACP]), compute_force=False)["energy"]) == pytest.approx(
+            float(o3(_batch([VACP]), compute_force=False)["energy"]), abs=0.0)
+
+    def test_neutral_null_is_still_the_base(self, o3):
+        out = o3(_batch([VAC0]), compute_force=True)
+        assert out["short_circuit"] and float(out["head_energy"].abs().max()) == 0.0
+
+    def test_batched_equals_per_graph(self, o3):
+        one = o3(_batch([VACP]), compute_force=True)
+        two = o3(_batch([VACP, VACX]), compute_force=True)
+        assert float(two["energy"][0] - one["energy"][0]) == pytest.approx(0.0, abs=1e-9)
+        assert float((two["forces"][:len(VACP)] - one["forces"]).abs().max()) < 1e-9
+
+    def test_forces_against_central_differences(self, o3):
+        out = o3(_batch([VACP]), compute_force=True)
+        h = 1e-4
+        for atom, comp in ((1, 0), (7, 2), (20, 1)):
+            plus, minus = VACP.copy(), VACP.copy()
+            plus.positions[atom, comp] += h
+            minus.positions[atom, comp] -= h
+            e_plus = float(o3(_batch([plus]), compute_force=False)["energy"])
+            e_minus = float(o3(_batch([minus]), compute_force=False)["energy"])
+            assert float(out["forces"][atom, comp]) == pytest.approx(-(e_plus - e_minus) / (2 * h), abs=3e-6)
+
+    def test_stress_against_strain_differences(self, o3):
+        out = o3(_batch([VACP]), compute_force=False, compute_stress=True)
+        volume = VACP.get_volume()
+        h = 1e-5
+        for i, j in ((0, 0), (0, 2)):
+            e = []
+            for sign in (1.0, -1.0):
+                strained = VACP.copy()
+                eps = np.zeros((3, 3)); eps[i, j] = eps[j, i] = sign * h
+                strained.set_cell(np.array(VACP.get_cell()) @ (np.eye(3) + eps), scale_atoms=True)
+                e.append(float(o3(_batch([strained]), compute_force=False)["energy"]))
+            fd = (e[0] - e[1]) / (2 * h) / volume
+            expected = float(out["stress"][0, i, j] + (out["stress"][0, j, i] if i != j else 0.0))
+            assert expected == pytest.approx(fd, abs=1e-7)
+
+    def test_training_and_inference_forces_agree(self, o3):
+        batch = _batch([VACP])
+        a = o3(dict(batch), training=False, compute_force=True)["forces"]
+        b = o3(dict(batch), training=True, compute_force=True)["forces"]
+        assert float((a - b.detach()).abs().max()) < 1e-9
+
+    def test_the_analytic_force_route_matches_the_autograd_route(self, o3):
+        """The closed-form Hellmann-Feynman contraction against the cotangent route it
+        replaces -- the same model, the same frame, two derivative routes. FD (above) bounds
+        both at 3e-6; this one has to be exact."""
+        assert o3.analytic_head_forces is True
+        batch = _batch([VACP, VACX])
+        fast = o3(dict(batch), compute_force=True)
+        o3.analytic_head_forces = False
+        try:
+            ref = o3(dict(batch), compute_force=True)
+        finally:
+            o3.analytic_head_forces = True
+        assert float((fast["energy"] - ref["energy"]).abs().max()) < 1e-12
+        assert float((fast["forces"] - ref["forces"]).abs().max()) < 1e-9
+        assert float(ref["forces"].abs().max()) > 1e-3        # not a comparison of zeros
+
+    def test_the_analytic_route_forms_no_density_matrix(self, o3):
+        """The point of running the head under `no_grad`: `two_fillings` takes its frontier
+        path, so the [4n, 4n] density is never built."""
+        seen = []
+        import mace.modules.dscc.scf as _scf
+        real = _scf.two_fillings
+
+        def spy(*a, **k):
+            out = real(*a, **k)
+            seen.append(out._dP is not None)      # the property BUILDS it; ask the field
+            return out
+        _scf.two_fillings, mdl = spy, __import__("mace.modules.dscc.model", fromlist=["x"])
+        mdl_two = mdl.two_fillings
+        mdl.two_fillings = spy
+        try:
+            o3(_batch([VACP]), compute_force=True)
+        finally:
+            _scf.two_fillings, mdl.two_fillings = real, mdl_two
+        assert seen and not any(seen)

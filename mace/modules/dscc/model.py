@@ -34,6 +34,7 @@ from mace.modules.models import ScaleShiftMACE
 from mace.modules.dscc.fill import SIGMA_S
 from mace.modules.dscc.hamiltonian import (A_MAX_DEFAULT, B_MAX_DEFAULT, DELTA_FRACTION_DEFAULT,
                                            ETA_DEFAULT, H0, Q_CUT_DEFAULT, R_CUT_DEFAULT)
+from mace.modules.dscc.analytic import assemble_compiled, h0_position_gradient, head_cotangent
 from mace.modules.dscc.ewald import COULOMB, gradient_of_contraction, madelung_self
 from mace.modules.dscc.kernels import (KernelConfig, gamma_lr, gamma_matrix, gamma_pair_derivative, host_potential,
                                        kernel_components, kernel_pair_gradients, gamma_lr_pair_gradient)
@@ -41,7 +42,7 @@ from mace.modules.dscc.scf import (ScfOptions, ScfResult, continuation_solve, co
                                    solve_dscc, solve_dscc_batched, two_fillings)
 from mace.modules.dscc.species import (N0, S_REF, State, U_MAX_GFN1, neutral_count,
                                        states_from_batch)
-from mace.modules.dscc.fill import eigh_for, fill, site_occupation
+from mace.modules.dscc.fill import DEGENERACY_TOL, eigh_for, fill, site_occupation
 from mace.modules.dscc.fscc import fscc_head, excess_trace_norm
 
 # Registered defaults for the bounded learnables (plan section 2.4; to confirm before use).
@@ -84,11 +85,16 @@ class MACEDSCC(nn.Module):
     # calls `set_extra_state`, so an instance attribute alone would break every earlier
     # checkpoint -- which it did, on the first benchmark of the Phi = 0 arms.
     scf_free: bool = False
+    decoupled: bool = False    # O3; class-level default for pre-O3 checkpoints
+    # The analytic head force (`mace.modules.dscc.analytic`). On by default for the decoupled
+    # head at inference; set False to fall back to the autograd cotangent route, which is the
+    # reference the gate compares against. Class level for the same pickle reason as above.
+    analytic_head_forces: bool = True
 
     def __init__(self, base: nn.Module, *, r_cut: float = R_CUT_DEFAULT,
                  kernel: Optional[KernelConfig] = None, sigma_s: float = SIGMA_S,
                  coupling: bool = False, route_b: bool = False, scf_free: bool = False,
-                 directional: bool = True,
+                 decoupled: bool = False, n_radial: int = 6, directional: bool = True,
                  lambda_0: float = LAMBDA_0_DEFAULT, lambda_max: float = LAMBDA_MAX_DEFAULT,
                  u_max: Optional[Dict[int, float]] = None, r_split: float = R_SPLIT_DEFAULT,
                  q_cut: float = Q_CUT_DEFAULT, a_max: float = A_MAX_DEFAULT,
@@ -123,10 +129,15 @@ class MACEDSCC(nn.Module):
         self.lambda_max = float(lambda_max)
         n_s, n_v, self.block0_width = block0_layout(base)
         self.n_scalars, self.n_vectors = n_s, n_v
+        # O3: the head owns its descriptor (Bessel x H0's taper, species-resolved l = 0)
+        # and reads nothing from the base; the hopping modulation goes with it.
+        self.decoupled = bool(decoupled)
         self.h0 = H0(self.atomic_numbers, feature_dim=n_s, n_vectors=n_v, r_cut=self.r_cut,
                      q_cut=q_cut, directional=directional, a_max=a_max, b_max=b_max,
                      hidden=hidden, eta=eta, beta_b=beta_b, beta_a=beta_a,
-                     delta_frac=delta_frac)
+                     delta_frac=delta_frac, decoupled=self.decoupled, n_radial=n_radial)
+        if self.decoupled:
+            self.h0.sk.hop_modulation = False
         n_el = len(self.atomic_numbers)
         u_max = dict(u_max or U_MAX_GFN1)
         self.register_buffer("u_max", torch.tensor([float(u_max[z]) for z in self.atomic_numbers],
@@ -151,7 +162,9 @@ class MACEDSCC(nn.Module):
         # statistics reproduces the A1 failure silently (corrections that never leave 0.1 eV),
         # so this is a hard guard rather than a default. Set False only for unit tests that
         # build an `H0` directly and do not care about conditioning.
-        self.require_feature_stats = True
+        # A decoupled head has no base features to standardise, so the A1.1 guard does not
+        # apply to it (and `set_feature_stats` is a no-op there).
+        self.require_feature_stats = not self.decoupled
         self.register_buffer("q0_pristine", torch.zeros(n_el, dtype=torch.float64))   # species means
         self.register_buffer("pristine_atoms", torch.tensor(0, dtype=torch.long))
         # C_Q: one constant per formal charge, with its record (plan section 6); both in
@@ -166,6 +179,7 @@ class MACEDSCC(nn.Module):
                 "r_cut": self.r_cut, "sigma_s": self.sigma_s,
                 "coupling": self.coupling, "route_b": self.route_b, "r_split": self.r_split,
                 "scf_free": getattr(self, "scf_free", False),
+                "decoupled": getattr(self, "decoupled", False),
                 "lambda_max": self.lambda_max, "c_q_table": dict(self.c_q_table),
                 "calibration_record": self.calibration_record,
                 "coupling_mode": getattr(self, "coupling_mode", "full"), "fscc": getattr(self, "fscc", ""),
@@ -178,6 +192,7 @@ class MACEDSCC(nn.Module):
         self.r_cut, self.sigma_s = float(state["r_cut"]), float(state["sigma_s"])
         self.coupling, self.route_b = bool(state["coupling"]), bool(state["route_b"])
         self.scf_free = bool(state.get("scf_free", False))      # W6; absent in pre-W6 checkpoints
+        self.decoupled = bool(state.get("decoupled", False))    # O3
         self.r_split, self.lambda_max = float(state["r_split"]), float(state["lambda_max"])
         self.c_q_table = {int(k): float(v) for k, v in state.get("c_q_table", {}).items()}
         self.calibration_record = state.get("calibration_record")
@@ -311,7 +326,7 @@ class MACEDSCC(nn.Module):
 
     def scf_free_terms(self, H: torch.Tensor, spectrum, counts_s, counts_r, n0: torch.Tensor,
                        positions: torch.Tensor, cell: torch.Tensor, charges: torch.Tensor,
-                       use_pairs: bool):
+                       use_pairs: bool, need_cotangents: bool = False):
         """W6: the two SCF-free terms that sit on top of the `Phi = 0` band energy, from the
         SAME eigendecomposition the fill used.
 
@@ -331,7 +346,9 @@ class MACEDSCC(nn.Module):
 
         Batched throughout (`H [B, 4n, 4n]`, `positions [B, N, 3]`, `cell [B, 3, 3]`); the
         per-graph branch calls it at `B = 1`, so the two paths agree by construction.
-        Returns `(e_host [B], e_M [B], pair_grad [B, N, 3] or None, dq [B, N], q0 [B, N])`.
+        Returns `(e_host [B], e_M [B], pair_grad [B, N, 3] or None, dq [B, N], q0 [B, N],
+        occ_cotangents)`; the last is `(dE_host/d occ_S, dE_host/d occ_R)` when asked for
+        (the analytic force route) and None otherwise.
         """
         n_graphs = H.shape[0]
         occ_s = site_occupation(H, spectrum, counts_s[0], counts_s[1], self.sigma_s)
@@ -343,7 +360,14 @@ class MACEDSCC(nn.Module):
                                          self.kernel.eps_inf, tol=self.kernel.tol,
                                          route=self._lr_route(), background=self._background())
                                 for g in range(n_graphs)])
-        e_host = (dq * torch.einsum("bij,bj->bi", g_lr, sq0)).sum(-1)
+        w = torch.einsum("bij,bj->bi", g_lr, sq0)
+        e_host = (dq * w).sum(-1)
+        # The analytic route needs `d E_host / d occ` explicitly, where the cotangent route
+        # gets it from `(e_host, 1)`: `dq = occ_R - occ_S` and `s q0 = s (n0 - occ_R)`, so
+        # `dE/d occ_S = -Gamma_LR s q0` and `dE/d occ_R = Gamma_LR s q0 - s Gamma_LR^T dq`.
+        occ_cotangents = None
+        if need_cotangents:
+            occ_cotangents = (-w, w - self.pattern_scale() * torch.einsum("bji,bj->bi", g_lr, dq))
         pair_grad = None
         if use_pairs:
             with torch.no_grad():
@@ -364,7 +388,7 @@ class MACEDSCC(nn.Module):
         volume = torch.det(cell).abs()
         second_moment = 4.0 * math.pi * self.kernel.r_g ** 2 * COULOMB / volume
         e_m = 0.5 * charges ** 2 * (xi + second_moment) / self.kernel.eps_inf
-        return e_host, e_m, pair_grad, dq, q0
+        return e_host, e_m, pair_grad, dq, q0, occ_cotangents
 
     def compensation_cloud(self, q0: torch.Tensor, species: torch.Tensor, positions: torch.Tensor,
                            cell: torch.Tensor) -> Dict[str, float]:
@@ -657,14 +681,27 @@ class MACEDSCC(nn.Module):
         cached_base = (torch.is_tensor(data.get("dscc_base_energy")) and torch.is_tensor(data.get("dscc_base_forces"))
                        and not compute_stress)
         if cached_base:
-            node_feats = self.first_block(self._trunk_data(strained))
+            # O3: a decoupled head reads nothing from the base, so with E_base/F_base cached
+            # the base is not evaluated at all -- block 0 and its `create_graph` traversal
+            # leave the training step entirely.
+            node_feats = None if self.decoupled else self.first_block(self._trunk_data(strained))
             e_base = data["dscc_base_energy"].reshape(num_graphs).to(torch.float64)
             f_base = data["dscc_base_forces"].to(torch.float64)
+        elif self.decoupled:
+            # O2 folded into O3: the head reads nothing from the base, so the base is DEFERRED
+            # until H0 has been assembled and copied to the CPU. Issuing it then lets its GPU
+            # window run underneath the CPU eigendecomposition and the fills.
+            node_feats, e_base, f_base = None, None, None
         else:
             out = self.base_forward(self._trunk_data(strained), training=training,
                                          compute_force=False)
             node_feats, e_base, f_base = out["node_feats"], out["energy"], None
-        scalars, vectors = self.features(node_feats)
+        deferred_base = self.decoupled and not cached_base
+
+        def run_base():
+            o = self.base_forward(self._trunk_data(strained), training=training, compute_force=False)
+            return o["energy"]
+        scalars, vectors = (None, None) if self.decoupled else self.features(node_feats)
         species = data["node_attrs"].argmax(dim=-1)
         edge_vector = positions[receiver] - positions[sender] + shifts
         ptr = data["ptr"]
@@ -695,13 +732,30 @@ class MACEDSCC(nn.Module):
             warm_start = None
         uniform = (all(not s_.is_reference for s_ in states) and bool((sizes == sizes[0]).all())
                    and not getattr(self, "fscc", ""))
+        # O3 + the analytic head force (coadvisor 2026-09-13). When the head is decoupled its
+        # position derivative is a closed-form contraction over edges, so the whole head --
+        # assembly, fills, `E_host` -- runs under `no_grad` and `mace.modules.dscc.analytic`
+        # supplies the gradient. Two things fall out: autograd never walks the assembly graph,
+        # and `two_fillings` takes its frontier path, so no density matrix is formed (the
+        # eager `_DensityMatrix` was 8 ms of the 159-atom step). Inference only -- under
+        # `create_graph` the parameter gradient still needs the graph -- and forces only; the
+        # stress keeps the cotangent route, which needs the strain graph anyway.
+        analytic = (uniform and self.decoupled and self.scf_free and not self.coupling
+                    and compute_force and not compute_stress and not create
+                    and getattr(self, "analytic_head_forces", True))
+        analytic_pack = None
         if uniform:
             # Equal sizes, no reference graph: one [B, 4n, 4n] Hamiltonian, batched fills
             # (and the batched solver when the coupling is on), block-diagonal cotangents --
             # the per-graph path below is the reference it is tested against.
             n_nodes = int(sizes[0])
-            H = self.h0.batched(scalars, vectors, species, data["edge_index"], edge_vector, batch,
-                                num_graphs, n_nodes)
+            if analytic:
+                with torch.no_grad():
+                    H = assemble_compiled(self.h0, scalars, vectors, species, data["edge_index"],
+                                          edge_vector, batch, num_graphs, n_nodes)
+            else:
+                H = self.h0.batched(scalars, vectors, species, data["edge_index"], edge_vector, batch,
+                                    num_graphs, n_nodes)
             n_up, n_dn, r_up, r_dn, n0_rows = [], [], [], [], []
             for g, state in enumerate(states):
                 numbers = [self.atomic_numbers[int(x)] for x in species[int(ptr[g]):int(ptr[g + 1])].tolist()]
@@ -712,20 +766,35 @@ class MACEDSCC(nn.Module):
             t = lambda v: torch.tensor(v, dtype=torch.float64, device=device)  # noqa: E731
             counts_s, counts_r = (t(n_up), t(n_dn)), (t(r_up), t(r_dn))
             if not self.coupling:
-                sol = two_fillings(H, counts_s, counts_r, self.sigma_s)
+                spectrum = None
+                if deferred_base:
+                    # D2H first (it waits only on H0's kernels), then issue the base, then do
+                    # the CPU eigendecomposition while the GPU works through it.
+                    H_cpu = H.detach().to("cpu")
+                    e_base = run_base()
+                    with torch.no_grad():
+                        eps_c, U_c = torch.linalg.eigh(H_cpu)
+                    spectrum = (eps_c.to(H.device), U_c.to(H.device))
+                with torch.set_grad_enabled(torch.is_grad_enabled() and not analytic):
+                    sol = two_fillings(H, counts_s, counts_r, self.sigma_s, spectrum=spectrum)
                 head_energy = sol.energy
-                cotangent_terms.append((H, 0.5 * (sol.dP + sol.dP.transpose(-1, -2))))
+                if not analytic:
+                    cotangent_terms.append((H, 0.5 * (sol.dP + sol.dP.transpose(-1, -2))))
                 dq_all = sol.dq.reshape(-1)
                 if self.scf_free:                                   # W6
                     pos_b = positions.reshape(num_graphs, n_nodes, 3)
                     q_form = t([float(s_.Q) for s_ in states])
-                    e_host, e_m, pg, _, q0 = self.scf_free_terms(
-                        H, (sol.fills[0].eps, sol.fills[0].U), counts_s, counts_r, t(n0_rows),
-                        pos_b, cell, q_form, use_pairs)
+                    with torch.set_grad_enabled(torch.is_grad_enabled() and not analytic):
+                        e_host, e_m, pg, _, q0, occ_cot = self.scf_free_terms(
+                            H, (sol.fills[0].eps, sol.fills[0].U), counts_s, counts_r, t(n0_rows),
+                            pos_b, cell, q_form, use_pairs, need_cotangents=analytic)
                     head_energy = head_energy + e_host + e_m
-                    cotangent_terms.append((e_host, torch.ones_like(e_host)))
-                    if compute_stress:      # E_M is a function of the cell alone: no force
-                        cotangent_terms.append((e_m, torch.ones_like(e_m)))
+                    if analytic:
+                        analytic_pack = (sol.fills, occ_cot, n_nodes)
+                    else:
+                        cotangent_terms.append((e_host, torch.ones_like(e_host)))
+                        if compute_stress:  # E_M is a function of the cell alone: no force
+                            cotangent_terms.append((e_m, torch.ones_like(e_m)))
                     if pg is not None:
                         pair_grad = pair_grad + pg.reshape(-1, 3)
                     diagnostics["q0_sum"] = q0.detach().sum(-1).cpu().tolist()
@@ -960,7 +1029,7 @@ class MACEDSCC(nn.Module):
                 if self.scf_free:                                   # W6, at B = 1
                     one = lambda v: torch.tensor([float(v)], dtype=torch.float64, device=device)  # noqa: E731
                     n0_g = torch.tensor([[float(N0[z]) for z in numbers]], dtype=torch.float64, device=device)
-                    e_host, e_m, pg, _, q0 = self.scf_free_terms(
+                    e_host, e_m, pg, _, q0, _ = self.scf_free_terms(
                         H.unsqueeze(0), (sol.fills[0].eps.unsqueeze(0), sol.fills[0].U.unsqueeze(0)),
                         (one(n_s[0]), one(n_s[1])), (one(n_r[0]), one(n_r[1])), n0_g,
                         positions[nodes].unsqueeze(0), cell[g].unsqueeze(0), one(state.Q), use_pairs)
@@ -977,6 +1046,8 @@ class MACEDSCC(nn.Module):
                 dq_all[nodes] = sol.dq
                 diagnostics["dq_sum"].append(float(sol.dq.sum()))
             diagnostics["n_atoms"].append(hi - lo)
+        if e_base is None:                      # per-graph path with a deferred base
+            e_base = run_base()
         c_q = torch.stack([self.c_q(s.Q) for s in states]).to(device)
         energy_uncal = e_base + head_energy
         result: Dict[str, Optional[torch.Tensor]] = {
@@ -1021,7 +1092,7 @@ class MACEDSCC(nn.Module):
                 # -> 928 ms; outputs and parameter gradients unchanged (`ref_before.json`).
                 terms = ([(([t for t, _ in cotangent_terms]), [c for _, c in cotangent_terms])]
                          if FUSED_HF_BACKWARD else [([t], [c]) for t, c in cotangent_terms])
-                for tensors, cots in terms:
+                for tensors, cots in ([] if not cotangent_terms else terms):
                     g_head = torch.autograd.grad(tensors, inputs, grad_outputs=cots,
                                                  create_graph=create, retain_graph=True,
                                                  allow_unused=True)
@@ -1030,6 +1101,18 @@ class MACEDSCC(nn.Module):
                             grads[k] = grads[k] + g
                 if pair_grad is not None:
                     grads[0] = grads[0] + pair_grad
+            if analytic_pack is not None:
+                # The head's Hellmann-Feynman contraction in closed form: ONE `X` carrying
+                # both the band term's `dP` and `E_host`'s two Frechet pullbacks (they share
+                # `U`), contracted with `d H0/dR` over the edges.
+                fills, occ_cot, n_nodes = analytic_pack
+                g_s, g_r = occ_cot if occ_cot is not None else (None, None)
+                with torch.no_grad():
+                    X = head_cotangent(fills, g_s, g_r, self.sigma_s, DEGENERACY_TOL)
+                    local = torch.arange(positions.shape[0], device=device) - batch * n_nodes
+                    grads[0] = grads[0] + h0_position_gradient(
+                        self.h0, X, species, data["edge_index"], edge_vector.detach(),
+                        local, batch, edge_graph, n_nodes, num_graphs)
             result["forces"] = -grads[0]
             if compute_stress:
                 volume = torch.det(data["cell"].view(-1, 3, 3)).abs()

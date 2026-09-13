@@ -93,6 +93,7 @@ class TrainConfig:
     coupling_mode: str = "full"       # Arm 2+3: lr_only | lr_u | full | lambda1
     route_b: bool = False
     scf_free: bool = False             # W6: SCF-free (route B' pattern, no solve)
+    decoupled: bool = False            # O3: head-owned atomic basis
     directional: bool = True          # False: the scalar-only control
     regime: str = "B"
     stratum_weights: Dict[str, float] = field(default_factory=dict)   # frozen per stratum key
