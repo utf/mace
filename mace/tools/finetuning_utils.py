@@ -347,6 +347,13 @@ def load_foundations_elements_default(
     for attr_name, module in model.named_children():
         if attr_name in _handled_attrs:
             continue
+        if not hasattr(model_foundations, attr_name):
+            # A module the fine-tuned model ADDS and the foundation does not have: MACELES's
+            # `les` and `les_readouts` are the case in hand. There is nothing to transfer --
+            # they are new modules and are learned -- and without this guard the loop raises
+            # `AttributeError: 'ScaleShiftMACE' object has no attribute 'les'` and no LES model
+            # can be fine-tuned from a plain foundation at all.
+            continue
         submodules = (
             list(zip(module, model_foundations.__dict__["_modules"][attr_name]))
             if isinstance(module, torch.nn.ModuleList)

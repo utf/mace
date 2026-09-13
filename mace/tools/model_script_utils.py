@@ -367,10 +367,32 @@ def _build_model(
     if args.model == "FoundationMACELES":
         from mace.modules.extensions import MACELES
 
-        return MACELES(
+        model = MACELES(
             les_arguments=args.les_arguments,
             **model_config_foundation,
         )
+        # ZERO THE LATENT-CHARGE READOUTS when starting from a foundation model.
+        #
+        # `load_foundations_elements` transfers the backbone and the ENERGY readouts but not
+        # `les_readouts`, which are new modules with a fresh initialisation -- so the Ewald
+        # term starts as a random long-range energy on top of an already-good potential.
+        # Measured on MH-1 + CsPbCl3: the initial validation error was 8332 meV/atom and
+        # 1474 meV/A, against ~44 meV/A for the same backbone without LES. That is not the
+        # E0 mismatch the fine-tuning guide's ">500 meV/atom" rule is about (the same E0s
+        # give ~200 meV/atom from scratch); it is the untrained charges.
+        #
+        # Zeroing the last layer of each latent-charge readout makes the model start EXACTLY
+        # at the foundation's predictions and learn the long-range term up from zero, which
+        # is what "initialised with the foundation weights" should mean. Gradients still flow
+        # into that layer, so nothing is frozen.
+        with torch.no_grad():
+            for readout in model.les_readouts:
+                final = getattr(readout, "linear_2", None) or getattr(readout, "linear", None)
+                if final is None:
+                    continue
+                for param in final.parameters():
+                    param.zero_()
+        return model
     if args.model == "ScaleShiftBOTNet":
         # say it is deprecated
         raise RuntimeError("ScaleShiftBOTNet is deprecated, use MACE instead")

@@ -2932,3 +2932,30 @@ bases that start at ~200 meV/atom, so a large number would be the untrained late
 the remedy would be to zero the LES readouts' final layer (the model then starts exactly at
 MH-1 and learns the long-range term from zero, the same "starts at its parent" discipline O3.2
 uses). Which of the two it is will be measured in the smoke, not guessed.
+
+**W7.1 smoke: two real bugs, both fixed before the run, both recorded.**
+
+1. **`MACELES` could not be fine-tuned from a plain foundation at all.**
+   `load_foundations_elements_default` walks the NEW model's children and looks each one up on
+   the foundation by name; `MACELES` adds `les` and `les_readouts`, which a `ScaleShiftMACE`
+   foundation does not have, so the loader raised
+   `AttributeError: 'ScaleShiftMACE' object has no attribute 'les'` before any training. Fixed
+   with a `hasattr` guard that skips modules the fine-tuned model ADDS — there is nothing to
+   transfer for them; they are new and are learned.
+
+2. **The latent-charge readouts started random on top of an already-good backbone**, exactly
+   the case flagged in the registration above. Measured: **initial validation error 8332
+   meV/atom and 1474 meV/Å**, against ~44 meV/Å for the same backbone without LES. The
+   guide's ">500 meV/atom means an E0 mismatch" rule does not apply — those same E0s give
+   ~200 meV/atom from scratch and 1.69 meV/atom for MH-1 itself. Remedy as registered: the
+   `FoundationMACELES` path now ZEROES the last layer of each latent-charge readout, so the
+   model starts exactly at the foundation and learns the long-range term up from zero.
+   Gradients still flow into that layer; nothing is frozen.
+
+   **Verified against an independent recorded number:** after the fix the initial error is
+   **1.69 meV/atom, 43.86 meV/Å, 0.11 meV/Å³** — the same 1.69 / 43.9 that W1.1 recorded for
+   the MH-1 foundation head on this validation set in September. The LES-FT model therefore
+   starts at MH-1 exactly, which is what "initialised with the MH-1 weights" has to mean.
+
+**Launched 2026-09-13 23:09** (b3 clock) on GPU 5 under a watchdog, 60 epochs, best-validation
+selection.
