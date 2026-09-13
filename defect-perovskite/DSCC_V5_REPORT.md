@@ -220,16 +220,34 @@ Seven cells, 79 → 959 atoms, two shapes at 319, `C_Q` applied. The x-axis is *
 1/L: the two 319-atom cells have identical volume but α = 2.45 and 1.56 and their raw errors
 differ by 85 meV, so a 1/L fit over mixed shapes is meaningless.
 
-| model | fitted slope | % of exact (−1.800 eV·Å) | dilute limit | residual after correction, 79 → 959 |
+| model | fitted slope | % of exact (−1.800 eV·Å) | dilute limit | residual after correction |
 |---|--:|--:|--:|---|
-| B′ (self-consistent) | −1.620 | **90 %** | −2.3945 eV | **+18 → +16 meV** |
-| W6 (SCF-free) | −1.470 | 82 % | −2.4636 eV | +55 → +16 meV |
-| Φ=0 | +0.546 | −30 % | −2.8529 eV | +432 → +193 meV |
+| **W6, same shape 639 / 2159 / 5119** | **−1.678 ± 0.050** | **93 %** | −2.4593 eV | **+11 → +7 meV** |
+| W6, all 11 cells (159–2159) | −1.371 ± 0.156 | 76 % | −2.4758 eV | — |
+| B′, all 11 cells | −1.750 ± 0.159 | 97 % | −2.3753 eV | — |
+| B′, cells ≥ 639 atoms | −2.508 ± 0.057 | 139 % | −2.3169 eV | — |
+| Φ=0, 7 cells | +0.546 | −30 % | −2.8529 eV | +432 → +193 meV |
 
-The two electrostatic arms agree on the dilute limit to **69 meV** from completely different
-machinery; Φ=0 is 389–459 meV away with the wrong sign, and applying the analytic correction to it
-makes its error *worse* (97 → 432 meV at 79 atoms), because you would be correcting for a term it
-never had.
+Two results matter more than any single slope.
+
+**Beyond ~640 atoms W6's convergence is pure monopole.** The same-shape family 639 / 2159 / 5119
+atoms (α = 2.7225 throughout, L = 28.6 → 57.3 Å) is collinear in α/L to **±1.4 meV** across a
+factor of eight in volume, at 93 % of the exact coefficient, with 6–11 meV left after the analytic
+correction. Adding the 79-atom cell drags that fit to 76 %, because **that cell sits 35 meV above
+the line the three large ones define** — the higher-order term measured rather than fitted. So a
+79-atom cell corrected with Makov–Payne alone still carries tens of meV; from ~640 atoms up the
+correction gets you to ~10 meV.
+
+**W6 extrapolates stably and B′ does not.** Fitting the same eleven cells over three nested
+subsets, W6's dilute limit moves 26 meV (−2.4758 / −2.4541 / −2.4803) while B′'s moves **83 meV**
+(−2.3753 / −2.3169 / −2.2919), its slope steepening monotonically 97 → 139 → 159 % as small cells
+are dropped. Two artefacts are ruled out: SCF convergence (11–19 iterations, no size trend,
+residual force ~10⁻⁷ eV/Å at every cell) and the electrostatic kernel (`K_LR_ii` matches the
+cell-shape Madelung coefficient to 1.3 % at 159 atoms, improving to **0.25 % at 2159**). What is
+left is B′'s self-consistent charge response: a larger cell lets the compensating cloud spread
+further, a size-dependent contribution the analytic term does not contain. Φ=0 has the wrong sign
+entirely, and applying the analytic correction to it makes its error *worse* (97 → 432 meV at 79
+atoms), because it never had the term being corrected for.
 
 **Why the arms agree on the trained sizes and diverge outside them.** Both fit 79 and 159 atoms:
 their heads differ by only 13.5 meV in how they move between those sizes. But the decomposition is
@@ -252,10 +270,11 @@ DFT at 319+ atoms, which the programme forbids.
   or charge state needs one DFT total energy to set it. After that, differences — including
   transition levels — are available at the accuracy above.
 - **The constant transfers across size:** fit at 79 atoms, apply at 159, 5 meV of error.
-- **Finite-size extrapolation**: the monopole slope comes out at 90 % of exact for B′ and 82 %
-  for W6, and the two agree on the dilute limit to 69 meV. After the analytic correction the
-  residual at a 79-atom cell is +18 meV (B′) or +55 meV (W6), falling to ~+16 meV by 639 atoms.
-  A model without the electrostatic term cannot do this at all.
+- **Finite-size extrapolation**: from ~640 atoms up, W6 converges along the monopole law at 93 %
+  of the exact coefficient and the analytic correction leaves 6–11 meV. At 79 atoms about 35 meV
+  is left that the correction does not reach. W6's extrapolated limit is stable to 26 meV
+  whichever cells are fitted; B′'s moves 83 meV, so W6 is the one to extrapolate with. A model
+  without the electrostatic term cannot do this at all.
 - **Cost ~2× a plain MACE step**, and no SCF to babysit: no convergence failures, no warm starts,
   no multi-valued fixed points. Those failure modes cost this programme the most time and W6 does
   not have them.
