@@ -2886,3 +2886,49 @@ largest epoch count that completes by morning, with Stage Two kept at 80 % of it
 shortfall against the heuristic is recorded here rather than discovered in the morning. A
 from-scratch 512-channel model on 1619 frames is not expected to match a fine-tune of a 89-element
 foundation model; **if it does not, that is the finding**, not something to be tuned away.
+
+### W7.1 — base v3 LES-FT: MACE-LES from the MH-1 weights, DIRECT fine-tuning
+
+*(User instruction, 2026-09-13 night: "one more base model which is more experimental. MACE-LES
+model but initialised with the MACE-MH-1 weights and direct Finetuning (not multi head)
+following the guidance here: mace-docs finetuning_guidance".)*
+
+**Registered before the run.** `--model MACELES --foundation_model <mh-1> --foundation_head
+omat_pbe --multiheads_finetuning False`, which the code resolves to `FoundationMACELES`: MH-1's
+architecture and weights, plus LES's latent-charge readouts. `load_foundations_elements`
+transfers the backbone and the ENERGY readouts and does not touch `les_readouts` — those are
+new modules and are learned here, which is the intended division of labour.
+
+**Settings taken from the guidance page's NAIVE column, which is a different recipe from the
+multihead one base v2 used:**
+
+| | naive / direct (W7.1) | multihead replay (base v2) |
+|---|---|---|
+| learning rate | **1e-3** | 1e-4 |
+| EMA decay | **0.999** | 0.9999 |
+| grad clip | 1.0 | 1.0 |
+| weight decay | 0.0 | 0.0 |
+| loss weights | constant 10 : 10 (: 1 stress), no stage two | constant 10 : 10, no stage two |
+| replay | **none** | 10k fps/combinations pseudolabels |
+
+**Epochs: 60, with best-validation selection.** The guide gives 10–30 for multihead and is
+silent for naive. It is also explicit that naive fine-tuning has the worst MD stability and the
+greatest drift from the pretrained distribution of the methods it compares — so the epoch
+trajectory is reported, and the minimum and any rise past it are put in the record rather than
+assumed. Base v2's own multihead run showed exactly that shape on its replay head (minimum at
+epoch 8–11, back to the epoch-0 level by 29) while its Default head still improved.
+
+**E0s and data: the same as every other base here** — `dataset_e0/train_iso.xyz` (1619) and
+`valid.xyz` (154), the estimated isolated-atom energies carried as `IsolatedAtom` frames at
+`config_weight` 1000 and kept as training points. That is also the guide's own advice for
+models with learnable E0 biases ("include true isolated-atom configurations as explicit
+training points"), and it keeps the energy column comparable across all four bases.
+
+**One thing to watch, registered before it is read.** The LES readouts start from a fresh
+initialisation, so the latent charges — and therefore the Ewald term — start RANDOM on top of
+an already-good backbone. If the initial validation energy error is large, the guide's ">500
+meV/atom means an E0 mismatch" rule does NOT apply here: the E0s are shared with three other
+bases that start at ~200 meV/atom, so a large number would be the untrained latent charges and
+the remedy would be to zero the LES readouts' final layer (the model then starts exactly at
+MH-1 and learns the long-range term from zero, the same "starts at its parent" discipline O3.2
+uses). Which of the two it is will be measured in the smoke, not guessed.
