@@ -231,15 +231,23 @@ class _SiteOccupation(torch.autograd.Function):
         return dH, None, None, None, None, None, None, None, None
 
 
-def site_occupation(H: torch.Tensor, spectrum, n_up, n_dn, sigma_s: float = SIGMA_S) -> torch.Tensor:
+def site_occupation(H: torch.Tensor, spectrum, n_up, n_dn, sigma_s: float = SIGMA_S,
+                    fills=None) -> torch.Tensor:
     """`occ_i` of the two-spin fill at counts `(n_up, n_dn)` `[..., N]`, attached to `H`
-    through `_SiteOccupation` (one contraction); the potentials solved once for both counts."""
+    through `_SiteOccupation` (one contraction); the potentials solved once for both counts.
+
+    `fills = (mu_up, mu_dn, f_up, f_dn)` supplies that solve instead of running it. The
+    capture path needs it: `chemical_potential` is a host-side Newton iteration in NumPy, and
+    a CUDA graph cannot contain one -- it belongs in the CPU segment that runs under the
+    base's GPU window, alongside the eigendecomposition that feeds it."""
     eps, U = (s.detach() for s in spectrum)
-    counts = torch.stack([torch.as_tensor(n_up, dtype=eps.dtype, device=eps.device).expand(eps.shape[:-1]),
-                          torch.as_tensor(n_dn, dtype=eps.dtype, device=eps.device).expand(eps.shape[:-1])])
-    mus = chemical_potential(eps.unsqueeze(0).expand(2, *eps.shape), counts, sigma_s)
-    f_up, f_dn = occupations(eps, mus[0], sigma_s), occupations(eps, mus[1], sigma_s)
-    return _SiteOccupation.apply(H, eps, U, mus[0], mus[1], f_up, f_dn, sigma_s, DEGENERACY_TOL)
+    if fills is None:
+        counts = torch.stack([torch.as_tensor(n_up, dtype=eps.dtype, device=eps.device).expand(eps.shape[:-1]),
+                              torch.as_tensor(n_dn, dtype=eps.dtype, device=eps.device).expand(eps.shape[:-1])])
+        mus = chemical_potential(eps.unsqueeze(0).expand(2, *eps.shape), counts, sigma_s)
+        fills = (mus[0], mus[1], occupations(eps, mus[0], sigma_s), occupations(eps, mus[1], sigma_s))
+    mu_up, mu_dn, f_up, f_dn = fills
+    return _SiteOccupation.apply(H, eps, U, mu_up, mu_dn, f_up, f_dn, sigma_s, DEGENERACY_TOL)
 
 
 @dataclass

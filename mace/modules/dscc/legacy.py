@@ -696,12 +696,23 @@ class SlaterKosterH(nn.Module):
             self.feat_sd[z] = torch.where(alive, s_, torch.ones_like(s_))
             self.feat_scale[z] = torch.where(alive, 1.0 / s_.clamp_min(1e-30), torch.zeros_like(s_))
         self.feat_stats_set.fill_(True)
+        self._stats_flag = True
         return dead
 
     def standardise(self, feats: torch.Tensor, species: torch.Tensor) -> torch.Tensor:
         """`(h - mu_Z) / sd_Z`. Identity while the stats are unset (a freshly constructed
-        module), which is why `MACEDSCC` refuses to run without them."""
-        if not bool(self.feat_stats_set):
+        module), which is why `MACEDSCC` refuses to run without them.
+
+        The flag is a device BUFFER, and `bool()` of it is a device-to-host read on the
+        assembly's hot path -- which CUDA-graph capture forbids outright. It is read once and
+        mirrored in a plain Python attribute; `set_feature_stats` is the only thing that moves
+        it, and it updates the mirror. A `load_state_dict` that flips the buffer under a model
+        that has already run would not: warm the model up after loading, which the capture
+        path does anyway."""
+        flag = getattr(self, "_stats_flag", None)
+        if flag is None:
+            flag = self._stats_flag = bool(self.feat_stats_set)
+        if not flag:
             return feats
         return (feats - self.feat_mean[species].to(feats.dtype)) * self.feat_scale[species].to(feats.dtype)
 
@@ -886,12 +897,13 @@ def _dk_eigenbasis(lam: torch.Tensor, f: torch.Tensor, t_el: float, tol: float,
     # no correction (0/0 -> 0), the others their own.
     denom = fp.sum(-1)
     ok = denom.abs() > 1e-12
-    if bool(ok.any()):
-        num = (fp * torch.diagonal(Ghat, dim1=-2, dim2=-1)).sum(-1)
-        safe = torch.where(ok, denom, torch.ones_like(denom))
-        ratio = torch.where(ok, num / safe, torch.zeros_like(denom))
-        M = M - torch.diag_embed(fp * ratio.unsqueeze(-1))
-    return M
+    # Unconditional: `if bool(ok.any())` was a device-to-host read, which CUDA-graph capture
+    # forbids, and it only skipped work that `torch.where` already makes a no-op (a frame with
+    # a saturated frontier gets ratio 0 either way). Same numbers, one branch fewer.
+    num = (fp * torch.diagonal(Ghat, dim1=-2, dim2=-1)).sum(-1)
+    safe = torch.where(ok, denom, torch.ones_like(denom))
+    ratio = torch.where(ok, num / safe, torch.zeros_like(denom))
+    return M - torch.diag_embed(fp * ratio.unsqueeze(-1))
 
 
 def _dk_backward(lam: torch.Tensor, U: torch.Tensor, f: torch.Tensor, t_el: float,

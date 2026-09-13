@@ -35,7 +35,8 @@ from mace.modules.dscc.fill import SIGMA_S
 from mace.modules.dscc.hamiltonian import (A_MAX_DEFAULT, B_MAX_DEFAULT, DELTA_FRACTION_DEFAULT,
                                            ETA_DEFAULT, H0, Q_CUT_DEFAULT, R_CUT_DEFAULT)
 from mace.modules.dscc.analytic import assemble_compiled, h0_position_gradient, head_cotangent
-from mace.modules.dscc.ewald import COULOMB, gradient_of_contraction, madelung_self
+from mace.modules.dscc.ewald import (COULOMB, gradient_of_contraction, madelung_self,
+                                     reciprocal_matrix_planned, reciprocal_pair_gradient_planned)
 from mace.modules.dscc.kernels import (KernelConfig, gamma_lr, gamma_matrix, gamma_pair_derivative, host_potential,
                                        kernel_components, kernel_pair_gradients, gamma_lr_pair_gradient)
 from mace.modules.dscc.scf import (ScfOptions, ScfResult, continuation_solve, continuation_solve_batched,
@@ -326,7 +327,9 @@ class MACEDSCC(nn.Module):
 
     def scf_free_terms(self, H: torch.Tensor, spectrum, counts_s, counts_r, n0: torch.Tensor,
                        positions: torch.Tensor, cell: torch.Tensor, charges: torch.Tensor,
-                       use_pairs: bool, need_cotangents: bool = False):
+                       use_pairs: bool, need_cotangents: bool = False,
+                       plan=None, xi: Optional[torch.Tensor] = None,
+                       fills_s=None, fills_r=None):
         """W6: the two SCF-free terms that sit on top of the `Phi = 0` band energy, from the
         SAME eigendecomposition the fill used.
 
@@ -351,15 +354,19 @@ class MACEDSCC(nn.Module):
         (the analytic force route) and None otherwise.
         """
         n_graphs = H.shape[0]
-        occ_s = site_occupation(H, spectrum, counts_s[0], counts_s[1], self.sigma_s)
-        occ_r = site_occupation(H, spectrum, counts_r[0], counts_r[1], self.sigma_s)
+        occ_s = site_occupation(H, spectrum, counts_s[0], counts_s[1], self.sigma_s, fills_s)
+        occ_r = site_occupation(H, spectrum, counts_r[0], counts_r[1], self.sigma_s, fills_r)
         dq, q0 = occ_r - occ_s, n0 - occ_r
         sq0 = self.pattern_scale() * q0
         with torch.set_grad_enabled(torch.is_grad_enabled() and not use_pairs):
-            g_lr = torch.stack([gamma_lr(positions[g], cell[g], self.kernel.r_g, self.r_split,
-                                         self.kernel.eps_inf, tol=self.kernel.tol,
-                                         route=self._lr_route(), background=self._background())
-                                for g in range(n_graphs)])
+            if plan is not None:            # capture: the cell-dependent half hoisted out
+                g_lr = torch.stack([reciprocal_matrix_planned(positions[g], plan) / self.kernel.eps_inf
+                                    for g in range(n_graphs)])
+            else:
+                g_lr = torch.stack([gamma_lr(positions[g], cell[g], self.kernel.r_g, self.r_split,
+                                             self.kernel.eps_inf, tol=self.kernel.tol,
+                                             route=self._lr_route(), background=self._background())
+                                    for g in range(n_graphs)])
         w = torch.einsum("bij,bj->bi", g_lr, sq0)
         e_host = (dq * w).sum(-1)
         # The analytic route needs `d E_host / d occ` explicitly, where the cotangent route
@@ -371,10 +378,14 @@ class MACEDSCC(nn.Module):
         pair_grad = None
         if use_pairs:
             with torch.no_grad():
-                d_w = torch.stack([gamma_lr_pair_gradient(positions[g], cell[g], self.kernel.r_g,
-                                                          self.r_split, self.kernel.eps_inf,
-                                                          tol=self.kernel.tol, route=self._lr_route())
-                                   for g in range(n_graphs)])
+                if plan is not None:
+                    d_w = torch.stack([reciprocal_pair_gradient_planned(positions[g], plan) / self.kernel.eps_inf
+                                       for g in range(n_graphs)])
+                else:
+                    d_w = torch.stack([gamma_lr_pair_gradient(positions[g], cell[g], self.kernel.r_g,
+                                                              self.r_split, self.kernel.eps_inf,
+                                                              tol=self.kernel.tol, route=self._lr_route())
+                                       for g in range(n_graphs)])
             # ATTACHED, as route B's own `A_w`: `d_w` is the constant of the geometry, but
             # the contraction's parameter gradient (`s` above all, which enters the force only
             # here and through the cotangent) has to survive `create_graph` in training.
@@ -384,7 +395,8 @@ class MACEDSCC(nn.Module):
         # the SCF models agree at fixed cell -- `xi + 4 pi r_g^2 C / Omega` is exactly
         # `E_PBC_ii(density)` minus the own-cloud self term `C / (sqrt(pi) r_g)`, which is
         # size-independent and absorbed by `C_Q` exactly (a point charge has no self term).
-        xi = torch.stack([madelung_self(cell[g]) for g in range(n_graphs)])
+        if xi is None:                  # cell only; hoisted out of a captured region
+            xi = torch.stack([madelung_self(cell[g]) for g in range(n_graphs)])
         volume = torch.det(cell).abs()
         second_moment = 4.0 * math.pi * self.kernel.r_g ** 2 * COULOMB / volume
         e_m = 0.5 * charges ** 2 * (xi + second_moment) / self.kernel.eps_inf
@@ -435,15 +447,36 @@ class MACEDSCC(nn.Module):
         return {k: (v.to(torch.float64) if torch.is_tensor(v) and v.is_floating_point() else v)
                 for k, v in out.items()}
 
-    def _trunk_data(self, data: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """The base's own graph: the head graph's edges no longer than `r_max`."""
+    def _trunk_data(self, data: Dict[str, torch.Tensor], capacity: Optional[int] = None,
+                    n_kept_out: Optional[torch.Tensor] = None,
+                    dummy: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+        """The base's own graph: the head graph's edges no longer than `r_max`.
+
+        `capacity` pads that subset to a fixed length instead of compacting it, for CUDA-graph
+        capture: compacting is a value-dependent shape, which capture forbids. The padding is
+        exactly inert (see `mace.modules.dscc.capture`). `n_kept_out`, when given, receives the
+        live count so the caller can check the bucket AFTER the step rather than synchronising
+        inside it. `dummy` supplies the padding translation: deriving it here reads the cell
+        to the host, which is exactly the synchronisation capture rejects."""
         sender, receiver = data["edge_index"][0], data["edge_index"][1]
         vectors = (data["positions"][receiver] - data["positions"][sender] + data["shifts"])
         keep = vectors.detach().norm(dim=-1) <= self.r_max
         trunk = dict(data)
-        trunk["edge_index"] = data["edge_index"][:, keep]
-        trunk["shifts"] = data["shifts"][keep]
-        trunk["unit_shifts"] = data["unit_shifts"][keep]
+        if capacity is None:
+            trunk["edge_index"] = data["edge_index"][:, keep]
+            trunk["shifts"] = data["shifts"][keep]
+            trunk["unit_shifts"] = data["unit_shifts"][keep]
+            return trunk
+        from mace.modules.dscc.capture import dummy_unit_shift, pad_edges
+        cell = data["cell"].view(-1, 3, 3)[0]
+        if dummy is None:
+            dummy = dummy_unit_shift(cell, float(self.r_max))
+        ei, us, _ = pad_edges(data["edge_index"], data["unit_shifts"], capacity, dummy, keep)
+        trunk["edge_index"] = ei
+        trunk["unit_shifts"] = us.to(data["unit_shifts"].dtype)
+        trunk["shifts"] = us.to(data["positions"].dtype) @ cell.to(data["positions"].dtype)
+        if n_kept_out is not None:
+            n_kept_out.copy_(keep.sum())
         return trunk
 
     def first_block(self, data: Dict[str, torch.Tensor]) -> torch.Tensor:

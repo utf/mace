@@ -67,3 +67,66 @@ class TestPaddingIsExact:
     def test_a_multi_graph_batch_is_refused(self):
         with pytest.raises(ValueError):
             pad_batch(dict(_batch([VACP, VACP])), 2048, 10.0)
+
+
+cuda_only = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA graphs need a GPU")
+
+
+@cuda_only
+class TestGraphedStep:
+    """Three CUDA graphs around a CPU segment, against the eager model.
+
+    The tolerance is 1e-9 and not the base's ~1e-6 nondeterminism floor: a captured graph
+    replays ONE recorded kernel order, so it is more reproducible than the eager path, and
+    every quantity here is compared against a single eager evaluation of the same frame.
+    """
+
+    @pytest.fixture(scope="class")
+    def step(self):
+        from mace.modules.dscc.capture import GraphedStep
+        model = _o3().cuda().eval()
+        data = {k: (v.cuda() if torch.is_tensor(v) else v) for k, v in _batch([VACP]).items()}
+        return model, data, GraphedStep(model, data)
+
+    def test_it_reproduces_the_eager_model(self, step):
+        model, data, graphed = step
+        ref = model(dict(data), compute_force=True)
+        out = graphed(data)
+        assert float((ref["energy"] - out["energy"]).abs().max()) < 1e-9
+        assert float((ref["head_energy"] - out["head_energy"]).abs().max()) < 1e-9
+        assert float((ref["dq"] - out["dq"]).abs().max()) < 1e-9
+        assert float((ref["forces"] - out["forces"]).abs().max()) < 1e-9
+        assert float(ref["forces"].abs().max()) > 1e-3          # not a comparison of zeros
+
+    def test_a_moved_frame_replays_through_the_same_graphs(self, step):
+        """The edge list's VALUES change from step to step; only its length is fixed. If the
+        graphs had baked in the first frame's neighbours this is what would catch it."""
+        model, _, graphed = step
+        moved = VACP.copy()
+        moved.positions[3, 1] += 0.07
+        moved.positions[10, 0] -= 0.05
+        data = {k: (v.cuda() if torch.is_tensor(v) else v) for k, v in _batch([moved]).items()}
+        ref = model(dict(data), compute_force=True)
+        out = graphed(data)
+        assert float((ref["energy"] - out["energy"]).abs().max()) < 1e-9
+        assert float((ref["forces"] - out["forces"]).abs().max()) < 1e-9
+
+    def test_the_base_bucket_holds_its_live_edges(self, step):
+        _, data, graphed = step
+        out = graphed(data)
+        assert 0 < int(out["base_edges_live"]) <= graphed.base_capacity
+
+    def test_a_frame_beyond_the_bucket_is_refused(self, step):
+        model, data, graphed = step
+        big = dict(data)
+        big["edge_index"] = torch.cat([data["edge_index"]] * 8, dim=1)
+        assert not graphed.fits(big)
+        with pytest.raises(RuntimeError):
+            graphed(big)
+
+    def test_a_coupled_head_is_refused(self):
+        from mace.modules.dscc.capture import GraphedStep
+        model = _w6().cuda().eval()               # route B', not decoupled
+        data = {k: (v.cuda() if torch.is_tensor(v) else v) for k, v in _batch([VACP]).items()}
+        with pytest.raises(ValueError):
+            GraphedStep(model, data)

@@ -261,6 +261,55 @@ def ewald_matrix(positions: torch.Tensor, cell: torch.Tensor,
     return COULOMB * (real + recip + bg)
 
 
+class ReciprocalPlan:
+    """The cell-dependent half of the reciprocal-space kernel, computed ONCE.
+
+    `reciprocal_matrix` reads `float(volume)` and `float(k_c)` to the host and selects the
+    `k` set by a value-dependent mask -- a synchronisation and a data-dependent shape, either
+    of which makes CUDA-graph capture illegal. Both depend on the cell alone, so at fixed cell
+    (a relaxation, NVT/NVE dynamics) they are constants of the run: this holds them, and
+    `*_planned` below are pure tensor functions of the positions.
+
+    Not an optimisation of the eager path -- `cached_reciprocal_vectors` already memoises the
+    `k` set. It exists so that the arithmetic can be captured."""
+
+    __slots__ = ("k", "weight", "volume", "constant")
+
+    def __init__(self, k: torch.Tensor, weight: torch.Tensor, volume: torch.Tensor,
+                 constant: float) -> None:
+        self.k, self.weight, self.volume, self.constant = k, weight, volume, float(constant)
+
+
+def reciprocal_plan(cell: torch.Tensor, width: float, tol: float = EWALD_TOL,
+                    constant: float = 0.0) -> ReciprocalPlan:
+    """The `ReciprocalPlan` for this cell and pair width."""
+    eta = 0.5 * float(width)
+    volume = torch.det(cell).abs()
+    k = cached_reciprocal_vectors(cell, reciprocal_cutoff(eta, float(volume.detach()), tol))
+    k2 = (k * k).sum(dim=-1)
+    return ReciprocalPlan(k, torch.exp(-(eta ** 2) * k2) / k2, volume, constant)
+
+
+def reciprocal_matrix_planned(positions: torch.Tensor, plan: ReciprocalPlan) -> torch.Tensor:
+    """`reciprocal_matrix` from a plan: positions in, `[N, N]` out, no host reads."""
+    root = plan.weight.sqrt().unsqueeze(0)
+    phase = positions @ plan.k.transpose(0, 1)                             # [N, n_k]
+    c, s = torch.cos(phase) * root, torch.sin(phase) * root
+    recip = c @ c.transpose(0, 1) + s @ s.transpose(0, 1)
+    return COULOMB * ((4.0 * math.pi / plan.volume) * recip + plan.constant / plan.volume)
+
+
+def reciprocal_pair_gradient_planned(positions: torch.Tensor, plan: ReciprocalPlan) -> torch.Tensor:
+    """`reciprocal_pair_gradient` from a plan: `[N, N, 3]`, no host reads."""
+    phase = positions @ plan.k.transpose(0, 1)
+    c, s = torch.cos(phase), torch.sin(phase)
+    out = []
+    for comp in range(3):
+        wk = (plan.weight * plan.k[:, comp]).unsqueeze(0)
+        out.append((s * wk) @ c.transpose(0, 1) - (c * wk) @ s.transpose(0, 1))
+    return -(4.0 * math.pi * COULOMB / plan.volume) * torch.stack(out, dim=-1)
+
+
 def reciprocal_matrix(positions: torch.Tensor, cell: torch.Tensor, width: float,
                       tol: float = EWALD_TOL, pair_vectors: Optional[torch.Tensor] = None,
                       k_chunk: int = 256, constant: float = 0.0) -> torch.Tensor:
@@ -277,23 +326,15 @@ def reciprocal_matrix(positions: torch.Tensor, cell: torch.Tensor, width: float,
     With `pair_vectors` the matrix is a function of the pair leaf entry by entry."""
     if positions.dtype != torch.float64 or cell.dtype != torch.float64:
         raise TypeError("the reciprocal matrix is evaluated in float64 (plan section 1)")
-    eta = 0.5 * float(width)
-    volume = torch.det(cell).abs()
-    k_c = reciprocal_cutoff(eta, float(volume.detach()), tol)
-    k = cached_reciprocal_vectors(cell, k_c)                               # [n_k, 3]
-    k2 = (k * k).sum(dim=-1)
-    weight = torch.exp(-(eta ** 2) * k2) / k2                              # [n_k]
+    plan = reciprocal_plan(cell, width, tol, constant)
+    k, weight, volume = plan.k, plan.weight, plan.volume
     if pair_vectors is None:
-        phase = positions @ k.transpose(0, 1)                              # [N, n_k]
-        c = torch.cos(phase) * weight.sqrt().unsqueeze(0)
-        s = torch.sin(phase) * weight.sqrt().unsqueeze(0)
-        recip = c @ c.transpose(0, 1) + s @ s.transpose(0, 1)
-    else:
-        n = positions.shape[0]
-        recip = torch.zeros(n, n, dtype=positions.dtype, device=positions.device)
-        for start in range(0, k.shape[0], k_chunk):
-            kk = k[start:start + k_chunk]
-            recip = recip + (torch.cos(pair_vectors @ kk.transpose(0, 1)) * weight[start:start + k_chunk]).sum(-1)
+        return reciprocal_matrix_planned(positions, plan)
+    n = positions.shape[0]
+    recip = torch.zeros(n, n, dtype=positions.dtype, device=positions.device)
+    for start in range(0, k.shape[0], k_chunk):
+        kk = k[start:start + k_chunk]
+        recip = recip + (torch.cos(pair_vectors @ kk.transpose(0, 1)) * weight[start:start + k_chunk]).sum(-1)
     return COULOMB * ((4.0 * math.pi / volume) * recip + float(constant) / volume)
 
 
@@ -303,19 +344,8 @@ def reciprocal_pair_gradient(positions: torch.Tensor, cell: torch.Tensor, width:
     factors: `-(4 pi C / V) sum_k c_k k sin(k . (r_i - r_j))` with `sin(k . (r_i - r_j)) =
     sin(k.r_i) cos(k.r_j) - cos(k.r_i) sin(k.r_j)`, `[N, N, 3]`, a detached constant of the
     geometry (three matrix products per component, no backward)."""
-    pos, cel = positions.detach(), cell.detach()
-    eta = 0.5 * float(width)
-    volume = float(torch.det(cel).abs())
-    k = cached_reciprocal_vectors(cel, reciprocal_cutoff(eta, volume, tol))
-    k2 = (k * k).sum(dim=-1)
-    weight = torch.exp(-(eta ** 2) * k2) / k2                              # [n_k]
-    phase = pos @ k.transpose(0, 1)                                        # [N, n_k]
-    c, s = torch.cos(phase), torch.sin(phase)
-    out = []
-    for comp in range(3):
-        wk = (weight * k[:, comp]).unsqueeze(0)                            # [1, n_k]
-        out.append((s * wk) @ c.transpose(0, 1) - (c * wk) @ s.transpose(0, 1))
-    return -(4.0 * math.pi * COULOMB / volume) * torch.stack(out, dim=-1)
+    return reciprocal_pair_gradient_planned(positions.detach(),
+                                            reciprocal_plan(cell.detach(), width, tol))
 
 
 def self_term(width: Union[float, torch.Tensor]) -> torch.Tensor:
