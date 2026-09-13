@@ -2006,3 +2006,66 @@ without DFT at these sizes; what can be said is that B's extrapolated dilute lim
 the choice of cells at the 80 meV level and W6's is not. The consequence recorded for W6 adoption
 ("B' is better for extrapolating from small cells") is therefore withdrawn -- on the evidence now
 available it is not.
+
+### Relaxed geometries change the conclusion (2026-09-13, user-directed)
+
+New instrument: `defect-perovskite/dscc_relax.py` -- an ASE calculator around `MACEDSCC` plus
+BFGS at FIXED cell. The head short-circuits in the reference state, so the neutral cell relaxes
+identically under every arm and `E(0)` is the base alone, shared by all three.
+
+**The +1 vacancy relaxed in the 159-atom cell, W6 against B'.** Both converge (fmax 0.015 and
+0.019 eV/A, 66 and 61 steps). The **structures are the same**: rms difference 0.0103 A, max
+0.0252 A; the flanking Pb-Pb distance opens 5.676 -> 5.973 A (W6) and 5.978 A (B'); the first
+shells sit at 2.99 / 3.53 / 3.61 / 3.63 / 3.74 A in both. Cross-evaluating each model on the
+other's minimum costs 4.3 meV (W6) and 0.1 meV (B'), so the two surfaces have the same minimum
+and differ only by an offset: **48.5 meV on the ideal lattice, 23.8 meV after relaxation.**
+
+**Does the model-to-model gap grow with cell size? No -- it scatters.** Relaxing with W6 and
+evaluating both models at that one geometry (so the structure is identical for both energies):
+
+| cell | n | `alpha/L` | gap at ideal geometry | gap at the relaxed geometry |
+|---|--:|--:|--:|--:|
+| 1,1,2 | 159 | 0.1503 | +48.6 meV | +23.7 meV |
+| 1,2,2 | 319 | 0.1076 | +59.4 meV | +4.0 meV |
+| 2,2,1 | 319 | 0.0685 | +35.0 meV | +74.2 meV |
+| 2,2,2 | 639 | 0.0951 | +64.0 meV | +10.6 meV |
+
+**Two cells of the SAME size differ by 70 meV** in the relaxed gap. The scatter is the scale of
+the models' own per-cell energy error (held-out RMS after one `C_Q`: W6 45.3 meV/cell, B' 37.2 at
+79 atoms, n = 256 and 258; the 159-atom columns quoted throughout this programme rest on 6 and 4
+held-out frames and establish no error scale at all).
+
+*Why the two 319-atom cells differ:* they relax to different local structures. 2,2,1 is
+32 x 32 x 11 A -- two octahedra thick -- so the relaxation field meets its own image along the
+short axis and is cut off. d(Pb-Pb) relaxes to 5.8729 A in 1,2,2 against 5.8423 in 2,2,1, and the
+first fourteen shell radii differ by 0.042 A rms. Same size, same defect, different confinement.
+
+*Also recorded:* the relaxation energies are -1742 / -3207 / -3250 / -6105 meV, i.e. **-9.6 to
+-10.9 meV per atom regardless of size** -- these relaxations are dominated by the whole lattice
+settling out of the MD-averaged static cell, not by the defect. Any comparison built on relaxed
+energies inherits that.
+
+**`E(+1) - E(0)` at the relaxed geometries, all three arms** (2,2,1 excluded; `E(0)` is the base
+alone at the same geometry; `relaxed_structures.json` holds the three geometries so none of this
+needs recomputing):
+
+| cell | `alpha/L` | W6 | B' | `Phi = 0` |
+|---|--:|--:|--:|--:|
+| 1,1,2 (159) | 0.1503 | -2.9122 | -2.8886 | -2.9619 |
+| 1,2,2 (319) | 0.1076 | -2.8548 | -2.8508 | -2.9900 |
+| 2,2,2 (639) | 0.0951 | -2.8344 | -2.8220 | -2.9889 |
+| **fit** | | **-1.393 +- 0.051 (77 %)** | **-1.124 +- 0.259 (62 %)** | **+0.532 +- 0.138 (-30 %)** |
+| **limit** | | **-2.7033 +- 0.006** | **-2.7215 +- 0.031** | **-3.0429 +- 0.017** |
+
+**What survives and what does not.** `Phi = 0` reads +0.55 eV.A on ideal cells and +0.53 +- 0.14
+on relaxed ones -- the same wrong-sign slope, robust to geometry, to relaxation and to the choice
+of cells, landing 320-340 meV from the electrostatic arms. That is the case for carrying
+electrostatics, reproduced three independent ways. Everything that distinguished W6 from B' does
+NOT survive: on ideal cells they sat 166 meV apart with slopes of 93 % and 154 %; on relaxed cells
+they are **18 meV apart** with slopes of 77 % and 62 %, both inside B's own +-26 % uncertainty.
+
+**Withdrawn: "W6 is the stable extrapolator and B' is not."** That reading came from idealised
+unrelaxed cells. On relaxed geometry the two agree within their uncertainties, and the
+model-to-model differences at any single cell are smaller than either model's own energy error.
+The surviving statement is narrower: the two electrostatic arms agree with each other; a head
+without electrostatics does not converge at all.
