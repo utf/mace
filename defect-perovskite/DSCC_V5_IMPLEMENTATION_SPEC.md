@@ -2784,3 +2784,43 @@ every job on the machine, not only its own. (ii) The default queue path `~/runs/
 still held six stale `dscc_w3_bp_lr_only_*` lines from 2026-09-10, which a runner started with
 default settings would have launched ahead of this wave. It is renamed to
 `w3_queue_stale_2026-09-10.txt` so it cannot fire, and O3.2 uses its own queue file.
+
+**CORRECTION OF RECORD, O3.1 G2b (mine, same evening, before O3.2's first held number).** The
+entry above called G2b "not resolvable" on the ground that the per-seed spread is wide. That
+was my own reading substituted for the registered one. The registered reading is the **cohort
+median** of `C_Q(159) - C_Q(79)`: the W6 median on this estimator is **+5.0 meV**, which
+reproduces the W6 adoption table's +5.0 exactly, so it is the same estimator and the same
+reading. Scored like for like: **O3.1 median -1.8 meV, |.| <= 10 -> PASS.** The wide per-seed
+spread (O3.1 -15.1..+12.1, W6 -0.4..+20.5, on 4 held frames at 159 atoms) stands as a caveat on
+the per-seed numbers, not as a reason to decline the gate. **O3.1: G1 INFERIOR, G2a PASS,
+G2b PASS, turn-on PASS.** It fails on forces alone.
+
+**Where the 2.94 meV/A sits -- by shell, cohort medians, meV/A per component.** The registered
+localisation columns, which the G1 table above omitted:
+
+| shell (A) | n | W6 | O3.1 | O3.1 - W6 |
+|---|---:|---:|---:|---:|
+| 2-4 | 1991 | 19.83 | 25.54 | +5.71 |
+| 4-6 | 2877 | 13.81 | 17.49 | +3.68 |
+| 6-8 | 8448 | 9.73 | 12.62 | +2.89 |
+| 8-10 | 5578 | 9.86 | 11.11 | +1.25 |
+| 10-12 | 1768 | 9.02 | 10.48 | +1.46 |
+| **flanking Pb** | | **27.40** | **37.41** | **+10.02** |
+| first-shell Cl | | 16.55 | 20.56 | +4.02 |
+| other 2-4 | | 10.26 | 11.85 | +1.59 |
+
+**The deficit is not uniform: it is concentrated exactly where a bond is.** The flanking Pb
+carries +10.0 of it, the 2-4 A shell +5.7, and it decays monotonically to +1.3 by 8-10 A. A
+hopping with no environment dependence is a two-body function of `r_ij` alone, and the atoms it
+should hurt most are the ones whose bonds are screened by a third atom -- the near neighbours of
+the vacancy. **Registered as the O3.2 expectation, before O3.2's first held number:** if the
+three-body screening is the right diagnosis, its gain should be concentrated in the same places
+-- the flanking Pb and the 2-4 A shell -- and largely absent beyond 8 A. If instead O3.2 gains
+uniformly across shells, or gains at long range, the reading is wrong whatever G1 says, and the
+next arm is the head-owned basis rather than the modulation.
+
+**Two precisions on the O3.1 gate list.** The registered "neutral null and FD forces re-run"
+were run in the unit suite on toy weights (255 passed, `tests/extensions/dscc`), not on the
+trained checkpoints; that is what the phrase covers here. And O3.2's epoch-0 loss is NOT
+expected to equal O3.1's -- `A` takes gradients from the first step -- the bit-for-bit property
+is the first forward at `A = 0`, which is gated in `test_screening.py`, not an epoch aggregate.
