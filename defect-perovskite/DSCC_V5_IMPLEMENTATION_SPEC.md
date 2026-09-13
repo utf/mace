@@ -2959,3 +2959,14 @@ uses). Which of the two it is will be measured in the smoke, not guessed.
 
 **Launched 2026-09-13 23:09** (b3 clock) on GPU 5 under a watchdog, 60 epochs, best-validation
 selection.
+
+**W7 epoch budget revised upward, 23:14 (b3 clock), 13 epochs in.** The 250-epoch figure was set
+from an 84 s/epoch smoke measured with an O3.2 job co-resident. The real rates are **55 s/epoch
+(plain) and 72 s (LES)**, still under contention, so 250 epochs would have finished around
+03:20 and left roughly three hours of the night unused — and the instruction that opened this
+work said from scratch "may need more epochs". Both runs were stopped and relaunched at **350
+epochs with Stage Two at 280**; `--restart_latest` resumed them from their epoch-13 checkpoints,
+so nothing already computed was discarded and Stage Two had not yet been reached. The two runs
+keep the SAME epoch count as each other, which is what makes plain-versus-LES a comparison.
+That is 71 k gradient updates against the README heuristic's 200 k — still short, and still
+recorded as short.
