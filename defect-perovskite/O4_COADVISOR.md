@@ -72,7 +72,7 @@ needs edge-bucket padding: pad to a bucket with dummy edges beyond `r_max`, whic
 zero through MACE's polynomial cutoff. Node counts are already fixed per size class. A day's
 work, with a production caveat (any driver that changes the neighbour list must re-bucket).
 
-**Question for you:** next item, or does the retrain result come first?
+**Built, same day (your ruling).** See the O5 section below.
 
 ## 4. The `eigh` bypass — not a threshold
 
@@ -126,3 +126,80 @@ cycle cleared. Not cycled; three usable cards of the permitted four is enough.
 
 All timings above are on **fake O3 weights** (architecture-correct, untrained). The retrained
 model gets re-timed on the same protocol before any of these numbers go in the report.
+
+
+---
+
+# O5 — the CUDA graphs, built (2026-09-13, same session)
+
+Your ruling taken: capture is weight-independent engineering, it does not gate on the retrain,
+and the head gets captured too. Done, gated, timing pending on the card.
+
+## Structure — as you sketched it, with one ordering change
+
+```
+graph A0 : H0 assembly                         ~1 ms of GPU, issued FIRST
+D2H      : H to pinned host memory
+graph A1 : base forward + backward             ~30 ms of GPU, 0.02 ms of CPU
+CPU      : eigh, chemical potentials, occupations -- under A1's window
+graph B  : site charges, E_host, E_M, X, the analytic contraction, accumulation
+```
+
+Your sketch puts the assembly *in* graph A with the base. Recorded after it, `H` is not ready
+until the base's 30 ms window closes, and the host idles through it and then works alone.
+Recorded **first**, the host copies `H` back and diagonalises while the base runs — which is
+the `EIGH_DEFERRED_ON_CPU` rule doing its job inside a captured step rather than beside one.
+
+## Gates
+
+Reproduces the eager model to **1e-14** in energy, head energy, `dq` and forces. A frame whose
+atoms have moved — a *different* neighbour list of the same length — replays through the same
+graphs to the same tolerance: only the length is fixed by capture, the edge list's values are
+read at replay. A coupled or base-reading head is refused. Padding is **bit-identical** (§4 of
+O4). Full suite **225 passed**.
+
+## What had to change, and what did not
+
+Every change removed a device-to-host read or a value-dependent shape. **None of them changed
+a number** — the suite is the evidence:
+
+* `ReciprocalPlan` holds the cell-dependent half of the Ewald kernel (the `k` set, the volume,
+  `k_c`); the eager entry points now delegate to the same arithmetic, so there is one
+  implementation and not a capture fork.
+* `site_occupation` accepts an already-solved fill — `chemical_potential` is a host Newton
+  iteration and belongs in the CPU segment, next to the eigh that feeds it.
+* `_dk_eigenbasis` applies its fixed-`N` correction unconditionally: `if bool(ok.any())` was a
+  host read that only skipped work `torch.where` already makes a no-op.
+* `standardise` mirrors its buffer flag in a Python attribute, read once.
+* `_trunk_data` can pad the base's subset instead of compacting it.
+* `head_tail` is the head's GPU work as a function of tensors alone — no potential solve, no
+  `nonzero` for the frontier set (the analytic route needs no `dP`), no lattice sums. Gated
+  against the model's own path at 1e-14.
+
+Your note on the O1 dedup was right to flag: every dummy edge is the unordered pair (0, 0), so
+it adds one row to the unique set and cannot reach a real pair's input. The gate runs the
+**modulated** head as well as O3's, and both come out bit-identical.
+
+## Two capture traps, recorded because they cost time
+
+1. `padded["positions"].clone()` of a batch that has been through an eager forward is a
+   **non-leaf** — the model calls `requires_grad_(True)` in place, so the clone carries that
+   forward's graph, and capture refuses it ("stale reference to the default stream").
+   `.detach().clone()`.
+2. A `for` loop's bindings outlive the loop in Python, so the warm-up's autograd graph — and
+   its stream reference — is still alive at capture. Deleted explicitly.
+
+## Deliverable, registered as you asked
+
+**Model <= 53 ms per step at 79 atoms**, with both ratios reported (against the eager base the
+criterion was written for, and against a captured base). `dscc_benchmark.py --graphed` times
+the model leg through capture and a bucketed captured base leg alongside the eager one. The
+number that goes in the record is milliseconds.
+
+## Still open
+
+The analytic **stress** — NPT only, a follow-up not a blocker, as you said. And the timing
+itself, which needed the local A4000: every registered P4.3 number is on that card and the
+six-seed retrain was using it. O3 trains much faster than W6 (~37 s/epoch against the W6
+cohort's several minutes — the decoupled head drops block 0 and its `create_graph` traversal
+entirely), so the wave finished within the hour rather than overnight.

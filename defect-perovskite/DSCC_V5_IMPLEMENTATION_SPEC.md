@@ -2411,3 +2411,39 @@ explicitly.
 **Open:** the analytic stress (needed for NPT and nothing else, a follow-up not a blocker), and
 the timing, which waits for the local A4000 to come free -- every registered P4.3 number is on
 that card and the six-seed retrain is using it.
+
+**O5 TIMING (idle A4000, fake O3 weights, P4.3 protocol, `dscc_benchmark.py --graphed`).**
+
+| | base eager | base captured | model eager | model graphed | model / eager base | model / captured base |
+|---|---|---|---|---|---|---|
+| 79 atoms, fixed cell | 40.4 ms | 32.4 ms | 63.6 ms | **39.7 ms** | 1.08 | 1.23 |
+| 159 atoms (registered set) | 67.2 ms | 67.3 ms | 100.6 ms | **89.0 ms** | 1.33 | 1.32 |
+
+**The registered deliverable is met at 79 atoms: 39.7 ms against <= 53 ms.** Both ratios are
+quoted because graphing the base moves the denominator, exactly as the coadvisor said it would.
+
+**At 159 atoms the captured base is no faster than the eager one** (67.3 against 67.2). That is
+the launch-bound-to-compute-bound crossover, measured: at 79 atoms the base is 41.6 ms of wall
+time on 30.6 ms of GPU work, so removing its 41.4 ms of CPU issue is the whole win; at 159 the
+kernels are large enough that the GPU is the constraint and there is no CPU time left to
+remove. The model still gains (100.6 -> 89.0) because the HEAD is launch-bound at both sizes.
+
+**Capture is a FIXED-CELL path.** The reciprocal plan, the Madelung constant `xi` and the
+padding translation are constants of the cell, and the formal charge enters `E_M` directly, so
+`GraphedStep.fits` now refuses a frame whose cell, composition, charge state or node count
+differs -- a ~50 us host comparison against a silently wrong answer. This was not hypothetical:
+the registered 79-atom P4.3 frames are NPT snapshots whose cells span 15.76-16.07 A, and
+replaying them through one capture read **5.5 meV in energy and 9.3 meV/A in force** with
+nothing raised. The 79-atom row above therefore uses a fixed-cell trajectory (the first frame
+plus 0.02 A thermal displacements, `--fixed_cell`), which is what a relaxation or an NVT/NVE
+step actually is; the 159-atom set shares one cell already and is used as registered. NPT pays
+a re-capture per cell: **0.25 s at 79 atoms, 0.38 s at 159**, so a barostat that updates the
+cell every few hundred steps is fine and one that updates every step is not.
+
+**Agreement on the PRODUCTION base** (float32, with its ZBL pair repulsion): energy 2e-5 to
+8e-5 eV, forces <= 5e-6 eV/A over six real frames at each size. That is the float32 base's own
+reproducibility under a changed scatter order -- padding reorders the edge list -- and not an
+error of the capture: the same base evaluated twice unpadded moves by 1.6e-7 eV and
+1.6e-6 eV/A, and padded-vs-unpadded by 2.9e-6 eV. On a float64 toy base the captured step
+reproduces the eager model to **1e-14**. Against `tau_phys` = 1.7 meV/A per component, 5e-6 eV/A
+is four orders of magnitude clear.

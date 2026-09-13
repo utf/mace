@@ -130,3 +130,21 @@ class TestGraphedStep:
         data = {k: (v.cuda() if torch.is_tensor(v) else v) for k, v in _batch([VACP]).items()}
         with pytest.raises(ValueError):
             GraphedStep(model, data)
+
+    def test_a_different_cell_is_refused(self, step):
+        """The reciprocal plan, the Madelung constant and the padding translation are cell
+        constants held on the capture. Replaying another cell through it would be wrong by
+        millielectronvolts and raise nothing -- so it raises."""
+        model, data, graphed = step
+        other = dict(data)
+        other["cell"] = data["cell"] * 1.01
+        assert not graphed.fits(other)
+        with pytest.raises(RuntimeError):
+            graphed(other)
+
+    def test_a_different_charge_state_is_refused(self, step):
+        model, data, graphed = step
+        other = dict(data)
+        other["carrier_counts"] = data["carrier_counts"].clone()
+        other["carrier_counts"][0] += 1
+        assert not graphed.fits(other)

@@ -35,6 +35,7 @@ def main() -> None:
     ap.add_argument("--out", default="")
     ap.add_argument("--predictor", type=int, default=0, help="v5 W2: warm start from the secant of the last two fixed points (2 dq_n - dq_{n-1})")
     ap.add_argument("--no_analytic", action="store_true", help="O3: fall back to the autograd cotangent route for the head force (the analytic kernel's reference)")
+    ap.add_argument("--fixed_cell", action="store_true", help="build the trajectory from the FIRST frame by small thermal displacements at its own cell -- what a relaxation or NVT/NVE step looks like, and the regime CUDA-graph capture applies to (the registered 79-atom frames are NPT snapshots whose cells differ frame to frame)")
     ap.add_argument("--graphed", action="store_true", help="O3: run the model leg through CUDA-graph capture (and time a captured base leg alongside the eager one)")
     ap.add_argument("--both", action="store_true", help="also time the other force route, interleaved frame by frame")
     ap.add_argument("--check", action="store_true", help="compare the two force routes on the first frame before timing")
@@ -44,6 +45,15 @@ def main() -> None:
     import ase.io
     frames = [a for a in ase.io.read(f"{args.dataset}/train.xyz", ":") if int(a.info["cell_charge"]) != 0 and len(a) == args.size]
     frames = frames[: args.frames]
+    if args.fixed_cell:
+        seed0 = frames[0]
+        frames = []
+        for i in range(args.frames):
+            a = seed0.copy()
+            a.info.update(seed0.info)
+            if i:
+                a.rattle(stdev=0.02, seed=1000 + i)
+            frames.append(a)
     model = torch.load(args.model, weights_only=False, map_location=args.device).to(args.device).eval()
     z_table = tools.AtomicNumberTable(model.atomic_numbers)
     base = model.base
@@ -101,15 +111,24 @@ def main() -> None:
         def capture(atoms):
             return GraphedStep(model, batch(atoms, model.r_cut))
 
+        from mace.modules.dscc.capture import edge_bucket, pad_batch
+
         class _CapturedBase:
             """The base alone, captured, so the ratio can be quoted against BOTH denominators.
             The registered criterion was written against an eager base, which is launch-bound;
             graphing the model makes it faster and the ratio harder, so the absolute
-            milliseconds are the number that carries across versions."""
+            milliseconds are the number that carries across versions.
+
+            Its edge list is bucketed the same way the model's is. Without that, a frame whose
+            base graph has a different edge count would silently replay the CAPTURED frame's
+            neighbours -- a timing leg that measures the wrong thing and says nothing."""
 
             def __init__(self, bb):
-                self.data = {k: (v.detach().clone() if torch.is_tensor(v) else v) for k, v in bb.items()}
+                self.capacity = edge_bucket(int(bb["edge_index"].shape[1]))
+                self.data = {k: (v.detach().clone() if torch.is_tensor(v) else v)
+                             for k, v in pad_batch(dict(bb), self.capacity, float(base.r_max)).items()}
                 self.data["positions"].requires_grad_(True)
+
                 st = torch.cuda.Stream(); st.wait_stream(torch.cuda.current_stream())
                 with torch.cuda.stream(st):
                     for _ in range(3):
@@ -121,11 +140,14 @@ def main() -> None:
                     self.out = ScaleShiftMACE.forward(base, dict(self.data), compute_force=True)
                 torch.cuda.synchronize()
 
+            def fits(self, bb):
+                return int(bb["edge_index"].shape[1]) <= self.capacity
+
             def __call__(self, bb):
+                padded = pad_batch(dict(bb), self.capacity, float(base.r_max))
                 with torch.no_grad():
-                    for k in ("positions", "shifts", "unit_shifts", "edge_index"):
-                        if k in bb and self.data[k].shape == bb[k].shape:
-                            self.data[k].copy_(bb[k])
+                    for k in ("positions", "cell", "shifts", "unit_shifts", "edge_index"):
+                        self.data[k].copy_(padded[k])
                 self.g.replay()
                 return self.out
 
@@ -146,7 +168,7 @@ def main() -> None:
             sync(); t0 = time.perf_counter()
             out = graphed(bh)
             sync(); t_head.append(time.perf_counter() - t0)
-            if captured_base is None:
+            if captured_base is None or not captured_base.fits(bb):
                 captured_base = _CapturedBase(bb)
             sync(); t0 = time.perf_counter()
             captured_base(bb)
@@ -176,7 +198,7 @@ def main() -> None:
               "base_ms_median": 1000 * float(np.median(t_base)), "model_ms_median": 1000 * float(np.median(t_head)),
               "ratio_median": float(np.median(ratio)), "ratio_p95": float(np.percentile(ratio, 95)),
               "scf_iterations_median": float(np.median(iters)) if iters else None, "predictor": bool(args.predictor), "tol_q": float(model.scf_options.tol_q_inference if args.tol_q is None else args.tol_q),
-              "graphed": bool(args.graphed),
+              "graphed": bool(args.graphed), "fixed_cell": bool(args.fixed_cell),
               "graphed_base_ms_median": (1000 * float(np.median(t_graph_base))) if t_graph_base else None,
               "ratio_median_vs_graphed_base": (float(np.median(t_head)) / float(np.median(t_graph_base))) if t_graph_base else None,
               "alt_route_ms_median": (1000 * float(np.median(t_alt))) if t_alt else None,

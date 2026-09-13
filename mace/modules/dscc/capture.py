@@ -325,15 +325,35 @@ class GraphedStep:
     # ------------------------------------------------------------------ one step
 
     def fits(self, data: Dict[str, torch.Tensor]) -> bool:
-        """Whether this capture's buckets still hold the frame (checked on the host, from the
-        neighbour list, which the caller built on the host anyway)."""
-        return int(data["edge_index"].shape[1]) <= self.head_capacity
+        """Whether this capture is valid for the frame.
+
+        The edge count must fit the bucket, and -- less obviously -- the CELL, the composition
+        and the carrier counts must be the ones captured. The reciprocal plan, the Madelung
+        constant `xi` and the padding translation are all constants OF THE CELL, held on the
+        object; the formal charge enters `E_M` directly. A frame with a different cell replayed
+        through this capture gets the captured cell's electrostatics and the new frame's
+        geometry, which is wrong by millielectronvolts and raises nothing -- measured at 5.5 meV
+        and 9.3 meV/A on the 79-atom training frames, whose cells span 15.76-16.07 A because
+        they are NPT snapshots. Capture is therefore a FIXED-CELL path: relaxation at fixed
+        cell, NVT/NVE dynamics. NPT re-captures per cell, or does not capture.
+
+        The comparisons read a 3x3 and two short integer tensors back to the host -- about
+        50 us, against the alternative of a silently wrong answer."""
+        if int(data["edge_index"].shape[1]) > self.head_capacity:
+            return False
+        for key in ("cell", "carrier_counts", "node_attrs", "ptr"):
+            got = data.get(key)
+            if got is None or not torch.equal(self.static[key], got.reshape(self.static[key].shape)):
+                return False
+        return True
 
     def __call__(self, data: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         from mace.modules.dscc.fill import chemical_potential, occupations
         if not self.fits(data):
-            raise RuntimeError(f"{int(data['edge_index'].shape[1])} edges exceed the captured "
-                               f"bucket of {self.head_capacity}; re-capture")
+            raise RuntimeError(
+                f"this frame is outside the capture: {int(data['edge_index'].shape[1])} edges "
+                f"against a bucket of {self.head_capacity}, or a different cell, composition or "
+                "charge state (all three are baked into the recorded graphs); re-capture")
         padded = pad_batch(dict(data), self.head_capacity, self.model.r_cut)
         with torch.no_grad():
             for k in ("positions", "cell", "edge_index", "unit_shifts", "shifts"):
@@ -356,6 +376,14 @@ class GraphedStep:
             for dst, src in zip(self.fills_s_d + self.fills_r_d, fs + fr):
                 dst.copy_(src, non_blocking=True)
         self.g_tail.replay()
+        # The base's bucket is the one the host cannot check in advance (the kept subset is a
+        # property of the positions), so it is checked HERE -- after the step, where the sync
+        # is free, and loudly: `pad_edges` truncates in silence and a base missing a few edges
+        # is wrong by millielectronvolts with nothing to show for it.
+        if int(self.n_kept) > self.base_capacity:
+            raise RuntimeError(f"the base's edge bucket overflowed ({int(self.n_kept)} live "
+                               f"edges against {self.base_capacity}); this step's result is "
+                               "invalid -- re-capture with a larger bucket and repeat it")
         c_q = self.model.c_q(int(round(float(self.charges[0]))))
         uncal = self.e_base.to(torch.float64) + self.head_energy
         return {"energy_uncalibrated": uncal, "energy": uncal + c_q.to(uncal.device),
