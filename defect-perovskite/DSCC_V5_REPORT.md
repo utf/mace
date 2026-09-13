@@ -106,8 +106,19 @@ sweep measures is the price of fitting energies **without** electrostatics.
 
 **Leak readout (head d-slope, 79 vs 159).** Built to the plan's wording; no instrument existed for
 the v5 models. The labels' own axial d-slope is +189.0 meV/Å per Å at 79 atoms and −109.4 at 159,
-a size difference of +298.4. W6's head reproduces that difference to a median **−15.3 (5 %)**. The
-head's d-trend changes with size by what the labels change by — no leak.
+a size difference of +298.4. Six seeds per arm:
+
+| arm | head 79−159 | head − label | as % of label |
+|---|--:|--:|--:|
+| **W6, w=0.05** | +283.1 | **−15.3** | **5 %** |
+| B′, w=0.05 | +267.2 | −31.2 | 10 % |
+| Φ=0, w=0.05 | +262.3 | −36.1 | 12 % |
+| Φ=0, w=0 | +266.0 | −32.4 | 11 % |
+
+**W6 tracks the labels' size-dependence about twice as closely as anything else in the programme**,
+and the two Φ=0 arms sit together at 11–12 % whether or not energies are in the loss — so the
+residual is the band term's, not the energy term's. The tiling ladder orders the arms the same way
+from a different quantity, so two independent instruments agree.
 
 ## W6 — the SCF-free model
 

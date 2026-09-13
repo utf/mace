@@ -1806,6 +1806,23 @@ W6, six seeds:
 5 %.** The head's `d`-slope changes between 79 and 159 atoms by what the labels change by. That is
 the leak readout passing, and it is the measurement the W5 gate asked for.
 
+All four arms, six seeds each (`~/runs/dscc/leak_v5/`):
+
+| arm | n | head 79-159 (median) | label 79-159 | head - label | as % of label |
+|---|--:|--:|--:|--:|--:|
+| **W6, w = 0.05** | 6 | +283.1 | +298.4 | **-15.3** | **5 %** |
+| B', w = 0.05 | 6 | +267.2 | +298.4 | -31.2 | 10 % |
+| `Phi = 0`, w = 0.05 | 6 | +262.3 | +298.4 | -36.1 | 12 % |
+| `Phi = 0`, w = 0 | 6 | +266.0 | +298.4 | -32.4 | 11 % |
+
+**W6 tracks the labels' size-dependence about twice as closely as anything else in the
+programme.** The analytic `E_M` plus the non-self-consistent host term reproduces how the axial
+`d`-slope changes between cells better than the self-consistent loop does, and the two `Phi = 0`
+arms -- with and without energies in the loss -- sit together at 11-12 %, which says the residual
+11 % is the band term's and not the energy term's. This is the same ordering the tiling ladder
+gives from a different quantity (W6 93 % and B' 106 % of the exact monopole slope against `Phi =
+0`'s -35 %), so two independent size-dependence instruments agree.
+
 ### `C_Q` written into the checkpoints (2026-09-13; `defect-perovskite/dscc_calibrate.py`)
 
 `C_Q` was never a learned parameter: under the quadratic energy loss its optimum is the mean
