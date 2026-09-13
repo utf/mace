@@ -2770,3 +2770,17 @@ bought 61 % of the force gap. The remainder is not a saturation problem and not 
 problem; it is specific to forces, which is where a two-body hopping with no environment
 dependence would be expected to lose -- the force is where the angular structure of the bond
 enters. O3.2 is the test of that reading and it is running.
+
+**O3.2 LAUNCHED 2026-09-13 22:31** (b3 clock), six seeds, the same folds as O3 and O3.1, every
+flag identical to the O3.1 lines plus `--screened 1 --r_s3 4.5`, so the arm is ONE change from
+O3.1 and two from O3. Seed 0 on the local A4000 (`~/runs/o32_local_queue.txt`), seeds 1, 2, 3,
+4, 6 on b3 GPUs 5/6/7 at two per card (`~/runs/o32_queue.txt`, `W3_PER_GPU=2`,
+`W3_HEADROOM=8000`). At 35 s/epoch the wave is about 35 minutes per seed.
+
+**Operational notes, recorded because both have bitten before.** (i) b3's GPU 4 reported
+`Unable to determine the device handle ... Unknown Error` during the changeover, so the runner
+was started on cards **5 6 7** only; a faulted card has previously killed the driver context of
+every job on the machine, not only its own. (ii) The default queue path `~/runs/w3_queue.txt`
+still held six stale `dscc_w3_bp_lr_only_*` lines from 2026-09-10, which a runner started with
+default settings would have launched ahead of this wave. It is renamed to
+`w3_queue_stale_2026-09-10.txt` so it cannot fire, and O3.2 uses its own queue file.
