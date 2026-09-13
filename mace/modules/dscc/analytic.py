@@ -32,6 +32,7 @@ path).
 from __future__ import annotations
 
 import math
+import os
 from typing import Optional, Sequence, Tuple
 
 import torch
@@ -154,7 +155,7 @@ def head_cotangent_eager(eps: torch.Tensor, U: torch.Tensor, f: Sequence[torch.T
 # (lazily, once, `dynamic=True` so that a changed edge count -- every relaxation step changes
 # it -- reuses the graph instead of recompiling) it is ~2x that. `COMPILE = False` runs the
 # eager reference; the two agree to 2e-14, and the gate holds them there.
-COMPILE = True
+COMPILE = os.environ.get("MACE_DSCC_NO_COMPILE", "") == ""
 _COMPILED: dict = {}
 
 

@@ -329,18 +329,30 @@ class Trainer:
             for b in train_loader:
                 yield to_device(b, self.device)
 
-        self.feature_stats = self.model.set_feature_stats(stat_batches())
-        self.feature_stats["n_frames"] = len(self.train_idx) + len(pristine_indices)
-        logging.info("A1.1 feature stats over %d frames: atoms %s, |mu|/sd median %s, dead channels %s",
-                     self.feature_stats["n_frames"], self.feature_stats["atoms_per_species"],
-                     {k: round(v, 1) for k, v in self.feature_stats["median_abs_mean_over_sd"].items()},
-                     self.feature_stats["dead_channels"])
+        if self.model.decoupled:
+            # O3: the head's readouts read its OWN descriptor, not the base's block-0
+            # invariants, so A1.1's per-species standardisation of those invariants has
+            # nothing to standardise -- and the buffers are sized for the descriptor
+            # (n_radial x n_species), not for the base's 512 channels.
+            self.feature_stats = {"skipped": "decoupled head (O3): no base features enter H0"}
+            logging.info("A1.1 feature stats skipped: the head is decoupled")
+        else:
+            self.feature_stats = self.model.set_feature_stats(stat_batches())
+            self.feature_stats["n_frames"] = len(self.train_idx) + len(pristine_indices)
+            logging.info("A1.1 feature stats over %d frames: atoms %s, |mu|/sd median %s, dead channels %s",
+                         self.feature_stats["n_frames"], self.feature_stats["atoms_per_species"],
+                         {k: round(v, 1) for k, v in self.feature_stats["median_abs_mean_over_sd"].items()},
+                         self.feature_stats["dead_channels"])
         static = dd.atomic_data([static_cell_atoms(self.cfg.static_cell_path)], self.z_table, self.cfg.r_cut)
         self.static_batch = to_device(next(iter(torch_geometric.dataloader.DataLoader(static, batch_size=1))), self.device)
         # The static cell never moves: its base features are geometry-only, cached once.
-        with torch.no_grad():
-            feats = self.model.first_block(self.model._trunk_data(dict(self.static_batch)))
-            self.static_features = tuple(t.detach() for t in self.model.features(feats))
+        # A decoupled head does not read them at all -- `pristine_gap` builds its own
+        # descriptor from the geometry -- so the base is not run for the regulariser either.
+        self.static_features = None
+        if not self.model.decoupled:
+            with torch.no_grad():
+                feats = self.model.first_block(self.model._trunk_data(dict(self.static_batch)))
+                self.static_features = tuple(t.detach() for t in self.model.features(feats))
         # E_base and F_base of every charged frame (frozen base, geometry-only), cached once.
         self.base_cache: Dict[int, Tuple[torch.Tensor, torch.Tensor]] = {}
         if self.cfg.cache_base:
@@ -481,8 +493,7 @@ class Trainer:
         flank_site: Dict[str, list] = {}
         for j, b in enumerate(loader):
             batch = to_device(b, self.device)
-            feats = self.model.first_block(self.model._trunk_data(dict(batch)))
-            scalars, _ = self.model.features(feats)
+            scalars = self.model.readout_scalars(batch)     # the head's own l = 0 when decoupled
             species = batch["node_attrs"].argmax(dim=-1)
             a = self.frames[sample[j]]
             found = vacancy_centre_full(batch["positions"], batch["cell"].view(-1, 3, 3)[0],

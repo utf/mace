@@ -568,6 +568,23 @@ class MACEDSCC(nn.Module):
 
     # ----------------------------------------------------------------- gap (plan 6)
 
+    def readout_scalars(self, data: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """The invariants A1's bounded readouts actually see for this batch: the base's
+        block-0 scalars normally, and the head's OWN `l = 0` descriptor when the head is
+        decoupled (O3). The saturation report and any other diagnostic that asks what the
+        readouts are being fed must go through here, or it reports on a tensor the head
+        never sees -- which is a silent wrong answer, not an error, once the shapes agree."""
+        if not self.decoupled:
+            return self.features(self.first_block(self._trunk_data(dict(data))))[0]
+        positions, cell = data["positions"], data["cell"].view(-1, 3, 3)
+        sender, receiver = data["edge_index"][0], data["edge_index"][1]
+        shifts = torch.einsum("ei,eij->ej", data["unit_shifts"].to(positions.dtype),
+                              cell[data["batch"][sender]])
+        edge_vector = (positions[receiver] - positions[sender] + shifts).to(torch.float64)
+        species = data["node_attrs"].argmax(dim=-1)
+        return self.h0.descriptor(species, data["edge_index"], edge_vector,
+                                  int(species.shape[0]))[0]
+
     def pristine_gap(self, data: Dict[str, torch.Tensor],
                      cached_features: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
         """`E_gap_model = LUMO - HOMO` at the exact valence count of the Hamiltonian
@@ -577,7 +594,15 @@ class MACEDSCC(nn.Module):
         static-lattice; thermal frames for the ensemble-mean diagnostic). Differentiable
         in the head parameters through the eigenvalues (not eigenvectors)."""
         num_graphs = int(data["ptr"].numel() - 1)
-        if cached_features is None:
+        if self.decoupled:
+            # O3: `H0` builds its own descriptor from the geometry and discards whatever is
+            # passed here, so the base is not run at all -- placeholders of the right leading
+            # dimension are all the per-graph slicing below needs.
+            n = int(data["positions"].shape[0])
+            dev, dt = data["positions"].device, torch.float64
+            scalars = torch.zeros(n, 1, dtype=dt, device=dev)
+            vectors = torch.zeros(n, 1, 3, dtype=dt, device=dev)
+        elif cached_features is None:
             scalars, vectors = self.features(self.first_block(self._trunk_data(dict(data))))
         else:
             # A fixed cell (the static pristine cell): its geometry-only base features are
