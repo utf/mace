@@ -442,3 +442,15 @@ class TestO3Decoupled:
         finally:
             _scf.two_fillings, mdl.two_fillings = real, mdl_two
         assert seen and not any(seen)
+
+    def test_the_per_graph_path_matches_the_batched_one(self, o3):
+        """A batch that mixes a charged frame with a REFERENCE one leaves the uniform path
+        and takes the per-graph one, which slices the features `H0` is handed. The decoupled
+        head has none, and `None` is not sliceable -- this is the crash that took down the
+        first O3 launch at its first evaluation batch."""
+        one = o3(_batch([VACP]), compute_force=True)
+        mixed = o3(_batch([VACP, VAC0]), compute_force=True)
+        assert not mixed["short_circuit"]
+        assert float(mixed["energy"][0] - one["energy"][0]) == pytest.approx(0.0, abs=1e-9)
+        assert float((mixed["forces"][:len(VACP)] - one["forces"]).abs().max()) < 1e-9
+        assert float(mixed["head_energy"][1]) == 0.0        # the reference graph adds nothing

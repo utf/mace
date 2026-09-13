@@ -536,6 +536,12 @@ class MACEDSCC(nn.Module):
         enough here (the channel means are O(10) and the deviations O(0.3), so the
         catastrophic-cancellation regime of the naive formula is far away, and the
         alternative would be two passes over the base)."""
+        if self.decoupled:
+            raise RuntimeError(
+                "a decoupled (O3) head reads no base features, so there is nothing for A1.1 to "
+                "standardise: its readout buffers are sized for the head's own descriptor "
+                "(n_radial x n_species), not for the base's block-0 width. The trainer skips "
+                "this call for such a head; calling it directly is a mistake, not a no-op")
         n_el, n_s = len(self.atomic_numbers), self.n_scalars
         dev = self.q0_pristine.device
         total = torch.zeros(n_el, n_s, dtype=torch.float64, device=dev)
@@ -568,6 +574,18 @@ class MACEDSCC(nn.Module):
 
     # ----------------------------------------------------------------- gap (plan 6)
 
+    @staticmethod
+    def _descriptor_placeholders(n: int, device, dtype=torch.float64):
+        """What a DECOUPLED `H0` is handed in place of the base's first-block features.
+
+        `H0.forward`/`H0.batched` overwrite `scalars` and `vectors` with their own descriptor
+        when `decoupled`, so the values are irrelevant -- but the per-graph path slices them
+        (`scalars[nodes]`) before `H0` ever sees them, and `None` is not sliceable. That cost
+        every seed of the first O3 launch at its first mixed-size evaluation batch: the
+        uniform path passes them straight through and never noticed."""
+        return (torch.zeros(n, 1, dtype=dtype, device=device),
+                torch.zeros(n, 1, 3, dtype=dtype, device=device))
+
     def readout_scalars(self, data: Dict[str, torch.Tensor]) -> torch.Tensor:
         """The invariants A1's bounded readouts actually see for this batch: the base's
         block-0 scalars normally, and the head's OWN `l = 0` descriptor when the head is
@@ -596,12 +614,9 @@ class MACEDSCC(nn.Module):
         num_graphs = int(data["ptr"].numel() - 1)
         if self.decoupled:
             # O3: `H0` builds its own descriptor from the geometry and discards whatever is
-            # passed here, so the base is not run at all -- placeholders of the right leading
-            # dimension are all the per-graph slicing below needs.
-            n = int(data["positions"].shape[0])
-            dev, dt = data["positions"].device, torch.float64
-            scalars = torch.zeros(n, 1, dtype=dt, device=dev)
-            vectors = torch.zeros(n, 1, 3, dtype=dt, device=dev)
+            # passed here, so the base is not run at all.
+            scalars, vectors = self._descriptor_placeholders(int(data["positions"].shape[0]),
+                                                             data["positions"].device)
         elif cached_features is None:
             scalars, vectors = self.features(self.first_block(self._trunk_data(dict(data))))
         else:
@@ -726,7 +741,8 @@ class MACEDSCC(nn.Module):
         def run_base():
             o = self.base_forward(self._trunk_data(strained), training=training, compute_force=False)
             return o["energy"]
-        scalars, vectors = (None, None) if self.decoupled else self.features(node_feats)
+        scalars, vectors = (self._descriptor_placeholders(int(data["node_attrs"].shape[0]), device)
+                            if self.decoupled else self.features(node_feats))
         species = data["node_attrs"].argmax(dim=-1)
         edge_vector = positions[receiver] - positions[sender] + shifts
         ptr = data["ptr"]

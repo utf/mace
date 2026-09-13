@@ -341,7 +341,12 @@ class H0(nn.Module):
             terms["rank2"] = (torch.tanh(self.g_read(env)), species)
         if self.beta_a:
             terms["rank1"] = (torch.tanh(self.f_read(env)), species)
-        if edge_index is not None:
+        if edge_index is not None and not getattr(self.sk, "hop_modulation", True):
+            # O3 removed the hopping modulation, so `sk.hop` is never evaluated by the model.
+            # Reporting its saturation would put a live-looking number in every epoch log for
+            # an MLP that does not run. Marked, not computed.
+            out["hop_not_applicable"] = 1.0
+        elif edge_index is not None:
             src, dst = edge_index[0], edge_index[1]
             sym = torch.cat([h[src] + h[dst], (h[src] - h[dst]).abs(),
                              self.sk.elem(species[src]) + self.sk.elem(species[dst]),

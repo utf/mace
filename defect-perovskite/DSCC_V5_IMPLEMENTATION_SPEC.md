@@ -2303,6 +2303,16 @@ Recorded also: under O3 the saturation report still carries a `hop` entry comput
 `sk.hop`, the MLP that `hop_modulation = False` never evaluates. **It is meaningless for O3
 and should not be read as the head saturating.**
 
+**A third O3 bug killed the first launch** (2026-09-13 ~20:03 b3 clock, four minutes in, at the
+first evaluation batch): the per-graph path -- taken by any batch that mixes a charged frame
+with a reference one, or mixes sizes -- slices the features it hands `H0`, and a decoupled head
+has none (`scalars[nodes]` on `None`). The uniform path passes them straight through, which is
+why every gate and both smokes missed it: the smoke ran `--subset 12`, all one size. Fixed with
+explicit placeholders (`MACEDSCC._descriptor_placeholders`; `H0` overwrites them with its own
+descriptor), gated by `test_the_per_graph_path_matches_the_batched_one`, and
+`set_feature_stats` now refuses a decoupled head loudly instead of raising a shape error.
+Runners stopped before the fix and the six seeds relaunched; cost one wave, ~10 minutes.
+
 **Timing (idle A4000, fake O3 weights, P4.3 protocol, both force routes interleaved frame by
 frame).** The interleave is necessary: the GPU's clocks drift ~15 % between separate runs, so
 the base leg alone reads 38-45 ms across invocations. The neighbour list is NOT static -- 60
