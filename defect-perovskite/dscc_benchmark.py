@@ -204,6 +204,10 @@ def main() -> None:
               "alt_route_ms_median": (1000 * float(np.median(t_alt))) if t_alt else None,
               "analytic_head_forces": bool(getattr(model, "analytic_head_forces", False)),
               "passes_2x": bool(np.median(ratio) <= 2.0 and np.percentile(ratio, 95) <= 2.0),
+              "note_fixed_cell": ("NOT the registered P4.3 trajectory: the frames are the first one "
+                                  "displaced by 0.02 A, at its own cell, which is what a relaxation or an "
+                                  "NVT/NVE step is and the regime CUDA-graph capture applies to. Quote this "
+                                  "number with that qualifier.") if args.fixed_cell else None,
               "note": "the model's time includes the base's full forward (the head needs block 0 attached; E_base is not cached at inference)"}
     print(json.dumps(report, indent=1))
     if args.out:

@@ -2422,8 +2422,17 @@ that card and the six-seed retrain is using it.
 **The registered deliverable is met at 79 atoms: 39.7 ms against <= 53 ms.** Both ratios are
 quoted because graphing the base moves the denominator, exactly as the coadvisor said it would.
 
-**At 159 atoms the captured base is no faster than the eager one** (67.3 against 67.2). That is
-the launch-bound-to-compute-bound crossover, measured: at 79 atoms the base is 41.6 ms of wall
+*Why the eager column differs from O4's* (79: 63.6 here against 74.0; 159: 100.6 against 106.5).
+Different trajectories, not a code change. This table's 79-atom row is a FIXED-CELL trajectory,
+so the eager path's reciprocal-vector cache (`_CELL_CACHE`) hits on every frame; O4's row walked
+the registered NPT frames and rebuilt the `k` set per frame. Against O4's 74.0 the graphed model
+is a 34.3 ms gain, of which 10.4 ms is the cell cache and 23.9 ms the capture. The 159-atom
+difference is within the card's run-to-run drift.
+
+**At 159 atoms the captured base is within noise of the eager one** (67.3 against 67.2 -- inside
+the card's ~15 % drift, so this pair alone proves nothing; what carries the conclusion is the
+79-atom split below). The mechanism is the launch-bound-to-compute-bound crossover: at 79 atoms
+the base is 41.6 ms of wall
 time on 30.6 ms of GPU work, so removing its 41.4 ms of CPU issue is the whole win; at 159 the
 kernels are large enough that the GPU is the constraint and there is no CPU time left to
 remove. The model still gains (100.6 -> 89.0) because the HEAD is launch-bound at both sizes.
@@ -2447,3 +2456,37 @@ error of the capture: the same base evaluated twice unpadded moves by 1.6e-7 eV 
 1.6e-6 eV/A, and padded-vs-unpadded by 2.9e-6 eV. On a float64 toy base the captured step
 reproduces the eager model to **1e-14**. Against `tau_phys` = 1.7 meV/A per component, 5e-6 eV/A
 is four orders of magnitude clear.
+
+**O3 TURN-ON READING (first four seeds, 2026-09-13) -- the registered check, and it reads the
+OPPOSITE way from the failure it was written to catch.**
+
+| | on-site shift p95 | max | fraction `|tanh| > 0.95` | held-out force RMSE |
+|---|---|---|---|---|
+| O3 s0 / s2 / s3 / s4 | 2.970 / 2.974 / 2.970 / 2.970 eV | 2.977-2.981 | **0.398-0.399** | 0.0323 / 0.0318 / 0.0353 / 0.0319 eV/A |
+| W6 s0 / s1 / s2 / s3 / s4 / s6 | 0.465-1.147 eV | 0.538-1.314 | **0.000** | (shipped) |
+
+The check was registered "so that 'forces equivalent' and 'the term never activated' cannot be
+confused". The term did not fail to activate: **it is pressed against its stop on two atoms in
+five**, at a p95 shift of 2.97 eV against a half-width `Delta_Z` of 3.079 eV, where the shipped
+W6 cohort never came within a factor of two of the bound and reads a saturated fraction of
+exactly zero. The four seeds agree to the third decimal, so this is the architecture and not a
+seed.
+
+Reading it precisely: the A1 barrier sits at `|pre| = 2.0` and `|tanh(2.0)| = 0.9640`, which is
+past the `SATURATED = 0.95` counter by construction, so "40 % saturated" means 40 % of atoms sit
+AT the barrier knee, not beyond it -- the logged barrier term (mean `relu(|pre| - 2)^2` about
+5.8e-6) puts them within ~4 meV of pre-activation past it. The barrier is doing its job and it
+is BINDING on 40 % of sites. A parameter at its stop has `sech^2 ~ 0`: this project has already
+paid once for reading such a parameter as "learning" (the `eta` ruling, 2026-09-10).
+
+Most likely cause, and it is a known deferral: O3 feeds the production readout the RAW
+species-resolved `l = 0` basis. A1.1's per-species standardisation was deliberately excluded
+from this run under one-change-at-a-time (see the O3 registration above), so the readout sees
+whatever scale `sum_j sin(n pi x) f_cut / r` happens to have. The follow-up arm is therefore
+the standardisation path, not the three-body screening -- but that is a SECOND change and the
+adoption gates are decided on forces first.
+
+Not a blocker for the gates; recorded before they are read, as the plan requires.
+
+**Also recorded:** `c4_stage_b_extras.py` reads the audit's `hop` pre-activations, which an O3
+head never produces; it now says so instead of raising `KeyError`.

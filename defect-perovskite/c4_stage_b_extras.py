@@ -57,6 +57,11 @@ def hub_stops(model, frames, z_table, cutoff, device, ctx):
                 model(d, training=False, compute_force=False)
         finally:
             head.audit(False)
+        if "hop" not in bin_:
+            raise RuntimeError(
+                "this head has no hopping modulation (O3 sets `hop_modulation = False`), so "
+                "the audit records no `hop` pre-activations and this Stage-B diagnostic has "
+                "nothing to read: t_ij = v0 * radial(r) with no environment factor")
         pre = torch.cat(bin_["hop"]).reshape(-1, len(BOND_TYPES))
         # The audit stores every edge of every head call in order; the edge list of the
         # head graph is what the model saw, so recover the hub edge by index.
