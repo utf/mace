@@ -454,3 +454,90 @@ class TestO3Decoupled:
         assert float(mixed["energy"][0] - one["energy"][0]) == pytest.approx(0.0, abs=1e-9)
         assert float((mixed["forces"][:len(VACP)] - one["forces"]).abs().max()) < 1e-9
         assert float(mixed["head_energy"][1]) == 0.0        # the reference graph adds nothing
+
+
+# ------------------------------------------------------------------------- O3.1
+
+
+def _o31(seed=0, n_radial=4):
+    """O3.1: O3 with A1.1's per-species standardisation of its OWN `l = 0` descriptor, and
+    the readout final layer at A1.1's registered 0.1. One change of substance from O3 --
+    what the readouts are fed -- plus the init scale that registration pairs with it."""
+    m = MACEDSCC(_base(seed), r_cut=R_CUT, directional=True, hidden=16, coupling=False,
+                 route_b=True, scf_free=True, decoupled=True, n_radial=n_radial,
+                 standardise_inputs=True, readout_init_scale=0.1,
+                 kernel=KernelConfig(regime="B", r_g=1.0, r_s=5.0))
+    with torch.no_grad():
+        m.h0.vector_mix.normal_(0.0, 0.3)
+        m.h0.alpha.fill_(0.5)
+        m.h0.beta.fill_(0.5)
+        m.h0.descriptor.c1.normal_(0.0, 0.5)
+        m.h0.descriptor.c2.normal_(0.0, 0.5)
+    m.set_pristine_reference([_batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])])
+    m.set_feature_stats([_batch([_frame(_perovskite(rattle=0.05, seed=s), [0, 0, 0, 0], 0)])
+                         for s in (11, 12, 13)])
+    return m
+
+
+class TestO31Standardised:
+    def test_the_statistics_are_the_heads_own_descriptor(self):
+        """Not the base's block-0 invariants: the buffers are `n_radial x n_species` wide and
+        what goes into them is what the readouts actually see."""
+        m = _o31()
+        assert bool(m.h0.sk.feat_stats_set)
+        assert m.h0.sk.feat_mean.shape[1] == 4 * 3          # n_radial x n_species
+        assert m.readout_scalars(_batch([VACP])).shape[1] == m.h0.sk.feat_mean.shape[1]
+        # On the ensemble the statistics were frozen from, the standardised descriptor has
+        # zero mean and unit sd per species on every live channel -- which is the whole of
+        # what A1.1 does, and what O3's raw input does not have.
+        rows, sps = [], []
+        for s_ in (11, 12, 13):
+            b = _batch([_frame(_perovskite(rattle=0.05, seed=s_), [0, 0, 0, 0], 0)])
+            sp = b["node_attrs"].argmax(-1)
+            rows.append(m.h0.sk.standardise(m.readout_scalars(b).to(torch.float64), sp))
+            sps.append(sp)
+        std, sp = torch.cat(rows), torch.cat(sps)
+        for z in range(3):
+            sel = std[sp == z]
+            live = m.h0.sk.feat_scale[z] > 0
+            assert float(sel[:, live].mean(0).abs().max()) < 1e-8
+            assert float((sel[:, live].std(0, unbiased=False) - 1.0).abs().max()) < 1e-6
+
+    def test_standardisation_is_off_for_o3_and_refuses_to_be_frozen(self, o3):
+        assert o3.standardise_inputs is False and o3.require_feature_stats is False
+        with pytest.raises(RuntimeError):
+            o3.set_feature_stats([_batch([VACP])])
+
+    def test_a_head_without_its_statistics_refuses_to_run(self):
+        m = MACEDSCC(_base(0), r_cut=R_CUT, directional=True, hidden=16, coupling=False,
+                     route_b=True, scf_free=True, decoupled=True, n_radial=4,
+                     standardise_inputs=True, kernel=KernelConfig(regime="B", r_g=1.0, r_s=5.0))
+        with pytest.raises(RuntimeError):
+            m(_batch([VACP]), compute_force=False)
+
+    def test_forces_against_central_differences(self):
+        m = _o31()
+        out = m(_batch([VACP]), compute_force=True)
+        h = 1e-4
+        for atom, comp in ((1, 0), (7, 2)):
+            plus, minus = VACP.copy(), VACP.copy()
+            plus.positions[atom, comp] += h
+            minus.positions[atom, comp] -= h
+            e_plus = float(m(_batch([plus]), compute_force=False)["energy"])
+            e_minus = float(m(_batch([minus]), compute_force=False)["energy"])
+            assert float(out["forces"][atom, comp]) == pytest.approx(-(e_plus - e_minus) / (2 * h), abs=3e-6)
+
+    def test_the_analytic_and_autograd_routes_still_agree(self):
+        m = _o31()
+        batch = _batch([VACP, VACX])
+        fast = m(dict(batch), compute_force=True)
+        m.analytic_head_forces = False
+        try:
+            ref = m(dict(batch), compute_force=True)
+        finally:
+            m.analytic_head_forces = True
+        assert float((fast["forces"] - ref["forces"]).abs().max()) < 1e-9
+
+    def test_the_readout_init_scale_is_recorded_and_applied(self):
+        assert _o31().h0.sk.readout_init_scale == 0.1
+        assert _o3().h0.sk.readout_init_scale == 0.05        # what O3 and W6 shipped with

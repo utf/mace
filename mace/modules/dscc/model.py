@@ -87,6 +87,7 @@ class MACEDSCC(nn.Module):
     # checkpoint -- which it did, on the first benchmark of the Phi = 0 arms.
     scf_free: bool = False
     decoupled: bool = False    # O3; class-level default for pre-O3 checkpoints
+    standardise_inputs: bool = True   # A1.1; class-level default for pre-O3.1 checkpoints
     # The analytic head force (`mace.modules.dscc.analytic`). On by default for the decoupled
     # head at inference; set False to fall back to the autograd cotangent route, which is the
     # reference the gate compares against. Class level for the same pickle reason as above.
@@ -96,6 +97,8 @@ class MACEDSCC(nn.Module):
                  kernel: Optional[KernelConfig] = None, sigma_s: float = SIGMA_S,
                  coupling: bool = False, route_b: bool = False, scf_free: bool = False,
                  decoupled: bool = False, n_radial: int = 6, directional: bool = True,
+                 standardise_inputs: Optional[bool] = None,
+                 readout_init_scale: Optional[float] = None,
                  lambda_0: float = LAMBDA_0_DEFAULT, lambda_max: float = LAMBDA_MAX_DEFAULT,
                  u_max: Optional[Dict[int, float]] = None, r_split: float = R_SPLIT_DEFAULT,
                  q_cut: float = Q_CUT_DEFAULT, a_max: float = A_MAX_DEFAULT,
@@ -136,7 +139,8 @@ class MACEDSCC(nn.Module):
         self.h0 = H0(self.atomic_numbers, feature_dim=n_s, n_vectors=n_v, r_cut=self.r_cut,
                      q_cut=q_cut, directional=directional, a_max=a_max, b_max=b_max,
                      hidden=hidden, eta=eta, beta_b=beta_b, beta_a=beta_a,
-                     delta_frac=delta_frac, decoupled=self.decoupled, n_radial=n_radial)
+                     delta_frac=delta_frac, decoupled=self.decoupled, n_radial=n_radial,
+                     readout_init_scale=readout_init_scale)
         if self.decoupled:
             self.h0.sk.hop_modulation = False
         n_el = len(self.atomic_numbers)
@@ -163,9 +167,14 @@ class MACEDSCC(nn.Module):
         # statistics reproduces the A1 failure silently (corrections that never leave 0.1 eV),
         # so this is a hard guard rather than a default. Set False only for unit tests that
         # build an `H0` directly and do not care about conditioning.
-        # A decoupled head has no base features to standardise, so the A1.1 guard does not
-        # apply to it (and `set_feature_stats` is a no-op there).
-        self.require_feature_stats = not self.decoupled
+        # A1.1 standardisation. Non-decoupled heads read the base's block-0 invariants and have
+        # always standardised them. O3 shipped WITHOUT it -- deliberately, under
+        # one-change-at-a-time -- and its on-site correction then sat at the barrier on 40 % of
+        # atoms (tracker, O3 turn-on reading). O3.1 turns it on for the head's own `l = 0`
+        # descriptor, which is the only input its readouts see.
+        self.standardise_inputs = bool((not decoupled) if standardise_inputs is None
+                                       else standardise_inputs)
+        self.require_feature_stats = self.standardise_inputs
         self.register_buffer("q0_pristine", torch.zeros(n_el, dtype=torch.float64))   # species means
         self.register_buffer("pristine_atoms", torch.tensor(0, dtype=torch.long))
         # C_Q: one constant per formal charge, with its record (plan section 6); both in
@@ -569,21 +578,24 @@ class MACEDSCC(nn.Module):
         enough here (the channel means are O(10) and the deviations O(0.3), so the
         catastrophic-cancellation regime of the naive formula is far away, and the
         alternative would be two passes over the base)."""
-        if self.decoupled:
+        if self.decoupled and not self.standardise_inputs:
             raise RuntimeError(
-                "a decoupled (O3) head reads no base features, so there is nothing for A1.1 to "
-                "standardise: its readout buffers are sized for the head's own descriptor "
-                "(n_radial x n_species), not for the base's block-0 width. The trainer skips "
-                "this call for such a head; calling it directly is a mistake, not a no-op")
+                "this decoupled (O3) head was built with standardisation OFF, so nothing reads "
+                "the statistics and freezing them would be a silent no-op. Build it with "
+                "`standardise_inputs=True` (the O3.1 arm) if you want them.")
         n_el, n_s = len(self.atomic_numbers), self.n_scalars
+        if self.decoupled:
+            # O3.1: the head's OWN l = 0 descriptor is what its readouts see, so that is what
+            # A1.1 standardises. Geometry only -- no learned coefficient enters `A0` -- so the
+            # statistics are a property of the basis and the training ensemble, not of a
+            # partially trained head, and freezing them once is exact.
+            n_s = int(self.h0.sk.feat_mean.shape[1])
         dev = self.q0_pristine.device
         total = torch.zeros(n_el, n_s, dtype=torch.float64, device=dev)
         total_sq = torch.zeros(n_el, n_s, dtype=torch.float64, device=dev)
         count = torch.zeros(n_el, dtype=torch.float64, device=dev)
         for data in batches:
-            out = self.base_forward(self._trunk_data(dict(data)), training=False, compute_force=False)
-            scalars, _ = self.features(out["node_feats"])
-            scalars = scalars.detach().to(torch.float64)
+            scalars = self.readout_scalars(data).detach().to(torch.float64)
             sp = data["node_attrs"].argmax(dim=-1)
             total = total.index_add(0, sp, scalars)
             total_sq = total_sq.index_add(0, sp, scalars ** 2)

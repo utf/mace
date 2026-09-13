@@ -420,7 +420,8 @@ class SlaterKosterH(nn.Module):
                  hop_form: str = HOP_FORM_DEFAULT,
                  hop_log_beta: float = HOP_LOG_BETA_DEFAULT,
                  decay_learned: bool = False,
-                 decay_log_beta: float = DECAY_LOG_BETA_DEFAULT) -> None:
+                 decay_log_beta: float = DECAY_LOG_BETA_DEFAULT,
+                 readout_init_scale: Optional[float] = None) -> None:
         super().__init__()
                 
         if envelope not in ENVELOPES:
@@ -477,9 +478,15 @@ class SlaterKosterH(nn.Module):
         # zero rather than a division by something near zero.
         self.register_buffer("feat_scale", torch.ones(num_elements, feature_dim))
         self.register_buffer("feat_stats_set", torch.tensor(False))
+        # The final layer's scale. 0.05 is what the campaign before A1.1 ran on RAW inputs and
+        # what W6 and O3 both shipped with; A1.1's registered value on STANDARDISED inputs is
+        # 0.1, which is what the O3.1 arm passes. Explicit rather than hard-coded, so which one
+        # a checkpoint was built with is a recorded fact.
+        scale = 0.05 if readout_init_scale is None else float(readout_init_scale)
+        self.readout_init_scale = scale
         self.hop = _mlp([2 * feature_dim + 2 * elem_dim, hidden, hidden, len(BOND_TYPES)],
-                        final_scale=0.05)
-        self.site = _mlp([feature_dim + elem_dim, hidden, hidden, 2], final_scale=0.05)
+                        final_scale=scale)
+        self.site = _mlp([feature_dim + elem_dim, hidden, hidden, 2], final_scale=scale)
 
     # ---------------------------------------------------------------- elements
 

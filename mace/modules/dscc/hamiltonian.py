@@ -202,7 +202,8 @@ class H0(nn.Module):
                  eta: float = ETA_DEFAULT, beta_b: float = 0.0, beta_a: float = 0.0,
                  delta_frac: float = DELTA_FRACTION_DEFAULT,
                  readout_hidden: int = READOUT_HIDDEN_DEFAULT,
-                 decoupled: bool = False, n_radial: int = N_RADIAL_DEFAULT) -> None:
+                 decoupled: bool = False, n_radial: int = N_RADIAL_DEFAULT,
+                 readout_init_scale: Optional[float] = None) -> None:
         super().__init__()
         self.atomic_numbers = [int(z) for z in atomic_numbers]
         num_elements = len(self.atomic_numbers)
@@ -222,7 +223,8 @@ class H0(nn.Module):
         self.sk = SlaterKosterH(num_elements, feature_dim, atomic_numbers=self.atomic_numbers,
                                 r_cut=self.r_cut, envelope="exp", hop_form="log",
                                 decay_learned=True, hop_log_beta=self.eta,
-                                on_site_range=on_site_range, hidden=hidden)
+                                on_site_range=on_site_range, hidden=hidden,
+                                readout_init_scale=readout_init_scale)
         harrison_initialise(SimpleNamespace(h=self.sk), self.atomic_numbers)
         # A1: the on-site half-width, AFTER the Harrison baselines are in place (the rule
         # reads them). Registered fraction times their spread.

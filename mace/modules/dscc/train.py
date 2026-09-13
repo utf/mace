@@ -94,6 +94,8 @@ class TrainConfig:
     route_b: bool = False
     scf_free: bool = False             # W6: SCF-free (route B' pattern, no solve)
     decoupled: bool = False            # O3: head-owned atomic basis
+    standardise_inputs: Optional[bool] = None   # A1.1; None = the default for the head kind
+    readout_init_scale: Optional[float] = None  # final-layer scale of the readouts
     directional: bool = True          # False: the scalar-only control
     regime: str = "B"
     stratum_weights: Dict[str, float] = field(default_factory=dict)   # frozen per stratum key
@@ -329,13 +331,13 @@ class Trainer:
             for b in train_loader:
                 yield to_device(b, self.device)
 
-        if self.model.decoupled:
-            # O3: the head's readouts read its OWN descriptor, not the base's block-0
-            # invariants, so A1.1's per-species standardisation of those invariants has
-            # nothing to standardise -- and the buffers are sized for the descriptor
-            # (n_radial x n_species), not for the base's 512 channels.
-            self.feature_stats = {"skipped": "decoupled head (O3): no base features enter H0"}
-            logging.info("A1.1 feature stats skipped: the head is decoupled")
+        if not self.model.standardise_inputs:
+            # O3 as registered: standardisation deliberately excluded under
+            # one-change-at-a-time. O3.1 turns it on and the branch below runs, over the head's
+            # OWN `l = 0` descriptor rather than the base's block-0 invariants.
+            self.feature_stats = {"skipped": "standardisation off (O3): the raw descriptor "
+                                             "feeds the readouts"}
+            logging.info("A1.1 feature stats skipped: standardisation is off for this head")
         else:
             self.feature_stats = self.model.set_feature_stats(stat_batches())
             self.feature_stats["n_frames"] = len(self.train_idx) + len(pristine_indices)
