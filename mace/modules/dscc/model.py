@@ -853,9 +853,14 @@ class MACEDSCC(nn.Module):
         # not contain. A screened head falls back to the autograd cotangent route (gated
         # against finite differences) until the kernel is extended; the training path never
         # used the analytic route, so this costs the arm nothing.
+        # GATED ON THE MODULE, NOT ON `self.screened`. The flag travels in the extra state, so
+        # loading an UNSCREENED parent's `state_dict` into a screened model clears it while
+        # `sk.screen` stays live -- and then the closed form runs on a screened Hamiltonian,
+        # with wrong forces and no error. The module is what decides whether the closed form
+        # is valid, so the module is what the gate asks.
         analytic = (uniform and self.decoupled and self.scf_free and not self.coupling
                     and compute_force and not compute_stress and not create
-                    and not getattr(self, "screened", False)
+                    and getattr(self.h0.sk, "screen", None) is None
                     and getattr(self, "analytic_head_forces", True))
         analytic_pack = None
         if uniform:

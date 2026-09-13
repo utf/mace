@@ -179,7 +179,10 @@ class TestTheArmStartsAtItsParent:
                            child(dict(batch), compute_force=True)["forces"])
 
     def test_removing_the_module_changes_nothing_at_zero_A(self):
+        """Deleting the module is what the analytic gate reads, so hold both runs on the
+        autograd route -- otherwise this compares two force ROUTES, not two models."""
         m = _o32(seed=4)
+        m.analytic_head_forces = False
         batch = _batch([VACP])
         with_screen = m(dict(batch), compute_force=True)
         m.h0.sk.screen = None
@@ -229,6 +232,30 @@ class TestDerivatives:
             assert calls == [1]
         finally:
             mdl.h0_position_gradient = real
+
+    def test_the_refusal_survives_loading_an_unscreened_state_dict(self):
+        """`screened` travels in the extra state, so loading O3.1's `state_dict` into a
+        screened model CLEARS the flag while `sk.screen` stays live. If the analytic gate
+        asked the flag, that model would take the closed-form route on a screened
+        Hamiltonian: wrong forces, no error. It asks the module."""
+        import mace.modules.dscc.model as mdl
+        m = _o32(seed=17, a_scale=0.4)
+        m.load_state_dict(_o31(seed=17).state_dict(), strict=False)
+        assert m.screened is False and m.h0.sk.screen is not None    # the inconsistent state
+        real, calls = mdl.h0_position_gradient, []
+        mdl.h0_position_gradient = lambda *a, **k: (calls.append(1), real(*a, **k))[1]
+        try:
+            out = m(_batch([VACP]), compute_force=True)
+        finally:
+            mdl.h0_position_gradient = real
+        assert calls == []
+        h = 1e-4
+        plus, minus = VACP.copy(), VACP.copy()
+        plus.positions[1, 0] += h
+        minus.positions[1, 0] -= h
+        fd = -(float(m(_batch([plus]), compute_force=False)["energy"])
+               - float(m(_batch([minus]), compute_force=False)["energy"])) / (2 * h)
+        assert float(out["forces"][1, 0]) == pytest.approx(fd, abs=3e-6)
 
     def test_training_and_inference_forces_agree(self):
         m = _o32(seed=8, a_scale=0.4)

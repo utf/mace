@@ -206,7 +206,7 @@ class GraphedStep:
                  base_capacity: Optional[int] = None, warmup: int = 3) -> None:
         import math as _math
         from mace.modules.dscc.ewald import madelung_self, reciprocal_plan
-        if getattr(model, "screened", False):
+        if getattr(model.h0.sk, "screen", None) is not None:   # the module, not the flag
             raise ValueError(
                 "capture is not available for the screened head (O3.2): its triplet list is "
                 "built with `nonzero`, so the shapes are data dependent and a replay would "

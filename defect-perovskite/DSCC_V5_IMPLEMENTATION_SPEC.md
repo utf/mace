@@ -2676,3 +2676,36 @@ one `C_Q` <= 10 meV, neutral null and FD forces re-run), plus the turn-on readin
 screening's own diagnostic: **the distribution of `|pre|` and the fraction beyond the barrier
 knee**, so that the modulation cannot be reported as "learned" while sitting at its stop, which
 is the mistake O3 made with the on-site term.
+
+**O3.2 registration, amendment (2026-09-13, still before any O3.2 result).** Four things the
+implementation fixed that the four specifics above left implicit. Written now because the rule
+is that the form in the record is the form that RAN, and the first held-out number lands at
+epoch 5:
+
+1. **`S` carries a fixed `1/N_ref` with `N_ref = 6`**, the octahedral coordination, so a full
+   first shell gives `S ~ O(1)`. It is absorbed exactly by `A` and changes nothing about what
+   the arm is; what it sets is Adam's effective step on `A` and the scale at which `|pre|` is
+   read against the barrier knee.
+2. **The screening's pre-activations go into the SAME `_reg_bin` as W6's `hop` did**, so they
+   carry both the registered L2 (`mean tanh^2`, weight 1.8e-6) and the one-sided barrier
+   (`mean relu(|pre| - 2.0)^2`, weight 1e-3). "Enters through the existing modulation" means
+   the existing regularisation too; a modulation with a bound and no barrier would be the one
+   thing A1 exists to prevent.
+3. **`A` is symmetrised in the species pair at use** (`0.5 (A + A^T)`), not merely initialised
+   symmetric. `S_ij = S_ji` alone does not make `t_ij = t_ji`.
+4. **Two refusals, so neither can fail silently.** CUDA-graph capture refuses a screened head
+   (the triplet list is built with `nonzero`, so the shapes are data dependent and a replay
+   would reuse the captured frame's triplets), and the sparse/windowed assembly refuses it
+   (it evaluates the two-body `integrals` and would drop the screening without a word). Both
+   are registered follow-ups; neither is on the training path. The analytic-force refusal and
+   the capture refusal ask `sk.screen is not None`, NOT the `screened` flag -- the flag
+   travels in the extra state, so loading an unscreened parent's `state_dict` clears it while
+   the module stays live, and a gate on the flag would then run the closed form on a screened
+   Hamiltonian with wrong forces and no error. Gated.
+
+**Cost, measured before launch on the local A4000, same data and same card as O3.1's
+production run: 35 s/epoch against O3.1's 28 s -- 1.25x.** ~70k triplets at 79 atoms. The
+smokes: 2 epochs at `--subset 60` and at `--subset 300` clean, then ONE FULL epoch on the real
+held set (258 frames at 79 atoms and 4 at 159) because a `--subset` held split is all one size
+-- which is precisely the blind spot that killed O3's first launch four minutes in. Suite: 254
+passed, 0 failed, including 22 new gates in `tests/extensions/dscc/test_screening.py`.
