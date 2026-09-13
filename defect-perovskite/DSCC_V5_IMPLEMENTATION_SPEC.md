@@ -2171,3 +2171,179 @@ have to be subtracted to better than a part in a hundred first.
 **Recommendation:** do not run 2879. Take route 2 for `eps_0^model`, and if `dE_relax(inf)` is
 wanted, run route 1 at one or two sizes. Part 1's `E_inf = -2.619 +- 0.003 eV` stands on its own
 and is the expensive half already paid for.
+
+## W6 speed plan — O1, O2, O3 (coadvisor design, 2026-09-13)
+
+Scope: the shipped W6 (w = 0.05) only. Targets at 79 atoms, model / base: current 2.10 ->
+O1 ~1.7 -> O1+O2 ~1.5 -> O3 ~1.2.
+
+### O1 — assembly (done; no model change)
+
+**The premise needed correcting.** The scatter is already ONE vectorised `index_put` (~1.5 ms)
+with no per-edge or per-species Python loop left to remove. The assembly cost is a float64
+GEMM: the hopping MLP's descriptor is `feats_i + feats_j`, `|feats_i - feats_j|` and the same
+for the species embedding -- all symmetric and none of them a function of `r` -- so `pre` is a
+function of the unordered NODE PAIR, while the edge list carries both directions and every
+periodic image of each pair. `standardise` is likewise a per-node map applied to edge rows.
+
+Deduplicating by node pair and standardising per node (`SlaterKosterH.pair_correction`,
+`integrals_fast`): on a 79-atom frame **9122 edges collapse to 2872 unique pairs**.
+
+| | reference | O1 |
+|---|--:|--:|
+| `integrals` | 8.90 ms | **2.54 ms** |
+| H0 assembly, 79 / 159 atoms | 10.3 / 19.5 ms | **5.3 / 10.0 ms** |
+| model / base, 79 atoms | 2.10 (p95 3.56) | **1.94** (p95 2.54) |
+| model / base, 159 atoms | 2.47 (p95 7.48) | **2.19** (p95 7.34) |
+
+Agreement with the reference path **1.3e-15** (gate: 1e-12). Suite 200 + 2 new gates
+(`test_integrals_fast_matches_the_reference`, and a check that the deduplication is real so
+the gate cannot silently pass on a future graph convention). The assembly landed at 5.3 ms
+against the <= 3 ms target; the rest is kernel-launch overhead, where `torch.compile` would
+act -- deferred until O3 settles what is on the critical path.
+
+### O2 — folded into O3 (ruled by the user)
+
+Measured ceiling: only the base TAIL (blocks 1+ and the readout, ~9 ms of the 24.2 ms base) is
+independent of the head, so overlapping it with the CPU eigendecomposition saves ~9 ms and
+lands near 1.66, not 1.5 -- and it requires a maintained fork of `ScaleShiftMACE.forward`.
+Ruled: a maintained fork for 9 ms is a bad trade. Under O3 the head reads nothing from the
+base, so H0 is assembled first, copied to the CPU, the WHOLE base issued, and the
+eigendecomposition and fills run underneath it: larger and free. **If O3 fails its gates,
+1.94 at 79 atoms is where the coupled model stops and this record says why.**
+
+### O3 — decoupled H0 (registered 2026-09-13, BEFORE the retrain)
+
+```
+A_i^(l) = sum_j c_{Z_i Z_j}^{(n,l)} R_n(r_ij) f_cut(r_ij) Y_l(rhat_ij)   l = 0,1,2; n = 1..6
+v_i     = A_i^(1)                (replaces the base l = 1 feature in the rank-1 onsite block)
+Q_i     = traceless A_i^(2)
+t_ij    = t^SK(r_ij)             (hopping modulation removed)
+```
+
+**Registered choices (user ruling on the two open questions).**
+
+1. *Scalar on-site input:* the species-resolved `l = 0` basis
+   `A_{i,n,Z'} = sum_{j in Z'} R_n f_cut`, `N_r x n_species = 18` numbers, fed DIRECTLY to the
+   production bounded, pristine-centred readout; **no `c` for `l = 0`** (the readout's first
+   layer is that projection, so a separate `c` would be redundant). `c` remains for `l = 1, 2`.
+   Species-only was rejected: the environment dependence of that term is not decorative (the
+   centred head used its full +-3 eV range at the flanking Pb, the missing-neighbour well, and
+   the one model whose corrections failed to turn on lost 4.8 meV/A everywhere). The A1.1
+   standardisation path was rejected FOR THIS RUN under one-change-at-a-time: it has never
+   carried a passing model, so a failed gate must be attributable to the descriptor and not to
+   normalisation. It stays in the code for a later capacity arm.
+2. *Centring:* production convention (static pristine cell, per species). The ensemble-mean
+   centre is the right foundation form and a one-line change, but it is a SECOND change --
+   deferred list.
+3. *Radial family:* orthogonal Bessel, `N_r = 6`, on `[0, r_cut]`, times H0's own taper
+   `(1 - (r/r_cut)^6)^2` (C1 at `r_cut`, as for the hoppings), so the head carries one cutoff
+   radius and one smoothness class. Harrison powers `(d_ref/r)^n` were rejected: over a
+   2.8-6 A window they are a nearly collinear monomial basis in `1/r`, ill conditioned and
+   divergent at short range, and nothing reads the coefficients (they feed bounded readouts) --
+   the single-convention argument concerns the hopping ENVELOPE, one specific function, not a
+   basis that must span smooth functions. Gaussian shells would work but add registered centres
+   and widths for no gain.
+
+**Required reading (registered now):** the per-species median and p95 of the trained scalar
+on-site correction, against the shipped W6's **0.2 / 1.85 eV** -- the turn-on check, so that
+"forces equivalent" and "the term never activated" cannot be confused.
+
+**Gates, paired by fold against the shipped W6 seeds:** force TOST (tau = 1.7 meV/A per
+component) equivalent or superior; energy RMSE at 79 not inferior beyond 0.10 meV/atom;
+between-size after one `C_Q` <= 10 meV; frozen-core ladder remainder flat as in v6; C5 read as
+analysis; neutral null and FD-force gates re-run. Adopt on pass; on failure keep the coupled
+W6 with O1 and register the three-body bond screening
+`S_ij = sum_k g(r_ik) g(r_jk) P(cos theta_ikj)` as the single follow-up arm.
+
+**Implementation gates already passed** (`decoupled=True`, toy model): FD forces 2.0e-9,
+1.7e-9, 6.3e-10 eV/A; FD stress 1.4e-11, 4.1e-12 eV/A^3; gauge `H0 -> H0 + aI` shifts `E` by
+exactly `-aQ` with forces unchanged to 1.1e-14 and `dq` to 4.4e-15; batched == per-graph to
+0.00e+00; `sum dq = Q` to 4e-16; neutral null short-circuits; feature statistics not required
+(there are no base features to standardise). With a cached base the decoupled head evaluates
+NO part of the base -- block 0 and its `create_graph` traversal leave the training step.
+
+### O4 — the analytic head force (coadvisor 2026-09-13; implemented, gated, measured)
+
+The head's force is `d <X, H0(R)>/dR` at fixed `X`, and autograd was computing it by walking
+the assembly graph backwards. The contraction is `O(edges x 16 x 3)` arithmetic, so the
+traversal was nearly all overhead. `mace/modules/dscc/analytic.py` writes it out:
+
+* per edge, closed form -- the Slater-Koster block's `dS/dv` and `dS/du`, the descriptor's
+  three channels, and the projector `du/dd = (I - u u^T)/r`;
+* per node, a small autograd on leaf descriptors through the PRODUCTION `on_site` and
+  `directional_site_blocks`, so A1's environment factors and the block layout are not
+  transcribed a second time;
+* ONE `X` for both consumers. The band term's `dP` and `E_host`'s two Frechet pullbacks share
+  `U`, so `X = U (diag(sum_sigma df) + M_S + M_R) U^T` is formed in the eigenbasis and rotated
+  out once -- four `n^3` GEMMs where the two separate routes did about ten.
+
+With it the whole head runs under `no_grad` at inference, which closes the coadvisor's fills
+item as a side effect: `two_fillings` takes its frontier path and forms no density matrix at
+all (8.0 -> 2.4 ms at 159 atoms). **Scope, stated not hidden:** forces only. The stress keeps
+the autograd cotangent route -- it needs the strain graph, and it is not on the timed path.
+Decoupled heads only: with the base's features in `H0` the derivative runs through the base's
+graph and there is nothing to write out.
+
+**Gates.** `test_the_analytic_force_route_matches_the_autograd_route` (same model, same frame,
+two derivative routes) 1e-9; compiled vs eager 2e-14; a 5.6 A cell with 30 periodic self-image
+edges 2.7e-15 (the assembly overwrites the matrix diagonal with the on-site levels, so a
+`src == dst` edge contributes its off-diagonal entries and not its diagonal ones -- masked);
+`test_the_analytic_route_forms_no_density_matrix`. Nine more O3 gates were added at the same
+time, because **O3 had no test of its own before 2026-09-13**: FD forces, FD stress, batched
+== per-graph, training == inference, and "perturbing every base parameter leaves the head
+energy bit-identical". Full `tests/extensions/dscc` suite: 211 passed.
+
+**Two O3 training-path bugs the one-epoch smoke found** (both in `Trainer.prepare`, both fatal
+to all six seeds): `set_feature_stats` standardised the base's 512 block-0 invariants into
+buffers sized for the head's 18-channel descriptor and raised; `saturation_report` fed those
+same base features to the head's readouts -- once the shapes agreed that would have been a
+wrong number and not an error, so diagnostics now go through `MACEDSCC.readout_scalars`.
+Recorded also: under O3 the saturation report still carries a `hop` entry computed from
+`sk.hop`, the MLP that `hop_modulation = False` never evaluates. **It is meaningless for O3
+and should not be read as the head saturating.**
+
+**Timing (idle A4000, fake O3 weights, P4.3 protocol, both force routes interleaved frame by
+frame).** The interleave is necessary: the GPU's clocks drift ~15 % between separate runs, so
+the base leg alone reads 38-45 ms across invocations. The neighbour list is NOT static -- 60
+(16 at 159) different frames, `torch.compile(dynamic=True)`.
+
+| | base | model, analytic + compiled | ratio | model, autograd | ratio |
+|---|---|---|---|---|---|
+| 79 atoms | 38.4 ms | 74.0 ms | 1.88 | 74.4 ms | 1.94 |
+| 159 atoms | 67.7 ms | 106.5 ms | 1.57 | 114.0 ms | 1.68 |
+
+**A wash at 79 atoms, 7.5 ms at 159.** Why: the kernel's own arithmetic is 2.7 ms of GPU time
+at 79 atoms but it issues 542 CUDA kernels eager (262 compiled) and costs ~4.5 ms of launch
+latency; `head_cotangent` is another 3.6 ms of the same kind. At 79 atoms that is about the
+size of the traversal it removes. The compiled H0 assembly went 3.2 -> 1.1 ms.
+
+**The CUDA-graph item, measured and NOT implemented.** Base forward+backward at 79 atoms:
+eager 41.6 ms wall of which **41.4 ms is CPU issue** -- entirely launch-bound; captured as a
+CUDA graph, 30.6 ms wall and **0.023 ms of CPU**. So graphing the base both removes 11 ms and
+frees 30 ms of CPU time in which the head -- which reads nothing from the base under O3 --
+could issue its own kernels. Capture succeeds on this base (openequivariance's JIT kernels do
+not refuse it); energies and forces agree with eager to 9e-7, which is the base's own
+run-to-run scatter nondeterminism and not an error of the graph. What it needs before it can
+be used is edge-bucket padding: capture fixes the shapes, and every frame has a different
+edge count, so the neighbour list must be padded to a bucket with dummy edges beyond `r_max`
+(zero through MACE's polynomial cutoff). Node counts are already fixed per size class. Not
+done; it is the largest remaining lever and it is a day's work with production caveats.
+
+**The `eigh` rule on the deferred-base path, registered with its measurement.** Not a size
+threshold: the base is issued first and the head reads nothing from it, so a CPU `eigh` runs
+underneath the base's GPU window and costs nothing, while a GPU one is serial work behind that
+window. Measured (float64, one matrix, ms): 316 orbitals cuSOLVER 12.4 / MKL 8.6 / base window
+45.9; 636 -> 23.6 / 26.0 / 64.2; 1272 -> 84.7 / 101.3 / 127.2; 2544 -> 433.8 / 389.2 / 253.6.
+The CPU `eigh` hides completely up to 1272 orbitals and is cheaper than cuSOLVER at 2544
+anyway, so the deferred path uses the CPU at every size measured (`EIGH_DEFERRED_ON_CPU`,
+`mace/modules/dscc/fill.py`). Note the head-to-head crossover is NOT monotone -- the GPU wins
+at 636 and 1272 and loses again at 2544 -- so `EIGH_CPU_MAX_ORBITALS = 512` must not be
+generalised into an "above this size, use the GPU" rule.
+
+**Six-seed O3 retrain launched 2026-09-13 ~19:59**: seeds 2, 3, 4, 6 on b3 GPUs 5/6/7
+(`~/runs/o3_queue.txt`, runner log `~/runs/o3_queue.log`), seeds 0, 1 on the local A4000
+(`~/runs/o3_local_queue.txt`). **b3 GPU 4 is off the bus** ("Unable to determine the device
+handle for GPU4: 0000:89:00.0: Unknown Error") -- the same fault GPU 6 had on 2026-09-06,
+which a cold power cycle cleared; not cycled, and the run does not need it (three usable cards
+of the permitted four, so four seeds run as 3 + 1).

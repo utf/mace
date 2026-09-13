@@ -31,6 +31,31 @@ _SQRT_PI = math.sqrt(math.pi)
 
 EIGH_CPU_MAX_ORBITALS = 512   # v5 W2 item 7 (registered): a single float64 eigh up to this size runs on the CPU
 
+# THE DEFERRED-BASE PATH HAS A DIFFERENT RULE, and it is not a size threshold at all.
+#
+# `EIGH_CPU_MAX_ORBITALS` above compares the two backends head to head, which is the right
+# comparison when the eigendecomposition is on the critical path. It is not the comparison
+# the decoupled (O3) head makes: there the base is issued FIRST and the head reads nothing
+# from it, so a CPU eigh runs underneath the base's GPU window and costs nothing at all,
+# while a GPU eigh is serial work queued behind that window.
+#
+# Measured 2026-09-13, idle A4000 + Xeon Gold 6248R, float64, one matrix (ms):
+#
+#   atoms  orbitals   cuSOLVER   MKL (+ round trip)   base fwd+bwd GPU window
+#      79       316       12.4         8.6                    45.9
+#     159       636       23.6        26.0                    64.2
+#     318      1272       84.7       101.3                   127.2
+#     636      2544      433.8       389.2                   253.6
+#
+# The CPU eigh fits inside the base's window at 316, 636 and 1272 orbitals -- free -- and at
+# 2544 it no longer fits but is still cheaper than cuSOLVER (389 against 434; the A4000's
+# float64 rate is 1/32 of its float32 one). So on the deferred path the answer is the CPU at
+# every size measured, and `MACEDSCC._charged_forward` runs it there unconditionally. Note
+# that the head-to-head crossover is NOT monotone -- the GPU wins at 636 and 1272 and loses
+# again at 2544 -- so a single "above this size use the GPU" threshold would be wrong even
+# for the non-deferred path beyond ~1300 orbitals.
+EIGH_DEFERRED_ON_CPU = True
+
 
 def eigh_for(H: torch.Tensor, device: str = "auto") -> "tuple[torch.Tensor, torch.Tensor]":
     """`torch.linalg.eigh` on the backend the size warrants (v5 W2 item 7, measured on the

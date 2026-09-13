@@ -798,6 +798,10 @@ class MACEDSCC(nn.Module):
                     H_cpu = H.detach().to("cpu")
                     e_base = run_base()
                     with torch.no_grad():
+                        # On the CPU by the `EIGH_DEFERRED_ON_CPU` rule (fill.py): it runs
+                        # underneath the base's GPU window, which the measurement there shows
+                        # is wide enough to hide it up to 1272 orbitals and cheaper than
+                        # cuSOLVER beyond that anyway.
                         eps_c, U_c = torch.linalg.eigh(H_cpu)
                     spectrum = (eps_c.to(H.device), U_c.to(H.device))
                 with torch.set_grad_enabled(torch.is_grad_enabled() and not analytic):
