@@ -33,11 +33,14 @@ ap.add_argument("--new", default="/home/alex/runs/base_v2_prod/base_v2_prod_base
 ap.add_argument("--device", default="cuda")
 ap.add_argument("--batch_size", type=int, default=4)
 ap.add_argument("--out", default="/home/alex/runs/base_compare.json")
+ap.add_argument("--limit", type=int, default=0, help="debug: use only the first N frames")
 args = ap.parse_args()
 torch.set_default_dtype(torch.float64); t0 = time.time()
 
 HERE = W + "/defect-perovskite"
 frames = load_frames(f"{HERE}/dataset_pbe/train.xyz", f"{HERE}/dataset_pbe/valid.xyz")
+if args.limit:
+    frames = frames[:: max(1, len(frames) // args.limit)][: args.limit]
 meta = []
 for a in frames:
     q = int(a.info.get("cell_charge", 0)); n = len(a)
