@@ -263,5 +263,24 @@ Most likely cause is a deferral we registered ourselves: O3 feeds the production
 one-change-at-a-time. If that is it, the follow-up arm is the standardisation path rather than
 the three-body screening — but it is a second change, and adoption is decided on forces.
 
-Forces so far are equivalent to or better than the shipped cohort. The paired TOST, the energy
-and between-size gates and the frozen-core ladder run when s1 and s6 land.
+**Correction to what I sent earlier: the forces are NOT equivalent.** I compared O3 against
+0.0329 eV/A, which is the Arm-2+3 figure for `B_Bp_lr_only` — a different campaign and base —
+not against the shipped W6 cohort, which is 11.58 meV/A per component. All six seeds are now in
+and G1 reads:
+
+| seed (fold) | 0 (0) | 1 (1) | 2 (2) | 3 (3) | 4 (0) | 6 (2) | median |
+|---|---|---|---|---|---|---|---|
+| W6 | 11.22 | 11.62 | 11.58 | 11.23 | 12.02 | 11.84 | **11.60** |
+| O3 | 18.82 | 19.71 | 18.55 | 20.48 | 18.53 | 18.79 | **18.81** |
+
+Paired TOST, τ = 1.7, d = W6 − O3: mean **−7.563**, se 0.407, 90 % CI **[−8.384, −6.743]** →
+**INFERIOR**, every seed the same sign, four standard errors clear of the band. **O3 is worse by
+4.4 τ.** My inference that the on-site term's environment dependence "carries little at this
+accuracy" is withdrawn — it rested on the wrong number.
+
+So your reason for letting the O3 gates run is answered, and the answer is no: the descriptor
+swap is not harmless. O3 is disqualified on forces as well as on saturation. O3.1 now has a
+7.56 meV/Å gap to close rather than just a bound to come off — and since O3 changed two things
+against W6 (head-owned descriptor, hopping modulation deleted) and saturated besides, how much
+of the gap O3.1 recovers is what says whether the basis is sound or the next arm has to restore
+the modulation.

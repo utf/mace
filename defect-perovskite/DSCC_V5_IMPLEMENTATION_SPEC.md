@@ -2564,9 +2564,43 @@ median, 5.9x; the b3 cards differ and some W6 runs shared one). Route B' (W5) is
 and 330 s on b3, so O3 trains 6-11x faster than the shipped B' cohort. A six-seed O3 wave
 finishes in about an hour where W6's took a night.
 
-**One reading the O3 forces already give, if the TOST holds.** With the on-site environment
-term effectively disabled on two atoms in five, the held-out force RMSE is 0.0318-0.0353 eV/A
-against the shipped cohort's 0.0329 median -- no worse. So that term's ENVIRONMENT dependence
-carries little at this accuracy. O3.1 measures whether an active, unsaturated version buys
-anything beyond equivalence; if it does not, the simplest survivor is a species-only scalar
-on-site term, one step from W4's `spec`.
+### O3 — G1 (2026-09-13, all six seeds). **FAIL: INFERIOR by 4.4 tau.**
+
+| seed (fold) | W6 | O3 | d = O3 - W6 |
+|---|---:|---:|---:|
+| 0 (0) | 11.22 | 18.82 | +7.60 |
+| 1 (1) | 11.62 | 19.71 | +8.09 |
+| 2 (2) | 11.58 | 18.55 | +6.97 |
+| 3 (3) | 11.23 | 20.48 | +9.25 |
+| 4 (0) | 12.02 | 18.53 | +6.51 |
+| 6 (2) | 11.84 | 18.79 | +6.95 |
+| **median** | **11.60** | **18.81** | |
+
+meV/A per component (the plan's convention: the trainer logs the per-atom force-error VECTOR
+RMS, `sqrt 3` times this). The W6 median of 11.60 reproduces the registered W6 table's 11.58,
+which confirms both the cohort and the convention.
+
+**Paired TOST, `tau` = 1.7, `d = W6 - O3`: mean -7.563, se 0.407, 90 % CI [-8.384, -6.743] ->
+INFERIOR.** Every seed the same sign; the interval is four standard errors clear of the
+equivalence band. **O3 is worse than the shipped W6 head by 7.56 meV/A per component, 4.4 x
+tau.**
+
+**CORRECTION OF RECORD (mine).** An earlier entry in this section read "no worse", comparing
+O3's 0.0318-0.0353 eV/A against "the shipped cohort's 0.0329 median". That 0.0329 is the
+**Arm 2+3** figure for `B_Bp_lr_only` -- a different campaign, base and dataset -- quoted in the
+trainer's per-atom-vector convention against W6 numbers that were never in it. The shipped W6
+cohort is 0.0194-0.0208 eV/A, i.e. 11.58 per component, as the W6 RESULT table above always
+said. The inference drawn from the wrong comparison -- that the on-site term's ENVIRONMENT
+dependence "carries little at this accuracy" -- is **withdrawn**: it was built on a number that
+did not belong to the comparison.
+
+**What this changes.** The coadvisor's reason for letting the O3 gates run was that they answer
+whether the descriptor swap is harmless. They answer it: **it is not.** O3 is disqualified twice
+over -- on forces by G1, and on the Stage-2 no-saturation rule -- and the two are not
+independent, since an on-site term pinned as a per-species constant is capacity removed. Note
+O3 changes TWO things against W6 (the head-owned descriptor, and the hopping modulation
+deleted) and saturates as well, so the 7.56 meV/A is not attributable to one cause. O3.1 tests
+only the saturation half: it now has a 7.56 meV/A gap to close, not merely a bound to come off.
+If it closes most of it, the descriptor is sound and the saturation was the cost; if it closes
+little, the head-owned basis or the deleted modulation is carrying the loss and the next arm
+is one of those, one at a time.
