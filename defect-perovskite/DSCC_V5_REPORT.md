@@ -317,11 +317,23 @@ slope near zero would mean the far-field ionic response is missing.
 
 The fully relaxed dilute limit is then `E∞(frozen) + ΔE_relax(∞)`, each with its own uncertainty.
 
-**Cost.** Part 1 is cheap: the whole eight-cell ladder including the `R_core` sweep took under four
-minutes. Part 2 is the expensive half — a BFGS step is 3.8 s at 639 atoms and 6.0 s at 959, and
-the force path scales as n³ through the eigendecomposition, so 2879 atoms is ~160 s per step and
-exceeds a 16 GB card. The 959 cell is running; whether the second relaxation cell is worth its
-hours is a judgement call, since it only sharpens ε₀ in a two-parameter fit.
+**Part 2 as specified does not work, and not because of cost.** The 959 cell ran to convergence —
+77 BFGS steps, 740 s, 9.6 s/step — and gave `ΔE_relax = −8.51 eV`, which is **−8.87 meV per atom**:
+the whole lattice settling out of the MD-averaged static reference cell, a term proportional to N.
+The far-field screening term the fit is meant to extract is +0.09 to +0.14 eV for ε₀ between 10 and
+40, i.e. **1–2 % of what was measured**. A 1/L fit to a quantity dominated by an L³ bulk term, from
+two cells and two parameters, cannot recover ε₀.
+
+Cost is a secondary obstacle but a real one: the force path scales as n³ through the
+eigendecomposition, so 2879 atoms is ~260 s per BFGS step — 6–20 hours — beyond a 16 GB card, and
+b3 proved unreliable for this workload (0 % GPU at 1200 % CPU, no step in ten minutes).
+
+**Two cheaper routes.** (i) Relax the 80-atom pristine cell with the base and build every tiling
+from it: the tilings are then stationary by periodicity, the bulk term vanishes by construction,
+and ΔE_relax is the defect's own response. (ii) Skip the ladder — ε₀ is a pristine-lattice property
+(Born charges and zone-centre phonons), and on a neutral cell the head short-circuits, so it is the
+*base's* ionic response, computable on the 80-atom cell in minutes. Part 1's E∞ stands on its own
+either way; it was the expensive half and it is already paid for.
 
 ## Practical implications
 

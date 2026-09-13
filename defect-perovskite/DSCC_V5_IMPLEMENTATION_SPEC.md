@@ -2130,3 +2130,44 @@ cells only (959 and 2879), fitted as `dE_relax(inf) + (C alpha / 2)(1/eps_inf - 
 `eps_0` the single free parameter besides the constant -- a label-free test of the model's
 far-field ionic response. A slope near zero would mean that response is missing.
 (`defect-perovskite/dscc_relax_ladder.py`.)
+
+### Part 2 as specified will not work, and the reason is not cost (2026-09-13)
+
+The 959-atom relaxation ladder ran to convergence: **77 BFGS steps, 740 s, 9.6 s/step, fmax
+0.0138 eV/A**, starting from the `R_core` = 8 A embedded structure.
+
+**Cost, measured.** 3.8 s per energy+force call at 639 atoms, 6.0 s at 959, and 9.6 s per BFGS
+step at 959 including the optimiser. The force path scales as `n^3` through the
+eigendecomposition, so 2879 atoms (11516 orbitals) is ~27x that -- of order 260 s per step, and
+with a comparable or larger step count (more, softer, longer-wavelength modes) that is **6-20
+hours**, with a memory footprint beyond a 16 GB card. b3 is not a reliable fallback for this
+workload: the same job there sat at 0 % GPU and 1200 % CPU with 13 GB allocated and produced no
+step in ten minutes, against 9.6 s/step locally.
+
+**But the arithmetic kills it before the cost does.** The measured relaxation energy is
+
+    dE_relax(959) = -8.5083 eV = -8.87 meV per atom,
+
+which is the WHOLE LATTICE settling out of the MD-averaged static reference cell -- the same
+-9.6 to -10.9 meV/atom seen in every earlier relaxation, and proportional to `N`, i.e. to `L^3`.
+The far-field ionic screening term the ladder is meant to measure,
+`(C alpha / 2)(1/eps_inf - 1/eps_0)/L`, is +0.09 to +0.14 eV at this cell size for `eps_0` between
+10 and 40 -- **1 to 2 % of what was measured**. Fitting a `1/L` law to a quantity dominated by an
+`L^3` bulk term, with two cells and two parameters, cannot recover `eps_0`; the bulk term would
+have to be subtracted to better than a part in a hundred first.
+
+**Two ways to make it work, both cheaper than the ladder as specified.**
+
+1. *Remove the bulk term by construction.* Relax the 80-atom PRISTINE cell with the base first
+   (seconds), and build every tiling from that relaxed unit cell. Its tilings are then stationary
+   by periodicity, the bulk term vanishes, and `dE_relax` is the defect's own far-field response.
+   This also fixes the frozen-core ladder's reference, though part 1 is insensitive to it because
+   the bulk term cancels in `E(+1) - E(0)` at fixed geometry.
+2. *Get `eps_0` without the ladder at all.* `eps_0` is a property of the pristine lattice -- Born
+   charges and zone-centre phonons -- and on a neutral pristine cell the head short-circuits, so
+   it is the BASE's ionic response and computable on the 80-atom cell in minutes. That gives
+   `eps_0^model` directly, after which `dE_relax(inf)` needs one relaxed cell rather than a ladder.
+
+**Recommendation:** do not run 2879. Take route 2 for `eps_0^model`, and if `dE_relax(inf)` is
+wanted, run route 1 at one or two sizes. Part 1's `E_inf = -2.619 +- 0.003 eV` stands on its own
+and is the expensive half already paid for.
