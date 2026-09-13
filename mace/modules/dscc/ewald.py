@@ -96,6 +96,41 @@ def image_vectors(cell: torch.Tensor, r_c: float, margin: float = 0.0) -> torch.
     return n @ cell
 
 
+# Geometry constants memoised on the cell. The reciprocal-vector set and the point-charge
+# Madelung constant are functions of the CELL alone, and a training set of fixed cells rebuilds
+# the identical object on every call of every batch of every epoch (the v5 data set has two
+# distinct cells). Both caches are bypassed whenever the cell carries a graph -- under a strain
+# derivative `k` and `xi` must stay attached to it -- so the stress path is untouched. Keys are
+# the cell's exact bytes: a different cell is a different entry, never a near-match.
+_CELL_CACHE: dict = {}
+_CELL_CACHE_MAX = 32
+
+
+def _cell_key(cell: torch.Tensor, *rest) -> tuple:
+    c = cell.detach().to("cpu", torch.float64).contiguous()
+    return (c.numpy().tobytes(), str(cell.device), *rest)
+
+
+def _cell_cached(key, build):
+    if _CELL_CACHE_MAX <= 0:            # 0 disables the cache (the A/B measurement)
+        return build()
+    hit = _CELL_CACHE.get(key)
+    if hit is None:
+        hit = build()
+        if len(_CELL_CACHE) >= _CELL_CACHE_MAX:
+            _CELL_CACHE.clear()
+        _CELL_CACHE[key] = hit
+    return hit
+
+
+def cached_reciprocal_vectors(cell: torch.Tensor, k_c: float) -> torch.Tensor:
+    """`reciprocal_vectors` memoised on `(cell, k_c)`; the live call when the cell is attached."""
+    if cell.requires_grad:
+        return reciprocal_vectors(cell, k_c)
+    return _cell_cached(_cell_key(cell, "k", round(float(k_c), 12)),
+                        lambda: reciprocal_vectors(cell, k_c))
+
+
 def reciprocal_vectors(cell: torch.Tensor, k_c: float) -> torch.Tensor:
     """Reciprocal vectors `2 pi m @ inv(cell)^T` with `|k| <= k_c`, `k != 0`, `[n_k, 3]`;
     the integer set is fixed by the detached cell so the result is differentiable in it."""
@@ -245,7 +280,7 @@ def reciprocal_matrix(positions: torch.Tensor, cell: torch.Tensor, width: float,
     eta = 0.5 * float(width)
     volume = torch.det(cell).abs()
     k_c = reciprocal_cutoff(eta, float(volume.detach()), tol)
-    k = reciprocal_vectors(cell, k_c)                                      # [n_k, 3]
+    k = cached_reciprocal_vectors(cell, k_c)                               # [n_k, 3]
     k2 = (k * k).sum(dim=-1)
     weight = torch.exp(-(eta ** 2) * k2) / k2                              # [n_k]
     if pair_vectors is None:
@@ -271,7 +306,7 @@ def reciprocal_pair_gradient(positions: torch.Tensor, cell: torch.Tensor, width:
     pos, cel = positions.detach(), cell.detach()
     eta = 0.5 * float(width)
     volume = float(torch.det(cel).abs())
-    k = reciprocal_vectors(cel, reciprocal_cutoff(eta, volume, tol))
+    k = cached_reciprocal_vectors(cel, reciprocal_cutoff(eta, volume, tol))
     k2 = (k * k).sum(dim=-1)
     weight = torch.exp(-(eta ** 2) * k2) / k2                              # [n_k]
     phase = pos @ k.transpose(0, 1)                                        # [N, n_k]
@@ -323,6 +358,45 @@ def gradient_of_contraction(A: torch.Tensor, D: torch.Tensor) -> torch.Tensor:
     `sum_j A_kj D_kj - sum_i A_ik D_ik`. `A [..., N, N]` (attached), `D [..., N, N, 3]`
     (constant); returns `[..., N, 3]`."""
     return torch.einsum("...kj,...kjc->...kc", A, D) - torch.einsum("...ik,...ikc->...kc", A, D)
+
+
+def madelung_self(cell: torch.Tensor, eta: Optional[float] = None,
+                  tol: float = EWALD_TOL) -> torch.Tensor:
+    """W6 `E_M`: the Ewald self constant `xi(h)` of ONE point charge in the cell `h` with its
+    neutralising background, eV per unit charge squared (`E_M = 0.5 Q^2 xi / eps_inf`).
+    Attached to `cell` and to nothing else -- the term carries a stress and no force, which
+    is what the plan registers for `E_M(Q; h)`.
+
+    `xi = C [sum_{L != 0} erfc(|L| / 2 eta) / |L| + (4 pi / V) sum_{k != 0} exp(-eta^2 k^2) / k^2
+             - 1 / (sqrt(pi) eta) - 4 pi eta^2 / V]`
+
+    This is the `w -> 0` limit of `ewald_matrix`'s diagonal with the Gaussian self term
+    `2 C / (sqrt(pi) w)` removed. The two background conventions (C13) coincide in that
+    limit, so `E_M` is convention-free. For a cubic cell of side `L` it equals
+    `-madelung_constant_cubic() * COULOMB / L` (the registered check).
+    """
+    if cell.dtype != torch.float64:
+        raise TypeError("the Ewald matrix is evaluated in float64 (plan section 1)")
+    if eta is None:
+        eta = default_eta(cell, [0.0])
+    if not cell.requires_grad:                 # a constant of the cell; attached under strain
+        return _cell_cached(_cell_key(cell, "madelung", round(float(eta), 12), tol),
+                            lambda: _madelung_self(cell, eta, tol))
+    return _madelung_self(cell, eta, tol)
+
+
+def _madelung_self(cell: torch.Tensor, eta: float, tol: float) -> torch.Tensor:
+    volume = torch.det(cell).abs()
+    r_c = real_space_cutoff(eta, tol)
+    k_c = reciprocal_cutoff(eta, float(volume.detach()), tol)
+    images = image_vectors(cell, r_c)
+    r = images.norm(dim=-1)
+    r = r[r.detach() > 1e-12]                      # L = 0 is the charge itself
+    real = (torch.erfc(r / (2.0 * eta)) / r).sum()
+    k = reciprocal_vectors(cell, k_c)
+    k2 = (k * k).sum(dim=-1)
+    recip = (4.0 * math.pi / volume) * (torch.exp(-(eta ** 2) * k2) / k2).sum()
+    return COULOMB * (real + recip - 1.0 / (_SQRT_PI * eta) - 4.0 * math.pi * eta ** 2 / volume)
 
 
 def madelung_constant_cubic() -> float:

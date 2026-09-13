@@ -79,8 +79,11 @@ def main() -> None:
                     row["sparse_dE"] = float(sp_out["energy"]) - e0
                     row["dense_sparse_force_diff"] = float((sp_out["forces"] - out["forces"]).abs().max())
                     row["sparse_window"] = sp_out["diagnostics"]["window"]
-                except NotImplementedError as exc:
-                    row["sparse_note"] = str(exc)
+                except Exception as exc:          # noqa: BLE001 -- a cross-check, not the gate
+                    # Route B' and W6 raise NotImplementedError by design (the sparse path has
+                    # no reference density); anything else here is still a note, not a reason
+                    # to lose the ladder row that IS the measurement.
+                    row["sparse_note"] = f"{type(exc).__name__}: {exc}"
         else:
             sp_out = sparse.model_forward_sparse(model, bp)
             row.update({"path": "sparse", "dE": float(sp_out["energy"]) - e0, "dq_max": float(sp_out["dq"].abs().max()),

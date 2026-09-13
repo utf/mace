@@ -22,6 +22,7 @@ section 2.6 plugs into `solve` in Phase 1.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import asdict
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -33,7 +34,7 @@ from mace.modules.models import ScaleShiftMACE
 from mace.modules.dscc.fill import SIGMA_S
 from mace.modules.dscc.hamiltonian import (A_MAX_DEFAULT, B_MAX_DEFAULT, DELTA_FRACTION_DEFAULT,
                                            ETA_DEFAULT, H0, Q_CUT_DEFAULT, R_CUT_DEFAULT)
-from mace.modules.dscc.ewald import gradient_of_contraction
+from mace.modules.dscc.ewald import COULOMB, gradient_of_contraction, madelung_self
 from mace.modules.dscc.kernels import (KernelConfig, gamma_lr, gamma_matrix, gamma_pair_derivative, host_potential,
                                        kernel_components, kernel_pair_gradients, gamma_lr_pair_gradient)
 from mace.modules.dscc.scf import (ScfOptions, ScfResult, continuation_solve, continuation_solve_batched,
@@ -48,6 +49,12 @@ LAMBDA_0_DEFAULT = 0.05
 LAMBDA_MAX_DEFAULT = 2.0
 U_INIT_FRACTION = 0.05          # U_eff starts at 5 % of its bound ("initialised small")
 R_SPLIT_DEFAULT = 2.5           # Route B', A (> r_g)
+# One `autograd.grad` call for every Hellmann-Feynman cotangent term instead of one per term.
+# The terms share the base's block-0 graph and H0's, so the loop re-walked the expensive part
+# once per term; `grad([t1, t2], inputs, [c1, c2])` is their sum by linearity, in one traversal.
+# Set False to recover the per-term loop -- `test_fused_and_looped_hellmann_feynman_agree`
+# holds the two to 1e-10, and the difference is float reassociation only.
+FUSED_HF_BACKWARD = True
 S_MAX_DEFAULT = 2.0             # Route B': the single global scale s in [0, s_max], init 1 (v4.2)
 
 
@@ -72,9 +79,16 @@ def block0_layout(base: nn.Module) -> Tuple[int, int, int]:
 class MACEDSCC(nn.Module):
     """The D-SCC head on a frozen base. Registered numbers travel in `extra_state`."""
 
+    # Class-level default so that models pickled before W6 (whose `__dict__` has no
+    # `scf_free`) keep loading: `torch.load` of a whole module restores `__dict__` and never
+    # calls `set_extra_state`, so an instance attribute alone would break every earlier
+    # checkpoint -- which it did, on the first benchmark of the Phi = 0 arms.
+    scf_free: bool = False
+
     def __init__(self, base: nn.Module, *, r_cut: float = R_CUT_DEFAULT,
                  kernel: Optional[KernelConfig] = None, sigma_s: float = SIGMA_S,
-                 coupling: bool = False, route_b: bool = False, directional: bool = True,
+                 coupling: bool = False, route_b: bool = False, scf_free: bool = False,
+                 directional: bool = True,
                  lambda_0: float = LAMBDA_0_DEFAULT, lambda_max: float = LAMBDA_MAX_DEFAULT,
                  u_max: Optional[Dict[int, float]] = None, r_split: float = R_SPLIT_DEFAULT,
                  q_cut: float = Q_CUT_DEFAULT, a_max: float = A_MAX_DEFAULT,
@@ -97,6 +111,14 @@ class MACEDSCC(nn.Module):
         self.sigma_s = float(sigma_s)
         self.coupling = bool(coupling)       # Phi_cc on (self-consistent) or Phi = 0
         self.route_b = bool(route_b)
+        # W6: SCF-free. One fill of H0 as at Phi = 0, plus the NON-self-consistent host term
+        # E_host = dq^T Gamma_LR (s q0) and the analytic point-charge Madelung E_M(Q; h) in
+        # place of the self-consistent 1/2 dq^T Gamma dq. It is a route-B' object (the
+        # pattern is s q0) and it never solves, so `coupling` must be off.
+        self.scf_free = bool(scf_free)
+        if self.scf_free and (self.coupling or not self.route_b):
+            raise ValueError("scf_free is the W6 model: route_b on, coupling off "
+                             f"(got route_b={route_b}, coupling={coupling})")
         self.r_split = float(r_split)
         self.lambda_max = float(lambda_max)
         n_s, n_v, self.block0_width = block0_layout(base)
@@ -143,6 +165,7 @@ class MACEDSCC(nn.Module):
         return {"kernel": asdict(self.kernel), "scf": asdict(self.scf_options),
                 "r_cut": self.r_cut, "sigma_s": self.sigma_s,
                 "coupling": self.coupling, "route_b": self.route_b, "r_split": self.r_split,
+                "scf_free": getattr(self, "scf_free", False),
                 "lambda_max": self.lambda_max, "c_q_table": dict(self.c_q_table),
                 "calibration_record": self.calibration_record,
                 "coupling_mode": getattr(self, "coupling_mode", "full"), "fscc": getattr(self, "fscc", ""),
@@ -154,6 +177,7 @@ class MACEDSCC(nn.Module):
         self.scf_options = ScfOptions(**state["scf"])
         self.r_cut, self.sigma_s = float(state["r_cut"]), float(state["sigma_s"])
         self.coupling, self.route_b = bool(state["coupling"]), bool(state["route_b"])
+        self.scf_free = bool(state.get("scf_free", False))      # W6; absent in pre-W6 checkpoints
         self.r_split, self.lambda_max = float(state["r_split"]), float(state["lambda_max"])
         self.c_q_table = {int(k): float(v) for k, v in state.get("c_q_table", {}).items()}
         self.calibration_record = state.get("calibration_record")
@@ -284,6 +308,63 @@ class MACEDSCC(nn.Module):
         if not torch.is_grad_enabled():
             return n0 - self._occupied_from_spectrum(spectrum, float(n_up), float(n_dn))
         return n0 - site_occupation(H, spectrum, float(n_up), float(n_dn), self.sigma_s)   # v5 W2 item 6
+
+    def scf_free_terms(self, H: torch.Tensor, spectrum, counts_s, counts_r, n0: torch.Tensor,
+                       positions: torch.Tensor, cell: torch.Tensor, charges: torch.Tensor,
+                       use_pairs: bool):
+        """W6: the two SCF-free terms that sit on top of the `Phi = 0` band energy, from the
+        SAME eigendecomposition the fill used.
+
+        `E_host = dq^T Gamma_LR (s q0)` -- non-self-consistent: `dq` and `q0` are both fills
+        of `H0` itself, no potential ever enters `H`. `E_M = 1/2 Q^2 xi(h) / eps_inf` is the
+        point-charge Madelung energy of the actual cell (`madelung_self`), which takes the
+        place of the self-consistent `1/2 dq^T Gamma dq`; it depends on the cell alone, so it
+        carries a stress and no force.
+
+        `occ_S` and `occ_R` are the plan's two Frechet contractions: `dq = occ_R - occ_S` and
+        `q0 = n0 - occ_R` SHARE the reference occupation, so the backward costs two
+        Daleckii-Krein contractions and not three. `E_host` is not a Hellmann-Feynman term --
+        the energy is not stationary in a non-self-consistent charge -- so its force keeps the
+        full `d dq/dR` and `d q0/dR`, which is what the `(e_host, 1)` cotangent the caller
+        pushes delivers. Under the pair route `Gamma_LR` is detached and its own geometry
+        derivative comes back in `pair_grad` instead (sign +: an explicit energy, not `-Tr(P dH)`).
+
+        Batched throughout (`H [B, 4n, 4n]`, `positions [B, N, 3]`, `cell [B, 3, 3]`); the
+        per-graph branch calls it at `B = 1`, so the two paths agree by construction.
+        Returns `(e_host [B], e_M [B], pair_grad [B, N, 3] or None, dq [B, N], q0 [B, N])`.
+        """
+        n_graphs = H.shape[0]
+        occ_s = site_occupation(H, spectrum, counts_s[0], counts_s[1], self.sigma_s)
+        occ_r = site_occupation(H, spectrum, counts_r[0], counts_r[1], self.sigma_s)
+        dq, q0 = occ_r - occ_s, n0 - occ_r
+        sq0 = self.pattern_scale() * q0
+        with torch.set_grad_enabled(torch.is_grad_enabled() and not use_pairs):
+            g_lr = torch.stack([gamma_lr(positions[g], cell[g], self.kernel.r_g, self.r_split,
+                                         self.kernel.eps_inf, tol=self.kernel.tol,
+                                         route=self._lr_route(), background=self._background())
+                                for g in range(n_graphs)])
+        e_host = (dq * torch.einsum("bij,bj->bi", g_lr, sq0)).sum(-1)
+        pair_grad = None
+        if use_pairs:
+            with torch.no_grad():
+                d_w = torch.stack([gamma_lr_pair_gradient(positions[g], cell[g], self.kernel.r_g,
+                                                          self.r_split, self.kernel.eps_inf,
+                                                          tol=self.kernel.tol, route=self._lr_route())
+                                   for g in range(n_graphs)])
+            # ATTACHED, as route B's own `A_w`: `d_w` is the constant of the geometry, but
+            # the contraction's parameter gradient (`s` above all, which enters the force only
+            # here and through the cotangent) has to survive `create_graph` in training.
+            pair_grad = gradient_of_contraction(dq.unsqueeze(-1) * sq0.unsqueeze(-2), d_w)
+        # C13 (registered): E_M carries the model density's second-moment term
+        # `4 pi r_g^2 C / Omega` alongside the point-charge Madelung constant, so that W6 and
+        # the SCF models agree at fixed cell -- `xi + 4 pi r_g^2 C / Omega` is exactly
+        # `E_PBC_ii(density)` minus the own-cloud self term `C / (sqrt(pi) r_g)`, which is
+        # size-independent and absorbed by `C_Q` exactly (a point charge has no self term).
+        xi = torch.stack([madelung_self(cell[g]) for g in range(n_graphs)])
+        volume = torch.det(cell).abs()
+        second_moment = 4.0 * math.pi * self.kernel.r_g ** 2 * COULOMB / volume
+        e_m = 0.5 * charges ** 2 * (xi + second_moment) / self.kernel.eps_inf
+        return e_host, e_m, pair_grad, dq, q0
 
     def compensation_cloud(self, q0: torch.Tensor, species: torch.Tensor, positions: torch.Tensor,
                            cell: torch.Tensor) -> Dict[str, float]:
@@ -466,7 +547,8 @@ class MACEDSCC(nn.Module):
     def pristine_gap(self, data: Dict[str, torch.Tensor],
                      cached_features: Optional[Tuple[torch.Tensor, torch.Tensor]] = None) -> torch.Tensor:
         """`E_gap_model = LUMO - HOMO` at the exact valence count of the Hamiltonian
-        actually filled at `dq = 0` -- `H0` in Route A, `H0 - W` in Route B -- for each
+        actually filled at `dq = 0` -- `H0` in Route A and in W6 (`scf_free`: the host term
+        is an energy, not a potential), `H0 - W` in Route B -- for each
         graph of a pristine batch (the static cell for the regulariser, C2 ruled
         static-lattice; thermal frames for the ensemble-mean diagnostic). Differentiable
         in the head parameters through the eigenvalues (not eigenvectors)."""
@@ -493,8 +575,12 @@ class MACEDSCC(nn.Module):
                         data["edge_index"][:, e_mask] - lo, edge_vector[e_mask])
             sp_g = species[nodes]
             numbers = [self.atomic_numbers[int(s_)] for s_ in sp_g.tolist()]
-            if self.route_b:
+            if self.route_b and not getattr(self, "scf_free", False):
                 # v4.2: the gap regulariser acts on H0 - W with W from the pristine q0.
+                # NOT in W6: there the host term is an ENERGY, never a potential -- the
+                # Hamiltonian W6 fills is H0 itself, so its gap regulariser must act on H0
+                # (the same Hamiltonian as the Phi = 0 arm, which is also what C5's
+                # localisation gate reads).
                 g_lr = gamma_lr(positions[nodes], cell[g], self.kernel.r_g, self.r_split,
                                 self.kernel.eps_inf, tol=self.kernel.tol, route=self._lr_route(), background=self._background())
                 W = host_potential(g_lr, self.pattern_scale() * self.reference_charges(H, numbers))
@@ -594,7 +680,8 @@ class MACEDSCC(nn.Module):
         # derivatives, its q0(H0(R)) term through a (W, -n_site) cotangent); the stress keeps
         # the cotangent route; `gamma_force_mode = "autograd"` selects it everywhere (the
         # tests' reference).
-        use_pairs = (compute_force and not compute_stress and self.coupling
+        use_pairs = (compute_force and not compute_stress
+                     and (self.coupling or getattr(self, "scf_free", False))
                      and getattr(self, "gamma_force_mode", "pairs") == "pairs")
         pair_grad = torch.zeros_like(positions) if use_pairs else None
         dq_all = torch.zeros(positions.shape[0], dtype=torch.float64, device=device)
@@ -629,6 +716,21 @@ class MACEDSCC(nn.Module):
                 head_energy = sol.energy
                 cotangent_terms.append((H, 0.5 * (sol.dP + sol.dP.transpose(-1, -2))))
                 dq_all = sol.dq.reshape(-1)
+                if self.scf_free:                                   # W6
+                    pos_b = positions.reshape(num_graphs, n_nodes, 3)
+                    q_form = t([float(s_.Q) for s_ in states])
+                    e_host, e_m, pg, _, q0 = self.scf_free_terms(
+                        H, (sol.fills[0].eps, sol.fills[0].U), counts_s, counts_r, t(n0_rows),
+                        pos_b, cell, q_form, use_pairs)
+                    head_energy = head_energy + e_host + e_m
+                    cotangent_terms.append((e_host, torch.ones_like(e_host)))
+                    if compute_stress:      # E_M is a function of the cell alone: no force
+                        cotangent_terms.append((e_m, torch.ones_like(e_m)))
+                    if pg is not None:
+                        pair_grad = pair_grad + pg.reshape(-1, 3)
+                    diagnostics["q0_sum"] = q0.detach().sum(-1).cpu().tolist()
+                    diagnostics["e_host"] = e_host.detach().cpu().tolist()
+                    diagnostics["e_madelung"] = e_m.detach().cpu().tolist()
             else:
                 gammas, Ws = [], []
                 pos_b = positions.reshape(num_graphs, n_nodes, 3)
@@ -853,8 +955,25 @@ class MACEDSCC(nn.Module):
                 diagnostics["dq_sum"].append(float(res.dq.sum()))
             else:
                 sol = two_fillings(H, n_s, n_r, self.sigma_s)
-                head_energy[g] = sol.energy
+                e_g = sol.energy
                 cotangent_terms.append((H, 0.5 * (sol.dP + sol.dP.transpose(0, 1))))
+                if self.scf_free:                                   # W6, at B = 1
+                    one = lambda v: torch.tensor([float(v)], dtype=torch.float64, device=device)  # noqa: E731
+                    n0_g = torch.tensor([[float(N0[z]) for z in numbers]], dtype=torch.float64, device=device)
+                    e_host, e_m, pg, _, q0 = self.scf_free_terms(
+                        H.unsqueeze(0), (sol.fills[0].eps.unsqueeze(0), sol.fills[0].U.unsqueeze(0)),
+                        (one(n_s[0]), one(n_s[1])), (one(n_r[0]), one(n_r[1])), n0_g,
+                        positions[nodes].unsqueeze(0), cell[g].unsqueeze(0), one(state.Q), use_pairs)
+                    e_g = e_g + e_host[0] + e_m[0]
+                    cotangent_terms.append((e_host, torch.ones_like(e_host)))
+                    if compute_stress:
+                        cotangent_terms.append((e_m, torch.ones_like(e_m)))
+                    if pg is not None:
+                        pair_grad = pair_grad.index_add(0, torch.arange(lo, hi, device=device), pg[0])
+                    diagnostics.setdefault("q0_sum", []).append(float(q0.detach().sum()))
+                    diagnostics.setdefault("e_host", []).append(float(e_host.detach()))
+                    diagnostics.setdefault("e_madelung", []).append(float(e_m.detach()))
+                head_energy[g] = e_g
                 dq_all[nodes] = sol.dq
                 diagnostics["dq_sum"].append(float(sol.dq.sum()))
             diagnostics["n_atoms"].append(hi - lo)
@@ -893,9 +1012,19 @@ class MACEDSCC(nn.Module):
                             grads[k] = grads[k] + g
                 # Head: Hellmann-Feynman -- the density (and charges) as constant cotangents,
                 # their graphs kept for the training gradient.
-                for tensor, cot in cotangent_terms:
-                    g_head = torch.autograd.grad(tensor, inputs, grad_outputs=cot, create_graph=create,
-                                                 retain_graph=True, allow_unused=True)
+                # ONE traversal for all of them: `grad([t1, t2], inputs, [c1, c2])` is the sum
+                # of the separate calls by linearity, and the terms share the base's block-0
+                # graph and H0's, which the per-term loop re-walked once each. (NOT the same as
+                # differentiating `sum (cot * tensor)`, which would add a `d cot/dR` term the
+                # Hellmann-Feynman form must not have -- the cotangents stay multipliers here.)
+                # Measured on one training step, batch 4 x 79 atoms: W6 500 -> 362 ms, B' 1070
+                # -> 928 ms; outputs and parameter gradients unchanged (`ref_before.json`).
+                terms = ([(([t for t, _ in cotangent_terms]), [c for _, c in cotangent_terms])]
+                         if FUSED_HF_BACKWARD else [([t], [c]) for t, c in cotangent_terms])
+                for tensors, cots in terms:
+                    g_head = torch.autograd.grad(tensors, inputs, grad_outputs=cots,
+                                                 create_graph=create, retain_graph=True,
+                                                 allow_unused=True)
                     for k, g in enumerate(g_head):
                         if g is not None:
                             grads[k] = grads[k] + g

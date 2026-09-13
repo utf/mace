@@ -346,7 +346,11 @@ def model_forward_sparse(model, data, k_buffer: int = K_BUFFER_DEFAULT, tol_q: f
     state = states_from_batch(data["carrier_counts"].view(1, -1))[0]
     positions = data["positions"].requires_grad_(True)
     cell = data["cell"].view(3, 3)
-    base_out = ScaleShiftMACE.forward(model.base, model._trunk_data(dict(data)), compute_force=False)
+    # `model.base_forward`, never `ScaleShiftMACE.forward` directly: the base may be float32
+    # with the head in float64 (W1), and that entry point owns the cast. Calling the base
+    # straight through raised "both inputs should have same dtype" on every v5 model and took
+    # the tiling ladder down with it -- the same bug class as the C5 precondition's.
+    base_out = model.base_forward(model._trunk_data(dict(data)), compute_force=False)
     node_feats = base_out["node_feats"]
     base_forces = None
     if compute_force:
@@ -365,8 +369,8 @@ def model_forward_sparse(model, data, k_buffer: int = K_BUFFER_DEFAULT, tol_q: f
     gamma = gamma_matrix(k_sr, k_lr, model.lambda_dir(), model.u_eff()[species], model.kernel.eps_inf)
     W = None
     if model.route_b:
-        raise NotImplementedError("Route B' on the sparse path needs the full reference density (dense fill); "
-                                  "use the dense forward below the dense-regime size")
+        raise NotImplementedError("Route B' (and W6, which shares its pattern) on the sparse path needs "
+                                  "the full reference density (dense fill); use the dense forward")
     # sigma: mid-gap of the reference count, from a first window around the diagonal median
     # (two_fillings_sparse does this when sigma is None).
     if not model.coupling:
