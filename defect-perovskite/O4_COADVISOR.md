@@ -203,3 +203,65 @@ itself, which needed the local A4000: every registered P4.3 number is on that ca
 six-seed retrain was using it. O3 trains much faster than W6 (~37 s/epoch against the W6
 cohort's several minutes — the decoupled head drops block 0 and its `create_graph` traversal
 entirely), so the wave finished within the hour rather than overnight.
+
+
+## O5 timing — the deliverable is met
+
+Idle A4000, fake O3 weights, `dscc_benchmark.py --graphed`:
+
+| | base eager | base captured | model eager | model graphed | / eager base | / captured base |
+|---|---|---|---|---|---|---|
+| 79 atoms, fixed cell | 40.4 ms | 32.4 ms | 63.6 ms | **39.7 ms** | 1.08 | 1.23 |
+| 159 atoms (registered) | 67.2 ms | 67.3 ms | 100.6 ms | **89.0 ms** | 1.33 | 1.32 |
+
+**39.7 ms against the registered ≤ 53 ms.** Your 1.3-not-1.2 prediction lands at 1.23 against a
+captured base.
+
+Two things fall out that you should have:
+
+**The 159-atom captured base is within noise of the eager one** (67.3 vs 67.2 — inside the
+card's drift, so that pair alone proves nothing; the 79-atom 41.6 ms wall / 30.6 ms GPU split
+is what carries it). That is your launch-bound-to-compute-bound crossover, located: at 159 the
+base's kernels are large enough that there is no CPU issue time left to remove. The model still
+gains, because the **head** is launch-bound at both sizes.
+
+**Capture is a fixed-cell path, and the trap was live on our own data.** The reciprocal plan,
+`ξ` and the padding translation are constants of the cell. The registered 79-atom P4.3 frames
+are NPT snapshots whose cells span 15.76–16.07 Å; one capture replayed over six of them read
+**5.5 meV and 9.3 meV/Å** with nothing raised, because `dq` was bit-perfect and only the
+electrostatics were stale. `fits()` now refuses a changed cell, composition, charge state or
+node count — a ~50 µs host comparison against a silent wrong answer — and the 79-atom row above
+uses a fixed-cell trajectory, which is what a relaxation or an NVT/NVE step is. Re-capture
+costs 0.25 s (79) / 0.38 s (159), so a barostat that touches the cell every few hundred steps
+is fine and one that touches it every step is not.
+
+On the production float32 base (with its ZBL pair repulsion) the captured step agrees to
+2e-5–8e-5 eV and ≤ 5e-6 eV/Å over six real frames per size — the base's own float32
+reproducibility under a reordered edge list, four orders below `τ_phys`.
+
+## The turn-on reading — and it is not the failure the check was written for
+
+Four seeds in:
+
+| | on-site p95 | max | `|tanh| > 0.95` | held-out force RMSE |
+|---|---|---|---|---|
+| O3 s0/s2/s3/s4 | 2.970–2.974 eV | 2.977–2.981 | **0.398–0.399** | 0.0323 / 0.0318 / 0.0353 / 0.0319 eV/Å |
+| W6 s0…s6 | 0.465–1.147 eV | 0.538–1.314 | **0.000** | (shipped) |
+
+The registered check exists so "forces equivalent" and "the term never activated" cannot be
+confused. The term did not fail to activate — **it is at its stop on two atoms in five**, p95
+2.97 eV against a half-width of 3.079, where W6 never came within a factor of two of the bound.
+Four seeds agree to the third decimal: architecture, not seed.
+
+Precisely: the A1 barrier knee is `|pre| = 2.0`, `|tanh(2)| = 0.964`, past the 0.95 counter by
+construction — so those atoms sit *at* the knee (the logged barrier term puts them within ~4 meV
+of pre-activation past it), not beyond it. The barrier is binding on 40 % of sites, and a
+parameter at its stop has `sech² ≈ 0`. We have paid for misreading that once (the `eta` ruling).
+
+Most likely cause is a deferral we registered ourselves: O3 feeds the production readout the
+**raw** species-resolved `l = 0` basis, because A1.1's standardisation was excluded under
+one-change-at-a-time. If that is it, the follow-up arm is the standardisation path rather than
+the three-body screening — but it is a second change, and adoption is decided on forces.
+
+Forces so far are equivalent to or better than the shipped cohort. The paired TOST, the energy
+and between-size gates and the frozen-core ladder run when s1 and s6 land.
