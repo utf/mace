@@ -3081,3 +3081,28 @@ its Stage Two answer — whether a 1000× energy weight over the last 64 epochs 
 left at 122 meV/atom for 250 — is worth having and is not otherwise known. `base_v3_les_zero`
 runs the identical configuration with the flag on, on GPU 5, same 320 epochs and same Stage Two
 at 256, so all three from-scratch runs are directly comparable.
+
+**W7.1 RESULT at 60 epochs, and why it was extended.** `base_v3_les_ft` finished 00:17 on
+2026-09-14; validation, per component:
+
+| epoch | 0 | 10 | 20 | 30 | 40 | 50 | 59 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| forces meV/Å | 11.99 | 8.06 | 7.32 | 6.75 | 6.46 | 6.28 | **6.16** |
+| energy meV/atom | 1.07 | 1.76 | 0.55 | 0.49 | 0.59 | 0.38 | 0.74 |
+| stress meV/Å³ | 0.36 | 0.18 | 0.17 | 0.18 | 0.17 | 0.17 | 0.24 |
+
+Against **base v2's 30-epoch multihead fine-tune on the same split: 1.16 / 10.23 / 0.16**. The
+direct LES fine-tune is at 6.16 meV/Å — **40 % below** the shipped base's forces — with energy
+at or below it.
+
+**The drift the guidance warns about did not appear.** The page is explicit that naive
+fine-tuning has the worst MD stability and the greatest drift from the pretrained distribution;
+60 epochs at lr 1e-3 gave a MONOTONIC force improvement to the last epoch and no rise in any
+column. Whether that holds to 150 epochs is now being measured rather than assumed: the run was
+**extended to 150 epochs on the local A4000** (b3's three cards are committed to the
+from-scratch runs) from its epoch-58 checkpoint via `--restart_latest`. The 60-epoch log is kept
+as `base_v3_les_ft_60ep.log` so the first wave's numbers stay readable on their own.
+
+The registered 60 was chosen because the guide gives a range only for multihead and warns about
+drift; the run ended still improving, so the cap was the binding constraint and not convergence.
+That is the reason for the extension, and it is recorded before the longer run's result is read.
