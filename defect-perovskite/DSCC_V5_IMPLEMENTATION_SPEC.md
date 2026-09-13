@@ -1871,3 +1871,85 @@ three w = 0.05 arms, including the one with no electrostatics at all. The electr
 (B', W6, and B' at w = 0) hold `N_eff` at 1.32-1.35 against 1.55-1.72 for the arms without a
 static pattern: the pattern tightens the hole. What moves with the energy term is where the level
 sits, not how localised it is.
+
+### What two cell sizes can and cannot constrain (2026-09-13, from the convergence study)
+
+Asked why the `Phi = 0` and W6 ladders diverge when both arms fit the 159-atom energies well.
+They do both fit them -- the finding is that the training data cannot see the difference.
+
+Mean HEAD energy per size on all 1047 charged frames (the base and the labels are common to both
+models, so the difference between two models of `mean head(159) - mean head(79)` IS the difference
+of their between-size residuals):
+
+| model | mean head at 79 | at 159 | delta | of which analytic `E_M` |
+|---|--:|--:|--:|--:|
+| W6 | 6.5200 eV | 6.4818 | **-38.2 meV** | **+66.4** |
+| `Phi = 0`, w = 0.05 | 7.7141 eV | 7.6624 | **-51.7 meV** | — |
+
+The two heads differ by **13.5 meV** in how they move between the trained sizes, which is what the
+between-size residuals (+5.0 and -0.4 meV) already said. But the decomposition differs completely:
+W6's analytic `E_M` supplies +66.4 meV and its band and host terms supply -104.6, nearly
+cancelling it, while `Phi = 0`'s band term supplies -51.7 on its own. **Two cell sizes contain
+exactly one measured size difference, and any split of it between an analytic monopole and a
+fitted band term reproduces that difference equally well.** The second size is thin as well: 17
+charged frames at 159 atoms against 1030 at 79, about four per held-out fold.
+
+The split stops being arbitrary outside the trained sizes. `E_M` is a function of the cell and
+keeps obeying `-alpha_cell C / (2 eps_inf L)` at 319, 639 and 959 atoms and in the limit; the band
+term was fitted on 79- and 159-atom thermal snapshots and has no reason to do anything particular
+beyond them. That is exactly where the two ladders separate, and they separate along the exact
+monopole law for W6 (82 % of it) and with the wrong sign for `Phi = 0` (+0.55 against -1.80 eV.A).
+
+**Recorded as a limit of the evidence, not as a claim that one extrapolation is verified.**
+Confirming which is right needs DFT at 319+ atoms, which the programme forbids. The indirect case
+for W6 is that its size dependence follows an analytically known law while `Phi = 0`'s does not,
+and that the independent leak readout has W6 tracking the labels' own size dependence to 5 %
+against 11-12 % for every other arm. The same measurement also shows W6's decomposition is not
+clean: its band term cancels most of its own `E_M` on the trained structures, which is the 18 %
+the ladder slope is short.
+
+**Convergence numbers, calibrated** (`C_Q` added per model; the two curves cross at the 79-atom
+cell where the constant was fitted):
+
+| cell | W6 | `Phi = 0` | gap |
+|---|--:|--:|--:|
+| 79 atoms | -2.7434 | -2.7557 | 12 meV |
+| 159 | -2.6797 | -2.7609 | 81 |
+| 639 | -2.6183 | -2.8163 | 198 |
+| 959 | -2.6025 | -2.8152 | 213 |
+| extrapolated limit | **-2.4636** | -2.8529 | **389 meV** |
+
+Instruments: `defect-perovskite/dscc_convergence_plot.py` (the plot and these tables) over
+`dscc_ladder.py` runs in `~/runs/dscc/ladder_conv/`. The `1/L` axis is WRONG for a mixed-shape
+ladder -- two 319-atom cells of the same volume differ by 85 meV because `alpha_cell` is 2.45 and
+1.56 -- so the variable is `alpha_cell / L` and the exact slope against it is `-C / (2 eps_inf)` =
+-1.800 eV.A, shape-independent.
+
+### Convergence of `E(+1) - E(0)` with cell size, all three arms (2026-09-13)
+
+Seven cells, 79 to 959 atoms, two shapes at 319; dense throughout; `C_Q` added per model so the
+curves are on the DFT scale (`defect-perovskite/dscc_convergence_plot.py`,
+`defect-perovskite/figures/convergence_e1_e0.png`).
+
+| model | fitted slope vs `alpha/L` | % of exact (-1.800) | dilute limit (calibrated) | residual after the monopole correction, 79 -> 959 |
+|---|--:|--:|--:|---|
+| B' (self-consistent) | -1.620 | **90 %** | -2.3945 eV | **+18 -> +16 meV** |
+| W6 (SCF-free) | -1.470 | 82 % | -2.4636 eV | +55 -> +16 meV |
+| `Phi = 0` | +0.546 | -30 % | -2.8529 eV | +432 -> +193 meV |
+
+**The two electrostatic arms agree on the dilute limit to 69 meV** -- from an SCF loop and from an
+analytic term respectively, with no reason to agree there unless both carry the same physics --
+while `Phi = 0` sits 389-459 meV away with the wrong sign. That mutual agreement is the strongest
+evidence in the programme that the extrapolation means something; it is still not a verification,
+which would need DFT at 319+ atoms.
+
+**B' is modestly better than W6 on this test**: 90 % against 82 % of the exact slope, and +18 meV
+against +55 at the 79-atom cell after the analytic correction. The self-consistent charge can
+respond to the compensating background where W6's `E_M` is a fixed point-charge term. By 639 atoms
+they are the same (+10 and +15 meV).
+
+**Consequence for the W6 adoption recorded above.** On forces, energies, speed and the leak
+readout W6 matches or beats B'; on finite-size extrapolation from small cells B' is better by
+about 25 meV at 79 atoms, for 1.7x the cost per step. The adoption stands for MD and for
+same-size work, which is what the plan's gates were written for; a use that extrapolates to the
+dilute limit from 79-atom cells should read this table first. Recorded rather than re-adjudicated.

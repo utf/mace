@@ -212,6 +212,36 @@ electrostatics — so this is the energy term's doing, not the electrostatics'. 
 pattern does is tighten the hole: `N_eff` 1.32–1.35 in every arm that has one, against 1.55–1.72
 without.
 
+## Convergence of E(+1) − E(0) with cell size
+
+![convergence](figures/convergence_e1_e0.png)
+
+Seven cells, 79 → 959 atoms, two shapes at 319, `C_Q` applied. The x-axis is **α_cell/L**, not
+1/L: the two 319-atom cells have identical volume but α = 2.45 and 1.56 and their raw errors
+differ by 85 meV, so a 1/L fit over mixed shapes is meaningless.
+
+| model | fitted slope | % of exact (−1.800 eV·Å) | dilute limit | residual after correction, 79 → 959 |
+|---|--:|--:|--:|---|
+| B′ (self-consistent) | −1.620 | **90 %** | −2.3945 eV | **+18 → +16 meV** |
+| W6 (SCF-free) | −1.470 | 82 % | −2.4636 eV | +55 → +16 meV |
+| Φ=0 | +0.546 | −30 % | −2.8529 eV | +432 → +193 meV |
+
+The two electrostatic arms agree on the dilute limit to **69 meV** from completely different
+machinery; Φ=0 is 389–459 meV away with the wrong sign, and applying the analytic correction to it
+makes its error *worse* (97 → 432 meV at 79 atoms), because you would be correcting for a term it
+never had.
+
+**Why the arms agree on the trained sizes and diverge outside them.** Both fit 79 and 159 atoms:
+their heads differ by only 13.5 meV in how they move between those sizes. But the decomposition is
+unconstrained — W6's analytic `E_M` supplies +66.4 meV of that motion while its band and host terms
+supply −104.6, nearly cancelling, and Φ=0's band term supplies −51.7 on its own. Two cell sizes
+contain exactly one measured size difference, and any split of it fits equally well; only 17 of
+1047 charged frames are at 159 atoms. Outside those sizes `E_M` keeps obeying −α_cell·C/2ε∞L by
+construction while a fitted band term has no reason to, which is where the curves separate.
+
+This is a limit of the evidence, not a verification: confirming which extrapolation is right needs
+DFT at 319+ atoms, which the programme forbids.
+
 ## Practical implications
 
 - **Forces and same-charge energy differences are what this model gives.** 11.6 meV/Å per
@@ -222,8 +252,10 @@ without.
   or charge state needs one DFT total energy to set it. After that, differences — including
   transition levels — are available at the accuracy above.
 - **The constant transfers across size:** fit at 79 atoms, apply at 159, 5 meV of error.
-- **Finite-size extrapolation is good to ~7 %**: at L = 14 Å the monopole correction is 0.34 eV,
-  so ~25 meV of systematic in anything extrapolated to the dilute limit.
+- **Finite-size extrapolation**: the monopole slope comes out at 90 % of exact for B′ and 82 %
+  for W6, and the two agree on the dilute limit to 69 meV. After the analytic correction the
+  residual at a 79-atom cell is +18 meV (B′) or +55 meV (W6), falling to ~+16 meV by 639 atoms.
+  A model without the electrostatic term cannot do this at all.
 - **Cost ~2× a plain MACE step**, and no SCF to babysit: no convergence failures, no warm starts,
   no multi-valued fixed points. Those failure modes cost this programme the most time and W6 does
   not have them.
