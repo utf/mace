@@ -2970,3 +2970,21 @@ so nothing already computed was discarded and Stage Two had not yet been reached
 keep the SAME epoch count as each other, which is what makes plain-versus-LES a comparison.
 That is 71 k gradient updates against the README heuristic's 200 k — still short, and still
 recorded as short.
+
+**W7 incident, 23:14–23:23 (b3 clock): the rebudget ran TWO trainers per run for nine minutes.**
+The trainer is a python CHILD of `scratch_run.sh`, so `pkill -f "scratch_run.sh <name>"` killed
+the wrapper and ORPHANED the python. The supervisor then saw no wrapper, correctly concluded
+the run was gone, and started a second one. Both wrote the same log and the same checkpoint
+directory, which is what the interleaved epoch numbers in
+`base_v3_{scratch,les}_doubled_2026-09-13.log` are — `Epoch 16, Epoch 12, Epoch 17, Epoch 13`,
+one lineage continuing from 16 and one resumed at 12. Caught from the monitor: the LES run's
+"epoch 9" came back at 151 meV/atom after an earlier epoch 9 of 4.61.
+
+Both runs were stopped properly (supervisor, then wrapper, then python), the directories moved
+aside rather than deleted, and **restarted clean at 320 epochs with Stage Two at 256**. The two
+lineages had both written `epoch-13` and `epoch-14`, so resuming from the latest checkpoint
+would have meant trusting a file two processes wrote: twenty minutes of training is not worth
+that on an unattended run. `scratch_stop.sh` now does the three-step kill, and the supervisor
+says in its header why a bare `pkill` on the wrapper is wrong.
+
+`base_v3_les_ft` was never touched by the rebudget and ran single throughout.

@@ -7,6 +7,11 @@
 # Relaunches NAME on the same GPU whenever its process is gone and its run has not finished
 # (finished = the log's final error table has been written). Gives up after MAX_RESTARTS.
 #   usage: scratch_supervise.sh NAME MODEL GPU_INDEX TRAIN VALID
+#
+# TO STOP A RUN, use scratch_stop.sh -- not a bare pkill on the wrapper. The trainer is a
+# PYTHON CHILD of the wrapper script, so killing the wrapper alone ORPHANS it: on 2026-09-13
+# that left two trainers per run writing the same log and the same checkpoint directory,
+# interleaving epochs ("Epoch 16, Epoch 12, Epoch 17, Epoch 13") until it was caught.
 W=/home/alex/src/mace/.claude/worktrees/size-extensivity
 NAME=$1; MODEL=$2; GPU=$3; TRAIN=$4; VALID=$5
 LOG=$HOME/runs/$NAME.log; SUP=$HOME/runs/$NAME.supervisor.log
