@@ -3060,3 +3060,24 @@ from the coupling, and it is one change.
 
 **No new arm is opened here.** This entry records the result and the direction; the next arm is
 registered before it runs, as every arm in this programme has been.
+
+**W7 addition, 2026-09-14 00:50: `base_v3_les_zero`, and why.** `base_v3_les`'s validation
+ENERGY is flat, not converging: median **127.2 meV/atom over epochs 40–60 and 122.1 over
+80–100**, while its forces fall 15.62 → 12.16 and the SAME architecture without LES reaches
+**1.26 meV/atom** at epoch 108. The criterion for calling this a real problem rather than slow
+convergence was set before the numbers were read, and it is met.
+
+Diagnosis: at the documented from-scratch weighting (energy 1, forces 100) the long-range Ewald
+energy from the latent charges is a degree of freedom the force term barely constrains, and the
+charges start from a fresh random initialisation — the from-scratch analogue of the 8332
+meV/atom the fine-tune showed before its readouts were zeroed. The fix is therefore the SAME
+one, and deliberately not a change of loss weights, which would have broken the controlled
+plain-versus-LES comparison: a new `--les_zero_readouts` flag (default False; always on from a
+foundation model) zeroes the last layer of each latent-charge readout so the model starts with
+no long-range term and grows it. Gradients still flow there; nothing is frozen.
+
+`base_v3_les` (the documented recipe, untouched) keeps running on GPU 7 to 320 epochs, because
+its Stage Two answer — whether a 1000× energy weight over the last 64 epochs recovers a term
+left at 122 meV/atom for 250 — is worth having and is not otherwise known. `base_v3_les_zero`
+runs the identical configuration with the flag on, on GPU 5, same 320 epochs and same Stage Two
+at 256, so all three from-scratch runs are directly comparable.

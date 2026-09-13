@@ -31,7 +31,7 @@ export TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1 OMP_NUM_THREADS=8 PYTORCH_CUDA_ALLOC_C
 EPOCHS=${SCRATCH_EPOCHS:-1000}
 START2=${SCRATCH_START_STAGE_TWO:-800}
 python - "$NAME" "$MODEL" "$TRAIN" "$VALID" "$EPOCHS" "$START2" "$@" <<'PY'
-import sys
+import os, sys
 sys.path.insert(0, "/home/alex/src/mace/.claude/worktrees/size-extensivity")
 from mace.cli.run_train import main
 name, model, train, valid, epochs, start2 = sys.argv[1:7]
@@ -55,6 +55,7 @@ sys.argv = ["run_train",
   "--pair_repulsion", "--distance_transform", "Agnesi",
   "--use_edge_irreps_first", "True", "--use_agnostic_product", "True",
   "--apply_cutoff", "False",          # MH-1's setting; the code default is True
+  "--les_zero_readouts", os.environ.get("SCRATCH_LES_ZERO", "False"),
   "--scaling", "rms_forces_scaling",
   # ---- from-scratch training strategy (README)
   "--loss", "stress", "--energy_weight", "1", "--forces_weight", "100", "--stress_weight", "1",

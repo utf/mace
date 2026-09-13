@@ -528,6 +528,14 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         required=False,
     )
     parser.add_argument(
+        "--les_zero_readouts",
+        help="MACELES: zero the last layer of each latent-charge readout at construction, so "
+             "the model starts with NO long-range term and grows it. Always applied when "
+             "starting from a foundation model; optional from scratch.",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
         "--les_arguments",
         help="Path to the LES arguments file",
         type=read_yaml,
