@@ -2490,3 +2490,83 @@ Not a blocker for the gates; recorded before they are read, as the plan requires
 
 **Also recorded:** `c4_stage_b_extras.py` reads the audit's `hop` pre-activations, which an O3
 head never produces; it now says so instead of raising `KeyError`.
+
+### O3 record additions and the O3.1 arm (coadvisor ruling 2026-09-13, evening)
+
+**Capture is a fixed-cell path, and NPT runs eager until further notice.** `fits()` refuses a
+changed cell, composition, charge state or node count. Re-capture at 0.25 s per step would
+dominate an NPT trajectory, and a drift threshold would reintroduce the staleness in a smaller
+dose rather than remove it; **the follow-up is to make the cell a graph INPUT** -- the
+reciprocal plan, `xi` and the padding translation computed inside the graph, with the G-vector
+count bucketed by volume range. Until that exists, NPT does not capture.
+
+**The production base's float32 reproducibility under edge reordering is 2e-5 to 8e-5 eV and
+<= 5e-6 eV/A. That is a NOISE FLOOR, not a head error** -- it is the same base evaluated twice
+with its edge list in a different order, which is what padding does -- and it is four orders
+below `tau_phys`. Recorded here so it is not later read as a cost of the capture.
+
+**O3 SATURATION -- and why it is disqualifying.** 40 % of sites at the on-site barrier, the
+four seeds identical to the third decimal, so it is the architecture. Measured by species and
+sign on 30 charged frames, the trained O3 correction and its WITHIN-SPECIES spread:
+
+| | O3 s0: `corr_s` | sd | `corr_p` | sd | frac `pre > 1.83` / `< -1.83` |
+|---|---|---|---|---|---|
+| Cl (1410) | +2.672 | **0.028** | +2.952 | **0.008** | +0.498 / 0.000 |
+| Pb (480) | +2.228 | 0.070 | +2.957 | 0.012 | +0.492 / 0.000 |
+| Cs (480) | -0.391 | 0.220 | +2.188 | 0.097 | 0.000 / 0.000 |
+
+| | W6 s1: `corr_s` | sd | `corr_p` | sd | frac |
+|---|---|---|---|---|---|
+| Cl / Cs / Pb | -0.018 / -0.024 / -0.083 | 0.060 / 0.027 / 0.069 | +0.539 / +0.471 / +0.624 | 0.081 / 0.081 / 0.076 | 0.000 |
+
+The coadvisor's prediction holds exactly: **one sign, and two species** (Cl and Pb; the
+saturated channel is the p shell, whose 2.95 eV is `|tanh| = 0.959` against the s shell's
+0.868). The environment-dependent part of the correction is **0.3-1 % of its magnitude** for Cl
+and Pb, against 10-15 % for the shipped W6 head. The term has degenerated into a per-species
+constant -- the mode `eps0` already parameterises, and which A1 records as "redundant by one
+constant per species". **This is the A1 failure inverted**: there the inputs were uncentred and
+the corrections never turned on; here the centre is wrong and the scale is raw, and they slam
+to the stop carrying no environment with them.
+
+**O3 is therefore NOT ADOPTABLE regardless of the paired TOST** (the plan's Stage-2
+no-systematic-saturation rule): a bound binding on 40 % of sites has no gradient there, so the
+trained head is not at an optimum. The O3 gates still run, because they answer a different and
+worth-answering question -- whether the descriptor swap itself is harmless.
+
+**What A1.1 would freeze for O3's `l = 0` input**, measured on the same 30 frames (and
+confirmed by the O3.1 trainer over its own 92 setup frames, which reads 4.9 / 6.0 / 8.6):
+
+| species | atoms | median abs mean | median sd | median `|mu|/sd` | max | dead channels |
+|---|---|---|---|---|---|---|
+| Cl | 1410 | 0.713 | 0.096 | **4.8** | 66.1 | 0/18 |
+| Cs | 480 | 1.177 | 0.086 | **6.1** | 84.4 | 0/18 |
+| Pb | 480 | 1.073 | 0.075 | **8.0** | 53.8 | 0/18 |
+
+Every channel is alive -- nothing would be zeroed -- and the species-constant component is 5 to
+8 times the ensemble deviation in the median channel and up to 84 times in the worst. That is
+the whole mechanism: the readout sees a large per-species offset, saturates on it with one
+sign, and the environment signal (a fifth to an eighty-fourth of the input) is squashed by the
+tanh's vanishing slope at the rail.
+
+**O3.1 LAUNCHED 2026-09-13 21:27** (b3 clock), six seeds, folds as O3: the same descriptor, the
+same readout, **standardised input** (ensemble mean and sd per channel per species, frozen once
+from the training frames) and the readout final layer at A1.1's registered **0.1** rather than
+the 0.05 the pre-A1.1 campaign, W6 and O3 all ran on raw inputs. Everything else as O3. The
+turn-on diagnostic is read against BOTH W6 (0.47-0.62 eV p95, no saturation) and O3 (at the
+stop). **The three-body bond screening stays deferred** -- the O3 failure is not a capacity
+shortfall. Seeds 2, 3, 4, 6 on b3 GPUs 5/6/7 (`~/runs/o31_queue.txt`), 0 and 1 on the local
+A4000. `--standardise` and `--readout_init_scale` are explicit flags, so which form a
+checkpoint carries is a recorded fact and not an inference.
+
+**Training step time, like for like on the local A4000** (the block-0 `create_graph` traversal
+leaving the step): **O3 32 s/epoch against W6's 124 s -- 3.9x** (on b3, 29 s against 170 s
+median, 5.9x; the b3 cards differ and some W6 runs shared one). Route B' (W5) is 182 s locally
+and 330 s on b3, so O3 trains 6-11x faster than the shipped B' cohort. A six-seed O3 wave
+finishes in about an hour where W6's took a night.
+
+**One reading the O3 forces already give, if the TOST holds.** With the on-site environment
+term effectively disabled on two atoms in five, the held-out force RMSE is 0.0318-0.0353 eV/A
+against the shipped cohort's 0.0329 median -- no worse. So that term's ENVIRONMENT dependence
+carries little at this accuracy. O3.1 measures whether an active, unsaturated version buys
+anything beyond equivalence; if it does not, the simplest survivor is a species-only scalar
+on-site term, one step from W4's `spec`.
