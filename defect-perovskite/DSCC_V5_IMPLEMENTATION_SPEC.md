@@ -1953,3 +1953,56 @@ readout W6 matches or beats B'; on finite-size extrapolation from small cells B'
 about 25 meV at 79 atoms, for 1.7x the cost per step. The adoption stands for MD and for
 same-size work, which is what the plan's gates were written for; a use that extrapolates to the
 dilute limit from 79-atom cells should read this table first. Recorded rather than re-adjudicated.
+
+### The ladder extended to 5119 atoms, and what it says about the two models (2026-09-13)
+
+Eleven cells, 159 to 2159 atoms, plus a 4,4,4 cell of **5119 atoms (20476 orbitals)** for W6 on
+b3. Instruments: `--reuse` (a ladder cell is a deterministic function of (model, tiling), so
+earlier runs are copied rather than recomputed), `--head_only_above` (`E_base` cancels exactly in
+`E(+1) - E(0)` at fixed geometry, so the neutral pass is skipped and the charged one takes the
+cached-base route) and `no_grad` on energy-only cells (`two_fillings` otherwise takes its eager
+path and forms density matrices -- 3.35 GB each at 5119 atoms). Gated against the two-forward
+result on the 639-atom cell: 6.869712 vs 6.869712 eV.
+
+**W6, same-shape family 639 / 2159 / 5119 (alpha = 2.7225 throughout):**
+
+| tiling | n | L (A) | alpha/L | dE (eV) | residual of the 2-parameter fit |
+|---|--:|--:|--:|--:|--:|
+| 2,2,2 | 639 | 28.64 | 0.0951 | 6.8697 | +0.5 meV |
+| 3,3,3 | 2159 | 42.96 | 0.0634 | 6.9211 | -1.4 meV |
+| 4,4,4 | 5119 | 57.28 | 0.0475 | 6.9499 | +0.9 meV |
+
+**Slope -1.678 +- 0.050 = 93 % +- 3 % of exact; intercept 7.0288 +- 0.0035 eV.** Collinear in
+`alpha/L` to +-1.4 meV over a factor of eight in volume. Adding the 79-atom cell to the same
+family drags the slope to 76 %: that cell sits **+35 meV above** the line the three large ones
+define, which is the higher-order term measured rather than fitted (the degenerate
+three-parameter fit had assigned +47 meV to a `1/L^3` contribution). **Beyond ~640 atoms the
+convergence is pure monopole and the residual after the analytic correction is 6-11 meV; at 79
+atoms about 35 meV is left that the monopole correction does not reach.**
+
+**Subset stability, the same eleven cells fitted three ways:**
+
+| subset | n | W6 slope (% of exact) | W6 limit | B' slope (% of exact) | B' limit |
+|---|--:|--:|--:|--:|--:|
+| all 11 cells | 11 | -1.371 +- 0.156 (76 %) | -2.4758 | -1.750 +- 0.159 (97 %) | -2.3753 |
+| >= 639 atoms | 6 | -1.733 +- 0.145 (96 %) | -2.4541 | -2.508 +- 0.057 (**139 %**) | -2.3169 |
+| >= 1279 atoms | 3 | -1.390 +- 0.716 (77 %) | -2.4803 | -2.868 +- 0.174 (**159 %**) | -2.2919 |
+
+**W6's answer does not depend on which cells are used (26 meV across the three subsets); B's does
+(83 meV).** B's slope steepens monotonically as small cells are dropped -- its large cells lie on
+a visibly steeper line than its small ones.
+
+*Two artefacts ruled out.* SCF convergence: 11-19 iterations with no size trend, residual total
+force ~1e-7 eV/A at every cell. The electrostatic kernel: `K_LR_ii` against the cell-shape
+Madelung coefficient reads 1.3 % at 159 atoms falling monotonically to **0.25 % at 2159**. So B's
+overshoot is its self-consistent charge response: a larger cell lets the compensating cloud
+spread further, which is a size-dependent contribution the analytic monopole term does not
+contain. W6, with a fixed `E_M` and a non-self-consistent host term, has no such freedom.
+
+**This inverts the reading recorded earlier today** from the seven-cell set, where B' looked
+better on finite-size extrapolation (90 % against 82 %). With eleven cells to 2159 atoms **W6 is
+the stable extrapolator and B' is not.** Which behaviour is physically right cannot be settled
+without DFT at these sizes; what can be said is that B's extrapolated dilute limit is sensitive to
+the choice of cells at the 80 meV level and W6's is not. The consequence recorded for W6 adoption
+("B' is better for extrapolating from small cells") is therefore withdrawn -- on the evidence now
+available it is not.
