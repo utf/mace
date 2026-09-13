@@ -2619,3 +2619,60 @@ launch-bound and half idle, which is the same diagnosis as the inference path. T
 therefore runs **two per card** (`W3_PER_GPU=2`, `W3_HEADROOM=8000`), which starts the last two
 seeds immediately instead of queueing them behind a 30-minute run. Neither number transfers to
 a base-reading head.
+
+### O3.2 — three-body bond screening: REGISTRATION (2026-09-13, written before any O3.2 result)
+
+Opened on the user's instruction while the O3.1 wave is still running, on the trend rather than
+on its gates: O3.1's held-out force is tracking ~14.5-15 meV/A per component against the shipped
+W6's 11.58, so it recovers most of O3's 7.56 deficit and not all of it. **The O3.1 gates remain
+the arbiter of O3.1**; this arm is queued behind them, not in place of them. The residual is
+consistent with the one capability O3 deleted and O3.1 did not restore: the hopping's environment
+dependence. O3 removed the MLP modulation (`hop_modulation = False`); this restores it in the
+form the plan registered as the single follow-up arm,
+
+    S_ij = sum_k g(r_ik) g(r_jk) P(cos theta_ikj)
+
+with `theta_ikj` the angle AT k. Four specifics were left open by that line. Registered now:
+
+1. **`g(r) = (1 - (r/r_s3)^6)^2` inside `r_s3`, zero outside** -- H0's own taper, so the head
+   keeps one smoothness class (C^1) across hoppings, descriptor and screening alike.
+2. **`r_s3 = 4.5 A`**, the registered `Q_CUT_DEFAULT`, and for the same reason it was registered
+   there: it reaches the first coordination shell and the Cs neighbours (Pb-Cl 2.8, Cs-Cl
+   3.5-4.1 A) and not the second Pb shell. A bond longer than `2 r_s3 = 9 A` therefore has no
+   screener at all and `S = 0` exactly, which is a property of the cutoff and not an
+   approximation.
+3. **`P_l`, Legendre, `l = 0, 1, 2`, species-resolved in `k`** -> 3 x 3 = **9 channels per
+   bond**. Species-blind screening would treat a Cs and a Cl third atom alike, which the
+   on-site term's own species dependence says is wrong; `l <= 2` matches the head's existing
+   angular content (the rank-2 on-site block).
+4. **It enters through the EXISTING bounded modulation**: `pre_ij = A[Z_i, Z_j] . S_ij` with `A`
+   a `[n_el, n_el, 9, 4]` linear map (one pre-activation per Slater-Koster integral type), then
+   `t_ij = v0 . radial(r) . exp(eta tanh(pre))` through the `modulation()` already in the head.
+   **No MLP** -- the point of O3 was to remove the readout from the hopping, and this does not
+   put it back; it replaces a learned function of base features with a learned contraction of a
+   geometric three-body invariant.
+
+**`A` is ZERO-INITIALISED, so the arm starts EXACTLY at O3.1.** That is the entry gate: with
+`A = 0` the energies and forces must equal O3.1's bit for bit. It also means O3.2 is one change
+from O3.1 and two from O3, so a failure is attributable.
+
+**Symmetry.** `S_ij = S_ji` by construction (`g(r_ik) g(r_jk)` is symmetric in `i, j` and the
+angle at `k` does not depend on which end is named first), which is what keeps `H` Hermitian by
+construction rather than by symmetrisation -- the property `sk_block` exists to preserve. Gated
+at 1e-12 on the reversed edge.
+
+**Known hole, registered rather than hidden: the analytic force kernel does not cover this.**
+`h0_position_gradient` writes `d H0/dR` in closed form assuming `t_ij` depends on `r_ij` alone;
+with screening it depends on `R_k` for every third atom, a genuine three-body force term. For
+this arm `analytic_head_forces` is **off** and the head falls back to the autograd cotangent
+route at inference (gated against finite differences). Extending the kernel -- `S` as a leaf in
+the small per-node autograd, chained analytically through the triplet geometry, the way the
+on-site readouts already are -- is a follow-up and is not on the training path, which never used
+the analytic route.
+
+**Gates, paired by fold against O3.1 and against the shipped W6**: as registered for O3 (force
+TOST at `tau` = 1.7 per component, energy RMSE at 79 within 0.10 meV/atom, between-size after
+one `C_Q` <= 10 meV, neutral null and FD forces re-run), plus the turn-on reading, plus the
+screening's own diagnostic: **the distribution of `|pre|` and the fraction beyond the barrier
+knee**, so that the modulation cannot be reported as "learned" while sitting at its stop, which
+is the mistake O3 made with the on-site term.
