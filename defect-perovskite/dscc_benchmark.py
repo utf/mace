@@ -35,6 +35,7 @@ def main() -> None:
     ap.add_argument("--out", default="")
     ap.add_argument("--predictor", type=int, default=0, help="v5 W2: warm start from the secant of the last two fixed points (2 dq_n - dq_{n-1})")
     ap.add_argument("--no_analytic", action="store_true", help="O3: fall back to the autograd cotangent route for the head force (the analytic kernel's reference)")
+    ap.add_argument("--graphed", action="store_true", help="O3: run the model leg through CUDA-graph capture (and time a captured base leg alongside the eager one)")
     ap.add_argument("--both", action="store_true", help="also time the other force route, interleaved frame by frame")
     ap.add_argument("--check", action="store_true", help="compare the two force routes on the first frame before timing")
     ap.add_argument("--tol_q", type=float, default=None, help="override the solver's inference tolerance (the registered value is used when unset)")
@@ -92,6 +93,43 @@ def main() -> None:
     if args.tol_q is not None:
         import dataclasses
         model.scf_options = dataclasses.replace(model.scf_options, tol_q=args.tol_q, tol_q_inference=args.tol_q)
+    graphed = None
+    t_graph_base = []              # --graphed: the base leg captured, the second denominator
+    if args.graphed:
+        from mace.modules.dscc.capture import GraphedStep
+
+        def capture(atoms):
+            return GraphedStep(model, batch(atoms, model.r_cut))
+
+        class _CapturedBase:
+            """The base alone, captured, so the ratio can be quoted against BOTH denominators.
+            The registered criterion was written against an eager base, which is launch-bound;
+            graphing the model makes it faster and the ratio harder, so the absolute
+            milliseconds are the number that carries across versions."""
+
+            def __init__(self, bb):
+                self.data = {k: (v.detach().clone() if torch.is_tensor(v) else v) for k, v in bb.items()}
+                self.data["positions"].requires_grad_(True)
+                st = torch.cuda.Stream(); st.wait_stream(torch.cuda.current_stream())
+                with torch.cuda.stream(st):
+                    for _ in range(3):
+                        o = ScaleShiftMACE.forward(base, dict(self.data), compute_force=True)
+                        del o
+                torch.cuda.current_stream().wait_stream(st); torch.cuda.synchronize()
+                self.g = torch.cuda.CUDAGraph()
+                with torch.cuda.graph(self.g):
+                    self.out = ScaleShiftMACE.forward(base, dict(self.data), compute_force=True)
+                torch.cuda.synchronize()
+
+            def __call__(self, bb):
+                with torch.no_grad():
+                    for k in ("positions", "shifts", "unit_shifts", "edge_index"):
+                        if k in bb and self.data[k].shape == bb[k].shape:
+                            self.data[k].copy_(bb[k])
+                self.g.replay()
+                return self.out
+
+        captured_base = None
     t_alt = []                     # --both: the other force route, interleaved frame by frame
     t_head, t_base, iters = [], [], []
     warm = None
@@ -102,9 +140,21 @@ def main() -> None:
         ScaleShiftMACE.forward(base, bb, compute_force=True); sync()
         t_base.append(time.perf_counter() - t0)
         bh = batch(atoms, model.r_cut)
-        sync(); t0 = time.perf_counter()
-        out = model(bh, compute_force=True, warm_start=warm)          # initialisation iii along the trajectory
-        sync(); t_head.append(time.perf_counter() - t0)
+        if args.graphed:
+            if graphed is None or not graphed.fits(bh):
+                graphed = capture(atoms)                              # a new bucket: one re-capture
+            sync(); t0 = time.perf_counter()
+            out = graphed(bh)
+            sync(); t_head.append(time.perf_counter() - t0)
+            if captured_base is None:
+                captured_base = _CapturedBase(bb)
+            sync(); t0 = time.perf_counter()
+            captured_base(bb)
+            sync(); t_graph_base.append(time.perf_counter() - t0)
+        else:
+            sync(); t0 = time.perf_counter()
+            out = model(bh, compute_force=True, warm_start=warm)      # initialisation iii along the trajectory
+            sync(); t_head.append(time.perf_counter() - t0)
         if args.both:
             # Interleaved in the SAME loop: the GPU's clocks drift between runs by ~15 %, so
             # two separate invocations cannot be compared frame for frame.
@@ -118,7 +168,7 @@ def main() -> None:
         # v5 W2 closing item: the tangent along the trajectory as the secant of the last two
         # fixed points (the geometry response is not formed); plain warm start otherwise.
         warm = [2 * history[-1] - history[-2]] if (args.predictor and len(history) == 2 and history[-1].shape == history[-2].shape) else [history[-1]]
-        iters.append(out["diagnostics"].get("iterations", [0])[0])
+        iters.append(out.get("diagnostics", {}).get("iterations", [0])[0] if "diagnostics" in out else 0)
     ratio = np.array(t_head) / np.array(t_base)
     report = {"model": args.model, "device": args.device, "hardware": torch.cuda.get_device_name(0) if args.device.startswith("cuda") else "cpu",
               "n_frames": len(frames), "size": args.size, "coupling": bool(model.coupling), "route_b": bool(model.route_b),
@@ -126,6 +176,9 @@ def main() -> None:
               "base_ms_median": 1000 * float(np.median(t_base)), "model_ms_median": 1000 * float(np.median(t_head)),
               "ratio_median": float(np.median(ratio)), "ratio_p95": float(np.percentile(ratio, 95)),
               "scf_iterations_median": float(np.median(iters)) if iters else None, "predictor": bool(args.predictor), "tol_q": float(model.scf_options.tol_q_inference if args.tol_q is None else args.tol_q),
+              "graphed": bool(args.graphed),
+              "graphed_base_ms_median": (1000 * float(np.median(t_graph_base))) if t_graph_base else None,
+              "ratio_median_vs_graphed_base": (float(np.median(t_head)) / float(np.median(t_graph_base))) if t_graph_base else None,
               "alt_route_ms_median": (1000 * float(np.median(t_alt))) if t_alt else None,
               "analytic_head_forces": bool(getattr(model, "analytic_head_forces", False)),
               "passes_2x": bool(np.median(ratio) <= 2.0 and np.percentile(ratio, 95) <= 2.0),

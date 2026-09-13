@@ -2357,3 +2357,57 @@ generalised into an "above this size, use the GPU" rule.
 handle for GPU4: 0000:89:00.0: Unknown Error") -- the same fault GPU 6 had on 2026-09-06,
 which a cold power cycle cleared; not cycled, and the run does not need it (three usable cards
 of the permitted four, so four seeds run as 3 + 1).
+
+### O5 — CUDA-graph capture (coadvisor ruling 2026-09-13; implemented and gated, timing pending)
+
+The coadvisor's reading of the O4 numbers, adopted: the cost model was the mistake, not the
+arithmetic. At these sizes nothing in the model is compute-bound, so the only lever is
+eliminating launches -- **for the head as well as the base** -- and the deliverable is
+registered in ABSOLUTE terms, **model <= 53 ms per step at 79 atoms** (the 1.2x of the eager
+base the criterion was written against), with both ratios reported. Graphing the base makes
+the model faster and the ratio harder; milliseconds are what carries across versions.
+
+**Structure** (`mace/modules/dscc/capture.py`):
+
+```
+graph A0 : H0 assembly                         ~1 ms of GPU, issued FIRST
+D2H      : H to pinned host memory
+graph A1 : base forward + backward             ~30 ms of GPU, 0.02 ms of CPU
+CPU      : eigh, chemical potentials, occupations -- under A1's window
+graph B  : site charges, E_host, E_M, X, the analytic contraction, accumulation
+```
+
+The assembly goes first rather than alongside the base as sketched: recorded after it, `H`
+would not be ready until the base's window closed, and the host would idle through 30 ms and
+then work alone. First, the host diagonalises while the base runs -- which is the
+`EIGH_DEFERRED_ON_CPU` rule doing its job inside a captured step.
+
+**Gates.** Reproduces the eager model to **1e-14** in energy, head energy, `dq` and forces; a
+frame whose atoms have moved -- a different neighbour list of the same length -- replays
+through the same graphs to the same tolerance (only the LENGTH is fixed by capture; the edge
+list's values are read at replay). A coupled or base-reading head is refused. Bucket rule:
+count x 1.10 rounded up to 512, shrunk only below 0.75 x bucket, so a relaxation drifting by a
+few edges keeps one graph. Padding is **bit-identical** (see O4 above). Full suite 225 passed.
+
+**What had to change, all of it removing a device-to-host read or a value-dependent shape, and
+none of it changing a number** (the suite is the evidence): `ReciprocalPlan` holds the
+cell-dependent half of the Ewald kernel and the eager entry points delegate to the same
+arithmetic; `site_occupation` accepts an already-solved fill (`chemical_potential` is a host
+Newton iteration and belongs in the CPU segment beside the eigh); `_dk_eigenbasis` applies its
+fixed-`N` correction unconditionally (`if bool(ok.any())` was a host read that skipped only
+work `torch.where` already makes a no-op); `standardise` mirrors its buffer flag in a Python
+attribute; `_trunk_data` can pad the base's subset instead of compacting it; and `head_tail` is
+the head's GPU work as a function of tensors alone -- no potential solve, no `nonzero` for the
+frontier set (the analytic route needs no `dP`), no lattice sums -- gated against the model's
+own path at 1e-14.
+
+**Two capture traps worth recording.** (1) `padded[k].clone()` of a batch that has been through
+an eager forward is a NON-leaf: the model calls `positions.requires_grad_(True)` in place, so
+the clone carries that forward's graph and capture refuses it ("stale reference to the default
+stream"). `.detach().clone()`. (2) A `for` loop's bindings outlive the loop in Python, so the
+warm-up's autograd graph -- and its stream reference -- is still alive at capture; deleted
+explicitly.
+
+**Open:** the analytic stress (needed for NPT and nothing else, a follow-up not a blocker), and
+the timing, which waits for the local A4000 to come free -- every registered P4.3 number is on
+that card and the six-seed retrain is using it.
