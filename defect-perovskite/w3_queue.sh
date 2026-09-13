@@ -4,6 +4,11 @@
 # One line of the queue file per run, dropped as it is launched.
 W=/home/alex/src/mace/.claude/worktrees/size-extensivity
 Q=${W3_QUEUE:-$HOME/runs/w3_queue.txt}; L=${W3_LOG:-$HOME/runs/w3_queue.log}
+# PER_GPU: how many runs share a card. ONE is the W6/B' number -- their training step peaks
+# at 11.6 GB because the base's block 0 is recomputed under `create_graph`. A DECOUPLED head
+# (O3/O3.1) does not recompute it: measured 4.7 GB steady and the cards sat at 51-65 %
+# utilisation with one job each, i.e. launch-bound and half idle. Two per card at
+# HEADROOM=8000 is what those runs use; do not carry either number to the other head.
 PER_GPU=${W3_PER_GPU:-1}; HEADROOM=${W3_HEADROOM:-13000}
 # Which cards to use. Never 0-3. Default 4 5 7; set W3_GPUS when a card has fallen off the
 # bus -- GPU 6 has been off the bus throughout, and GPU 7 joined it on 2026-09-10, taking

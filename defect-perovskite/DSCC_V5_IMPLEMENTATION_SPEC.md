@@ -2604,3 +2604,18 @@ only the saturation half: it now has a 7.56 meV/A gap to close, not merely a bou
 If it closes most of it, the descriptor is sound and the saturation was the cost; if it closes
 little, the head-owned basis or the deleted modulation is carrying the loss and the next arm
 is one of those, one at a time.
+
+**O3 IS EXCLUDED FROM FURTHER ANALYSIS (user, 2026-09-13).** It is disqualified twice -- G1
+INFERIOR by 4.4 `tau`, and the Stage-2 no-systematic-saturation rule -- so its numbers are a
+record of what the unstandardised descriptor did, not a comparator. Comparisons are against the
+shipped **W6** cohort (11.58 meV/A per component) and, once it lands, **O3.1**. The O3 runs
+themselves are complete; nothing was left running.
+
+**Card packing, measured rather than inherited.** The `PER_GPU = 1` rule in `w3_queue.sh` is the
+W6/B' number: their training step peaks at 11.6 GB because the base's block 0 is recomputed
+under `create_graph`. A decoupled head does not recompute it -- an O3.1 job measures **4.7 GB
+steady on a 24.5 GB card, with the cards at 51-65 % utilisation running one job each**, i.e.
+launch-bound and half idle, which is the same diagnosis as the inference path. The O3.1 wave
+therefore runs **two per card** (`W3_PER_GPU=2`, `W3_HEADROOM=8000`), which starts the last two
+seeds immediately instead of queueing them behind a 30-minute run. Neither number transfers to
+a base-reading head.
