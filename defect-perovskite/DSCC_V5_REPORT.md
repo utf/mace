@@ -214,51 +214,58 @@ without.
 
 ## Convergence of E(+1) − E(0) with cell size
 
-![convergence](figures/convergence_e1_e0.png)
+![convergence](figures/convergence_relaxed.png)
 
-Seven cells, 79 → 959 atoms, two shapes at 319, `C_Q` applied. The x-axis is **α_cell/L**, not
-1/L: the two 319-atom cells have identical volume but α = 2.45 and 1.56 and their raw errors
-differ by 85 meV, so a 1/L fit over mixed shapes is meaningless.
+Supercells from 159 to 5119 atoms (tilings of the static pristine cell with one Cl removed),
+fitted against **α_cell/L** rather than 1/L — two 319-atom cells of identical volume have
+α = 2.45 and 1.56, so a 1/L fit over mixed shapes is meaningless. The exact monopole coefficient
+is −C/2ε∞ = −1.800 eV·Å. `C_Q` is applied, so the energies are on the DFT scale.
 
-| model | fitted slope | % of exact (−1.800 eV·Å) | dilute limit | residual after correction |
-|---|--:|--:|--:|---|
-| **W6, same shape 639 / 2159 / 5119** | **−1.678 ± 0.050** | **93 %** | −2.4593 eV | **+11 → +7 meV** |
-| W6, all 11 cells (159–2159) | −1.371 ± 0.156 | 76 % | −2.4758 eV | — |
-| B′, all 11 cells | −1.750 ± 0.159 | 97 % | −2.3753 eV | — |
-| B′, cells ≥ 639 atoms | −2.508 ± 0.057 | 139 % | −2.3169 eV | — |
-| Φ=0, 7 cells | +0.546 | −30 % | −2.8529 eV | +432 → +193 meV |
+**The cells must be relaxed.** The first pass used the idealised unrelaxed lattice with a
+vacancy, and gave a confused picture: the two electrostatic models appeared to differ by 166 meV
+in the extrapolated limit, with fitted slopes of 93 % and 154 % of exact, and the disagreement
+appeared to grow with cell size. None of that survived. Those structures are far outside the
+training domain — the models saw thermal MD snapshots, never a perfect static lattice — and the
+models differ there in ways the data never constrained. Relaxing each cell at fixed cell volume
+(`dscc_relax.py`, BFGS to 0.02 eV/Å) resolves it.
 
-Two results matter more than any single slope.
+**On relaxed geometries** (159 / 319 / 639 atoms, all three arms evaluated at the *same*
+W6-relaxed structure so no geometry difference enters):
 
-**Beyond ~640 atoms W6's convergence is pure monopole.** The same-shape family 639 / 2159 / 5119
-atoms (α = 2.7225 throughout, L = 28.6 → 57.3 Å) is collinear in α/L to **±1.4 meV** across a
-factor of eight in volume, at 93 % of the exact coefficient, with 6–11 meV left after the analytic
-correction. Adding the 79-atom cell drags that fit to 76 %, because **that cell sits 35 meV above
-the line the three large ones define** — the higher-order term measured rather than fitted. So a
-79-atom cell corrected with Makov–Payne alone still carries tens of meV; from ~640 atoms up the
-correction gets you to ~10 meV.
+| model | fitted slope (eV·Å) | % of exact | extrapolated dilute limit |
+|---|--:|--:|--:|
+| W6 (SCF-free) | −1.393 ± 0.051 | 77 % | **−2.7033 ± 0.006 eV** |
+| B′ (self-consistent) | −1.124 ± 0.259 | 62 % | **−2.7215 ± 0.031 eV** |
+| Φ=0 (no electrostatics) | **+0.532 ± 0.138** | **−30 %** | −3.0429 ± 0.017 eV |
 
-**W6 extrapolates stably and B′ does not.** Fitting the same eleven cells over three nested
-subsets, W6's dilute limit moves 26 meV (−2.4758 / −2.4541 / −2.4803) while B′'s moves **83 meV**
-(−2.3753 / −2.3169 / −2.2919), its slope steepening monotonically 97 → 139 → 159 % as small cells
-are dropped. Two artefacts are ruled out: SCF convergence (11–19 iterations, no size trend,
-residual force ~10⁻⁷ eV/Å at every cell) and the electrostatic kernel (`K_LR_ii` matches the
-cell-shape Madelung coefficient to 1.3 % at 159 atoms, improving to **0.25 % at 2159**). What is
-left is B′'s self-consistent charge response: a larger cell lets the compensating cloud spread
-further, a size-dependent contribution the analytic term does not contain. Φ=0 has the wrong sign
-entirely, and applying the analytic correction to it makes its error *worse* (97 → 432 meV at 79
-atoms), because it never had the term being corrected for.
+**The two electrostatic models agree**: limits 18 meV apart, slopes inside each other's
+uncertainty. **Φ=0 does not converge at all** — its slope has the wrong sign, so its
+`E(+1) − E(0)` moves *away* from the dilute limit as the cell grows, landing 320–340 meV from the
+other two. That is the case for carrying the electrostatics, and it is the one result reproduced
+on every structure set tried: +0.55 eV·Å on ideal cells, +0.53 ± 0.14 on relaxed ones. Applying a
+Makov–Payne correction to Φ=0 makes its error *worse*, because it never had the term being
+corrected for.
 
-**Why the arms agree on the trained sizes and diverge outside them.** Both fit 79 and 159 atoms:
-their heads differ by only 13.5 meV in how they move between those sizes. But the decomposition is
-unconstrained — W6's analytic `E_M` supplies +66.4 meV of that motion while its band and host terms
-supply −104.6, nearly cancelling, and Φ=0's band term supplies −51.7 on its own. Two cell sizes
-contain exactly one measured size difference, and any split of it fits equally well; only 17 of
-1047 charged frames are at 159 atoms. Outside those sizes `E_M` keeps obeying −α_cell·C/2ε∞L by
-construction while a fitted band term has no reason to, which is where the curves separate.
+**The two electrostatic models are not distinguishable by this test.** Relaxed with each model
+separately, the 159-atom cell gives structures 0.010 Å apart (d(Pb–Pb) 5.973 vs 5.978 Å), and each
+model evaluated on the other's minimum costs 4.3 meV (W6) and 0.1 meV (B′) — one minimum, two
+surfaces differing by an offset. Evaluating both at one relaxed geometry across four cells gives
+gaps of 23.7, 4.0, 74.2 and 10.6 meV with no size trend; **two cells of the same size differ by
+70 meV**, because a 32 × 32 × 11 Å cell is two octahedra thick and clips the defect's relaxation
+field. That scatter is the scale of the models' own per-cell energy error (45.3 meV for W6, 37.2
+for B′, held out at 79 atoms), so single-cell comparisons between the two models carry no
+information.
 
-This is a limit of the evidence, not a verification: confirming which extrapolation is right needs
-DFT at 319+ atoms, which the programme forbids.
+**Practical reading.** Use a relaxed cell. Beyond ~640 atoms the analytic monopole correction
+leaves ~10 meV; at 79 atoms roughly 35 meV is left that it does not reach. Either electrostatic
+model gives the same dilute-limit answer to within its uncertainty; a model without the
+electrostatic term cannot be used for this at all.
+
+*Caveat of record.* Every slope here is fitted to model energies on structures with no labels, so
+a model error varying smoothly with cell size is degenerate with the coefficient being fitted.
+Confirming which extrapolation is physically right needs DFT at 319+ atoms, which the programme
+forbids. What is established is the models' internal size behaviour and the qualitative failure of
+Φ=0, not a validated dilute-limit energy.
 
 ## Practical implications
 
