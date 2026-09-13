@@ -2988,3 +2988,75 @@ that on an unattended run. `scratch_stop.sh` now does the three-step kill, and t
 says in its header why a bare `pkill` on the wrapper is wrong.
 
 `base_v3_les_ft` was never touched by the rebudget and ran single throughout.
+
+### O3.2 RESULT (wave complete 2026-09-14 00:19 b3 clock, six seeds, all clean)
+
+**G1, the adoption gate.** meV/Å per component, paired by seed/fold, τ = 1.7:
+
+| seed (fold) | W6 | O3.1 | O3.2 | O3.2 − W6 | O3.1 − O3.2 |
+|---|---:|---:|---:|---:|---:|
+| 0 (0) | 11.22 | 14.59 | 13.78 | +2.55 | +0.81 |
+| 1 (1) | 11.62 | 14.22 | 13.94 | +2.32 | +0.28 |
+| 2 (2) | 11.58 | 15.06 | 13.85 | +2.27 | +1.21 |
+| 3 (3) | 11.23 | 14.82 | 13.89 | +2.66 | +0.92 |
+| 4 (0) | 12.02 | 14.28 | 13.67 | +1.65 | +0.61 |
+| 6 (2) | 11.84 | 14.17 | 14.04 | +2.20 | +0.13 |
+| **median** | **11.60** | **14.44** | **13.87** | | |
+
+- **vs W6**: mean **−2.278**, se 0.144, 90 % CI [−2.568, −1.988] → **INFERIOR**, 1.3 τ.
+  **O3.2 IS NOT ADOPTABLE.**
+- **vs O3.1**: mean **+0.659**, se 0.166, 90 % CI [+0.326, +0.993] → better on every seed, but
+  the whole interval lies **inside the equivalence band**: by the registered τ the two arms are
+  **EQUIVALENT**. The screening helps, and the help is smaller than the threshold this
+  programme set for "a difference that matters."
+
+**G2a energy at 79 atoms: PASS** (mean d −0.0739, one-sided 95 % upper −0.0314), better than W6
+at five of six seeds. **G2b between-size, cohort median: −0.3 meV, PASS** (W6 +5.0, O3.1 −1.8).
+**Saturation: nothing at the knee**, on-site p95 shift 0.722 eV.
+
+**THE PRE-REGISTERED EXPECTATION IS NOT MET, AND THAT IS THE RESULT.** Before the wave ran,
+this was written down: "if the three-body screening is the right diagnosis, its gain should be
+concentrated in the same places — the flanking Pb and the 2–4 Å shell — and largely absent
+beyond 8 Å. If instead O3.2 gains uniformly across shells, or gains at long range, the reading
+is wrong whatever G1 says, and the next arm is the head-owned basis rather than the
+modulation." Cohort medians, meV/Å per component:
+
+| shell (Å) | W6 | O3.1 | O3.2 | O3.2 − O3.1 |
+|---|---:|---:|---:|---:|
+| 2–4 | 19.83 | 25.54 | 24.99 | −0.55 |
+| 4–6 | 13.81 | 17.49 | 17.00 | −0.50 |
+| 6–8 | 9.73 | 12.62 | 12.09 | −0.53 |
+| 8–10 | 9.86 | 11.11 | 10.25 | **−0.86** |
+| 10–12 | 9.02 | 10.48 | 9.38 | **−1.10** |
+| **flanking Pb** | 27.40 | 37.41 | 35.55 | **−1.86** |
+| first-shell Cl | 16.55 | 20.56 | 20.26 | −0.31 |
+| rest of 2–4 | 10.26 | 11.85 | 11.18 | −0.68 |
+
+Half of it matches: the flanking Pb takes the largest single gain, −1.86, three times the
+typical shell. The other half does not: the gain **does not decay with distance** — it is
+LARGER at 8–12 Å (−0.86, −1.10) than at 4–8 Å (−0.57). A bond-local three-body screening with
+`r_s3` = 4.5 Å has no business improving forces at 10–12 Å more than at 5 Å. By the criterion
+registered before the result, **the reading that "the residual is the hopping's missing
+environment dependence" is not supported.**
+
+**And the screening barely engaged.** The diagnostic registered so that the modulation could not
+be reported as "learned" while sitting at its stop shows the opposite failure — it is sitting at
+its START. Cohort medians: saturated fraction **0.000**, `|pre|` p95 **0.038**, `|pre|` max
+0.390, and the modulation factor `exp(η tanh pre)` at p95 **1.001**. The fit moved the hoppings
+by about a tenth of a percent over most bonds. So the +0.66 meV/Å did not come from a strong
+screening; it came from a nearly-absent one, which is consistent with the shell table saying the
+gain is not where a screening would put it.
+
+**What this means for the programme.** Three arms now agree on the same thing. O3 (descriptor
+swap plus modulation deleted) lost 7.56; O3.1 (standardisation) recovered 4.63 of it; O3.2
+(modulation restored, from geometry) recovers a further 0.66 and reads EQUIVALENT to its own
+parent. **The remaining ~2.3 meV/Å is not the hopping modulation.** The two candidates left are
+the head-owned descriptor itself — the one thing every O3-lineage arm has in common and W6 does
+not — and the possibility that the base's block-0 features carry information no geometric basis
+of this size reproduces. Per the registration, **the next arm is the head-owned basis**, and it
+should be tested by the cheapest decisive experiment: give the decoupled head the base's
+features back for the on-site term ALONE, changing nothing else. That isolates the descriptor
+from the coupling, and it is one change.
+
+**No new arm is opened here.** This entry records the result and the direction; the next arm is
+registered before it runs, as every arm in this programme has been.
