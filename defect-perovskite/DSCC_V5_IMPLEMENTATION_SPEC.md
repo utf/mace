@@ -3379,3 +3379,53 @@ pristine or neutral-defect energetics — `base_v3_les_ft` is the best model pro
 replay head and nothing else changed. If the charged-frame error returns to base v2's level,
 the replay is confirmed as the mechanism; if it does not, the mechanism is something else and
 this reading is wrong. That is one run and it is the obvious next experiment.
+
+### W7 — MAJOR CORRECTION: the latent charges never trained in EITHER LES model
+
+*(User question, 2026-09-14 morning: "compare the zero vs ft les models to see whether the
+learnt charges actually trained in the ft model." They did not, in either.)*
+
+**Measured, three independent ways, on `les_ft_300.model` and `base_v3_les_zero_stagetwo.model`:**
+
+| reading | LES-FT (300 ep) | LES zero-init (320 ep) |
+|---|---|---|
+| final-layer `\|\|W\|\|` of both latent-charge readouts | **0.0000e+00** | **0.0000e+00** |
+| latent charge `q` on 48 frames (neutral and charged) | identically 0 | identically 0 |
+| `E_LES` per frame | identically 0 | identically 0 |
+| ablation (zero the readouts and re-predict) | ΔE 0.0000, ΔF 0.0000 | ΔE 0.0000, ΔF 0.0000 |
+
+**Mechanism, confirmed directly rather than inferred.** With the trained model's weights at zero
+the gradient reaching the latent-charge readouts is **exactly 0.000000e+00** while the energy
+readouts receive 9.03; after perturbing those weights by 1e-3 the gradient becomes 9.48e-03. The
+Ewald energy is **quadratic** in the charges, so `q = 0` is a stationary point of it:
+`dE_lr/dq = 0` there, and `dL/dW = dL/dE_lr · dE_lr/dq · dq/dW` vanishes identically however
+large `dL/dE_lr` is.
+
+**The claim written into `_zero_les_readouts` — "Gradients still flow into the zeroed layer, so
+nothing is frozen: the term is learned if the data wants it, from zero rather than from noise"
+— IS FALSE, and is the error this correction is about.** Zeroing the latent-charge readouts does
+not start the long-range term small; it removes it. Both "fixes" of last night worked by
+silently disabling the thing they were meant to stabilise.
+
+**What this invalidates.**
+
+1. **`base_v3_les_ft` is not a LES model.** It is a plain direct fine-tune of MH-1 with inert
+   LES machinery. Its result (0.55 meV/atom, 5.19 meV/Å, 49 % below base v2 on forces) stands
+   exactly as measured, but it is a result about NAIVE FINE-TUNING, not about LES. Every
+   statement about it in the entries above should be read that way.
+2. **`base_v3_les_zero` is not a LES model** either — it is `base_v3_scratch` with 528 dead
+   parameters and a different RNG draw. Its agreement with that model (0.23 / 7.19 against
+   0.23 / 6.63) is now fully explained and is not evidence about LES.
+3. **"LES buys nothing here" is WITHDRAWN.** It was never tested. The only run in which the
+   latent charges were live is `base_v3_les` with the library's default random initialisation,
+   and that one diverged to NaN at epoch 118. **The question of whether LES helps on this data
+   is OPEN and unmeasured.**
+4. The out-of-sample finding is untouched: all three models lose on charged frames, and none of
+   them had a working long-range term, so that conclusion never rested on LES.
+
+**The fix, and why it is not "zero".** The initialisation has to be small enough that the Ewald
+term does not swamp an already-good potential, and non-zero so the gradient exists — the
+default random init is the second without the first, and zero is the first without the second.
+`--les_zero_readouts` should become a SCALE (e.g. 1e-2 × the default draw), not a zeroing, with
+the scale registered. A run at that setting is the experiment that would actually answer
+whether LES helps here; it has not been run and no claim about LES should be made until it is.
