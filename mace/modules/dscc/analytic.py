@@ -184,10 +184,16 @@ def _site_blocks(h0, A0: torch.Tensor, vec: torch.Tensor, Qg: torch.Tensor,
     `autograd.grad` on this function -- and so that `torch.compile` owns its backward.
     Transcribing A1's environment factors and the block layout a second time is exactly what
     calling the production code here avoids."""
-    levels = h0.sk.on_site(A0, species, None)                               # [N, 2]
+    # O3.3: the readouts are fed the correlation-2 block, which is a FUNCTION of the leaves
+    # `(A0, vec, Qg)`. Forming it here rather than outside keeps the leaves raw, so the edge
+    # contraction below still receives a cotangent in the `[n, n_species, N_r]` layout it
+    # knows how to scatter, and autograd supplies the chain rule through the quadratic
+    # channels for free.
+    feats = h0.descriptor.invariants(A0, vec, Qg) if h0.descriptor.correlation2 else A0
+    levels = h0.sk.on_site(feats, species, None)                            # [N, 2]
     site = torch.diag_embed(torch.cat([levels[:, :1], levels[:, 1:].expand(-1, 3)], dim=-1))
     if h0.directional:
-        site = site + h0.directional_site_blocks(A0, vec, species, edge_index, edge_vector, Qg)
+        site = site + h0.directional_site_blocks(feats, vec, species, edge_index, edge_vector, Qg)
     return site
 
 
@@ -273,7 +279,7 @@ def h0_position_gradient(h0, X: torch.Tensor, species: torch.Tensor,
     # The descriptor runs under `no_grad`: `c1`/`c2` are parameters, so building its graph
     # here only to detach it cost 4 ms of the 8 the whole kernel took.
     with torch.no_grad():
-        A0, vec, Qg = h0.descriptor(species, edge_index, edge_vector, n_total)
+        A0, vec, Qg = h0.descriptor.raw(species, edge_index, edge_vector, n_total)
     with torch.enable_grad():
         A0, vec, Qg = (t.requires_grad_(True) for t in (A0, vec, Qg))
         site = _compiled(_site_blocks)(h0, A0, vec, Qg, species, edge_index, edge_vector)

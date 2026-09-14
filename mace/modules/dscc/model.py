@@ -95,12 +95,15 @@ class MACEDSCC(nn.Module):
     analytic_head_forces: bool = True
     # O3.2: the three-body bond screening. Class level for the same pickle reason as above.
     screened: bool = False
+    # O3.3: correlation-2 invariants of the head's own A-tensors into the on-site readout.
+    correlation2: bool = False
 
     def __init__(self, base: nn.Module, *, r_cut: float = R_CUT_DEFAULT,
                  kernel: Optional[KernelConfig] = None, sigma_s: float = SIGMA_S,
                  coupling: bool = False, route_b: bool = False, scf_free: bool = False,
                  decoupled: bool = False, n_radial: int = 6, directional: bool = True,
                  screened: bool = False, r_s3: float = R_S3_DEFAULT,
+                 correlation2: bool = False,
                  standardise_inputs: Optional[bool] = None,
                  readout_init_scale: Optional[float] = None,
                  lambda_0: float = LAMBDA_0_DEFAULT, lambda_max: float = LAMBDA_MAX_DEFAULT,
@@ -144,12 +147,16 @@ class MACEDSCC(nn.Module):
         # contraction of the three-body invariants, through the head's existing bounded
         # modulation, with no MLP and nothing from the base.
         self.screened, self.r_s3 = bool(screened), float(r_s3)
+        # O3.3: the head's own three-body content. Zero runtime cost -- these are contractions
+        # of tensors the descriptor already builds -- and nothing from the base enters.
+        self.correlation2 = bool(correlation2)
         self.h0 = H0(self.atomic_numbers, feature_dim=n_s, n_vectors=n_v, r_cut=self.r_cut,
                      q_cut=q_cut, directional=directional, a_max=a_max, b_max=b_max,
                      hidden=hidden, eta=eta, beta_b=beta_b, beta_a=beta_a,
                      delta_frac=delta_frac, decoupled=self.decoupled, n_radial=n_radial,
                      readout_init_scale=readout_init_scale,
-                     screened=self.screened, r_s3=self.r_s3)
+                     screened=self.screened, r_s3=self.r_s3,
+                     correlation2=self.correlation2)
         if self.decoupled:
             self.h0.sk.hop_modulation = False
         n_el = len(self.atomic_numbers)
@@ -200,6 +207,7 @@ class MACEDSCC(nn.Module):
                 "scf_free": getattr(self, "scf_free", False),
                 "decoupled": getattr(self, "decoupled", False),
                 "screened": getattr(self, "screened", False),
+                "correlation2": getattr(self, "correlation2", False),
                 "r_s3": getattr(self, "r_s3", R_S3_DEFAULT),
                 "lambda_max": self.lambda_max, "c_q_table": dict(self.c_q_table),
                 "calibration_record": self.calibration_record,
@@ -215,6 +223,7 @@ class MACEDSCC(nn.Module):
         self.scf_free = bool(state.get("scf_free", False))      # W6; absent in pre-W6 checkpoints
         self.decoupled = bool(state.get("decoupled", False))    # O3
         self.screened = bool(state.get("screened", False))      # O3.2
+        self.correlation2 = bool(state.get("correlation2", False))   # O3.3
         self.r_s3 = float(state.get("r_s3", R_S3_DEFAULT))
         self.r_split, self.lambda_max = float(state["r_split"]), float(state["lambda_max"])
         self.c_q_table = {int(k): float(v) for k, v in state.get("c_q_table", {}).items()}

@@ -348,3 +348,125 @@ class TestItStaysDecoupled:
                                                     int(species.shape[0]))
         with pytest.raises(NotImplementedError, match="screening"):
             sparse.csr_hamiltonian(m.h0, scalars, vectors, species, batch["edge_index"], vec)
+
+
+# ------------------------------------------------------------------- O3.3
+
+
+def _o33(seed=0, n_radial=4):
+    """O3.3: O3.1 plus the correlation-2 invariants of the head's OWN A-tensors. One change
+    from O3.1 -- what the on-site readout is fed -- and nothing from the base."""
+    m = MACEDSCC(_base(seed), r_cut=R_CUT, directional=True, hidden=16, coupling=False,
+                 route_b=True, scf_free=True, decoupled=True, n_radial=n_radial,
+                 standardise_inputs=True, readout_init_scale=0.1, correlation2=True,
+                 kernel=KernelConfig(regime="B", r_g=1.0, r_s=5.0))
+    with torch.no_grad():
+        m.h0.vector_mix.normal_(0.0, 0.3)
+        m.h0.alpha.fill_(0.5)
+        m.h0.beta.fill_(0.5)
+        m.h0.descriptor.c1.normal_(0.0, 0.5)
+        m.h0.descriptor.c2.normal_(0.0, 0.5)
+    m.set_pristine_reference([_batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])])
+    m.set_feature_stats([_batch([_frame(_perovskite(rattle=0.05, seed=s), [0, 0, 0, 0], 0)])
+                         for s in (11, 12, 13)])
+    return m
+
+
+class TestO33Correlation2:
+    def test_the_width_is_the_registered_count(self):
+        """n0 linear + n0(n0+1)/2 pairwise l=0 + nr(nr+1)/2 from A1.A1 + 1 from ||A2||^2."""
+        m = _o33(n_radial=4)
+        d = m.h0.descriptor
+        n0, nr = 4 * 3, 4
+        assert d.scalar_width() == n0 + n0 * (n0 + 1) // 2 + nr * (nr + 1) // 2 + 1
+        assert m.readout_scalars(_batch([VACP])).shape[1] == d.scalar_width()
+        assert m.h0.sk.feat_mean.shape[1] == d.scalar_width()
+
+    def test_the_invariants_are_the_stated_contractions(self):
+        """Checked against an explicit loop, not against another vectorised expression."""
+        m = _o33(seed=3)
+        d = m.h0.descriptor
+        batch = _batch([VACP])
+        species = batch["node_attrs"].argmax(dim=-1)
+        vec = m.head_edge_vectors(batch)
+        A0, v, Q = d(species, batch["edge_index"], vec, int(species.shape[0]))
+        # rebuild the raw A0 by turning the flag off on a copy of the same module
+        d.correlation2 = False
+        try:
+            raw, v2, Q2 = d(species, batch["edge_index"], vec, int(species.shape[0]))
+        finally:
+            d.correlation2 = True
+        assert torch.equal(v, v2) and torch.equal(Q, Q2)
+        n0 = raw.shape[1]
+        assert torch.allclose(A0[:, :n0], raw, atol=0)          # linear block unchanged
+        k = n0
+        for a in range(n0):
+            for b in range(a, n0):
+                assert torch.allclose(A0[:, k], raw[:, a] * raw[:, b], atol=1e-12)
+                k += 1
+        for a in range(v.shape[1]):
+            for b in range(a, v.shape[1]):
+                assert torch.allclose(A0[:, k], (v[:, a] * v[:, b]).sum(-1), atol=1e-12)
+                k += 1
+        assert torch.allclose(A0[:, k], (Q * Q).sum(dim=(-1, -2)), atol=1e-12)
+        assert k + 1 == A0.shape[1]
+
+    def test_it_still_reads_nothing_from_the_base(self):
+        m = _o33(seed=5)
+        batch = _batch([VACP])
+        before = float(m(dict(batch), compute_force=False)["head_energy"])
+        with torch.no_grad():
+            for p in m.base.parameters():
+                p.add_(torch.randn_like(p) * 0.1)
+        assert float(m(dict(batch), compute_force=False)["head_energy"]) == before
+
+    def test_forces_match_finite_differences(self):
+        m = _o33(seed=6)
+        out = m(_batch([VACP]), compute_force=True)
+        h = 1e-4
+        for atom, comp in ((1, 0), (7, 2)):
+            plus, minus = VACP.copy(), VACP.copy()
+            plus.positions[atom, comp] += h
+            minus.positions[atom, comp] -= h
+            e_plus = float(m(_batch([plus]), compute_force=False)["energy"])
+            e_minus = float(m(_batch([minus]), compute_force=False)["energy"])
+            assert float(out["forces"][atom, comp]) == pytest.approx(
+                -(e_plus - e_minus) / (2 * h), abs=3e-6)
+
+    def test_the_new_channels_are_alive_after_standardisation(self):
+        """A quadratic channel that is constant across the ensemble would be standardised to
+        nothing and would add no capacity. Count the dead ones."""
+        m = _o33(seed=7)
+        batch = _batch([VACP])
+        raw = m.readout_scalars(batch)
+        species = batch["node_attrs"].argmax(dim=-1)
+        std = m.h0.sk.standardise(raw, species)
+        assert bool(torch.isfinite(std).all())
+        n0 = m.h0.descriptor.n_radial * m.h0.descriptor.num_elements
+        quad = std[:, n0:]
+        dead = int((quad.std(dim=0) < 1e-10).sum())
+        assert dead == 0, f"{dead} of {quad.shape[1]} correlation-2 channels are dead"
+
+    def test_a_mixed_batch_matches_per_graph(self):
+        m = _o33(seed=8)
+        one = m(_batch([VACP]), compute_force=True)
+        mixed = m(_batch([VACP, VAC0]), compute_force=True)
+        assert not mixed["short_circuit"]
+        assert float(mixed["energy"][0] - one["energy"][0]) == pytest.approx(0.0, abs=1e-9)
+        assert float((mixed["forces"][:len(VACP)] - one["forces"]).abs().max()) < 1e-9
+
+    def test_the_analytic_route_still_applies(self):
+        """Unlike O3.2, this arm does not touch the hoppings, so the closed-form force kernel
+        is still valid and must still be taken."""
+        import mace.modules.dscc.model as mdl
+        real, calls = mdl.h0_position_gradient, []
+        mdl.h0_position_gradient = lambda *a, **k: (calls.append(1), real(*a, **k))[1]
+        try:
+            fast = _o33(seed=9)(_batch([VACP]), compute_force=True)
+        finally:
+            mdl.h0_position_gradient = real
+        assert calls == [1]
+        m = _o33(seed=9)
+        m.analytic_head_forces = False
+        ref = m(_batch([VACP]), compute_force=True)
+        assert float((fast["forces"] - ref["forces"]).abs().max()) < 1e-9

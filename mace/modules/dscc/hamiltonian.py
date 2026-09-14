@@ -145,11 +145,15 @@ class GeometricDescriptor(nn.Module):
     `l = 1, 2`, where it defines the vector and the tensor.
     """
 
-    def __init__(self, num_elements: int, r_cut: float, n_radial: int = N_RADIAL_DEFAULT) -> None:
+    def __init__(self, num_elements: int, r_cut: float, n_radial: int = N_RADIAL_DEFAULT,
+                 correlation2: bool = False) -> None:
         super().__init__()
         self.num_elements = int(num_elements)
         self.r_cut = float(r_cut)
         self.n_radial = int(n_radial)
+        # O3.3: the ACE correlation-2 invariants of the A-tensors built below. See
+        # `scalar_width` and `invariants`.
+        self.correlation2 = bool(correlation2)
         # c_{Z Z'}^{(n,l)} for l = 1, 2; small init so the blocks start near absent, matching
         # the production convention for `vector_mix` / `alpha` / `beta`.
         self.c1 = nn.Parameter(torch.zeros(num_elements, num_elements, self.n_radial))
@@ -157,6 +161,40 @@ class GeometricDescriptor(nn.Module):
         with torch.no_grad():
             self.c1.normal_(0.0, 1.0 / max(self.n_radial, 1) ** 0.5)
             self.c2.normal_(0.0, 1.0 / max(self.n_radial, 1) ** 0.5)
+
+    def scalar_width(self) -> int:
+        """Width of the scalar block the readouts are fed."""
+        n0 = self.n_radial * self.num_elements
+        if not self.correlation2:
+            return n0
+        nr = self.n_radial
+        return n0 + n0 * (n0 + 1) // 2 + nr * (nr + 1) // 2 + 1
+
+    def invariants(self, A0: torch.Tensor, v: torch.Tensor, Q: torch.Tensor) -> torch.Tensor:
+        """O3.3: correlation-2 invariants of the SAME A-tensors, appended to the `l = 0` block.
+
+        WHY. Block 0 of the base is products of an A-basis up to correlation 3; the head's
+        on-site readout sees only `A^(0)`, a two-body radial sum. The crystal-field shift of a
+        site in a TILTED perovskite is a three-body quantity -- the tilt angle, the Cs
+        displacement relative to the cage -- and no amount of radial richness in a two-body sum
+        reproduces it. These are the correlation-2 contractions of the tensors the descriptor
+        already builds, so they cost nothing at runtime: no new neighbour loop, no new tensor.
+
+            l = 0:  A^(0)_a A^(0)_b   for a <= b
+            l = 1:  A^(1)_n . A^(1)_m for n <= m     (the angular content of the vector block)
+            l = 2:  ||A^(2)||^2_F
+
+        They are formed from the RAW channels; A1.1 standardises the whole block afterwards,
+        which is what keeps the quadratic channels conditioned.
+        """
+        n = A0.shape[0]
+        ia, ib = torch.triu_indices(A0.shape[1], A0.shape[1], device=A0.device)
+        p0 = A0[:, ia] * A0[:, ib]                                    # [N, n0 (n0+1) / 2]
+        vv = torch.einsum("nia,nja->nij", v, v)                       # [N, n_rad, n_rad]
+        ja, jb = torch.triu_indices(v.shape[1], v.shape[1], device=A0.device)
+        p1 = vv[:, ja, jb]                                            # [N, nr (nr+1) / 2]
+        p2 = (Q * Q).sum(dim=(-1, -2)).reshape(n, 1)                  # [N, 1]
+        return torch.cat([A0, p0, p1, p2], dim=-1)
 
     def radial(self, r: torch.Tensor) -> torch.Tensor:
         """`[n_edges, N_r]`: Bessel `sin(n pi r / r_cut) / r` times H0's taper."""
@@ -168,7 +206,19 @@ class GeometricDescriptor(nn.Module):
 
     def forward(self, species: torch.Tensor, edge_index: torch.Tensor,
                 edge_vector: torch.Tensor, n_nodes: int):
-        """`(A0 [N, N_r * n_species], v [N, N_r, 3], Q [N, 3, 3])`."""
+        """`(scalars, v [N, N_r, 3], Q [N, 3, 3])`; `scalars` is the raw `l = 0` block, widened
+        by `invariants` when O3.3 is on."""
+        A0, v, Q = self.raw(species, edge_index, edge_vector, n_nodes)
+        if self.correlation2:
+            return self.invariants(A0, v, Q), v, Q
+        return A0, v, Q
+
+    def raw(self, species: torch.Tensor, edge_index: torch.Tensor,
+            edge_vector: torch.Tensor, n_nodes: int):
+        """`(A0 [N, N_r * n_species], v [N, N_r, 3], Q [N, 3, 3])` -- the A-tensors themselves,
+        without the correlation-2 block. The analytic force kernel differentiates through
+        THESE: they are what the edge contraction knows how to map back to edges, and the
+        correlation-2 channels are functions of them, so autograd carries the chain rule."""
         src, dst = edge_index[0], edge_index[1]
         r = edge_vector.norm(dim=-1).clamp_min(1e-9)
         R = self.radial(r)                                              # [E, N_r]
@@ -204,7 +254,8 @@ class H0(nn.Module):
                  readout_hidden: int = READOUT_HIDDEN_DEFAULT,
                  decoupled: bool = False, n_radial: int = N_RADIAL_DEFAULT,
                  readout_init_scale: Optional[float] = None,
-                 screened: bool = False, r_s3: float = R_S3_DEFAULT) -> None:
+                 screened: bool = False, r_s3: float = R_S3_DEFAULT,
+                 correlation2: bool = False) -> None:
         super().__init__()
         self.atomic_numbers = [int(z) for z in atomic_numbers]
         num_elements = len(self.atomic_numbers)
@@ -212,9 +263,11 @@ class H0(nn.Module):
         # is production's, unchanged -- only its INPUT changes, so a failed gate is
         # attributable to the descriptor and not to normalisation.
         self.decoupled = bool(decoupled)
+        self.correlation2 = bool(correlation2)
         if self.decoupled:
-            self.descriptor = GeometricDescriptor(num_elements, float(r_cut), n_radial)
-            feature_dim = n_radial * num_elements          # species-resolved l = 0
+            self.descriptor = GeometricDescriptor(num_elements, float(r_cut), n_radial,
+                                                  correlation2=self.correlation2)
+            feature_dim = self.descriptor.scalar_width()   # O3.3 widens this
             n_vectors = n_radial
         self.r_cut, self.q_cut = float(r_cut), float(q_cut)
         self.directional = bool(directional)
