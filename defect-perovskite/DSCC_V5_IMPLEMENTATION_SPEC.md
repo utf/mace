@@ -3275,3 +3275,22 @@ here by a wide margin (2.41–4.75 meV/Å against base v2's 5.05–10.96).
 **Open question, being measured rather than argued** (`pass C`): whether the out-of-sample gap
 GROWS with fine-tuning epochs, as the guidance implies. The 150-epoch LES-FT checkpoint was
 kept, so 150 and 300 can be compared on the same charged frames.
+
+**Pass C — does the out-of-sample gap grow with fine-tuning epochs? No: it saturates early.**
+The 150-epoch LES-FT checkpoint against the 300-epoch one, same frames, same code:
+
+| | neutral 79 (in-sample) | charged 79 (OUT of sample) | charged 79, 2–4 Å |
+|---|---:|---:|---:|
+| LES-FT @ 150 epochs | 4.41 | 57.12 | 136.4 |
+| LES-FT @ 300 epochs | **3.70** | 58.54 | 140.3 |
+| base v2 | 10.96 | **33.22** | **74.9** |
+
+Doubling the epochs bought **16 % in-distribution** and cost **2.5 % out**. So the drift is not
+a progressive penalty for training longer — it is incurred early, in the first hundred epochs or
+sooner, and then roughly saturates while the in-distribution fit keeps improving. Two
+consequences: (i) shortening a naive fine-tune would NOT have avoided the out-of-sample loss,
+so "fewer epochs" is not the remedy; (ii) given that a naive fine-tune is being run at all,
+running it long is nearly free.
+
+The remedy the evidence points at is the replay head, which is the one structural difference
+between base v2 and both W7 models — not the epoch count, not the initialisation, and not LES.
