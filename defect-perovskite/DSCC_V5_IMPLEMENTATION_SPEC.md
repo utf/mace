@@ -3234,3 +3234,44 @@ past it: this is one host, 1619 frames, and a fine-tune whose LES term started a
 **Operational note.** b3's GPU 6 fell off the bus at ~03:45 (GPU 4 had gone earlier). Nothing
 was lost: `base_v3_scratch` had finished on it at 02:28 and `base_v3_les_zero` on GPU 5 was
 unaffected. Recorded because the machine has previously lost every job at once to a card fault.
+
+### W7 — the out-of-sample reading, and a CORRECTION of "the drift did not appear"
+
+`base_compare_n.py` pass B. Forces per component, meV/Å; energies meV/atom after the per-species
+OLS offset.
+
+| data set | frames | base v2 | v3 scratch | **v3 LES-FT** |
+|---|---:|---:|---:|---:|
+| pristine, 80 | 639 | 5.05 | 3.21 | **2.41** |
+| neutral vacancy, 79 | 1174 | 10.96 | 4.83 | **3.70** |
+| neutral vacancy, 159 | 17 | 10.96 | 5.35 | **4.75** |
+| charged vacancy, 79 | 1030 | **33.22** | 57.23 | 58.54 |
+| charged vacancy, 159 | 17 | **22.14** | 33.74 | 36.26 |
+| charged 79, 2–4 Å shell | | **74.9** | 132.5 | 140.3 |
+
+**CORRECTION OF RECORD (mine).** The W7.1 entry above says "the drift the fine-tuning guidance
+warns about did not appear at 300 epochs". That was read off the NEUTRAL validation split, and
+a neutral in-distribution split **structurally cannot see drift away from the pretrained
+distribution** — it is the distribution being fitted. On the charged frames, which no base has
+ever seen, the drift is plain: the LES fine-tune is **58.54 meV/Å against base v2's 33.22**, and
+140.3 against 74.9 in the 2–4 Å shell where the head works. The claim is withdrawn. What holds
+is the narrower statement: *no degradation appeared in-distribution* at 300 epochs.
+
+**And the initialisation is not what protects base v2.** `v3 LES-FT` starts from MH-1's weights
+and still loses out-of-sample — slightly MORE than the from-scratch model does. The one thing
+base v2 has that neither W7 model has is the **multihead pseudolabel replay head**. On this
+evidence the replay, not the initialisation, is what buys out-of-distribution robustness, which
+is what the multihead recipe is for and what the guidance page claims when it says naive
+fine-tuning drifts most. W1's choice of the multihead route is vindicated by a measurement it
+did not have at the time.
+
+**Recommendation, following the out-of-sample column.** For the D-SCC programme, whose head
+operates on CHARGED frames, **base v2 remains the base.** Neither `base_v3_scratch` nor
+`base_v3_les_ft` is a candidate to replace it, notwithstanding that both are two to three times
+better on every neutral set. For a user who wants a neutral-only CsPbCl3 potential — bulk MD,
+phonons, pristine or neutral-defect energetics — `base_v3_les_ft` is the best model produced
+here by a wide margin (2.41–4.75 meV/Å against base v2's 5.05–10.96).
+
+**Open question, being measured rather than argued** (`pass C`): whether the out-of-sample gap
+GROWS with fine-tuning epochs, as the guidance implies. The 150-epoch LES-FT checkpoint was
+kept, so 150 and 300 can be compared on the same charged frames.
