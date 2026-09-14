@@ -14,20 +14,19 @@ from mace.tools.utils import AtomicNumberTable
 
 
 
-def _zero_les_readouts(model) -> None:
-    """Zero the last layer of each latent-charge readout, so a MACELES model starts with NO
-    long-range term and grows it.
+def _scale_les_readouts(model, scale: float) -> None:
+    """Multiply the last layer of each latent-charge readout by `scale` at construction.
 
-    Why it matters, measured on CsPbCl3. From a FOUNDATION model the untrained charges put the
-    initial validation error at 8332 meV/atom against ~44 meV/A for the same backbone without
-    LES; zeroing brings it to the foundation's own 1.69 / 43.9. FROM SCRATCH the effect is
-    slower but worse: at the documented 1 : 100 energy : forces weighting the long-range energy
-    is a degree of freedom the forces barely constrain, and the validation energy sat at a
-    median 127 meV/atom over epochs 40-60 and 122 over 80-100 -- flat, not converging -- while
-    forces fell from 15.6 to 12.2 and the same architecture WITHOUT LES reached 1.3 meV/atom.
+    **ZERO DOES NOT MEAN "START SMALL AND GROW".** The Ewald energy is QUADRATIC in the latent
+    charges, so `q = 0` is a stationary point of it: `dE_lr/dq = 0` there, and therefore
+    `dL/dW = dL/dE_lr . dE_lr/dq . dq/dW` vanishes identically however large the loss gradient
+    is. Measured on a trained model: with these weights at zero the gradient reaching them is
+    exactly 0.000000e+00 while the energy readouts receive 9.03; perturbed by 1e-3 it becomes
+    9.48e-03. A zeroed latent-charge readout is PINNED -- two models trained that way for 300
+    and 320 epochs came out with their charges still exactly zero and LES contributing nothing.
 
-    Gradients still flow into the zeroed layer, so nothing is frozen: the term is learned if
-    the data wants it, from zero rather than from noise.
+    Use a SMALL NON-ZERO scale to start the long-range term small and LIVE. Zero is correct
+    only when the intent is to disable LES outright.
     """
     with torch.no_grad():
         for readout in model.les_readouts:
@@ -35,7 +34,7 @@ def _zero_les_readouts(model) -> None:
             if final is None:
                 continue
             for param in final.parameters():
-                param.zero_()
+                param.mul_(scale)
 
 def configure_model(
     args,
@@ -405,11 +404,10 @@ def _build_model(
         # E0 mismatch the fine-tuning guide's ">500 meV/atom" rule is about (the same E0s
         # give ~200 meV/atom from scratch); it is the untrained charges.
         #
-        # Zeroing the last layer of each latent-charge readout makes the model start EXACTLY
-        # at the foundation's predictions and learn the long-range term up from zero, which
-        # is what "initialised with the foundation weights" should mean. Gradients still flow
-        # into that layer, so nothing is frozen.
-        _zero_les_readouts(model)
+        # `--les_readout_scale` controls it: 1.0 (default) leaves the library initialisation
+        # alone; a SMALL value starts the long-range term small and live. ZERO PINS IT -- see
+        # `_scale_les_readouts` -- and was the mistake that made two whole runs no-ops.
+        _scale_les_readouts(model, float(getattr(args, "les_readout_scale", 1.0)))
         return model
     if args.model == "ScaleShiftBOTNet":
         # say it is deprecated
@@ -496,7 +494,9 @@ def _build_model(
             use_last_readout_only=args.use_last_readout_only,
             use_agnostic_product=args.use_agnostic_product,
         )
-        if getattr(args, "les_zero_readouts", False):
-            _zero_les_readouts(model)
+        scale = 0.0 if getattr(args, "les_zero_readouts", False) else float(
+            getattr(args, "les_readout_scale", 1.0))
+        if scale != 1.0:
+            _scale_les_readouts(model, scale)
         return model
     raise RuntimeError(f"Unknown model: '{args.model}'")

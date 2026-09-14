@@ -528,6 +528,16 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         required=False,
     )
     parser.add_argument(
+        "--les_readout_scale",
+        help="MACELES: multiply the latent-charge readouts' last layer by this at construction. "
+             "1.0 (default) leaves the library initialisation alone. A SMALL value (e.g. 0.01) "
+             "starts the long-range term small but LIVE. ZERO PINS IT: the Ewald energy is "
+             "quadratic in the charges, so q = 0 is a stationary point, the gradient into these "
+             "readouts is exactly zero there, and the term can never leave zero -- measured.",
+        type=float,
+        default=1.0,
+    )
+    parser.add_argument(
         "--les_zero_readouts",
         help="MACELES: zero the last layer of each latent-charge readout at construction, so "
              "the model starts with NO long-range term and grows it. Always applied when "

@@ -3429,3 +3429,69 @@ default random init is the second without the first, and zero is the first witho
 `--les_zero_readouts` should become a SCALE (e.g. 1e-2 × the default draw), not a zeroing, with
 the scale registered. A run at that setting is the experiment that would actually answer
 whether LES helps here; it has not been run and no claim about LES should be made until it is.
+
+## O3.3 / O3.D — REGISTRATION (2026-09-14, written before either arm runs)
+
+*(Coadvisor ruling, relayed 2026-09-14. Adopted as written, with the mechanism check added.)*
+
+**The coadvisor's mechanism for the 8–12 Å gain, which the O3.2 entry left unattributed.** The
+far-field force channel is `E_host = dqᵀ Γ_LR (s q0)`, and `q0` is the Mulliken pattern of the
+reference fill of `H0` on EVERY atom, including those 10 Å from the vacancy. The on-site term
+sets those bulk atoms' thermal charges, so a better on-site environment model gives a better
+thermal `q0` and better far-field forces. A gain that is largest at the flanking Pb and still
+present at 8–12 Å is what that channel predicts **from an on-site change, with no three-body
+screening required** — which is consistent with O3.2's modulation having moved the hoppings by
+0.1 % while the gain appeared anyway. O3.1, not O3.2, is therefore the parent for what follows.
+
+**Diagnostic, to run now (`q0` check).** Per-atom `|q0(W6) − q0(O3.1)|` on shared frames against
+the per-atom force error, by shell. If they track, the target is the on-site term and nothing
+else.
+
+**What block 0 has that the head's basis does not: BODY ORDER, not range or radial richness.**
+Both reach 6 Å and six Bessel functions with learned coefficients is a normal ACE A-basis. Block
+0's invariants are products of that A-basis up to correlation 3 — three- and four-body content:
+octahedral tilt angles, the Cs displacement relative to the cage, bond-polarity patterns. The
+head's on-site readout sees only the two-body radial sum, and **the crystal-field shift of a site
+in a tilted perovskite is a three-body quantity.**
+
+### Arm O3.3 — decoupled, PRIMARY, one change from O3.1
+
+O3.1 plus the **ACE correlation-2 invariants of the A-tensors the head already computes**, fed to
+the on-site readout: the pairwise products of the `l = 0` channels, `A^(1)_n · A^(1)_m` over the
+radial channels, and `‖A^(2)‖²_F`. Standardised by A1.1 exactly as the linear channels are.
+**Zero runtime cost** — the tensors are already built and these are contractions of them — and
+it keeps every property that makes the decoupled head worth having: nothing from the base, no
+wait on block 0, no `create_graph` traversal, capture still possible.
+
+### Arm O3.D — coupled, DIAGNOSTIC ONLY, not a production candidate
+
+O3.1 with the base's block-0 invariants restored **for the on-site term alone**, hoppings and
+directional block left on the head's own descriptor. **Registered as not adoptable whatever it
+scores**: a head that reads block 0 anywhere must wait for it, needs the cotangent through it,
+must expose block-0 outputs to capture, and returns the `create_graph` traversal to the training
+step — back near the 1.66× ceiling measured for O2. It exists to attribute the gap, not to ship.
+
+### How the pair reads (registered before either result)
+
+- **B-basis recovers the 2.3** → adopt the decoupled head; the content was many-body and the
+  head can make it itself.
+- **Block-0 recovers it and the B-basis does not** → the content is many-body beyond
+  correlation 2, or it is the base's pretrained chemistry. The choice is then accuracy against
+  speed, made with numbers, and a registered "fast tier" becomes a legitimate product ruling.
+- **Neither recovers it** → the deficit is in the rank-1 block, and the next arm is the
+  equivariant correlation-2 product for `v_i`.
+
+Gates for both: paired TOST vs W6 and vs O3.1 at τ = 1.7, by-shell gains, saturation (including
+that the new channels are not merely saturating the readout), G2a and G2b as registered. Six
+seeds each, folds as before.
+
+### Recorded whatever happens
+
+**The decoupled head WITH electrostatics (13.87) is worse than the coupled head WITHOUT them
+(`Phi = 0`, 12.22).** The environment information in the on-site term is worth at least as much
+to the forces as the entire host term. The on-site term was treated through this programme as
+the inert piece of the head; it is not, and that reorders what is worth working on.
+
+**Optional, not scheduled:** a learning curve for O3.1 and W6 at 50 % of the training frames,
+to separate variance (learning the environment dependence from 785 charged frames) from capacity
+(inheriting it from the neutral PES). It would change how a foundation version is built.
