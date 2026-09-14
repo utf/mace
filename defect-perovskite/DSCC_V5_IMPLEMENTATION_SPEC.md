@@ -3329,3 +3329,53 @@ charge — LES is designed for systems where charge transfer and long-range inte
 captured locally. **It is the wrong test bed for LES, and that is a property of the data, not a
 failure of the method.** The charged frames, where a long-range term might matter, are exactly
 the frames no base is trained on.
+
+### W7 — THE COMPLETE ERROR TABLE (base v2's format, all four new bases)
+
+`base_compare_n.py`, 2877 frames, identical code and frames for every model, each called through
+its OWN forward so the LES models contribute their Ewald term. Energies meV/atom after a
+per-species OLS offset fitted on the neutral frames of each base separately (raw in brackets);
+forces per component, meV/Å. **Neutral rows are in-sample for every production base and measure
+FIT. Charged rows were seen by no base and are the only GENERALISATION numbers here.**
+
+| data set | frames | old base | base v2 | v3 scratch | v3 LES zero-init | v3 LES-FT |
+|---|---:|---:|---:|---:|---:|---:|
+| **energy, meV/atom** | | | | | | |
+| pristine, 80 | 639 | 1.15 | 0.30 | **0.06** | **0.06** | 0.07 |
+| neutral vacancy, 79 | 1174 | 1.31 | 0.40 | **0.06** | **0.06** | 0.08 |
+| neutral vacancy, 159 | 17 | 3.08 | 0.74 | **0.09** | 0.12 | 0.10 |
+| charged vacancy, 79 | 1030 | 42.16 | **38.37** | 40.52 | 41.11 | 41.68 |
+| charged vacancy, 159 | 17 | 24.58 | **18.89** | 20.69 | 21.15 | 21.51 |
+| **forces, meV/Å per component** | | | | | | |
+| pristine, 80 | 639 | 6.82 | 5.05 | 3.21 | 3.50 | **2.41** |
+| neutral vacancy, 79 | 1174 | 13.07 | 10.96 | 4.83 | 5.26 | **3.70** |
+| neutral vacancy, 159 | 17 | 6.51 | 10.96 | 5.35 | 5.68 | **4.75** |
+| charged vacancy, 79 | 1030 | 53.65 | **33.22** | 57.23 | 58.33 | 58.54 |
+| charged vacancy, 159 | 17 | 29.95 | **22.14** | 33.74 | 33.90 | 36.26 |
+
+Charged 79-atom forces by range from the vacancy, per component (the shells the head works in):
+
+| base | 2–4 | 4–8 | 8–10 | 10–12 | >12 |
+|---|---:|---:|---:|---:|---:|
+| old base | 120.3 | 49.4 | 24.2 | 12.9 | 10.5 |
+| **base v2** | **74.9** | **30.4** | **15.3** | **8.9** | 8.0 |
+| v3 scratch | 132.5 | 51.8 | 21.9 | 10.7 | 7.3 |
+| v3 LES zero-init | 138.7 | 51.2 | 22.1 | 11.0 | 7.6 |
+| v3 LES-FT | 140.3 | 51.2 | 21.8 | 9.6 | **6.9** |
+
+**The result is uniform across all three new bases and is the night's main finding.** Every one
+of them is two to three times better than base v2 on neutral data and 1.7–1.8× WORSE on charged
+data, with the damage concentrated in the 2–4 Å shell (133–140 against base v2's 74.9). They
+differ in architecture (LES or not) and in initialisation (from scratch or from MH-1) and it
+makes no difference to this pattern; base v2 differs from all three by having the **multihead
+pseudolabel replay head**, and it is the only one that holds up off its training distribution.
+
+**Recommendation: base v2 stays.** For the D-SCC programme, whose head operates on charged
+frames, none of the three is a candidate. For neutral-only work on this host — bulk MD, phonons,
+pristine or neutral-defect energetics — `base_v3_les_ft` is the best model produced here
+(2.41–4.75 meV/Å against base v2's 5.05–10.96, energies 0.07–0.10 against 0.30–0.74).
+
+**What would test the conclusion** (registered, not run): repeat the direct fine-tune WITH the
+replay head and nothing else changed. If the charged-frame error returns to base v2's level,
+the replay is confirmed as the mechanism; if it does not, the mechanism is something else and
+this reading is wrong. That is one run and it is the obvious next experiment.
