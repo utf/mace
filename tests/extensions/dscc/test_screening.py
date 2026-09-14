@@ -470,3 +470,92 @@ class TestO33Correlation2:
         m.analytic_head_forces = False
         ref = m(_batch([VACP]), compute_force=True)
         assert float((fast["forces"] - ref["forces"]).abs().max()) < 1e-9
+
+
+# ------------------------------------------------------------------- O3.D
+
+
+def _o3d(seed=0, n_radial=4):
+    """O3.D: decoupled head, but the ON-SITE readout reads the base's block 0. Diagnostic."""
+    m = MACEDSCC(_base(seed), r_cut=R_CUT, directional=True, hidden=16, coupling=False,
+                 route_b=True, scf_free=True, decoupled=True, n_radial=n_radial,
+                 standardise_inputs=True, readout_init_scale=0.1, on_site_from_base=True,
+                 kernel=KernelConfig(regime="B", r_g=1.0, r_s=5.0))
+    with torch.no_grad():
+        m.h0.vector_mix.normal_(0.0, 0.3)
+        m.h0.alpha.fill_(0.5)
+        m.h0.beta.fill_(0.5)
+        m.h0.descriptor.c1.normal_(0.0, 0.5)
+        m.h0.descriptor.c2.normal_(0.0, 0.5)
+    m.set_pristine_reference([_batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])])
+    m.set_feature_stats([_batch([_frame(_perovskite(rattle=0.05, seed=s), [0, 0, 0, 0], 0)])
+                         for s in (11, 12, 13)])
+    return m
+
+
+class TestO3DBaseOnSite:
+    def test_the_readouts_are_fed_the_base_block_zero(self):
+        m = _o3d()
+        assert m.readout_scalars(_batch([VACP])).shape[1] == m.n_scalars
+        assert m.h0.sk.feat_mean.shape[1] == m.n_scalars
+        assert m.n_scalars != m.h0.descriptor.scalar_width()      # not the head's own block
+
+    def test_it_DOES_read_the_base_now(self):
+        """The complement of the O3 gate: this arm is supposed to be coupled, so perturbing
+        the base MUST move the head energy. If it does not, the wiring is wrong."""
+        m = _o3d(seed=2)
+        batch = _batch([VACP])
+        before = float(m(dict(batch), compute_force=False)["head_energy"])
+        with torch.no_grad():
+            for p in m.base.parameters():
+                p.add_(torch.randn_like(p) * 0.1)
+        assert abs(float(m(dict(batch), compute_force=False)["head_energy"]) - before) > 1e-6
+
+    def test_the_hoppings_and_directional_block_still_use_the_head_descriptor(self):
+        """Only the on-site term changed. Perturbing the descriptor's own `c1`/`c2` -- which
+        feed the l=1 and l=2 blocks and nothing the base provides -- must still move the
+        energy."""
+        m = _o3d(seed=3)
+        batch = _batch([VACP])
+        before = float(m(dict(batch), compute_force=False)["head_energy"])
+        with torch.no_grad():
+            m.h0.descriptor.c1.add_(0.2)
+        assert abs(float(m(dict(batch), compute_force=False)["head_energy"]) - before) > 1e-6
+
+    def test_forces_match_finite_differences(self):
+        m = _o3d(seed=4)
+        out = m(_batch([VACP]), compute_force=True)
+        h = 1e-4
+        for atom, comp in ((1, 0), (7, 2)):
+            plus, minus = VACP.copy(), VACP.copy()
+            plus.positions[atom, comp] += h
+            minus.positions[atom, comp] -= h
+            e_plus = float(m(_batch([plus]), compute_force=False)["energy"])
+            e_minus = float(m(_batch([minus]), compute_force=False)["energy"])
+            assert float(out["forces"][atom, comp]) == pytest.approx(
+                -(e_plus - e_minus) / (2 * h), abs=3e-6)
+
+    def test_the_analytic_route_is_refused(self):
+        """Its cotangent would have to run through block 0, which the closed form does not
+        carry. Registered as a cost of the diagnostic, gated so it cannot be taken silently."""
+        import mace.modules.dscc.model as mdl
+        real, calls = mdl.h0_position_gradient, []
+        mdl.h0_position_gradient = lambda *a, **k: (calls.append(1), real(*a, **k))[1]
+        try:
+            _o3d(seed=5)(_batch([VACP]), compute_force=True)
+        finally:
+            mdl.h0_position_gradient = real
+        assert calls == []
+
+    def test_a_mixed_batch_matches_per_graph(self):
+        m = _o3d(seed=6)
+        one = m(_batch([VACP]), compute_force=True)
+        mixed = m(_batch([VACP, VAC0]), compute_force=True)
+        assert not mixed["short_circuit"]
+        assert float(mixed["energy"][0] - one["energy"][0]) == pytest.approx(0.0, abs=1e-9)
+
+    def test_it_refuses_a_coupled_head(self):
+        with pytest.raises(ValueError, match="DECOUPLED"):
+            MACEDSCC(_base(7), r_cut=R_CUT, directional=True, hidden=16, coupling=False,
+                     route_b=True, scf_free=True, decoupled=False, on_site_from_base=True,
+                     kernel=KernelConfig(regime="B", r_g=1.0, r_s=5.0))

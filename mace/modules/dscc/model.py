@@ -97,13 +97,17 @@ class MACEDSCC(nn.Module):
     screened: bool = False
     # O3.3: correlation-2 invariants of the head's own A-tensors into the on-site readout.
     correlation2: bool = False
+    # O3.D: the base's block 0 restored for the ON-SITE readout only. Diagnostic, not a
+    # production candidate -- it reintroduces the wait on block 0 and the create_graph
+    # traversal the decoupled head exists to remove.
+    on_site_from_base: bool = False
 
     def __init__(self, base: nn.Module, *, r_cut: float = R_CUT_DEFAULT,
                  kernel: Optional[KernelConfig] = None, sigma_s: float = SIGMA_S,
                  coupling: bool = False, route_b: bool = False, scf_free: bool = False,
                  decoupled: bool = False, n_radial: int = 6, directional: bool = True,
                  screened: bool = False, r_s3: float = R_S3_DEFAULT,
-                 correlation2: bool = False,
+                 correlation2: bool = False, on_site_from_base: bool = False,
                  standardise_inputs: Optional[bool] = None,
                  readout_init_scale: Optional[float] = None,
                  lambda_0: float = LAMBDA_0_DEFAULT, lambda_max: float = LAMBDA_MAX_DEFAULT,
@@ -150,13 +154,18 @@ class MACEDSCC(nn.Module):
         # O3.3: the head's own three-body content. Zero runtime cost -- these are contractions
         # of tensors the descriptor already builds -- and nothing from the base enters.
         self.correlation2 = bool(correlation2)
+        self.on_site_from_base = bool(on_site_from_base)
+        if self.on_site_from_base and not decoupled:
+            raise ValueError("on_site_from_base is the O3.D diagnostic on a DECOUPLED head; "
+                             "a coupled head already reads block 0 everywhere")
         self.h0 = H0(self.atomic_numbers, feature_dim=n_s, n_vectors=n_v, r_cut=self.r_cut,
                      q_cut=q_cut, directional=directional, a_max=a_max, b_max=b_max,
                      hidden=hidden, eta=eta, beta_b=beta_b, beta_a=beta_a,
                      delta_frac=delta_frac, decoupled=self.decoupled, n_radial=n_radial,
                      readout_init_scale=readout_init_scale,
                      screened=self.screened, r_s3=self.r_s3,
-                     correlation2=self.correlation2)
+                     correlation2=self.correlation2,
+                     on_site_from_base=self.on_site_from_base)
         if self.decoupled:
             self.h0.sk.hop_modulation = False
         n_el = len(self.atomic_numbers)
@@ -208,6 +217,7 @@ class MACEDSCC(nn.Module):
                 "decoupled": getattr(self, "decoupled", False),
                 "screened": getattr(self, "screened", False),
                 "correlation2": getattr(self, "correlation2", False),
+                "on_site_from_base": getattr(self, "on_site_from_base", False),
                 "r_s3": getattr(self, "r_s3", R_S3_DEFAULT),
                 "lambda_max": self.lambda_max, "c_q_table": dict(self.c_q_table),
                 "calibration_record": self.calibration_record,
@@ -224,6 +234,7 @@ class MACEDSCC(nn.Module):
         self.decoupled = bool(state.get("decoupled", False))    # O3
         self.screened = bool(state.get("screened", False))      # O3.2
         self.correlation2 = bool(state.get("correlation2", False))   # O3.3
+        self.on_site_from_base = bool(state.get("on_site_from_base", False))   # O3.D
         self.r_s3 = float(state.get("r_s3", R_S3_DEFAULT))
         self.r_split, self.lambda_max = float(state["r_split"]), float(state["lambda_max"])
         self.c_q_table = {int(k): float(v) for k, v in state.get("c_q_table", {}).items()}
@@ -659,7 +670,10 @@ class MACEDSCC(nn.Module):
         decoupled (O3). The saturation report and any other diagnostic that asks what the
         readouts are being fed must go through here, or it reports on a tensor the head
         never sees -- which is a silent wrong answer, not an error, once the shapes agree."""
-        if not self.decoupled:
+        # O3.D: the readouts are fed the base's block 0, so this must report THAT -- the
+        # whole point of this method is that a diagnostic never reports on a tensor the
+        # readouts do not see.
+        if not self.decoupled or getattr(self, "on_site_from_base", False):
             return self.features(self.first_block(self._trunk_data(dict(data))))[0]
         edge_vector = self.head_edge_vectors(data)
         species = data["node_attrs"].argmax(dim=-1)
@@ -799,10 +813,11 @@ class MACEDSCC(nn.Module):
             # O3: a decoupled head reads nothing from the base, so with E_base/F_base cached
             # the base is not evaluated at all -- block 0 and its `create_graph` traversal
             # leave the training step entirely.
-            node_feats = None if self.decoupled else self.first_block(self._trunk_data(strained))
+            node_feats = (None if (self.decoupled and not self.on_site_from_base)
+                          else self.first_block(self._trunk_data(strained)))
             e_base = data["dscc_base_energy"].reshape(num_graphs).to(torch.float64)
             f_base = data["dscc_base_forces"].to(torch.float64)
-        elif self.decoupled:
+        elif self.decoupled and not self.on_site_from_base:
             # O2 folded into O3: the head reads nothing from the base, so the base is DEFERRED
             # until H0 has been assembled and copied to the CPU. Issuing it then lets its GPU
             # window run underneath the CPU eigendecomposition and the fills.
@@ -811,13 +826,17 @@ class MACEDSCC(nn.Module):
             out = self.base_forward(self._trunk_data(strained), training=training,
                                          compute_force=False)
             node_feats, e_base, f_base = out["node_feats"], out["energy"], None
-        deferred_base = self.decoupled and not cached_base
+        # O3.D cannot defer the base: H0's on-site readout needs block 0 to assemble at all.
+        # That is exactly the cost this arm is registered as not being willing to pay in
+        # production, made explicit here rather than hidden.
+        deferred_base = self.decoupled and not cached_base and not self.on_site_from_base
 
         def run_base():
             o = self.base_forward(self._trunk_data(strained), training=training, compute_force=False)
             return o["energy"]
         scalars, vectors = (self._descriptor_placeholders(int(data["node_attrs"].shape[0]), device)
-                            if self.decoupled else self.features(node_feats))
+                            if (self.decoupled and not self.on_site_from_base)
+                            else self.features(node_feats))
         species = data["node_attrs"].argmax(dim=-1)
         edge_vector = positions[receiver] - positions[sender] + shifts
         ptr = data["ptr"]
@@ -870,6 +889,8 @@ class MACEDSCC(nn.Module):
         analytic = (uniform and self.decoupled and self.scf_free and not self.coupling
                     and compute_force and not compute_stress and not create
                     and getattr(self.h0.sk, "screen", None) is None
+                    and not getattr(self, "on_site_from_base", False)   # O3.D: cotangent
+                                                                       # would need block 0
                     and getattr(self, "analytic_head_forces", True))
         analytic_pack = None
         if uniform:

@@ -96,6 +96,7 @@ class TrainConfig:
     decoupled: bool = False            # O3: head-owned atomic basis
     screened: bool = False             # O3.2: three-body bond screening on the hoppings
     correlation2: bool = False         # O3.3: correlation-2 invariants into the on-site readout
+    on_site_from_base: bool = False    # O3.D: block 0 for the on-site readout (diagnostic)
     r_s3: float = 4.5                  # its cutoff, = Q_CUT_DEFAULT
     standardise_inputs: Optional[bool] = None   # A1.1; None = the default for the head kind
     readout_init_scale: Optional[float] = None  # final-layer scale of the readouts

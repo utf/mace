@@ -257,7 +257,7 @@ class H0(nn.Module):
                  decoupled: bool = False, n_radial: int = N_RADIAL_DEFAULT,
                  readout_init_scale: Optional[float] = None,
                  screened: bool = False, r_s3: float = R_S3_DEFAULT,
-                 correlation2: bool = False) -> None:
+                 correlation2: bool = False, on_site_from_base: bool = False) -> None:
         super().__init__()
         self.atomic_numbers = [int(z) for z in atomic_numbers]
         num_elements = len(self.atomic_numbers)
@@ -266,10 +266,17 @@ class H0(nn.Module):
         # attributable to the descriptor and not to normalisation.
         self.decoupled = bool(decoupled)
         self.correlation2 = bool(correlation2)
+        # O3.D (DIAGNOSTIC ONLY, registered as not adoptable): the head keeps its own
+        # descriptor for the hoppings and the directional block, but the ON-SITE readout is
+        # fed the base's block-0 invariants. It exists to attribute the O3 lineage's residual,
+        # not to ship: a head that reads block 0 anywhere must wait for it, needs the cotangent
+        # through it, and returns the `create_graph` traversal to the training step.
+        self.on_site_from_base = bool(on_site_from_base)
         if self.decoupled:
             self.descriptor = GeometricDescriptor(num_elements, float(r_cut), n_radial,
                                                   correlation2=self.correlation2)
-            feature_dim = self.descriptor.scalar_width()   # O3.3 widens this
+            if not self.on_site_from_base:
+                feature_dim = self.descriptor.scalar_width()   # O3.3 widens this
             n_vectors = n_radial
         self.r_cut, self.q_cut = float(r_cut), float(q_cut)
         self.directional = bool(directional)
@@ -471,15 +478,18 @@ class H0(nn.Module):
         graph of every node."""
         edge_vector = edge_vector.to(torch.float64)
         Q_geo = None
+        base_scalars = scalars
         if getattr(self, "decoupled", False):                 # O3: nothing from the base enters H0
             scalars, vectors, Q_geo = self.geometric_inputs(
                 species, edge_index, edge_vector, int(species.shape[0]))
         scalars = scalars.to(torch.float64)
+        site_feats = (base_scalars.to(torch.float64)
+                      if getattr(self, "on_site_from_base", False) else scalars)      # O3.D
         local = torch.arange(scalars.shape[0], device=scalars.device) - batch * n_nodes
         edge_graph = batch[edge_index[0]]
-        H = self.sk.batched(scalars, species, edge_index, edge_vector, local, edge_graph, n_nodes, num_graphs)
+        H = self.sk.batched(site_feats, species, edge_index, edge_vector, local, edge_graph, n_nodes, num_graphs)
         dim = n_nodes * ORBITALS_PER_ATOM
-        levels = self.sk.on_site(scalars, species, None)                              # [N, 2]
+        levels = self.sk.on_site(site_feats, species, None)                           # [N, 2]
         diag = torch.cat([levels[:, :1], levels[:, 1:].expand(-1, 3)], dim=-1)           # [N, 4]
         diag = diag.reshape(num_graphs, dim)
         eye = torch.eye(dim, dtype=H.dtype, device=H.device)
@@ -487,7 +497,7 @@ class H0(nn.Module):
         if self.directional:
             if vectors is None:
                 raise ValueError("the directional block needs the base's l = 1 features")
-            blocks = self.directional_site_blocks(scalars, vectors.to(torch.float64), species,
+            blocks = self.directional_site_blocks(site_feats, vectors.to(torch.float64), species,
                                                   edge_index, edge_vector, Q_geo)
             # Scatter the [N, 4, 4] site blocks onto the block diagonals of [B, 4n, 4n].
             o = torch.arange(ORBITALS_PER_ATOM, device=H.device)
@@ -535,17 +545,22 @@ class H0(nn.Module):
         n = int(species.shape[0])
         edge_vector = edge_vector.to(torch.float64)
         Q_geo = None
+        base_scalars = scalars
         if getattr(self, "decoupled", False):                 # O3, as in `batched`
             scalars, vectors, Q_geo = self.geometric_inputs(species, edge_index, edge_vector, n)
         scalars = scalars.to(torch.float64)
-        H = self.sk(scalars, species, edge_index, edge_vector, madelung=None, n_nodes=n)
-        levels = self.sk.on_site(scalars, species, None)
+        # O3.D: the readouts see the BASE's block 0; the descriptor still drives the hoppings
+        # (which read nothing, the modulation being off) and the directional block's v and Q.
+        site_feats = (base_scalars.to(torch.float64)
+                      if getattr(self, "on_site_from_base", False) else scalars)
+        H = self.sk(site_feats, species, edge_index, edge_vector, madelung=None, n_nodes=n)
+        levels = self.sk.on_site(site_feats, species, None)
         diag = torch.cat([levels[:, :1], levels[:, 1:].expand(-1, 3)], dim=-1).reshape(-1)
         H = H - torch.diag(torch.diagonal(H)) + torch.diag(diag)
         if self.directional:
             if vectors is None:
                 raise ValueError("the directional block needs the base's l = 1 features")
-            H = H + self.directional_block(scalars, vectors.to(torch.float64), species,
+            H = H + self.directional_block(site_feats, vectors.to(torch.float64), species,
                                            edge_index, edge_vector, Q_geo)
         H = 0.5 * (H + H.transpose(0, 1))
         if self.site_shift is not None:
