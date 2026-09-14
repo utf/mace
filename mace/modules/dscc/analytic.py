@@ -189,7 +189,8 @@ def _site_blocks(h0, A0: torch.Tensor, vec: torch.Tensor, Qg: torch.Tensor,
     # contraction below still receives a cotangent in the `[n, n_species, N_r]` layout it
     # knows how to scatter, and autograd supplies the chain rule through the quadratic
     # channels for free.
-    feats = h0.descriptor.invariants(A0, vec, Qg) if h0.descriptor.correlation2 else A0
+    feats = (h0.descriptor.invariants(A0, vec, Qg)
+             if getattr(h0.descriptor, "correlation2", False) else A0)
     levels = h0.sk.on_site(feats, species, None)                            # [N, 2]
     site = torch.diag_embed(torch.cat([levels[:, :1], levels[:, 1:].expand(-1, 3)], dim=-1))
     if h0.directional:

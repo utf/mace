@@ -165,7 +165,7 @@ class GeometricDescriptor(nn.Module):
     def scalar_width(self) -> int:
         """Width of the scalar block the readouts are fed."""
         n0 = self.n_radial * self.num_elements
-        if not self.correlation2:
+        if not getattr(self, "correlation2", False):
             return n0
         nr = self.n_radial
         return n0 + n0 * (n0 + 1) // 2 + nr * (nr + 1) // 2 + 1
@@ -209,7 +209,9 @@ class GeometricDescriptor(nn.Module):
         """`(scalars, v [N, N_r, 3], Q [N, 3, 3])`; `scalars` is the raw `l = 0` block, widened
         by `invariants` when O3.3 is on."""
         A0, v, Q = self.raw(species, edge_index, edge_vector, n_nodes)
-        if self.correlation2:
+        # `getattr`: descriptors pickled before O3.3 have no such attribute, and the whole
+        # O3/O3.1/O3.2 cohort must stay scorable.
+        if getattr(self, "correlation2", False):
             return self.invariants(A0, v, Q), v, Q
         return A0, v, Q
 
@@ -469,7 +471,7 @@ class H0(nn.Module):
         graph of every node."""
         edge_vector = edge_vector.to(torch.float64)
         Q_geo = None
-        if self.decoupled:                 # O3: nothing from the base enters H0
+        if getattr(self, "decoupled", False):                 # O3: nothing from the base enters H0
             scalars, vectors, Q_geo = self.geometric_inputs(
                 species, edge_index, edge_vector, int(species.shape[0]))
         scalars = scalars.to(torch.float64)
@@ -533,7 +535,7 @@ class H0(nn.Module):
         n = int(species.shape[0])
         edge_vector = edge_vector.to(torch.float64)
         Q_geo = None
-        if self.decoupled:                 # O3, as in `batched`
+        if getattr(self, "decoupled", False):                 # O3, as in `batched`
             scalars, vectors, Q_geo = self.geometric_inputs(species, edge_index, edge_vector, n)
         scalars = scalars.to(torch.float64)
         H = self.sk(scalars, species, edge_index, edge_vector, madelung=None, n_nodes=n)
