@@ -3143,3 +3143,32 @@ improving, and the A4000 is otherwise idle until morning, it is extended once mo
 epochs**. The stopping rule for the night is stated here before the result: stop at 300, or
 earlier if forces stop improving or any column starts to rise. Logs kept per wave
 (`_60ep`, `_150ep`).
+
+### W7 RESULT — `base_v3_scratch` (MH-1's architecture, from scratch), complete 2026-09-14 02:28
+
+320 epochs, Stage Two from 256. Validation on the same 154-frame split base v2's gate numbers
+were read on, per component:
+
+| epoch | 49 | 99 | 149 | 199 | 249 | 255 (Stage One end) | 279 | 319 (final) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| energy meV/atom | 10.06 | 1.15 | 1.61 | 1.87 | 2.32 | 1.85 | **0.25** | **0.23** |
+| forces meV/Å | 10.96 | 8.09 | 7.38 | 6.90 | 6.66 | 6.68 | 6.86 | **6.63** |
+| stress meV/Å³ | 2.81 | 0.57 | 0.31 | 0.64 | 0.50 | 0.55 | 0.26 | 0.24 |
+
+| | energy meV/atom | forces meV/Å | stress meV/Å³ |
+|---|---:|---:|---:|
+| base v2 (multihead fine-tune of MH-1, 30 epochs) | 1.16 | 10.23 | **0.16** |
+| **base v3 from scratch (320 epochs)** | **0.23** | **6.63** | 0.24 |
+
+**A from-scratch model with MH-1's architecture beats the fine-tune of MH-1 on this data: 5×
+on energy, 35 % on forces.** base v2 keeps stress (0.16 against 0.24). Two things this does NOT
+say: it is not a statement about MH-1's transferability (this model knows three elements and one
+material, MH-1 knows 89 and everything), and it is not a like-for-like epoch budget (320 epochs
+of 1619 frames against 30 epochs of 1619 + 10 000 replay). It says that for THIS host, with
+this much data, the foundation initialisation and its replay were not what the accuracy was
+coming from.
+
+Stage Two did what it is for, exactly: energy 1.85 → 0.25 meV/atom over epochs 256–279 with
+forces unchanged. Forces were flat from epoch ~200 (6.90 → 6.63 over 120 epochs), so the
+registered shortfall against the README's 200 k-update heuristic (71 k here) cost little on
+forces; whether it cost anything on energy cannot be told from one run.
