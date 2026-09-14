@@ -3294,3 +3294,38 @@ running it long is nearly free.
 
 The remedy the evidence points at is the replay head, which is the one structural difference
 between base v2 and both W7 models — not the epoch count, not the initialisation, and not LES.
+
+### W7 RESULT — `base_v3_les_zero` (MACE-LES from scratch, latent charges zero-initialised)
+
+320 epochs, Stage Two from 256, complete 2026-09-14 04:40. Same architecture, data, E0s, split
+and schedule as `base_v3_scratch`; the ONLY difference is the LES term.
+
+| epoch | 49 | 99 | 149 | 199 | 249 | 255 | 279 | 319 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| energy meV/atom | 4.41 | 7.21 | 6.51 | 6.48 | 4.42 | 5.04 | **0.27** | **0.23** |
+| forces meV/Å | 10.98 | 8.60 | 7.79 | 7.68 | 7.51 | 7.22 | 7.45 | **7.19** |
+| stress meV/Å³ | 1.64 | 0.83 | 1.06 | 0.69 | 1.03 | 0.94 | 0.35 | 0.33 |
+
+| | energy | forces | stress |
+|---|---:|---:|---:|
+| base v2 | 1.16 | 10.23 | **0.16** |
+| base v3 from scratch (no LES) | **0.23** | **6.63** | 0.24 |
+| **base v3 LES, zero-init** | **0.23** | 7.19 | 0.33 |
+
+**Two findings, one about the method and one about the material.**
+
+(i) **The zero-init fixes the instability completely.** The identical configuration with the
+library's default random latent-charge initialisation wandered between 60 and 430 meV/atom and
+diverged to NaN at epoch 118. With the term started at zero the run is stable for all 320
+epochs and Stage Two behaves exactly as it does for the plain model (energy 5.04 → 0.27 over
+epochs 255–279). This is not a tuning preference: one configuration completes and the other
+does not.
+
+(ii) **LES buys nothing here.** Against the plain from-scratch model it is identical on energy
+(0.23), 8 % worse on forces (7.19 vs 6.63) and 38 % worse on stress. A latent Ewald term has
+nothing to add to neutral CsPbCl3 frames at these cell sizes, which is the expected answer for a
+material whose long-range electrostatics are screened and whose training set carries no net
+charge — LES is designed for systems where charge transfer and long-range interactions are not
+captured locally. **It is the wrong test bed for LES, and that is a property of the data, not a
+failure of the method.** The charged frames, where a long-range term might matter, are exactly
+the frames no base is trained on.
