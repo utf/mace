@@ -3128,3 +3128,18 @@ used an unanchored `pkill -f "$N"`, and `base_v3_les` is a PREFIX of `base_v3_le
 killed the healthy zero-init run along with its target. Caught within a minute from the GPU
 memory readout (card 5 at 1 MiB when it should have held a job), restarted from its epoch-56
 checkpoint, and the script now anchors the name with `\b...\b`.
+
+**W7.1 at 150 epochs, and a second extension to 300.** Resumed on the local A4000 (43 s/epoch,
+faster than b3 for this model) and run to 150:
+
+| epoch | 59 | 100 | 125 | 149 |
+|---|---:|---:|---:|---:|
+| forces meV/Å | 6.16 | — | — | **5.69** |
+| energy meV/atom | 0.74 | — | — | **0.48** |
+
+Still monotonic on forces, still no rise in any column: at 150 epochs of NAIVE fine-tuning at
+lr 1e-3 **the drift the guidance warns about has not appeared**. Since the run again ended still
+improving, and the A4000 is otherwise idle until morning, it is extended once more to **300
+epochs**. The stopping rule for the night is stated here before the result: stop at 300, or
+earlier if forces stop improving or any column starts to rise. Logs kept per wave
+(`_60ep`, `_150ep`).
