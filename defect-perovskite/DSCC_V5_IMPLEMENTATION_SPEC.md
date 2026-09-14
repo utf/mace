@@ -3106,3 +3106,25 @@ as `base_v3_les_ft_60ep.log` so the first wave's numbers stay readable on their 
 The registered 60 was chosen because the guide gives a range only for multihead and warns about
 drift; the run ended still improving, so the cap was the binding constraint and not convergence.
 That is the reason for the extension, and it is recorded before the longer run's result is read.
+
+**`base_v3_les` (the documented from-scratch recipe with LES) DIVERGED TO NaN at epoch 118**
+and stayed there for 41 epochs with no recovery; it was stopped at 01:20 on 2026-09-14 rather
+than spend four more hours of a card on a dead run. Its best pre-NaN validation was **10.19
+meV/Å at epoch 101** (energy 22.35) and **8.75 meV/atom at epoch 106** (forces 13.05) — forces
+level with base v2's 10.23, energy an order of magnitude worse, and the energy never settled:
+the last non-NaN epochs read 9.14, 30.30, 61.36 meV/atom on consecutive evaluations.
+
+This is the finding the arm was for, and it is a clean one: **MACE-LES trained from scratch at
+the documented 1 : 100 energy : forces weighting, with the latent-charge readouts at their
+default random initialisation, is unstable on this data.** The long-range Ewald energy is a
+degree of freedom the force term barely constrains; the validation energy wandered between 60
+and 430 meV/atom for a hundred epochs and then the run blew up. `base_v3_les_zero` — the same
+configuration with `--les_zero_readouts`, so the long-range term starts at zero and is learned
+up — was at **4.41 meV/atom and 10.98 meV/Å by epoch 49**, against the unmodified run's 189
+and 16.0 at the same epoch. The fix is not cosmetic.
+
+**A second self-inflicted process bug, recorded like the first.** `scratch_stop.sh base_v3_les`
+used an unanchored `pkill -f "$N"`, and `base_v3_les` is a PREFIX of `base_v3_les_zero`: it
+killed the healthy zero-init run along with its target. Caught within a minute from the GPU
+memory readout (card 5 at 1 MiB when it should have held a job), restarted from its epoch-56
+checkpoint, and the script now anchors the name with `\b...\b`.
