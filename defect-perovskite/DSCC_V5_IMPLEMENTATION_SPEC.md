@@ -3495,3 +3495,43 @@ the inert piece of the head; it is not, and that reorders what is worth working 
 **Optional, not scheduled:** a learning curve for O3.1 and W6 at 50 % of the training frames,
 to separate variance (learning the environment dependence from 785 charged frames) from capacity
 (inheriting it from the neutral PES). It would change how a foundation version is built.
+
+### The `q0` diagnostic (coadvisor's check), 2026-09-14 — the mechanism is SUPPORTED
+
+30 charged 79-atom frames, `q0` recomputed from each model's own `H0` through
+`reference_charges` (not by changing what production exports). W6 s0 against O3.1 s0, same
+fold, same frames.
+
+| shell (Å) | atoms | mean \|Δq0\| (e) | W6 F err | O3.1 F err | O3.1 − W6 | within-shell corr(\|Δq0\|, err) |
+|---|---:|---:|---:|---:|---:|---:|
+| 2–4 | 234 | **0.3418** | 17.09 | 26.92 | +9.82 | +0.446 |
+| 4–6 | 320 | 0.1549 | 12.37 | 17.51 | +5.14 | +0.428 |
+| 6–8 | 991 | 0.0728 | 9.31 | 13.66 | +4.35 | +0.060 |
+| 8–10 | 601 | 0.0834 | 8.31 | 10.23 | +1.92 | +0.090 |
+| 10–12 | 204 | 0.0790 | 8.37 | 10.74 | +2.36 | −0.224 |
+| >12 | 20 | 0.0496 | 6.64 | 7.01 | +0.37 | +0.117 |
+
+**The reference charges differ by 21 %.** Mean `|q0(W6) − q0(O3.1)|` is **0.1135 e** against a
+mean `|q0|` of 0.5396 e, reaching 0.94 e on individual atoms. The two heads do not merely place
+the defect differently; they disagree about the thermal Mulliken charge of ordinary bulk atoms.
+
+**Across shells the two quantities track almost perfectly:** correlation between mean `|Δq0|`
+and the O3.1 − W6 force deficit is **+0.939**, and between mean `|Δq0|` and O3.1's absolute
+force error **+0.963**, over six shells spanning 2 to >12 Å. Both fall by roughly an order of
+magnitude together. This is the coadvisor's prediction and it holds at the level the argument
+is made: `E_host = dqᵀ Γ_LR (s q0)` with `q0` set on EVERY atom by the on-site term, so a worse
+on-site environment model gives a worse far-field force through the host channel, with no
+three-body screening required anywhere.
+
+**Stated with its limit, because the limit matters.** The correlation is between SHELL MEANS.
+The WITHIN-shell per-atom correlation is strong only at 2–6 Å (+0.45, +0.43) and is ~0 or
+negative beyond (+0.06, +0.09, −0.22). So `|Δq0|` predicts which SHELL carries force error and
+not which ATOM within a far shell does. That is consistent with a collective electrostatic
+channel — `Γ_LR` mixes every atom's `q0` into every atom's force, so a per-atom correspondence
+is not expected at long range — but it means the diagnostic supports the mechanism rather than
+proving it atom by atom.
+
+**Consequence for the programme.** The on-site term is not the inert part of the head. It sets
+`q0` on all 79 atoms, `q0` drives the entire far-field force channel, and the O3 lineage's
+remaining deficit tracks the error it makes there. O3.3 and O3.D both act on exactly that term,
+which is now the right place to be working.
