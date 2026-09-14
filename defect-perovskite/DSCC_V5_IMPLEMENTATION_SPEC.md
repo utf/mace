@@ -3212,3 +3212,25 @@ One thing `v3 scratch` does fix: the **159-atom neutral reversal** recorded in W
 than the old base there, 10.96 against 6.51, cause unknown). `v3 scratch` reads 5.35 and is
 better than both at that size, uniformly across shells. The cause of base v2's reversal is still
 not established, but it is not intrinsic to this data or this architecture.
+
+**W7.1 FINAL at 300 epochs** (`base_v3_les_ft`, local A4000, complete 2026-09-14 03:47):
+
+| epoch | 0 | 20 | 59 | 149 | 262 | 299 |
+|---|---:|---:|---:|---:|---:|---:|
+| energy meV/atom | 1.07 | 0.55 | 0.74 | 0.48 | 0.96 | **0.55** |
+| forces meV/Å | 11.99 | 7.32 | 6.16 | 5.69 | 5.26 | **5.19** |
+| stress meV/Å³ | 0.36 | 0.17 | 0.24 | 0.27 | 0.32 | **0.28** |
+
+Against base v2 (1.16 / 10.23 / 0.16) on the same split: **energy 2.1× better, forces 49 %
+lower, stress 1.75× worse.** The forces improved monotonically at every checkpoint — 6.16 at
+60, 5.69 at 150, 5.19 at 300 — and the gain is flattening (0.47 over epochs 60–150, 0.50 over
+150–300, i.e. half the rate per epoch).
+
+**The drift the fine-tuning guidance warns about did not appear at 300 epochs**, five times the
+upper end of the range the page gives for multihead replay, at lr 1e-3 with no replay head at
+all. That is a real result about naive fine-tuning ON THIS DATA and should not be generalised
+past it: this is one host, 1619 frames, and a fine-tune whose LES term started at exactly zero.
+
+**Operational note.** b3's GPU 6 fell off the bus at ~03:45 (GPU 4 had gone earlier). Nothing
+was lost: `base_v3_scratch` had finished on it at 02:28 and `base_v3_les_zero` on GPU 5 was
+unaffected. Recorded because the machine has previously lost every job at once to a card fault.
