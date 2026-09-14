@@ -3535,3 +3535,47 @@ proving it atom by atom.
 `q0` on all 79 atoms, `q0` drives the entire far-field force channel, and the O3 lineage's
 remaining deficit tracks the error it makes there. O3.3 and O3.D both act on exactly that term,
 which is now the right place to be working.
+
+### O3.3 instability, diagnosed — and O3.3b REGISTERED (2026-09-14, before it runs)
+
+O3.3 seeds show discrete loss spikes (up to 79× the median) that O3.1 never shows. Measured,
+with O3.1 on the SAME seeds and folds as the control, and the cosine schedule (lr 2e-3 → 5 %
+over 60 epochs) identical in both:
+
+| run | epochs with `sat` > 0 | max loss / median | dEp95 mean (eV) | dEp95 max |
+|---|---:|---:|---:|---:|
+| O3.1 s1 / s2 / s3 | **0 / 0 / 0** | 19× / 11× / 12× | 0.65–0.67 | 0.88–0.90 |
+| O3.3 s1 / s2 / s3 | **23 / 11 / 44** | 41× / 24× / **79×** | 1.10–1.36 | 1.53–**2.34** |
+
+**It is not input outliers.** The standardised 211-wide block was measured over 4800 atoms:
+max `|z|` is 4.1 (linear `l = 0`), **4.9 (the 171 product channels)**, 6.7 (`A¹·A¹`), 4.1
+(`‖A²‖²`), with essentially nothing beyond 5σ. The quadratic channels are no heavier-tailed
+than the linear ones — the hypothesis that products would blow the tails out is **wrong** and
+is recorded as such.
+
+**It is the A1 bound.** O3.3 spends its extra capacity on a roughly DOUBLED on-site correction
+(dEp95 1.10–1.36 eV against O3.1's 0.65), and where O3.1 never once reaches the barrier knee in
+60 epochs on any seed, O3.3 reaches it in 11 to 44 of them. The correction is
+`Δ_Z tanh(pre)` with `Δ_Z` = 3.079 eV; as `|pre| → 2` the tanh flattens, gradients through it
+become erratic, and occasional batches push past — which is the spike and the damaged fill.
+**Dose-dependent, which is the evidence:** barrier incidence orders the seeds exactly as the
+final error does — s2 (11 epochs → 11.99 meV/Å), s1 (23 → 13.91), s3 (44 → 15.97).
+
+**The barrier is currently weightless.** `sat_weight` 1e-3 times `sat` ≈ 1e-6 is ~1e-9 against a
+loss of 6e-6 — a millionth of the objective. The mechanism A1 registered to prevent exactly this
+has never had the weight to do it; it has simply never been needed before, because no arm until
+now went near the knee.
+
+**Arm O3.3b (registered, user-approved 2026-09-14):** O3.3 with `--sat_weight 1.0`, one change,
+six seeds, everything else identical. At the observed excursion size that makes the barrier
+worth ~20 % of the loss when it fires and ~nothing otherwise, which is what a barrier should be.
+
+**How it reads, written before the result:**
+- **s2's 11.99 survives and the spikes go** → the excursions were optimiser noise, the
+  correlation-2 content is real, and O3.3b is the adoption candidate.
+- **Spikes go but accuracy degrades toward O3.1** → the on-site term genuinely NEEDS more range
+  than A1 allows. Unlike O3 — which was stuck on a species offset with a badly conditioned
+  input — this arm has a clean input and is using twice the correction, so the constraint is
+  the BOUND and not the parameterisation. The next arm is then a registered increase of `Δ_Z`,
+  which is an A1 amendment and needs its own registration.
+- **Spikes remain** → the cause is not the bound and the diagnosis above is wrong.
