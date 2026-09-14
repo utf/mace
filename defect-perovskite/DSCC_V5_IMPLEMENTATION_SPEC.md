@@ -3172,3 +3172,43 @@ Stage Two did what it is for, exactly: energy 1.85 → 0.25 meV/atom over epochs
 forces unchanged. Forces were flat from epoch ~200 (6.90 → 6.63 over 120 epochs), so the
 registered shortfall against the README's 200 k-update heuristic (71 k here) cost little on
 forces; whether it cost anything on energy cannot be told from one run.
+
+### W7 — the base_compare reading, and a QUALIFICATION of "from scratch beats the fine-tune"
+
+`base_compare_n.py`, 2877 frames, identical code, energies after a per-species OLS offset fitted
+on the neutral frames of each base separately (raw median in brackets). Forces per component,
+meV/Å; energies meV/atom.
+
+| data set | frames | old base E | base v2 E | **v3 scratch E** | old base F | base v2 F | **v3 scratch F** |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| pristine, 80 | 639 | 1.15 | 0.30 | **0.06** | 6.82 | 5.05 | **3.21** |
+| neutral vacancy, 79 | 1174 | 1.31 | 0.40 | **0.06** | 13.07 | 10.96 | **4.83** |
+| neutral vacancy, 159 | 17 | 3.08 | 0.74 | **0.09** | 6.51 | 10.96 | **5.35** |
+| charged vacancy, 79 | 1030 | 42.16 | **38.37** | 40.52 | 53.65 | **33.22** | 57.23 |
+| charged vacancy, 159 | 17 | 24.58 | **18.89** | 20.69 | 29.95 | **22.14** | 33.74 |
+
+**The from-scratch base is far better on neutral data and WORSE on charged data, and the
+charged rows are the only out-of-sample measurement in this table.** Every neutral frame is
+in-sample for all three production bases, so those rows measure FIT. No charged frame was ever
+seen by any base, so those rows measure GENERALISATION — and there `v3 scratch` reads **57.23
+meV/Å at 79 atoms against base v2's 33.22**, worse even than the old base's 53.65, with the
+same ordering at 159 atoms (33.74 vs 22.14). By shell the gap is worst exactly where the head
+works: the 2–4 Å shell of a charged 79-atom cell is **132.5 against base v2's 74.9**.
+
+This is the classic shape of a model that has fit its training distribution harder and
+transfers less well off it, and it is the reason the foundation initialisation plus replay was
+chosen in W1: base v2's numbers on neutral data are worse BECAUSE it is anchored to a
+general-purpose representation, and that anchor is what pays on configurations it never saw.
+
+**So the W7 result entry above stands as written but must be read with this:** "from scratch
+beats the fine-tune" is true on the held-out NEUTRAL validation split (0.23 / 6.63 against
+1.16 / 10.23), and false on the charged frames the D-SCC head actually operates on. **For the
+programme's purpose — a base the charge head works against — base v2 remains the better base on
+this evidence, and `base_v3_scratch` is not a candidate to replace it.** The comparison was
+asked for and is reported; the recommendation follows the out-of-sample column, not the
+in-sample one.
+
+One thing `v3 scratch` does fix: the **159-atom neutral reversal** recorded in W1 (base v2 worse
+than the old base there, 10.96 against 6.51, cause unknown). `v3 scratch` reads 5.35 and is
+better than both at that size, uniformly across shells. The cause of base v2's reversal is still
+not established, but it is not intrinsic to this data or this architecture.
