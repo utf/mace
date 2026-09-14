@@ -3726,3 +3726,78 @@ by one cosmetic `node_energy` cast (commit `daaaf10`, pre-dating this work) on a
 LES path never consumes. The changes made here are confined to `mace/tools/` and concern getting
 INTO MACELES — the foundation-loader guard, the fitted shift, and the readout init scale — not
 what it computes.
+
+### O3.3 / O3.3b / O3.D RESULT (2026-09-14) — the three-way reading resolves to branch THREE
+
+All six seeds each, folds as registered, τ = 1.7 per component.
+
+| seed (fold) | W6 | O3 | O3.1 | O3.2 | O3.3 | O3.3b | O3.D |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 0 (0) | 11.22 | 18.82 | 14.59 | 13.78 | 13.20 | 13.58 | 15.74 |
+| 1 (1) | 11.62 | 19.71 | 14.22 | 13.94 | 13.91 | 14.08 | 14.65 |
+| 2 (2) | 11.58 | 18.55 | 15.06 | 13.85 | 11.99 | 12.80 | 15.44 |
+| 3 (3) | 11.23 | 20.48 | 14.82 | 13.89 | 15.64 | 13.07 | 14.16 |
+| 4 (0) | 12.02 | 18.53 | 14.28 | 13.67 | 12.24 | 15.20 | 17.18 |
+| 6 (2) | 11.84 | 18.79 | 14.17 | 14.04 | 15.31 | 13.06 | 14.06 |
+| **median** | **11.60** | **18.81** | **14.44** | **13.87** | **13.55** | **13.32** | **15.04** |
+| spread | 0.80 | 1.95 | 0.89 | 0.37 | 3.65 | 2.39 | 3.12 |
+
+| comparison | mean d | 90 % CI | reading |
+|---|---:|---|---|
+| W6 − O3.3 | −2.127 | [−3.487, −0.767] | INFERIOR, 1.3 τ |
+| W6 − O3.3b | −2.046 | [−2.678, −1.414] | INFERIOR, 1.2 τ |
+| **W6 − O3.D** | **−3.620** | **[−4.521, −2.718]** | **INFERIOR, 2.1 τ** |
+| O3.1 − O3.3 | +0.810 | [−0.551, +2.172] | inconclusive |
+| O3.1 − O3.3b | +0.891 | [−0.046, +1.829] | inconclusive |
+| **O3.1 − O3.D** | **−0.682** | [−1.702, +0.338] | inconclusive (O3.D WORSE) |
+
+**O3.D — block 0 for the on-site readout — is the WORST arm since O3 itself.** Median 15.04,
+worse than its own parent O3.1 (14.44), 2.1 τ inferior to W6, and worse than O3.1 at EVERY
+shell including the flanking Pb (39.98 against 37.41). **The registered three-way reading
+therefore lands on branch three: neither the head's own correlation-2 content nor the base's
+block-0 content recovers the 2.3 meV/Å. The deficit is not in what the on-site readout is
+fed.**
+
+**And O3.D is the first arm since O3 to saturate.** On-site p95 shift **2.767 eV** against
+`Δ_Z` = 3.079, with a nonzero saturated fraction (0.002). Giving the readout 512 base invariants
+makes it ask for a larger correction than the bound allows — the same failure O3 had, reached by
+the opposite route (O3 through a badly conditioned input, O3.D through too rich a one).
+
+**O3.D is also the only arm to FAIL G2a.** Energy at 79 atoms 0.6621 meV/atom against W6's
+0.5151: mean d **+0.134**, one-sided 95 % upper **+0.213**, outside the 0.10 margin.
+
+| arm | E79 (meV/atom) | vs W6, 95 % upper | G2b median (meV) | on-site p95 shift (eV) |
+|---|---:|---|---:|---:|
+| W6 | 0.5151 | — | +5.0 | 0.846 |
+| O3.1 | 0.4552 | −0.0245 PASS | −1.8 | 0.740 |
+| O3.2 | 0.4340 | −0.0314 PASS | −0.3 | 0.722 |
+| **O3.3** | **0.3387** | **−0.1108 PASS** | +3.2 | 1.526 |
+| **O3.3b** | **0.3395** | **−0.1280 PASS** | +0.3 | 1.569 |
+| O3.D | 0.6621 | **+0.2132 FAIL** | +0.6 | 2.767 |
+
+**The finding worth carrying forward is a DECOUPLING of energy from forces.** O3.3 doubles the
+on-site correction it uses (p95 1.53 eV against O3.1's 0.74) and converts that almost entirely
+into ENERGY: E79 improves 26 % over O3.1 and is **34 % better than the shipped W6 head**, the
+best energies anywhere in this programme. The same capacity buys only +0.81 meV/Å of force,
+which does not clear τ. So the correlation-2 content is real, is used, and is worth having — it
+simply is not what the force deficit is made of.
+
+**Shell localisation, cohort medians:**
+
+| shell (Å) | W6 | O3.1 | O3.2 | O3.3 | O3.3b | O3.D |
+|---|---:|---:|---:|---:|---:|---:|
+| 2–4 | 19.83 | 25.54 | 24.99 | 22.82 | 22.63 | 27.30 |
+| 4–6 | 13.81 | 17.49 | 17.00 | 15.72 | 15.64 | 17.87 |
+| 6–8 | 9.73 | 12.62 | 12.09 | 11.92 | 11.78 | 12.75 |
+| 8–10 | 9.86 | 11.11 | 10.25 | 11.22 | 11.15 | 11.60 |
+| 10–12 | 9.02 | 10.48 | 9.38 | 10.51 | 10.62 | 10.74 |
+| **flanking Pb** | 27.40 | 37.41 | 35.55 | **33.64** | **33.21** | 39.98 |
+| first-shell Cl | 16.55 | 20.56 | 20.26 | 17.96 | 18.14 | 21.43 |
+| rest of 2–4 | 10.26 | 11.85 | 11.18 | 11.76 | 12.25 | 13.66 |
+
+O3.3/O3.3b improve on O3.1 in the NEAR field (flanking Pb 37.41 → 33.2, first-shell Cl
+20.56 → 18.0) and are flat-to-worse beyond 8 Å — the opposite localisation to O3.2's, and the
+right one for an on-site change acting through the near field.
+
+**Next arm indicated by the registration**, not opened: the deficit is in the rank-1 block, and
+the arm is the equivariant correlation-2 product for `v_i`. It is registered before running.
