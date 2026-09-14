@@ -3801,3 +3801,70 @@ right one for an on-site change acting through the near field.
 
 **Next arm indicated by the registration**, not opened: the deficit is in the rank-1 block, and
 the arm is the equivariant correlation-2 product for `v_i`. It is registered before running.
+
+## O5 — crystal-field head: REGISTRATION (2026-09-14, before either arm runs)
+
+*(Coadvisor ruling. Adopted as specified. This restores in closed form what the original
+specification's §8.2 carried and v4 simplified away.)*
+
+**One damped-Coulomb primitive over neighbours generates all three on-site channels:**
+
+    V_i   = sum_j q_{Z_j} erf(r_ij / a_{Z_i Z_j}) / r_ij  f_cut(r_ij)      potential  (l = 0)
+    E_i   = -grad_i V_i                                                     field      (l = 1)
+    grad E_i = traceless Hessian of V_i                                     gradient   (l = 2)
+
+    d eps_i = s_Z (V_i - V_bar_Z)               on-site shift, linear, no MLP
+    a_i (E_i . T_sp),  b_i (grad E_i : T_pp)    rank-1 and rank-2 blocks, species scalars
+    t_ij -> t_ij [1 + beta_{ZZ'} (V_i - V_j)^2] hopping as bond polarity
+
+**Parameters:** one charge and one damping length per species; a scale per species per channel;
+one polarity coefficient per pair. **Charges are initialised from the pristine Mulliken means
+the head already computes**, so nothing external enters and the arm keeps O3's defining property.
+
+**Why this and not more angular machinery.** Everything is TWO-BODY: the analytic force kernel
+extends by a closed-form `dV_i/dR_j`, no triplet list is needed, and CUDA capture still works —
+all three of which O3.2's angular screening gave up. The rank-1 block gets the FIELD, which is
+what drives s–p mixing at a Pb next to a vacancy; the rank-2 block gets the field GRADIENT,
+which is the p-splitting. That is the physics Arm 1 found the directional block to carry, now
+with its correct radial form instead of a neighbour-direction sum. The bulk `q0` modulation
+follows from the potential's bond-length dependence rather than from a readout — which is
+exactly the channel the `q0` diagnostic showed carries the residual (+0.939 across shells).
+`(V_i - V_j)^2` is Harrison's polar-bond renormalisation and is a real candidate for the ~20 %
+modulation W6 uses on the flanking bonds that O3.2's angular screening could not stand in for.
+
+### Arm O5a — the crystal-field head
+
+O3.3b with the on-site, rank-1 and rank-2 inputs replaced by `(V_i, E_i, grad E_i)`; signed
+species charges initialised from the pristine Mulliken means; species damping lengths; linear
+readouts. Hopping modulation as polarity, `beta` **zero-initialised** so the arm starts exactly
+at O3.3b. A1.1 standardisation stays on the scalar input and **the B-basis is kept as a second
+`l = 0` input** (it earned that: it is worth 34 % on energies).
+
+### Arm O5b — radial-resolution control
+
+O3.3b with `N_r = 16` against the standing 6. One flag. Part of the stall may be nothing more
+than six Bessels, and this is the cheapest way to find out.
+
+### Gates (both arms, registered before results)
+
+Paired TOST vs W6 (τ = 1.7) and vs O3.3b; the by-shell table with flanking Pb and first-shell
+Cl called out; **the `q0` disagreement with W6 by shell**, which is the diagnostic that
+identified this target; saturation including whether the new channels merely re-saturate the
+on-site bound; G2a and G2b; the analytic-force FD gate; `capture.fits()`.
+
+### Reading, written before the results
+
+- **O5a closes the near field and the `q0` disagreement** → adopt the crystal-field head.
+- **O5b closes it and O5a does not** → the basis was simply under-resolved, and the physics
+  argument was unnecessary.
+- **Neither** → the deficit is the pretrained prior, and the cached-Jacobian W6 (below) is the
+  model.
+
+### Parked, explicitly
+
+The `Δ_Z` amendment, triplet screening, and distillation. **Also registered but not scheduled:
+the cached block-0 Jacobian.** Block 0 is frozen, so `d(features)/dR` is parameter-independent
+and cacheable per frame (sparse within 6 Å, tens of MB/frame). The force loss would then need no
+`create_graph` traversal of block 0, taking W6's training from 124 s/epoch to roughly the
+decoupled head's speed **with no change to the model**. That is the fallback if the physics arms
+do not land, and it is worth doing on its own merits.
