@@ -539,13 +539,19 @@ class SlaterKosterH(nn.Module):
                  decay_learned: bool = False,
                  decay_log_beta: float = DECAY_LOG_BETA_DEFAULT,
                  readout_init_scale: Optional[float] = None,
-                 screened: bool = False, r_s3: float = R_S3_DEFAULT) -> None:
+                 screened: bool = False, r_s3: float = R_S3_DEFAULT,
+                 polarity: bool = False) -> None:
         super().__init__()
         # O3.2: the three-body screening, when the arm is on. `None` -- not a disabled
         # module -- when it is off, so an unscreened checkpoint has no parameter for it and
         # `state_dict` round trips between the arms are a shape error rather than a silent
         # zero.
         self.screen = BondScreening(num_elements, r_s3) if screened else None
+        # O5a: Harrison's polar-bond renormalisation, `t_ij -> t_ij [1 + beta_ZZ' (V_i - V_j)^2]`.
+        # ZERO-INITIALISED, so the arm starts exactly at its parent. A real candidate for the
+        # ~20 % modulation W6 uses on the flanking bonds, which O3.2's angular screening could
+        # not stand in for -- and unlike that screening it is two-body.
+        self.polarity = nn.Parameter(torch.zeros(num_elements, num_elements)) if polarity else None
                 
         if envelope not in ENVELOPES:
             raise ValueError(f"unknown radial envelope {envelope!r}; expected one of "
@@ -731,7 +737,8 @@ class SlaterKosterH(nn.Module):
         return self.modulation(pre_u)[inverse], pre_u[inverse]
 
     def integrals_fast(self, node_feats, node_species, src, dst, r,
-                       screen_pre: Optional[torch.Tensor] = None) -> torch.Tensor:
+                       screen_pre: Optional[torch.Tensor] = None,
+                       potential: Optional[torch.Tensor] = None) -> torch.Tensor:
         """`integrals` with the MLP deduplicated by node pair (O1). Same value; the gate
         `test_integrals_fast_matches_the_reference` holds it to 1e-12.
 
@@ -749,6 +756,12 @@ class SlaterKosterH(nn.Module):
         if radial.dim() == 1:
             radial = radial.unsqueeze(-1)
         t_sk = self.v0(node_species[src], node_species[dst]) * radial
+        if getattr(self, "polarity", None) is not None and potential is not None:
+            b = self.polarity.to(t_sk.dtype)
+            b = 0.5 * (b + b.transpose(0, 1))            # Hermiticity, as for the screening
+            dv = potential[src] - potential[dst]
+            self._audit_store("polarity", (dv * dv).unsqueeze(-1))
+            t_sk = t_sk * (1.0 + b[node_species[src], node_species[dst]] * (dv * dv)).unsqueeze(-1)
         pre = None
         if getattr(self, "hop_modulation", True):
             _, pre = self.pair_correction(node_feats, node_species, src, dst)
@@ -927,7 +940,8 @@ class SlaterKosterH(nn.Module):
 
     def forward(self, node_feats, node_species, edge_index, edge_vector,
                 madelung: Optional[torch.Tensor] = None,
-                n_nodes: Optional[int] = None) -> torch.Tensor:
+                n_nodes: Optional[int] = None,
+                potential: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Dense `H`, `[4N, 4N]`, for ONE graph.
 
         Dense on purpose at training sizes: 4N <= 636 here, so `eigh` plus native autograd is
@@ -943,7 +957,7 @@ class SlaterKosterH(nn.Module):
 
         screen_pre = (self.screen(edge_index, edge_vector, node_species)
                       if getattr(self, "screen", None) is not None else None)
-        v = self.integrals_fast(node_feats, node_species, src, dst, r, screen_pre)
+        v = self.integrals_fast(node_feats, node_species, src, dst, r, screen_pre, potential)
         blocks = sk_block(direction, v)                       # [n_edges, 4, 4]
 
         H = torch.zeros(dim, dim, device=node_feats.device, dtype=node_feats.dtype)
@@ -966,7 +980,7 @@ class SlaterKosterH(nn.Module):
 
     def batched(self, node_feats, node_species, edge_index, edge_vector,
                 local: torch.Tensor, edge_graph: torch.Tensor, n_nodes: int,
-                num_graphs: int) -> torch.Tensor:
+                num_graphs: int, potential: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Dense `H` for a whole batch of EQUAL-SIZED graphs at once: `[B, 4n, 4n]`.
 
         Section 1.1. The per-graph `forward` above is the reference and stays the reference:
@@ -987,7 +1001,7 @@ class SlaterKosterH(nn.Module):
         # screening wants -- a triplet never crosses a graph because no edge does.
         screen_pre = (self.screen(edge_index, edge_vector, node_species)
                       if getattr(self, "screen", None) is not None else None)
-        v = self.integrals_fast(node_feats, node_species, src, dst, r, screen_pre)
+        v = self.integrals_fast(node_feats, node_species, src, dst, r, screen_pre, potential)
         blocks = sk_block(direction, v)                        # [n_edges, 4, 4]
 
         dim = int(n_nodes) * ORBITALS_PER_ATOM

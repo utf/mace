@@ -103,6 +103,11 @@ def main() -> None:
                     help="O3.3: append the correlation-2 invariants of the head's own A-tensors "
                          "(l=0 pairwise products, A1.A1 over radial channels, ||A2||^2) to the "
                          "scalar block the on-site readout is fed. Zero runtime cost")
+    ap.add_argument("--crystal_field", type=int, default=0,
+                    help="O5a: the damped-Coulomb crystal field. V goes into the scalar block "
+                         "(the B-basis stays), the FIELD takes the rank-1 slot and the field "
+                         "GRADIENT the rank-2 slot, and the hopping gains Harrison's polarity "
+                         "term. Two-body throughout")
     ap.add_argument("--on_site_from_base", type=int, default=0,
                     help="O3.D (diagnostic, not adoptable): feed the ON-SITE readout the base's "
                          "block-0 invariants while the head's own descriptor still drives the "
@@ -130,6 +135,7 @@ def main() -> None:
                       screened=bool(args.screened), r_s3=args.r_s3,
                       correlation2=bool(args.correlation2),
                       on_site_from_base=bool(args.on_site_from_base),
+                      crystal_field=bool(args.crystal_field),
                       standardise_inputs=(None if args.standardise < 0 else bool(args.standardise)),
                       readout_init_scale=(None if args.readout_init_scale < 0 else args.readout_init_scale),
                       directional=bool(args.directional), regime=args.regime, gap_weight=args.gap_weight,
@@ -149,6 +155,7 @@ def main() -> None:
                      screened=cfg.screened, r_s3=cfg.r_s3,
                      correlation2=cfg.correlation2,
                      on_site_from_base=cfg.on_site_from_base,
+                     crystal_field=cfg.crystal_field,
                      readout_init_scale=cfg.readout_init_scale,
                      kernel=KernelConfig(regime=cfg.regime),
                      eta=args.eta, beta_b=args.beta_b, beta_a=args.beta_a,
@@ -156,6 +163,9 @@ def main() -> None:
                      scf=ScfOptions(n_max=args.n_max)).to(args.device)
     logging.info("A1.1: standardisation %s, readout final scale %.3f",
                  "ON" if model.standardise_inputs else "OFF", float(model.h0.sk.readout_init_scale))
+    if model.crystal_field:
+        logging.info("O5a: crystal field ON (charges are set from the pristine Mulliken means "
+                     "later, in prepare(); polarity zero-init)")
     if model.on_site_from_base:
         logging.info("O3.D: the ON-SITE readout reads the base's block 0 (%d wide); the "
                      "descriptor still drives hoppings and the directional block. DIAGNOSTIC "

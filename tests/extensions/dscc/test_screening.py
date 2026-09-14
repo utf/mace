@@ -559,3 +559,128 @@ class TestO3DBaseOnSite:
             MACEDSCC(_base(7), r_cut=R_CUT, directional=True, hidden=16, coupling=False,
                      route_b=True, scf_free=True, decoupled=False, on_site_from_base=True,
                      kernel=KernelConfig(regime="B", r_g=1.0, r_s=5.0))
+
+
+# ------------------------------------------------------------------- O5a
+
+
+def _o5a(seed=0, n_radial=4):
+    """O5a: the damped-Coulomb crystal field. Potential into the scalar block beside the
+    B-basis, field into the rank-1 slot, field gradient into the rank-2 slot, polarity on the
+    hoppings."""
+    m = MACEDSCC(_base(seed), r_cut=R_CUT, directional=True, hidden=16, coupling=False,
+                 route_b=True, scf_free=True, decoupled=True, n_radial=n_radial,
+                 standardise_inputs=True, readout_init_scale=0.1, correlation2=True,
+                 crystal_field=True, kernel=KernelConfig(regime="B", r_g=1.0, r_s=5.0))
+    with torch.no_grad():
+        m.h0.vector_mix.normal_(0.0, 0.3)
+        m.h0.alpha.fill_(0.5)
+        m.h0.beta.fill_(0.5)
+        m.h0.descriptor.c1.normal_(0.0, 0.5)
+        m.h0.descriptor.c2.normal_(0.0, 0.5)
+    m.set_pristine_reference([_batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])])
+    m.set_feature_stats([_batch([_frame(_perovskite(rattle=0.05, seed=s), [0, 0, 0, 0], 0)])
+                         for s in (11, 12, 13)])
+    return m
+
+
+class TestO5aCrystalField:
+    def test_the_charges_are_set_from_the_pristine_mulliken_means(self):
+        """Left at their zero initialisation the field is identically zero and the arm is a
+        no-op -- the failure that wasted two LES runs. They must be non-zero AND equal to the
+        head's own q0_pristine."""
+        m = _o5a()
+        q = m.h0.cfield.charge
+        assert float(q.abs().max()) > 1e-6, "crystal-field charges never left zero"
+        assert torch.allclose(q.double(), m.q0_pristine.double(), atol=0)
+
+    def test_the_radial_derivatives_are_exact(self):
+        """g' and g'' in closed form against autograd -- the analytic force kernel will need
+        them, and the field gradient is wrong everywhere if g'' is."""
+        cf = _o5a().h0.cfield
+        r = torch.linspace(0.8, 0.99 * cf.r_cut, 50, dtype=torch.float64, requires_grad=True)
+        a = torch.full_like(r, 0.9)
+        g, dg, d2g = cf.radial(r, a)
+        g1 = torch.autograd.grad(g.sum(), r, create_graph=True)[0]
+        g2 = torch.autograd.grad(g1.sum(), r)[0]
+        assert float((dg - g1).abs().max()) < 1e-12
+        assert float((d2g - g2).abs().max()) < 1e-12
+
+    def test_the_cutoff_is_masked_in_the_second_derivative(self):
+        """`T` and `T'` vanish at the clamp on their own; `T''` does NOT -- it goes to
+        +72/r_cut^2 there. Without the mask the field gradient is wrong for every pair beyond
+        the cutoff, which is most of them."""
+        cf = _o5a().h0.cfield
+        r = torch.tensor([cf.r_cut * 1.01, cf.r_cut * 2.0], dtype=torch.float64)
+        g, dg, d2g = cf.radial(r, torch.full_like(r, 0.9))
+        assert float(g.abs().max()) == 0.0
+        assert float(dg.abs().max()) == 0.0
+        assert float(d2g.abs().max()) == 0.0
+
+    def test_field_and_gradient_are_the_derivatives_of_the_potential(self):
+        m = _o5a(seed=2)
+        cf = m.h0.cfield
+        batch = _batch([VACP])
+        species = batch["node_attrs"].argmax(dim=-1)
+        pos = batch["positions"].clone().double().requires_grad_(True)
+        ei = batch["edge_index"]
+        shifts = torch.einsum("ei,eij->ej", batch["unit_shifts"].double(),
+                              batch["cell"].view(-1, 3, 3).double()[batch["batch"][ei[0]]])
+        build = lambda p: cf(species, ei, p[ei[1]] - p[ei[0]] + shifts, int(species.shape[0]))
+        V, E, GE = build(pos)
+        for i in (0, 5, 11):
+            gi = torch.autograd.grad(build(pos)[0][i], pos, create_graph=True)[0][i]
+            assert float((E[i] + gi).abs().max()) < 1e-9          # E = -grad V
+            H = torch.stack([torch.autograd.grad(gi[k], pos, retain_graph=True)[0][i]
+                             for k in range(3)])
+            H = H - torch.diagonal(H).sum() * torch.eye(3, dtype=H.dtype) / 3.0
+            assert float((GE[i] - H).abs().max()) < 1e-9          # traceless Hessian
+        assert float(torch.diagonal(GE, dim1=-2, dim2=-1).sum(-1).abs().max()) < 1e-12
+
+    def test_zero_polarity_leaves_the_hoppings_alone(self):
+        """`beta` is zero-initialised, so the modulation factor is exactly 1."""
+        m = _o5a(seed=3)
+        assert float(m.h0.sk.polarity.abs().max()) == 0.0
+        before = float(m(_batch([VACP]), compute_force=False)["head_energy"])
+        with torch.no_grad():
+            m.h0.sk.polarity.add_(0.05)
+        assert abs(float(m(_batch([VACP]), compute_force=False)["head_energy"]) - before) > 1e-6
+
+    def test_the_channels_are_alive_after_standardisation(self):
+        m = _o5a(seed=4)
+        batch = _batch([VACP])
+        raw = m.readout_scalars(batch)
+        std = m.h0.sk.standardise(raw, batch["node_attrs"].argmax(dim=-1))
+        assert bool(torch.isfinite(std).all())
+        assert float(std[:, -3:].std(dim=0).min()) > 1e-10, "a crystal-field channel is dead"
+
+    def test_forces_match_finite_differences(self):
+        m = _o5a(seed=5)
+        with torch.no_grad():
+            m.h0.sk.polarity.add_(0.02)          # exercise the polarity term too
+        out = m(_batch([VACP]), compute_force=True)
+        h = 1e-4
+        for atom, comp in ((1, 0), (7, 2)):
+            plus, minus = VACP.copy(), VACP.copy()
+            plus.positions[atom, comp] += h
+            minus.positions[atom, comp] -= h
+            e_plus = float(m(_batch([plus]), compute_force=False)["energy"])
+            e_minus = float(m(_batch([minus]), compute_force=False)["energy"])
+            assert float(out["forces"][atom, comp]) == pytest.approx(
+                -(e_plus - e_minus) / (2 * h), abs=3e-6)
+
+    def test_it_still_reads_nothing_from_the_base(self):
+        m = _o5a(seed=6)
+        batch = _batch([VACP])
+        before = float(m(dict(batch), compute_force=False)["head_energy"])
+        with torch.no_grad():
+            for p in m.base.parameters():
+                p.add_(torch.randn_like(p) * 0.1)
+        assert float(m(dict(batch), compute_force=False)["head_energy"]) == before
+
+    def test_a_mixed_batch_matches_per_graph(self):
+        m = _o5a(seed=7)
+        one = m(_batch([VACP]), compute_force=True)
+        mixed = m(_batch([VACP, VAC0]), compute_force=True)
+        assert not mixed["short_circuit"]
+        assert float(mixed["energy"][0] - one["energy"][0]) == pytest.approx(0.0, abs=1e-9)

@@ -243,6 +243,100 @@ class GeometricDescriptor(nn.Module):
         return A0, v, Q
 
 
+class CrystalField(nn.Module):
+    """O5: the damped-Coulomb primitive that generates all three on-site channels.
+
+        V_i      = sum_j q_{Z_j} erf(r_ij / a_{Z_i Z_j}) / r_ij  f_cut(r_ij)     (l = 0)
+        E_i      = -grad_i V_i                                                    (l = 1)
+        grad E_i = traceless Hessian of V_i                                       (l = 2)
+
+    This is what the original specification's section 8.2 carried and v4 simplified away. It
+    restores the crystal field in CLOSED FORM: the rank-1 block gets the FIELD, which is what
+    drives s-p mixing at a Pb next to a vacancy, and the rank-2 block gets the field GRADIENT,
+    which is the p-splitting -- the physics Arm 1 found the directional block to carry, with
+    its correct radial form instead of a neighbour-direction sum.
+
+    EVERYTHING IS TWO-BODY. No triplet list, so `capture` still works, and the analytic force
+    kernel extends by a closed-form `dV_i/dR_j` rather than the three-body term O3.2 needed.
+
+    Parameters: one signed charge and one damping length per species, nothing else. The charges
+    are initialised from the head's own pristine Mulliken means, so nothing external enters and
+    the decoupled head stays decoupled.
+    """
+
+    def __init__(self, num_elements: int, r_cut: float) -> None:
+        super().__init__()
+        self.num_elements = int(num_elements)
+        self.r_cut = float(r_cut)
+        # Signed charge per species. Overwritten from the pristine Mulliken means by
+        # `set_crystal_field_charges`; the init here is the formal-valence sign pattern so the
+        # module is usable before that runs (and so a unit test does not depend on it).
+        self.charge = nn.Parameter(torch.zeros(num_elements))
+        # Damping length per species PAIR, positive by construction through softplus.
+        self.damp_raw = nn.Parameter(torch.zeros(num_elements, num_elements))
+
+    def damping(self) -> torch.Tensor:
+        """`a_{Z Z'}` in Angstrom, symmetric and positive. softplus(0) = 0.693, so the default
+        damping is ~0.69 A -- short compared with the 2.8 A first shell, i.e. the primitive is
+        close to bare Coulomb at bonding range and regular at the origin."""
+        a = torch.nn.functional.softplus(self.damp_raw)
+        return 0.5 * (a + a.transpose(0, 1))
+
+    def radial(self, r: torch.Tensor, a: torch.Tensor):
+        """`(g, g', g'')` for `g(r) = erf(r/a)/r * f_cut(r)`, all closed form.
+
+        The second derivative is needed for the field GRADIENT, and writing it here rather than
+        taking autograd twice is what keeps the analytic force kernel a possibility.
+        """
+        rr = r.clamp_min(1e-9)
+        x = rr / a
+        # erf and its derivatives
+        E0 = torch.erf(x)
+        c = 2.0 / (a * math.sqrt(math.pi))
+        E1 = c * torch.exp(-x * x)                                   # d erf(r/a) / dr
+        E2 = -2.0 * rr / (a * a) * E1                                # d2
+        phi = E0 / rr
+        dphi = E1 / rr - E0 / rr ** 2
+        d2phi = E2 / rr - 2.0 * E1 / rr ** 2 + 2.0 * E0 / rr ** 3
+        # H0's own taper, so the head keeps one smoothness class everywhere
+        xc = (rr / self.r_cut).clamp(max=1.0)
+        T = (1.0 - xc ** 6) ** 2
+        dT = -12.0 * xc ** 5 * (1.0 - xc ** 6) / self.r_cut
+        # MASKED. `T` and `dT` vanish of their own accord at the clamp because they carry a
+        # factor (1 - x^6); `d2T` does NOT -- it goes to +72/r_cut^2 there, which is the
+        # one-sided limit from inside and not the value of a function that is identically zero
+        # outside. Without this mask the field gradient is wrong for every pair beyond r_cut,
+        # which is most of them.
+        inside = (rr < self.r_cut).to(rr.dtype)
+        d2T = -12.0 * (5.0 * xc ** 4 - 11.0 * xc ** 10) / self.r_cut ** 2 * inside
+        g = phi * T
+        dg = dphi * T + phi * dT
+        d2g = d2phi * T + 2.0 * dphi * dT + phi * d2T
+        return g, dg, d2g
+
+    def forward(self, species: torch.Tensor, edge_index: torch.Tensor,
+                edge_vector: torch.Tensor, n_nodes: int):
+        """`(V [N], E [N, 3], GE [N, 3, 3] traceless)`."""
+        src, dst = edge_index[0], edge_index[1]
+        r = edge_vector.norm(dim=-1).clamp_min(1e-9)
+        u = edge_vector / r.unsqueeze(-1)                            # i -> j
+        z_i, z_j = species[src], species[dst]
+        a = self.damping().to(edge_vector.dtype)[z_i, z_j]
+        q = self.charge.to(edge_vector.dtype)[z_j]
+        g, dg, d2g = self.radial(r, a)
+        V = torch.zeros(n_nodes, dtype=edge_vector.dtype, device=edge_vector.device).index_add(0, src, q * g)
+        # E = -grad_i V. With d = R_j - R_i, dr/dR_i = -u, so -grad_i = +sum q g' u.
+        E = torch.zeros(n_nodes, 3, dtype=edge_vector.dtype, device=edge_vector.device).index_add(
+            0, src, (q * dg).unsqueeze(-1) * u)
+        # Hessian of V wrt R_i: g'' u u^T + g' (I - u u^T) / r
+        eye = torch.eye(3, dtype=edge_vector.dtype, device=edge_vector.device)
+        uu = u.unsqueeze(-1) * u.unsqueeze(-2)
+        Hs = (q * d2g).reshape(-1, 1, 1) * uu + (q * dg / r).reshape(-1, 1, 1) * (eye - uu)
+        GE = torch.zeros(n_nodes, 3, 3, dtype=edge_vector.dtype, device=edge_vector.device).index_add(0, src, Hs)
+        GE = GE - torch.diagonal(GE, dim1=-2, dim2=-1).sum(-1).reshape(-1, 1, 1) * eye / 3.0
+        return V, E, GE
+
+
 class H0(nn.Module):
     """The runtime Hamiltonian for ONE graph (dense; the batched path stacks equal sizes)."""
 
@@ -257,7 +351,8 @@ class H0(nn.Module):
                  decoupled: bool = False, n_radial: int = N_RADIAL_DEFAULT,
                  readout_init_scale: Optional[float] = None,
                  screened: bool = False, r_s3: float = R_S3_DEFAULT,
-                 correlation2: bool = False, on_site_from_base: bool = False) -> None:
+                 correlation2: bool = False, on_site_from_base: bool = False,
+                 crystal_field: bool = False) -> None:
         super().__init__()
         self.atomic_numbers = [int(z) for z in atomic_numbers]
         num_elements = len(self.atomic_numbers)
@@ -272,11 +367,19 @@ class H0(nn.Module):
         # not to ship: a head that reads block 0 anywhere must wait for it, needs the cotangent
         # through it, and returns the `create_graph` traversal to the training step.
         self.on_site_from_base = bool(on_site_from_base)
+        # O5a: the damped-Coulomb crystal field. Adds V to the scalar block (the B-basis stays
+        # as a second l = 0 input) and REPLACES the rank-1/rank-2 inputs with the field and its
+        # gradient. Everything two-body, so capture and a closed-form force stay available.
+        self.crystal_field = bool(crystal_field)
+        if self.crystal_field:
+            self.cfield = CrystalField(num_elements, float(r_cut))
         if self.decoupled:
             self.descriptor = GeometricDescriptor(num_elements, float(r_cut), n_radial,
                                                   correlation2=self.correlation2)
             if not self.on_site_from_base:
                 feature_dim = self.descriptor.scalar_width()   # O3.3 widens this
+                if self.crystal_field:
+                    feature_dim += 3        # V, |E|, tr(grad E . grad E)
             n_vectors = n_radial
         self.r_cut, self.q_cut = float(r_cut), float(q_cut)
         self.directional = bool(directional)
@@ -289,7 +392,8 @@ class H0(nn.Module):
                                 decay_learned=True, hop_log_beta=self.eta,
                                 on_site_range=on_site_range, hidden=hidden,
                                 readout_init_scale=readout_init_scale,
-                                screened=self.screened, r_s3=self.r_s3)
+                                screened=self.screened, r_s3=self.r_s3,
+                                polarity=self.crystal_field)
         harrison_initialise(SimpleNamespace(h=self.sk), self.atomic_numbers)
         # A1: the on-site half-width, AFTER the Harrison baselines are in place (the rule
         # reads them). Registered fraction times their spread.
@@ -487,7 +591,9 @@ class H0(nn.Module):
                       if getattr(self, "on_site_from_base", False) else scalars)      # O3.D
         local = torch.arange(scalars.shape[0], device=scalars.device) - batch * n_nodes
         edge_graph = batch[edge_index[0]]
-        H = self.sk.batched(site_feats, species, edge_index, edge_vector, local, edge_graph, n_nodes, num_graphs)
+        pot = scalars[:, -3] if getattr(self, "crystal_field", False) else None
+        H = self.sk.batched(site_feats, species, edge_index, edge_vector, local, edge_graph,
+                            n_nodes, num_graphs, potential=pot)
         dim = n_nodes * ORBITALS_PER_ATOM
         levels = self.sk.on_site(site_feats, species, None)                           # [N, 2]
         diag = torch.cat([levels[:, :1], levels[:, 1:].expand(-1, 3)], dim=-1)           # [N, 4]
@@ -515,8 +621,21 @@ class H0(nn.Module):
         return H
 
     def geometric_inputs(self, species, edge_index, edge_vector, n_nodes):
-        """O3: `(A0, v, Q)` from geometry alone -- the head's inputs when `decoupled`."""
-        return self.descriptor(species, edge_index, edge_vector, n_nodes)
+        """O3: `(A0, v, Q)` from geometry alone -- the head's inputs when `decoupled`.
+
+        O5a: the rank-1 and rank-2 inputs become the crystal FIELD and its GRADIENT, and the
+        scalar block gains the potential and two invariants of the other two. The B-basis stays
+        -- it is worth 34 % on energies and nothing here displaces it."""
+        A0, v, Q = self.descriptor(species, edge_index, edge_vector, n_nodes)
+        if not getattr(self, "crystal_field", False):
+            return A0, v, Q
+        V, E, GE = self.cfield(species, edge_index, edge_vector, n_nodes)
+        inv = torch.stack([V, E.norm(dim=-1), (GE * GE).sum(dim=(-1, -2))], dim=-1)
+        A0 = torch.cat([A0, inv], dim=-1)
+        # the field takes the vector slot; `vector_mix` contracts over n_vectors channels, so
+        # broadcast the single field vector across them -- the mix then learns one scale.
+        v = E.unsqueeze(1).expand(-1, v.shape[1], -1)
+        return A0, v, GE
 
     def directional_site_blocks(self, scalars: torch.Tensor, vectors: torch.Tensor,
                                 species: torch.Tensor, edge_index: torch.Tensor,
@@ -553,7 +672,11 @@ class H0(nn.Module):
         # (which read nothing, the modulation being off) and the directional block's v and Q.
         site_feats = (base_scalars.to(torch.float64)
                       if getattr(self, "on_site_from_base", False) else scalars)
-        H = self.sk(site_feats, species, edge_index, edge_vector, madelung=None, n_nodes=n)
+        # O5a: the polarity modulation needs the potential; it is the third-from-last column of
+        # the scalar block that `geometric_inputs` appended, so no second pass over the edges.
+        pot = scalars[:, -3] if getattr(self, "crystal_field", False) else None
+        H = self.sk(site_feats, species, edge_index, edge_vector, madelung=None, n_nodes=n,
+                    potential=pot)
         levels = self.sk.on_site(site_feats, species, None)
         diag = torch.cat([levels[:, :1], levels[:, 1:].expand(-1, 3)], dim=-1).reshape(-1)
         H = H - torch.diag(torch.diagonal(H)) + torch.diag(diag)

@@ -97,6 +97,7 @@ class TrainConfig:
     screened: bool = False             # O3.2: three-body bond screening on the hoppings
     correlation2: bool = False         # O3.3: correlation-2 invariants into the on-site readout
     on_site_from_base: bool = False    # O3.D: block 0 for the on-site readout (diagnostic)
+    crystal_field: bool = False        # O5a: damped-Coulomb potential / field / field gradient
     r_s3: float = 4.5                  # its cutoff, = Q_CUT_DEFAULT
     standardise_inputs: Optional[bool] = None   # A1.1; None = the default for the head kind
     readout_init_scale: Optional[float] = None  # final-layer scale of the readouts
@@ -318,6 +319,19 @@ class Trainer:
         loader = torch_geometric.dataloader.DataLoader(ds, batch_size=self.cfg.setup_batch_size)
         pristine_batches = [to_device(b, self.device) for b in loader]
         self.model.set_pristine_reference(pristine_batches)
+        if getattr(self.model, "crystal_field", False):
+            # AFTER the pristine pass, which is the only place the charges exist. Logged here
+            # rather than at construction, where they are still zero and the line says nothing.
+            cf = self.model.h0.cfield
+            q = [round(float(x), 4) for x in cf.charge]
+            logging.info("O5a: crystal-field charges from the pristine Mulliken means %s, "
+                         "damping %.3f-%.3f A", q, float(cf.damping().min()),
+                         float(cf.damping().max()))
+            if max(abs(x) for x in q) < 1e-8:
+                raise RuntimeError(
+                    "the crystal-field charges are still zero after the pristine pass: the "
+                    "potential, field and field gradient would all be identically zero and the "
+                    "arm a no-op (the failure that wasted two LES runs)")
         # A1.1: per-species channel statistics of the base's block-0 invariants. TRAINING
         # frames plus the pristine cells (thermal ensemble, defect and pristine, as
         # registered); the held-out fold is excluded.

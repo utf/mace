@@ -101,6 +101,8 @@ class MACEDSCC(nn.Module):
     # production candidate -- it reintroduces the wait on block 0 and the create_graph
     # traversal the decoupled head exists to remove.
     on_site_from_base: bool = False
+    # O5a: the damped-Coulomb crystal field (potential, field, field gradient).
+    crystal_field: bool = False
 
     def __init__(self, base: nn.Module, *, r_cut: float = R_CUT_DEFAULT,
                  kernel: Optional[KernelConfig] = None, sigma_s: float = SIGMA_S,
@@ -108,6 +110,7 @@ class MACEDSCC(nn.Module):
                  decoupled: bool = False, n_radial: int = 6, directional: bool = True,
                  screened: bool = False, r_s3: float = R_S3_DEFAULT,
                  correlation2: bool = False, on_site_from_base: bool = False,
+                 crystal_field: bool = False,
                  standardise_inputs: Optional[bool] = None,
                  readout_init_scale: Optional[float] = None,
                  lambda_0: float = LAMBDA_0_DEFAULT, lambda_max: float = LAMBDA_MAX_DEFAULT,
@@ -155,6 +158,7 @@ class MACEDSCC(nn.Module):
         # of tensors the descriptor already builds -- and nothing from the base enters.
         self.correlation2 = bool(correlation2)
         self.on_site_from_base = bool(on_site_from_base)
+        self.crystal_field = bool(crystal_field)
         if self.on_site_from_base and not decoupled:
             raise ValueError("on_site_from_base is the O3.D diagnostic on a DECOUPLED head; "
                              "a coupled head already reads block 0 everywhere")
@@ -165,7 +169,8 @@ class MACEDSCC(nn.Module):
                      readout_init_scale=readout_init_scale,
                      screened=self.screened, r_s3=self.r_s3,
                      correlation2=self.correlation2,
-                     on_site_from_base=self.on_site_from_base)
+                     on_site_from_base=self.on_site_from_base,
+                     crystal_field=self.crystal_field)
         if self.decoupled:
             self.h0.sk.hop_modulation = False
         n_el = len(self.atomic_numbers)
@@ -218,6 +223,7 @@ class MACEDSCC(nn.Module):
                 "screened": getattr(self, "screened", False),
                 "correlation2": getattr(self, "correlation2", False),
                 "on_site_from_base": getattr(self, "on_site_from_base", False),
+                "crystal_field": getattr(self, "crystal_field", False),
                 "r_s3": getattr(self, "r_s3", R_S3_DEFAULT),
                 "lambda_max": self.lambda_max, "c_q_table": dict(self.c_q_table),
                 "calibration_record": self.calibration_record,
@@ -235,6 +241,7 @@ class MACEDSCC(nn.Module):
         self.screened = bool(state.get("screened", False))      # O3.2
         self.correlation2 = bool(state.get("correlation2", False))   # O3.3
         self.on_site_from_base = bool(state.get("on_site_from_base", False))   # O3.D
+        self.crystal_field = bool(state.get("crystal_field", False))           # O5a
         self.r_s3 = float(state.get("r_s3", R_S3_DEFAULT))
         self.r_split, self.lambda_max = float(state["r_split"]), float(state["lambda_max"])
         self.c_q_table = {int(k): float(v) for k, v in state.get("c_q_table", {}).items()}
@@ -596,6 +603,13 @@ class MACEDSCC(nn.Module):
         for s_ in range(len(self.atomic_numbers)):
             if bool((sp == s_).any()):
                 self.q0_pristine[s_] = q0[sp == s_].mean()
+        # O5a: the crystal field's charges come FROM HERE -- the head's own pristine Mulliken
+        # means -- so nothing external enters and the decoupled head stays decoupled. Left at
+        # the zero initialisation the field would be identically zero and the whole arm a
+        # no-op, which is exactly the failure that wasted two LES runs; `set_pristine_reference`
+        # is the one place that has the numbers, so it is the one place that sets them.
+        if getattr(self, "crystal_field", False):
+            self.h0.cfield.charge.copy_(self.q0_pristine.to(self.h0.cfield.charge.dtype))
         return int(sp.shape[0])
 
     @torch.no_grad()
@@ -677,8 +691,11 @@ class MACEDSCC(nn.Module):
             return self.features(self.first_block(self._trunk_data(dict(data))))[0]
         edge_vector = self.head_edge_vectors(data)
         species = data["node_attrs"].argmax(dim=-1)
-        return self.h0.descriptor(species, data["edge_index"], edge_vector,
-                                  int(species.shape[0]))[0]
+        # `geometric_inputs`, NOT `descriptor`: the crystal field appends its channels there,
+        # and this method exists precisely so that no diagnostic -- and no feature-statistics
+        # pass -- reports on a tensor the readouts do not actually see.
+        return self.h0.geometric_inputs(species, data["edge_index"], edge_vector,
+                                        int(species.shape[0]))[0]
 
     def head_edge_vectors(self, data: Dict[str, torch.Tensor]) -> torch.Tensor:
         """The head graph's edge vectors in float64, from `unit_shifts` and the cell.
@@ -891,6 +908,7 @@ class MACEDSCC(nn.Module):
                     and getattr(self.h0.sk, "screen", None) is None
                     and not getattr(self, "on_site_from_base", False)   # O3.D: cotangent
                                                                        # would need block 0
+                    and not getattr(self, "crystal_field", False)       # O5a: dV/dR pending
                     and getattr(self, "analytic_head_forces", True))
         analytic_pack = None
         if uniform:
