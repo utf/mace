@@ -3579,3 +3579,45 @@ worth ~20 % of the loss when it fires and ~nothing otherwise, which is what a ba
   the BOUND and not the parameterisation. The next arm is then a registered increase of `Δ_Z`,
   which is an A1 amendment and needs its own registration.
 - **Spikes remain** → the cause is not the bound and the diagnosis above is wrong.
+
+### W7.2 — LES retrained with LIVE charges: the divergence was the LR SCHEDULE, and LES does help
+
+*(User: "I know many people train les mace models" — correct, and the failure was mine.)*
+
+**The reference recipe** (`ChengUCB/les_fit`, `MLIPs/MACE-LES-new/fit.sh`) does NOT set `--lr`
+either: both it and the run that diverged use MACE's default 1e-2. What it sets and the failed
+run did not is **`--scheduler_patience 15` against the default 50**. The diverged run's LR was
+still 1e-2 at epoch 90 — the plateau scheduler essentially never fired — and the forces degraded
+for ~17 epochs (10.19 → 12.00 → 15.56 → 21.40) before the NaN at 118. The other differences were
+stress in the loss (reference: weight 0) and Stage Two at 50 % rather than 80 %.
+
+**`base_v3_les_ref`** (reference recipe, charges at the library's own initialisation): **320
+epochs, no NaN, 0.21 meV/atom and 6.43 meV/Å.** Against `base_v3_scratch`'s 0.23 / 6.63 — but
+that is NOT a controlled LES comparison, because the recipe changed too.
+
+**The controlled comparison is the fine-tune pair**: identical settings, identical 150 epochs,
+one difference — latent charges live at a 1e-2 scale versus pinned at zero.
+
+| | energy meV/atom | forces meV/Å |
+|---|---:|---:|
+| LES-FT, charges PINNED, 150 ep | 0.48 | 5.69 |
+| **LES-FT2, charges LIVE, 150 ep** | **0.24** | **5.62** |
+
+**Energy halved, forces level. LES helps on this data, modestly.** The earlier "LES buys nothing
+here" was withdrawn as untested; it is now tested, and the answer is that it buys a factor two
+on energy and nothing measurable on forces.
+
+**The charges are live and doing work**, measured the same three ways that exposed the pinned
+runs: readout `‖W‖` 6.4e-1 / 1.9e-1 (FT2) and 1.3e1 / 9.2e-1 (REF) against 0 before; `|q|` mean
+0.028 / 0.053 e; `E_LES` 4.1 / 8.8 meV/atom; ablation moves forces by 9.6–18.4 meV/Å. **The
+ablation only shows the model has ADAPTED to the term, not that it improves accuracy** — the
+FT2-versus-pinned pair is the evidence for that, and it is the only controlled pair here.
+
+**Flagged, not resolved: the net latent charge per cell is −2.06 e (FT2) and +2.47 e (REF)** in
+cells that are neutral or singly charged. Latent charges are an auxiliary field, not Mulliken
+charges, and the Ewald energy is invariant under a global sign flip — so this is not wrong on
+its face. But a non-neutral distribution in a periodic cell needs a neutralising background and
+the energy then carries a convention. Anyone reading these charges physically should check that
+first. Per-species means (Cl / Cs / Pb): FT2 −0.040 / +0.006 / −0.017, REF +0.039 / −0.055 /
++0.091 — not an ionic pattern in either, which is expected for a latent field and is the reason
+not to read them as charges.
