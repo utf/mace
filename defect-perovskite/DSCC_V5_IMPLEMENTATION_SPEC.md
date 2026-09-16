@@ -5151,3 +5151,76 @@ appear with `E_PP` and match the nonanalytic value to 20 %; splitting present + 
 base v2's restoring forces, Phase 1 proceeds; no splitting → stop and report. Run directory
 `~/runs/dscc/p0/`, deliverable `P0_REPORT.md`. Phase 1–3 thresholds are in the plan file and are
 copied here when each phase is registered.
+
+**Phase 0.3 specifics registered before the ladders run (2026-09-16 22:05).** W6 checkpoint for
+0.3: seed-median by held force RMSE over the six W6-on-v2 seeds (19.42/19.85/20.28/19.19/21.05/
+20.68 meV/Å for s0/s1/s2/s3/s4/s6; median 20.06 → **s1**, `~/runs/dscc/dscc_w6_s1/model.pt`,
+uncalibrated: at fixed cell and charge state `C_Q` and `E_M` cancel in `dE_relax`). The
+polarisation variant is the SAME checkpoint with `host_coupling="polarisation"`, the MACE-Field
+provider attached (head `mp-dielectric`), `r_split` set to the 0.1 value for both `E_cP` and
+`E_PP`, ε∞ = 4.0 (variant R); W6's `s` is unused there. Gate before use (`p0_variant.py`): analytic
+and capture routes refused; `dq`, band energy and `e_madelung` identical to W6 on a charged
+79-atom training frame (only `e_host` → `e_cP` differs, plus `e_pp`); one central-difference
+force check with the real base and provider. Ladder (`p0_ladder.py`): base-v2-relaxed pristine
+80-atom cell (`~/runs/dscc/p0/pristine_relaxed_v2.json`: E −281.152 → −281.876 eV, rms
+displacement 0.253 Å, max 0.312 Å; same tilt topology — every Cl bridges two Pb — with the
+Pb–Cl–Pb angle 167.1° → 156.1° mean and Pb–Cl 2.860 → 2.905 Å; recorded, not gated) tiled
+2,2,2 / 2,2,3 / 3,3,3 / 3,3,4 with the first Cl removed (639/959/2159/2879 atoms); core = full
+BFGS relaxation of the +1 vacancy in the 639-atom cell (fixed cell, fmax 0.02 eV/Å, maxstep
+0.1 Å, ≤ 400 steps); per tiling `E_frozen = E(+1)` at the ideal vacancy geometry, the core
+displacements embedded within r_core = 8 Å (minimum-image keys, as `dscc_embed_ladder.py`), the
+far field relaxed with the core fixed, `dE_relax = E_relaxed − E_frozen`; fit against
+x = α(h)/L (cell-shape Madelung constant from `madelung_self`, not a bare 1/L: 2,2,3 and 3,3,4
+are not cubic), `dE_relax = dE_∞ + (Q²C/2) x (1/ε∞ − 1/eps0_ladder)`, leave-one-out spread of
+eps0 as the fit uncertainty. eps0_LST from `p0_eps0_lst.py` (base v2 Γ Hessian, h = 0.01 Å,
+acoustic sum rule; provider Born tensors; polycrystalline). Sizes beyond what the local 16 GB
+card or b3's 24 GB cards can hold are truncated with the reason written here before the fit is
+read.
+
+**Phase 0.1 read (2026-09-16 22:10; `~/runs/dscc/p0/p0_locality.json`).** 2×2×2 tiling of the
+base-relaxed pristine cell (640 atoms), node field 0.01 V/Å on one atom of each species, three
+directions each. r90 of Σ_b|dp[b]|: Cl 7.00–7.42 Å, Cs 7.71–8.04 Å, Pb 6.65 Å (the perturbed
+atom itself carries 22–39 % of the response; 95–98 % is inside 8 Å, 99.9 % inside 10 Å — the
+field couples after layer 0 and the second layer carries it one more r_max). r90 of Σ_b|dF[b]|:
+8.0–8.5 Å. **r90_max = 8.04 Å > 6 Å: by the plan's rule the mid-field coupling reverts to H0 for
+this iteration (accepted, no second representation), and r_split = max(3.0, 1.2 × 8.04) =
+9.645 Å for both E_cP and E_PP.** Partition ambiguity RMS(p − p′)/RMS(p) = 1.11 (rms p 0.043 e Å,
+rms p′ 0.077 e Å; both sums equal Ω P to 1e-9): the per-atom-energy partition is a different
+object from the node-field partition — recorded, not gated. 0.2 on the same relaxed cell: ε∞
+tensor diag (3.531, 3.535, 3.575), polycrystalline 3.547, anisotropy 1.2 % (tensor kernel not
+needed); Z* trace/3 Cl −1.618 (Frobenius 3.52), Cs +1.277 (2.24), Pb +3.577 (6.21), ΣZ* = 0 to
+1e-12; on the MP cells the same checkpoint gives ε∞ 3.83–3.90 (MP DFPT 3.62–3.64) — the spread
+is the (M) variant's uncertainty. Variant (M) for this base: ε∞ = 3.547. eps0_LST (base v2 Γ
+Hessian on the relaxed cell, no imaginary optical modes, optical range 1.9–27.9 meV; provider Z*):
+ionic part 20.63 → **eps0_LST = 24.63 (R, ε∞ 4.0) / 24.18 (M)**; the four strongest modes at
+8.6–10.5 meV carry 9.1 of the 20.6.
+
+**Phase 0.3 matching read (22:35; `p0_matching_r9645.json`, all 2560 training frames, provider
+dipoles with dp/dR).** At r_split = 9.645 Å the forces of E_PP alone are RMS 0.13 meV/Å per
+component on the pristine-80 and neutral-vacancy-79 frames, 0.12 on charged-79, 0.05 / 0.04 on
+the 159-atom families (E_PP itself −0.01 meV/atom): the 3 meV/Å threshold is met by more than
+20×, no r_split raise. Noted for the reading of Decision 0: with w_PP = 2 r_split = 19.3 Å and
+w_cP = 13.7 Å the two new kernels are smoother than the training cells (e^{−w²k²/4} at the
+first k of a 32 Å edge is 0.03), so in the training domain E_PP is inert by construction and
+only the ladder's larger cells exercise it — the plan's "mid-field reverts to H0" acceptance.
+Scan for the record (same frames): F_PP RMS all-families 8.50 / 4.74 / 1.86 / 0.56 / 0.13 meV/Å at
+r_split 3.0 / 3.6 / 4.5 / 6.0 / 9.645 Å (charged-159 the largest family at every width: 13.2 /
+9.5 / 5.3 / 1.5 / 0.04); the 3 meV/Å threshold alone would have allowed r_split ≈ 5.5 Å.
+
+**Variant gate and timing (22:50; `p0_variant_s1.json`; `~/runs/dscc/p0/w6_s1_polarisation.pt`).**
+W6 s1 → polarisation, r_split 9.645, ε∞ 4.0. On the first charged 79-atom training frame: dq
+identical (max |Δ| 0.0), Σdq = 1.000 both, band energy 6.816156 eV both, e_madelung −0.338319 eV
+both; e_host −20.5 meV (W6) → e_cP −0.13 meV + e_PP −0.49 meV. Central-difference force check on
+the variant (h = 1e-3 Å): 2.1 and 0.8 meV/Å from the analytic values (analytic route refused,
+cotangent route in use; W6 as shipped is also a block-0-reading head, so it was never on the
+analytic route either). **Forces of the untrained composition:** RMS difference to W6 16.9
+meV/Å, RMSE against the label 17.1 (variant) vs 8.4 (W6) on that frame — the W6 head was trained
+with E_host's geometry dependence in the loop and loses it here; this is the frozen-provider
+mechanism model, not a force claim (Phase 2 retrains). Timing, one energy+force, charged +1, local
+A4000 float64: 639 atoms W6 2.25 s / 5.8 GB, variant 3.75 s / 8.8 GB; 959 atoms W6 5.7 s / 8.5 GB,
+variant 7.9 s / 13.0 GB. Linear extrapolation: variant ≈ 29 GB at 2159 and ≈ 39 GB at 2879 — beyond
+both cards; W6 ≈ 19 / 25 GB. **Launched (22:52) on b3:** W6 ladder on GPU 5, variant on GPU 7
+(`~/runs/dscc/p0/ladder_{w6,var}/`, runner `b3_ladder_runner.sh`: core stage at 2,2,2 then the
+ladder at 2,2,2 and 2,2,3); the 2159/2879 rungs are being timed on the CPU (96 cores, local) before
+their placement is decided — if unaffordable, the ladder is fitted on 639/959 (+2159 for W6) and
+that truncation is written here before the fit is read.
