@@ -61,26 +61,32 @@ from .utils import get_edge_vectors_and_lengths, get_symmetric_displacement
 
 
 def _copy_mace_readout(
-    mace_readout: torch.nn.Module, cueq_config: Optional[CuEquivarianceConfig] = None
+    mace_readout: torch.nn.Module, cueq_config: Optional[CuEquivarianceConfig] = None,
+    num_heads: Optional[int] = None,
 ) -> torch.nn.Module:
     """
-    Helper function to copy a MACE readout block.
+    Helper function to copy a MACE readout block. `num_heads` overrides the source's head count
+    (D2: ONE latent-charge readout shared by every head -- both label sets carry electrostatics,
+    so the charges must live on one scale); the energy readouts stay per head.
     """
     if isinstance(mace_readout, LinearReadoutBlock):
+        n = mace_readout.linear.irreps_out.dim if num_heads is None else num_heads
         return LinearReadoutBlock(
             irreps_in=mace_readout.linear.irreps_in,  # type: ignore
-            irrep_out=mace_readout.linear.irreps_out,  # type: ignore
+            irrep_out=o3.Irreps(f"{n}x0e"),  # type: ignore
             cueq_config=cueq_config,
         )
     if isinstance(mace_readout, NonLinearReadoutBlock):  # type: ignore
+        n = mace_readout.num_heads if num_heads is None else num_heads
         return NonLinearReadoutBlock(
             irreps_in=mace_readout.linear_1.irreps_in,  # type: ignore
-            MLP_irreps=mace_readout.hidden_irreps,
+            MLP_irreps=(mace_readout.hidden_irreps if num_heads is None
+                        else o3.Irreps(f"{mace_readout.hidden_irreps.count((0, 1)) // max(mace_readout.num_heads, 1)}x0e")),
             gate=mace_readout.non_linearity._modules["acts"][  # pylint: disable=W0212
                 0
             ].f,
-            irrep_out=mace_readout.linear_2.irreps_out,  # type: ignore
-            num_heads=mace_readout.num_heads,
+            irrep_out=o3.Irreps(f"{n}x0e"),  # type: ignore
+            num_heads=n,
             cueq_config=cueq_config,
         )
     raise TypeError("Unsupported readout type.")
@@ -96,8 +102,9 @@ def _get_readout_input_dim(block: torch.nn.Module) -> int:
 
 @compile_mode("script")
 class MACELES(ScaleShiftMACE):
-    def __init__(self, les_arguments: Optional[Dict] = None, **kwargs):
+    def __init__(self, les_arguments: Optional[Dict] = None, les_shared_readout: bool = False, **kwargs):
         super().__init__(**kwargs)
+        self.les_shared_readout = bool(les_shared_readout)
         try:
             from les import Les
         except ImportError as exc:
@@ -116,7 +123,8 @@ class MACELES(ScaleShiftMACE):
         cueq_config = kwargs.get("cueq_config", None)
         for readout in self.readouts:  # type: ignore
             self.les_readouts.append(
-                _copy_mace_readout(readout, cueq_config=cueq_config)
+                _copy_mace_readout(readout, cueq_config=cueq_config,
+                                   num_heads=(1 if self.les_shared_readout else None))
             )
 
     def forward(
@@ -245,9 +253,12 @@ class MACELES(ScaleShiftMACE):
             node_es = readout(node_feats_list[feat_idx], node_heads)[
                 num_atoms_arange, node_heads
             ]
-            node_qs = les_readout(node_feats_list[feat_idx], node_heads)[
-                num_atoms_arange, node_heads
-            ]  # type: ignore
+            if getattr(self, "les_shared_readout", False):
+                node_qs = les_readout(node_feats_list[feat_idx], None)[:, 0]   # one readout for every head
+            else:
+                node_qs = les_readout(node_feats_list[feat_idx], node_heads)[
+                    num_atoms_arange, node_heads
+                ]  # type: ignore
             node_qs_list.append(node_qs)
             node_es_list.append(node_es)
 

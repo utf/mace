@@ -108,6 +108,24 @@ def main() -> None:
                          "(the B-basis stays), the FIELD takes the rank-1 slot and the field "
                          "GRADIENT the rank-2 slot, and the hopping gains Harrison's polarity "
                          "term. Two-body throughout")
+    ap.add_argument("--cf_linear", type=int, default=0,
+                    help="O5a AS SPECIFIED: the on-site shift is s_Z (V_i - V_bar_Z), linear, "
+                         "no MLP; the invariants never enter the readout and the B-basis stays")
+    ap.add_argument("--cf_mlp", type=int, default=0,
+                    help="O5c: a dedicated small MLP on the standardised (V, |E|, tr(gradE^2)), "
+                         "added to the on-site pre-activation. The advisor's fallback form")
+    ap.add_argument("--les_cross", type=int, default=0,
+                    help="L2 (LES head line): E_cross = s_c dq^T K q_LES replaces E_host; needs a MACELES base")
+    ap.add_argument("--les_sign", type=float, default=1.0,
+                    help="L2: the Born sign fix of q_LES for this base (+1 / -1), from les_gates.json")
+    ap.add_argument("--init_state", default="",
+                    help="L3: start from a saved MACEDSCC (L2's model.pt): every named PARAMETER present in "
+                         "both is copied (h0, lambda, u, s, s_cross); the flags of THIS run stay (les_well), "
+                         "new parameters (s_well) keep their init; buffers are recomputed by the trainer")
+    ap.add_argument("--les_well", type=int, default=0,
+                    help="L3: H0' = H0 - s_W (K q_LES - mean), the host's long-range well in H0; starts at L2")
+    ap.add_argument("--les_cache", default="",
+                    help="L2: q_LES / Jacobian cache file for this base (built on first use)")
     ap.add_argument("--on_site_from_base", type=int, default=0,
                     help="O3.D (diagnostic, not adoptable): feed the ON-SITE readout the base's "
                          "block-0 invariants while the head's own descriptor still drives the "
@@ -136,6 +154,9 @@ def main() -> None:
                       correlation2=bool(args.correlation2),
                       on_site_from_base=bool(args.on_site_from_base),
                       crystal_field=bool(args.crystal_field),
+                      cf_linear=bool(args.cf_linear), cf_mlp=bool(args.cf_mlp),
+                      les_cross=bool(args.les_cross), les_sign=float(args.les_sign), les_cache=args.les_cache,
+                      les_well=bool(args.les_well),
                       standardise_inputs=(None if args.standardise < 0 else bool(args.standardise)),
                       readout_init_scale=(None if args.readout_init_scale < 0 else args.readout_init_scale),
                       directional=bool(args.directional), regime=args.regime, gap_weight=args.gap_weight,
@@ -156,6 +177,8 @@ def main() -> None:
                      correlation2=cfg.correlation2,
                      on_site_from_base=cfg.on_site_from_base,
                      crystal_field=cfg.crystal_field,
+                     cf_linear=cfg.cf_linear, cf_mlp=cfg.cf_mlp,
+                     les_cross=cfg.les_cross, les_sign=cfg.les_sign, les_well=cfg.les_well,
                      readout_init_scale=cfg.readout_init_scale,
                      kernel=KernelConfig(regime=cfg.regime),
                      eta=args.eta, beta_b=args.beta_b, beta_a=args.beta_a,
@@ -163,9 +186,20 @@ def main() -> None:
                      scf=ScfOptions(n_max=args.n_max)).to(args.device)
     logging.info("A1.1: standardisation %s, readout final scale %.3f",
                  "ON" if model.standardise_inputs else "OFF", float(model.h0.sk.readout_init_scale))
+    if model.les_cross:
+        logging.info("L2: E_cross = s_c dq^T K_bare q_LES on the base's latent charges (sign %+.0f), "
+                     "s_c init %.4f in [-%.1f, %.1f]; E_host and the reference fill are gone; "
+                     "q_LES / Jacobian cache: %s", model.les_sign, float(model.cross_scale()), model.s_max,
+                     model.s_max, cfg.les_cache or "(none: computed in memory)")
+    if model.les_well:
+        logging.info("L3: H0' = H0 - s_W (K_bare q_LES - mean), s_W init %.4f in [0, %.1f]; the gap "
+                     "regulariser acts on H0'", float(model.well_scale()), model.s_max)
     if model.crystal_field:
-        logging.info("O5a: crystal field ON (charges are set from the pristine Mulliken means "
-                     "later, in prepare(); polarity zero-init)")
+        form = ("LINEAR s_Z (V - V_bar_Z), no MLP (O5a as specified)" if model.cf_linear
+                else "dedicated small MLP on (V, |E|, tr(gradE^2)) (O5c)" if model.cf_mlp
+                else "invariants appended to the B-basis readout")
+        logging.info("O5: crystal field ON, on-site form = %s; charges set in prepare(); "
+                     "polarity zero-init", form)
     if model.on_site_from_base:
         logging.info("O3.D: the ON-SITE readout reads the base's block 0 (%d wide); the "
                      "descriptor still drives hoppings and the directional block. DIAGNOSTIC "
@@ -187,6 +221,22 @@ def main() -> None:
     if args.init_from:
         model.load_h0_from(args.init_from)
         logging.info("H0 initialised from %s", args.init_from)
+    if args.init_state:
+        src = torch.load(args.init_state, weights_only=False, map_location=args.device)
+        src_params = dict(src.named_parameters())
+        copied, missing = [], []
+        with torch.no_grad():
+            for n, p in model.named_parameters():
+                if n.startswith("base."):
+                    continue
+                if n in src_params and src_params[n].shape == p.shape:
+                    p.copy_(src_params[n].to(p.device)); copied.append(n)
+                else:
+                    missing.append(n)
+        logging.info("parameters initialised from %s: %d copied, kept at init: %s", args.init_state,
+                     len(copied), missing)
+        if model.les_cross and not getattr(src, "les_cross", False):
+            raise ValueError("--init_state: the source is not an L2 (les_cross) model")
     if args.fscc:
         model.fscc = args.fscc
         logging.info("F-SCC comparator: %s kernel", args.fscc)

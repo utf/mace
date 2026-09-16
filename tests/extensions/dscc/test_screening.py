@@ -10,6 +10,8 @@ The entry gate is the first test: with `A = 0` the screened head is its unscreen
 FOR BIT, so any difference the arm produces is attributable to the one change.
 """
 import numpy as np
+import inspect
+
 import pytest
 import torch
 
@@ -344,7 +346,7 @@ class TestItStaysDecoupled:
         batch = _batch([VACP])
         vec = m.head_edge_vectors(batch)
         species = batch["node_attrs"].argmax(dim=-1)
-        scalars, vectors, _ = m.h0.geometric_inputs(species, batch["edge_index"], vec,
+        scalars, vectors, _, _ = m.h0.geometric_inputs(species, batch["edge_index"], vec,
                                                     int(species.shape[0]))
         with pytest.raises(NotImplementedError, match="screening"):
             sparse.csr_hamiltonian(m.h0, scalars, vectors, species, batch["edge_index"], vec)
@@ -684,3 +686,220 @@ class TestO5aCrystalField:
         mixed = m(_batch([VACP, VAC0]), compute_force=True)
         assert not mixed["short_circuit"]
         assert float(mixed["energy"][0] - one["energy"][0]) == pytest.approx(0.0, abs=1e-9)
+
+
+def _o5(seed=0, n_radial=4, linear=False, mlp=False):
+    m = MACEDSCC(_base(seed), r_cut=R_CUT, directional=True, hidden=16, coupling=False,
+                 route_b=True, scf_free=True, decoupled=True, n_radial=n_radial,
+                 standardise_inputs=True, readout_init_scale=0.1, correlation2=True,
+                 crystal_field=True, cf_linear=linear, cf_mlp=mlp,
+                 kernel=KernelConfig(regime="B", r_g=1.0, r_s=5.0))
+    with torch.no_grad():
+        m.h0.vector_mix.normal_(0.0, 0.3)
+        m.h0.alpha.fill_(0.5)
+        m.h0.beta.fill_(0.5)
+        m.h0.descriptor.c1.normal_(0.0, 0.5)
+        m.h0.descriptor.c2.normal_(0.0, 0.5)
+    m.set_pristine_reference([_batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])])
+    m.set_feature_stats([_batch([_frame(_perovskite(rattle=0.05, seed=s), [0, 0, 0, 0], 0)])
+                         for s in (11, 12, 13)])
+    return m
+
+
+class TestO5OnSiteForms:
+    """O5a as specified (linear, no MLP) and O5c (the advisor's small-MLP fallback)."""
+
+    def test_linear_keeps_the_invariants_out_of_the_readout(self):
+        """`no MLP` means exactly that: the scalar block is the B-basis ALONE, and the
+        potential acts only through `s_Z (V - V_bar_Z)`."""
+        lin, app = _o5(linear=True), _o5()
+        assert lin.readout_scalars(_batch([VACP])).shape[1] == lin.h0.descriptor.scalar_width()
+        assert app.readout_scalars(_batch([VACP])).shape[1] == app.h0.descriptor.scalar_width() + 3
+        assert lin.h0.sk.feat_mean.shape[1] == lin.h0.descriptor.scalar_width()
+
+    def test_vbar_is_set_from_the_pristine_ensemble(self):
+        m = _o5(linear=True)
+        assert float(m.h0.cf_vbar.abs().max()) > 1e-8, "V_bar_Z never left zero"
+        batch = _batch([_frame(_perovskite(rattle=0.0), [0, 0, 0, 0], 0)])
+        sp = batch["node_attrs"].argmax(dim=-1)
+        V, _, _ = m.h0.cfield(sp, batch["edge_index"], m.head_edge_vectors(batch),
+                              int(sp.shape[0]))
+        for z in range(3):
+            if bool((sp == z).any()):
+                assert float(m.h0.cf_vbar[z]) == pytest.approx(
+                    float(V[sp == z].mean()), rel=1e-9)
+
+    @pytest.mark.parametrize("kw", [{"linear": True}, {"mlp": True}])
+    def test_the_new_on_site_term_starts_at_zero_and_then_moves(self, kw):
+        """Both forms are zero-initialised, so the arm starts at its parent; and both must
+        actually move the energy once their parameter is perturbed -- the check the LES
+        episode taught us to run."""
+        m = _o5(seed=3, **kw)
+        batch = _batch([VACP])
+        before = float(m(dict(batch), compute_force=False)["head_energy"])
+        with torch.no_grad():
+            if kw.get("linear"):
+                assert float(m.h0.cf_scale.abs().max()) == 0.0
+                m.h0.cf_scale.add_(0.05)
+            else:
+                final = m.h0.cf_site[-1]
+                assert float(final.weight.abs().max()) == 0.0
+                final.weight.add_(0.05)
+        assert abs(float(m(dict(batch), compute_force=False)["head_energy"]) - before) > 1e-6
+
+    def test_the_linear_shift_is_exactly_s_Z_times_V_minus_Vbar(self):
+        """Against an explicit recomputation, not another vectorised expression."""
+        m = _o5(seed=4, linear=True)
+        with torch.no_grad():
+            m.h0.cf_scale.normal_(0.0, 0.1)
+        batch = _batch([VACP])
+        sp = batch["node_attrs"].argmax(dim=-1)
+        V, _, _ = m.h0.cfield(sp, batch["edge_index"], m.head_edge_vectors(batch),
+                              int(sp.shape[0]))
+        got = m.h0.cf_linear_shift(V, sp)
+        want = (V - m.h0.cf_vbar[sp]).unsqueeze(-1) * m.h0.cf_scale[sp]
+        assert torch.allclose(got, want, atol=1e-14)
+
+    def test_the_potential_is_returned_not_stashed(self):
+        """The consumers -- the polarity term and the linear shift -- take `V` as a RETURN
+        VALUE of `geometric_inputs`, not off an instance attribute set as a side effect.
+        Stashing worked only because the producer happened to run immediately before the
+        consumer in the same call; anything that reordered them (capture, a diagnostic that
+        calls `h0.forward` directly, a second graph) would have read a stale `V` silently.
+        With the linear form the scalar block has no V column at all, so there is no column
+        to fall back on either."""
+        for kw in ({"linear": True}, {"mlp": True}, {}):
+            m = _o5(seed=5, **kw)
+            batch = _batch([VACP])
+            sp = batch["node_attrs"].argmax(dim=-1)
+            vec = m.head_edge_vectors(batch)
+            V, _, _ = m.h0.cfield(sp, batch["edge_index"], vec, int(sp.shape[0]))
+            got = m.h0.geometric_inputs(sp, batch["edge_index"], vec, int(sp.shape[0]))[3]
+            assert got is not None
+            assert torch.allclose(got, V, atol=1e-12), f"wrong potential for {kw}"
+            assert not hasattr(m.h0, "_cf_V"), "V is stashed on the module again"
+
+    def test_a_head_with_no_crystal_field_returns_no_potential(self):
+        """The fourth slot is `None`, not a stale tensor, when there is no field to report."""
+        m = _o33(seed=5) if "_o33" in globals() else None
+        if m is None:
+            pytest.skip("no O3.3 constructor in this module")
+        batch = _batch([VACP])
+        sp = batch["node_attrs"].argmax(dim=-1)
+        vec = m.head_edge_vectors(batch)
+        assert m.h0.geometric_inputs(sp, batch["edge_index"], vec, int(sp.shape[0]))[3] is None
+
+    def test_the_polarity_factor_has_a_watched_sign_floor(self):
+        """`t -> t (1 + beta dV^2)` is the ONE term in O5 that no tanh bounds. `dV^2` is
+        non-negative, so a negative beta drives the factor through ZERO and flips the sign of
+        a hopping -- the failure the linear form is documented to have and the reason W6's
+        hopping is `1 + range tanh`. The ruling does not bound it, so it is watched: the
+        running minimum over every edge, and the trainer stops the arm when it is not
+        positive. A silent sign flip would otherwise produce a complete run of numbers with
+        nothing wrong on the face of them."""
+        m = _o5(seed=9, linear=True)
+        batch = _batch([VACP])
+        # The constructor's reference and feature-stats passes are forwards, so they have
+        # already written a reading; clear it and start from nothing seen.
+        m.h0.sk.polarity_floor(reset=True)
+        assert m.h0.sk.polarity_floor() is None, "nothing seen yet, so nothing to report"
+        m(dict(batch), compute_force=False)
+        healthy = m.h0.sk.polarity_floor(reset=True)
+        assert healthy == pytest.approx(1.0), "beta starts at zero, so the factor starts at 1"
+        assert m.h0.sk.polarity_floor() is None, "the reset did not take"
+        with torch.no_grad():                        # a beta large and negative enough to flip
+            m.h0.sk.polarity.fill_(-50.0)
+        m(dict(batch), compute_force=False)
+        assert m.h0.sk.polarity_floor() <= 0.0
+
+    def test_the_unbounded_shift_is_reported_in_ev(self):
+        """`s_Z (V - V_bar_Z)` is outside A1's tanh, so it appears in neither the saturation
+        fractions nor the barrier. A term nothing watches can quietly grow to dominate the
+        level it shifts, so its p95 and max go into the saturation report in the same eV units
+        as the bounded shift, beside it. Absent for the MLP form, which IS inside the bound."""
+        m = _o5(seed=10, linear=True)
+        batch = _batch([VACP])
+        sp = batch["node_attrs"].argmax(dim=-1)
+        vec = m.head_edge_vectors(batch)
+        scalars = m.readout_scalars(dict(batch))
+        rep = m.h0.saturation(scalars, sp, batch["edge_index"], None, edge_vector=vec)
+        assert rep["cf_shift_eV_p95"] == 0.0, "zero-init, so it starts at exactly zero"
+        assert rep["cf_potential_eV_p95"] > 0.0, "the potential itself is not zero"
+        with torch.no_grad():
+            m.h0.cf_scale.fill_(0.3)
+        rep = m.h0.saturation(scalars, sp, batch["edge_index"], None, edge_vector=vec)
+        assert rep["cf_shift_eV_p95"] > 0.0 and rep["cf_shift_eV_max"] >= rep["cf_shift_eV_p95"]
+        assert set(rep["cf_shift_eV_p95_by_species"]) == {17, 55, 82}
+        mlp = _o5(seed=10, mlp=True)
+        rep = mlp.h0.saturation(mlp.readout_scalars(dict(batch)), sp, batch["edge_index"],
+                                None, edge_vector=mlp.head_edge_vectors(batch))
+        assert "cf_shift_eV_p95" not in rep, "the MLP form is inside the bound already"
+
+    def test_a_flipped_hopping_stops_the_run(self):
+        """The floor is not just recorded, it is acted on."""
+        import mace.modules.dscc.train as tr
+        src = inspect.getsource(tr.Trainer.fit)
+        assert "polarity_floor" in src and "raise RuntimeError" in src
+        assert src.index("polarity_floor") < src.index("saturation_report(self.held_idx, n_frames=4)")
+
+    @pytest.mark.parametrize("kw", [{"linear": True}, {"mlp": True}])
+    def test_the_rank_one_slot_carries_the_field_itself(self, kw):
+        """The ruling's rank-1 block is `a_i (E_i . T_sp)`: ONE species scalar times the
+        field. Broadcasting the field across `n_radial` channels and contracting with
+        `vector_mix` computes the same function but carries `n_radial - 1` redundant learned
+        scalars, and invites the reading that `vector_mix` holds content. With the crystal
+        field on there is exactly one vector channel, and it is the field."""
+        m = _o5(seed=8, **kw)
+        batch = _batch([VACP])
+        sp = batch["node_attrs"].argmax(dim=-1)
+        vec = m.head_edge_vectors(batch)
+        _, E, _ = m.h0.cfield(sp, batch["edge_index"], vec, int(sp.shape[0]))
+        v = m.h0.geometric_inputs(sp, batch["edge_index"], vec, int(sp.shape[0]))[1]
+        assert v.shape[1] == 1, f"{v.shape[1]} vector channels, expected 1"
+        assert torch.allclose(v[:, 0], E, atol=1e-12)
+        assert m.h0.vector_mix.shape[-1] == 1
+
+    @pytest.mark.parametrize("kw", [{"linear": True}, {"mlp": True}])
+    def test_forces_match_finite_differences(self, kw):
+        m = _o5(seed=6, **kw)
+        with torch.no_grad():
+            m.h0.sk.polarity.add_(0.02)
+            if kw.get("linear"):
+                m.h0.cf_scale.normal_(0.0, 0.05)
+            else:
+                m.h0.cf_site[-1].weight.normal_(0.0, 0.05)
+        out = m(_batch([VACP]), compute_force=True)
+        h = 1e-4
+        for atom, comp in ((1, 0), (7, 2)):
+            plus, minus = VACP.copy(), VACP.copy()
+            plus.positions[atom, comp] += h
+            minus.positions[atom, comp] -= h
+            e_plus = float(m(_batch([plus]), compute_force=False)["energy"])
+            e_minus = float(m(_batch([minus]), compute_force=False)["energy"])
+            assert float(out["forces"][atom, comp]) == pytest.approx(
+                -(e_plus - e_minus) / (2 * h), abs=3e-6)
+
+    @pytest.mark.parametrize("kw", [{"linear": True}, {"mlp": True}])
+    def test_it_still_reads_nothing_from_the_base(self, kw):
+        m = _o5(seed=7, **kw)
+        batch = _batch([VACP])
+        before = float(m(dict(batch), compute_force=False)["head_energy"])
+        with torch.no_grad():
+            for p in m.base.parameters():
+                p.add_(torch.randn_like(p) * 0.1)
+        assert float(m(dict(batch), compute_force=False)["head_energy"]) == before
+
+    @pytest.mark.parametrize("kw", [{"linear": True}, {"mlp": True}])
+    def test_a_mixed_batch_matches_per_graph(self, kw):
+        m = _o5(seed=8, **kw)
+        one = m(_batch([VACP]), compute_force=True)
+        mixed = m(_batch([VACP, VAC0]), compute_force=True)
+        assert not mixed["short_circuit"]
+        assert float(mixed["energy"][0] - one["energy"][0]) == pytest.approx(0.0, abs=1e-9)
+
+    def test_the_two_forms_are_mutually_exclusive(self):
+        with pytest.raises(ValueError, match="pick one"):
+            MACEDSCC(_base(9), r_cut=R_CUT, directional=True, hidden=16, coupling=False,
+                     route_b=True, scf_free=True, decoupled=True, crystal_field=True,
+                     cf_linear=True, cf_mlp=True,
+                     kernel=KernelConfig(regime="B", r_g=1.0, r_s=5.0))

@@ -97,7 +97,9 @@ class TrainConfig:
     screened: bool = False             # O3.2: three-body bond screening on the hoppings
     correlation2: bool = False         # O3.3: correlation-2 invariants into the on-site readout
     on_site_from_base: bool = False    # O3.D: block 0 for the on-site readout (diagnostic)
-    crystal_field: bool = False        # O5a: damped-Coulomb potential / field / field gradient
+    crystal_field: bool = False        # O5: damped-Coulomb potential / field / field gradient
+    cf_linear: bool = False            # O5a as specified: s_Z (V - V_bar_Z), linear, no MLP
+    cf_mlp: bool = False               # O5c: a small MLP on (V, |E|, tr(grad E . grad E))
     r_s3: float = 4.5                  # its cutoff, = Q_CUT_DEFAULT
     standardise_inputs: Optional[bool] = None   # A1.1; None = the default for the head kind
     readout_init_scale: Optional[float] = None  # final-layer scale of the readouts
@@ -117,6 +119,10 @@ class TrainConfig:
     base_cache_batch_size: int = 8    # E_base / F_base cache
     grad_clip: float = 10.0
     cache_base: bool = True           # E_base/F_base cached per frame; block 0 recomputed
+    les_cross: bool = False           # L2: E_cross = s_c dq^T K q_LES on a MACELES base
+    les_well: bool = False            # L3: H0' = H0 - s_W (K q_LES - mean), starts at L2
+    les_sign: float = 1.0             # L2: the Born sign fix of q_LES (Z*(Cs) > 0), per base
+    les_cache: str = ""               # L2: q_LES / Jacobian cache file (built once per base)
     device: str = "cuda"
     static_cell_path: str = "defect-perovskite/static_pristine_cell.json"
 
@@ -377,6 +383,19 @@ class Trainer:
         self.base_cache: Dict[int, Tuple[torch.Tensor, torch.Tensor]] = {}
         if self.cfg.cache_base:
             self._fill_base_cache(self.train_idx + self.held_idx)
+        # L2: q_LES and d q_LES / d R of every frame the head sees, once per base (a file), so
+        # the training step runs no base at all -- the force term through q_LES is J^T (s_c K dq).
+        self.les_cache: Dict[int, Tuple[torch.Tensor, torch.Tensor]] = {}
+        if getattr(self.model, "les_cross", False):
+            if not self.cfg.cache_base:
+                raise ValueError("les_cross training needs cache_base (the Jacobian route)")
+            self._fill_les_cache(self.train_idx + self.held_idx)
+            if getattr(self.model, "les_well", False) and self.static_batch is not None:
+                # L3: the static cell's q_LES for the gap regulariser, once (geometry-only)
+                with torch.no_grad():
+                    q_static = self.model.base_forward(self.model._trunk_data(dict(self.static_batch)),
+                                                       training=False, compute_force=False)["latent_charges"]
+                self.static_batch["dscc_base_q"] = q_static.detach().reshape(-1)
         self.write_record()
 
     def _fill_base_cache(self, indices: Sequence[int]) -> None:
@@ -394,12 +413,45 @@ class Trainer:
                 self.base_cache[indices[k]] = (out["energy"][g].detach().cpu(), out["forces"][lo:hi].detach().cpu())
                 k += 1
 
+    def _fill_les_cache(self, indices: Sequence[int]) -> None:
+        """L2: `(q_LES, J)` per frame, keyed by the frame's geometry key in `cfg.les_cache`
+        (loaded if present, computed and saved otherwise). N backward passes per frame."""
+        from mace.modules.dscc.legacy import frame_key
+        path = Path(self.cfg.les_cache) if self.cfg.les_cache else None
+        store: Dict[int, Tuple[torch.Tensor, torch.Tensor]] = {}
+        if path is not None and path.exists():
+            store = {int(k): (v[0], v[1]) for k, v in torch.load(path, map_location="cpu", weights_only=False).items()}
+            logging.info("L2 cache: %d frames loaded from %s", len(store), path)
+        keys = {i: int(frame_key(self.frames[i].get_atomic_numbers(), self.frames[i].get_positions(),
+                                 np.array(self.frames[i].get_cell()))) for i in indices}
+        missing = [i for i in indices if keys[i] not in store]
+        t0 = time.time()
+        for n, i in enumerate(missing):
+            batch = to_device(next(iter(torch_geometric.dataloader.DataLoader(self._dataset([i]), batch_size=1))), self.device)
+            q, J = self.model.latent_charge_jacobian(batch)
+            store[keys[i]] = (q.cpu(), J.cpu())
+            if n % 50 == 0:
+                logging.info("L2 cache: %d / %d frames (%.1f s per frame)", n, len(missing), (time.time() - t0) / max(n, 1))
+        if missing and path is not None:
+            tmp = path.with_suffix(".tmp")
+            torch.save({str(k): v for k, v in store.items()}, tmp)
+            tmp.replace(path)
+            logging.info("L2 cache: %d frames computed in %.0f s, %d saved to %s", len(missing), time.time() - t0, len(store), path)
+        elif missing:
+            logging.info("L2 cache: %d frames computed in %.0f s (no cache file)", len(missing), time.time() - t0)
+        self.les_cache = {i: store[keys[i]] for i in indices}
+
     def _attach_base(self, batch: Dict[str, torch.Tensor], frame_indices: Sequence[int]) -> Dict[str, torch.Tensor]:
         if not self.base_cache or any(i not in self.base_cache for i in frame_indices):
             return batch
         batch = dict(batch)
         batch["dscc_base_energy"] = torch.stack([self.base_cache[i][0] for i in frame_indices]).to(self.device)
         batch["dscc_base_forces"] = torch.cat([self.base_cache[i][1] for i in frame_indices]).to(self.device)
+        if self.les_cache:
+            if any(i not in self.les_cache for i in frame_indices):
+                raise RuntimeError("L2 cache missing for a frame in the batch")
+            batch["dscc_base_q"] = torch.cat([self.les_cache[i][0] for i in frame_indices]).to(self.device)
+            batch["dscc_base_J"] = torch.stack([self.les_cache[i][1] for i in frame_indices]).to(self.device)
         return batch
 
     def write_record(self) -> None:
@@ -749,7 +801,9 @@ class Trainer:
                      "scf_fills_per_batch": stats["scf_fills"] / max(stats["n"], 1),
                      "warm_batches": stats["warm"], "batches": stats["n"],
                      "lambda_dir": float(self.model.lambda_dir()), "u_eff": self.model.u_eff().detach().cpu().tolist(),
-                     "s": float(self.model.pattern_scale()), "time": time.time() - t0}
+                     "s": float(self.model.pattern_scale()), "time": time.time() - t0,
+                     "s_cross": (float(self.model.cross_scale()) if getattr(self.model, "les_cross", False) else None),
+                     "s_well": (float(self.model.well_scale()) if getattr(self.model, "les_well", False) else None)}
             # The ceiling applies to the trained model (v4.2 section 5: the root rule and
             # convergence gates apply to trained models; the initialised-model outcome is a
             # diagnostic). Epoch 0's check is that diagnostic -- the zero start against the
@@ -761,14 +815,31 @@ class Trainer:
             # A1.1's registered per-epoch check: the p95 on-site correction in eV. It stayed
             # under 0.105 eV for the whole A1 run; standardised, it is expected to reach
             # several hundred meV within the first epochs.
+            # O5's unbounded term: see `SlaterKosterH.polarity_floor`. A factor that reaches
+            # zero has flipped a hopping's sign, and every number after it is meaningless, so
+            # the run stops here rather than reporting a result built on it.
+            floor = self.model.h0.sk.polarity_floor(reset=True)
+            entry["polarity_floor"] = floor
+            if floor is not None and floor <= 0.0:
+                json.dump(history + [entry], open(self.run_dir / "history.json", "w"), indent=1, default=str)
+                raise RuntimeError(
+                    f"polarity factor reached {floor:.4f} at epoch {epoch}: the hopping has "
+                    "changed sign. beta is unbounded by construction (O5 spec); the arm is stopped.")
             sat = self.saturation_report(self.held_idx, n_frames=4)
             entry["on_site_shift_eV_p95"] = sat.get("on_site_shift_eV_p95")
             entry["on_site_shift_eV_p95_by_species"] = sat.get("on_site_shift_eV_p95_by_species")
+            # O5a only: the unbounded linear crystal-field shift, beside the bounded one.
+            for k in ("cf_shift_eV_p95", "cf_shift_eV_max", "cf_potential_eV_p95"):
+                if k in sat:
+                    entry[k] = sat[k]
             entry["sv_init_diagnostic"] = epoch == 0
             if (epoch + 1) % cfg.eval_every == 0 or epoch == cfg.epochs - 1:
                 entry["held"] = {k: v for k, v in self.evaluate(self.held_idx, "held").items() if k != "energies"}
             history.append(entry)
-            logging.info("epoch %d loss %.4e force %.4e l2 %.2e sat %.2e lr %.2e dEp95 %.3f gap %.3f unconv %d sv %s scf/batch %.1f fills/batch %.1f warm %d/%d lambda %.3f s %.3f held %s (%.0fs)",
+            cf_note = ("" if entry.get("cf_shift_eV_p95") is None
+                       else " cfp95 %.3f floor %.3f" % (entry["cf_shift_eV_p95"],
+                                                        entry.get("polarity_floor") or 1.0))
+            logging.info("epoch %d loss %.4e force %.4e l2 %.2e sat %.2e lr %.2e dEp95 %.3f gap %.3f unconv %d sv %s scf/batch %.1f fills/batch %.1f warm %d/%d lambda %.3f s %.3f held %s (%.0fs)" + cf_note,
                          epoch, entry["loss"], entry["force"], entry["l2"], entry["sat"], entry["lr"],
                          entry["on_site_shift_eV_p95"] or 0.0, entry["gap"], entry["unconverged"], sv,
                          entry["scf_iterations_per_batch"], entry["scf_fills_per_batch"], entry["warm_batches"], entry["batches"],

@@ -115,14 +115,18 @@ def quadrupole_descriptor(edge_index: torch.Tensor, edge_vector: torch.Tensor, n
     centrosymmetric site by symmetry."""
     sender = edge_index[0]
     r = edge_vector.norm(dim=-1)
-    inside = r < q_cut
-    r_in, v_in = r[inside], edge_vector[inside]
-    unit = v_in / r_in.unsqueeze(-1)
-    w = (1.0 - (r_in / q_cut) ** 6) ** 2
+    # MASKED BY MULTIPLICATION, NOT BY INDEXING. `r[inside]` is a value-dependent shape, which
+    # CUDA-graph capture forbids outright, and this is the rank-2 input of every head that
+    # reads the base (the decoupled heads pass their own `Q` and never reach here). The weight
+    # is zero outside `q_cut` by construction, so every excluded edge contributes exactly 0.0
+    # and the sum is the same sum -- but the shape no longer depends on the positions.
+    inside = (r < q_cut).to(edge_vector.dtype)
+    unit = edge_vector / r.clamp_min(1e-9).unsqueeze(-1)
+    w = (1.0 - (r / q_cut) ** 6) ** 2 * inside
     outer = unit.unsqueeze(-1) * unit.unsqueeze(-2) - torch.eye(3, dtype=r.dtype, device=r.device) / 3.0
     contrib = w.reshape(-1, 1, 1) * outer
     Q = torch.zeros(n_nodes, 3, 3, dtype=r.dtype, device=r.device)
-    return Q.index_add(0, sender[inside], contrib)
+    return Q.index_add(0, sender, contrib)
 
 
 class GeometricDescriptor(nn.Module):
@@ -352,7 +356,8 @@ class H0(nn.Module):
                  readout_init_scale: Optional[float] = None,
                  screened: bool = False, r_s3: float = R_S3_DEFAULT,
                  correlation2: bool = False, on_site_from_base: bool = False,
-                 crystal_field: bool = False) -> None:
+                 crystal_field: bool = False, cf_mlp: bool = False,
+                 cf_linear: bool = False) -> None:
         super().__init__()
         self.atomic_numbers = [int(z) for z in atomic_numbers]
         num_elements = len(self.atomic_numbers)
@@ -373,14 +378,37 @@ class H0(nn.Module):
         self.crystal_field = bool(crystal_field)
         if self.crystal_field:
             self.cfield = CrystalField(num_elements, float(r_cut))
+        # O5c: a DEDICATED small MLP on the three crystal-field invariants. In O5a they are
+        # three inputs among 214 and the readout can barely distinguish them; here they get an
+        # undiluted path of their own whose output is ADDED to the on-site pre-activation,
+        # inside the same bounded tanh, so A1's bound and barrier still apply unchanged.
+        # The final layer is ZERO-INITIALISED, so O5c starts exactly at O5a -- and unlike the
+        # LES case this really does start and not pin: the pre-activation is linear in that
+        # layer's weights, so its gradient is the hidden activation and is non-zero.
+        self.cf_mlp = bool(cf_mlp) and self.crystal_field
+        # O5a AS SPECIFIED: `d eps_i = s_Z (V_i - V_bar_Z)` -- LINEAR, no MLP. The scalar block
+        # then keeps the B-basis ALONE (the invariants do not enter the readout at all) and the
+        # potential acts only through this term. That stiffness is the point of the form: two
+        # parameters per species and no capacity to overfit.
+        self.cf_linear = bool(cf_linear) and self.crystal_field
+        if self.cf_linear:
+            self.cf_scale = nn.Parameter(torch.zeros(num_elements, 2))
+            # `V_bar_Z`: the per-species mean of the potential over the PRISTINE ensemble, set
+            # by `set_pristine_reference` beside the charges. A buffer, so it travels with the
+            # checkpoint; with the linear form the invariants never enter the scalar block, so
+            # A1.1's stored means cannot supply it.
+            self.register_buffer("cf_vbar", torch.zeros(num_elements, dtype=torch.float64))
         if self.decoupled:
             self.descriptor = GeometricDescriptor(num_elements, float(r_cut), n_radial,
                                                   correlation2=self.correlation2)
             if not self.on_site_from_base:
                 feature_dim = self.descriptor.scalar_width()   # O3.3 widens this
-                if self.crystal_field:
+                if self.crystal_field and not bool(cf_linear):
                     feature_dim += 3        # V, |E|, tr(grad E . grad E)
-            n_vectors = n_radial
+            # One vector channel when the crystal field supplies it: the rank-1 block is then
+            # literally `a_i (E_i . T_sp)` and `vector_mix` is a single species scalar, not a
+            # redundant contraction over broadcast copies of the same field.
+            n_vectors = 1 if self.crystal_field else n_radial
         self.r_cut, self.q_cut = float(r_cut), float(q_cut)
         self.directional = bool(directional)
         self.a_max, self.b_max = float(a_max), float(b_max)
@@ -412,6 +440,8 @@ class H0(nn.Module):
         # for a gradient path through the SK element table". One hidden layer, final layer
         # (weights AND bias) scaled by 0.05, so the head starts at the species-level
         # coefficients -- which is exactly W4's `beta = 0` variant.
+        if self.cf_mlp:
+            self.cf_site = _mlp([3 + ELEM_DIM_ENV, readout_hidden, 2], final_scale=0.0)
         self.elem_env = nn.Embedding(num_elements, ELEM_DIM_ENV)
         self.g_read = _mlp([feature_dim + ELEM_DIM_ENV, readout_hidden, 1], final_scale=READOUT_INIT_SCALE)
         self.f_read = _mlp([feature_dim + ELEM_DIM_ENV, readout_hidden, 1], final_scale=READOUT_INIT_SCALE)
@@ -557,6 +587,22 @@ class H0(nn.Module):
             if bool(sel.any()):
                 per_z[int(z)] = float(torch.quantile(shift[sel].reshape(-1), 0.95))
         out["on_site_shift_eV_p95_by_species"] = per_z
+        # O5a's ONE unbounded channel. `s_Z (V - V_bar_Z)` has no tanh, so it appears in
+        # neither the saturation fractions above nor the barrier, and a term that nothing
+        # watches is a term that can quietly grow to dominate the level it shifts. Its p95 and
+        # max are reported in the same eV units as the bounded shift, beside it, so the two
+        # can be read against each other. (O5c's MLP form IS inside the bound and needs none
+        # of this.)
+        if getattr(self, "cf_linear", False) and edge_index is not None and edge_vector is not None:
+            V, _, _ = self.cfield(species, edge_index, edge_vector.to(torch.float64),
+                                  int(species.shape[0]))
+            cf = self.cf_linear_shift(V, species).abs()
+            out["cf_shift_eV_p95"] = float(torch.quantile(cf.reshape(-1), 0.95))
+            out["cf_shift_eV_max"] = float(cf.max())
+            out["cf_shift_eV_p95_by_species"] = {
+                int(z): float(torch.quantile(cf[species == z_i].reshape(-1), 0.95))
+                for z_i, z in enumerate(self.atomic_numbers) if bool((species == z_i).any())}
+            out["cf_potential_eV_p95"] = float(torch.quantile(V.abs().reshape(-1), 0.95))
         if sites is not None and bool(sites.any()):
             out["site_on_site"] = [float(x) for x in t_site[sites].reshape(-1)]
             if self.beta_b:
@@ -583,19 +629,26 @@ class H0(nn.Module):
         edge_vector = edge_vector.to(torch.float64)
         Q_geo = None
         base_scalars = scalars
+        V_cf = None
         if getattr(self, "decoupled", False):                 # O3: nothing from the base enters H0
-            scalars, vectors, Q_geo = self.geometric_inputs(
+            scalars, vectors, Q_geo, V_cf = self.geometric_inputs(
                 species, edge_index, edge_vector, int(species.shape[0]))
         scalars = scalars.to(torch.float64)
         site_feats = (base_scalars.to(torch.float64)
                       if getattr(self, "on_site_from_base", False) else scalars)      # O3.D
         local = torch.arange(scalars.shape[0], device=scalars.device) - batch * n_nodes
         edge_graph = batch[edge_index[0]]
-        pot = scalars[:, -3] if getattr(self, "crystal_field", False) else None
+        if getattr(self, "crystal_field", False) and V_cf is None:
+            raise ValueError("the crystal field needs the decoupled path, which computes `V`")
+        pot = V_cf
         H = self.sk.batched(site_feats, species, edge_index, edge_vector, local, edge_graph,
                             n_nodes, num_graphs, potential=pot)
         dim = n_nodes * ORBITALS_PER_ATOM
         levels = self.sk.on_site(site_feats, species, None)                           # [N, 2]
+        if getattr(self, "cf_mlp", False):
+            levels = levels + self.cf_shift(scalars, species)
+        if getattr(self, "cf_linear", False):
+            levels = levels + self.cf_linear_shift(V_cf, species)
         diag = torch.cat([levels[:, :1], levels[:, 1:].expand(-1, 3)], dim=-1)           # [N, 4]
         diag = diag.reshape(num_graphs, dim)
         eye = torch.eye(dim, dtype=H.dtype, device=H.device)
@@ -620,6 +673,47 @@ class H0(nn.Module):
             H = H + float(self.gauge_shift) * eye
         return H
 
+    def cf_linear_shift(self, V: torch.Tensor, species: torch.Tensor) -> torch.Tensor:
+        '''O5a as specified: `d eps_i = s_Z (V_i - V_bar_Z)`, linear, no MLP, `[N, 2]` in eV.
+
+        `V_bar_Z` is the per-species mean of the potential over the training ensemble -- the
+        same quantity A1.1 already stores, so nothing new is fitted for it. `s_Z` is two numbers
+        per species (s and p shells), zero-initialised, so the arm starts exactly at its parent.
+
+        NOTE, recorded rather than hidden: this channel is OUTSIDE A1's `Delta_Z tanh` bound by
+        construction -- the specified form has no squashing. `V` is bounded by the cutoff so the
+        shift cannot run away, but the barrier and the saturation report do not see it, and its
+        p95 is reported separately for that reason.
+        '''
+        vbar = self.cf_vbar.to(V.dtype)[species]
+        d = (V - vbar).unsqueeze(-1) * self.cf_scale.to(V.dtype)[species]
+        self.sk._audit_store("cf_linear", d)
+        return d
+
+    def cf_shift(self, scalars: torch.Tensor, species: torch.Tensor) -> torch.Tensor:
+        '''O5c: the dedicated crystal-field readout's contribution to the on-site levels.
+
+        Returns `[N, 2]` in eV, already bounded -- `Delta_Z tanh(.)`, the same form and the same
+        bound A1 puts on the main readout -- so nothing here escapes the barrier or the
+        saturation report. In O5a the three invariants are three inputs among 214 and the
+        readout can barely distinguish them; here they get an undiluted path.
+
+        NOT A SECOND TERM INSIDE THE MAIN BOUND: this is its OWN `Delta_Z tanh`, added to the
+        LEVEL beside the main readout's. So the arm's extra channel is squashed at `Delta_Z`
+        and pays the L2 and the barrier (`_reg_store` below), where O5a's linear shift pays
+        neither. The MLP is the more constrained of the two forms, not the freer one.
+
+        Zero at initialisation, so O5c starts exactly at O5a. Unlike the LES latent charges this
+        really does START rather than pin: the pre-activation is linear in the final layer's
+        weights, so their gradient is the hidden activation and is non-zero there.
+        '''
+        h = self.sk.standardise(scalars, species)[:, -3:]     # A1.1, as registered
+        e = self.elem_env(species).to(h.dtype)
+        pre = self.cf_site(torch.cat([h, e], dim=-1))
+        self.sk._audit_store("cf_site", pre)
+        self.sk._reg_store("cf_site", pre)
+        return self.sk.delta[species].to(pre.dtype) * torch.tanh(pre)
+
     def geometric_inputs(self, species, edge_index, edge_vector, n_nodes):
         """O3: `(A0, v, Q)` from geometry alone -- the head's inputs when `decoupled`.
 
@@ -628,14 +722,16 @@ class H0(nn.Module):
         -- it is worth 34 % on energies and nothing here displaces it."""
         A0, v, Q = self.descriptor(species, edge_index, edge_vector, n_nodes)
         if not getattr(self, "crystal_field", False):
-            return A0, v, Q
+            return A0, v, Q, None
         V, E, GE = self.cfield(species, edge_index, edge_vector, n_nodes)
         inv = torch.stack([V, E.norm(dim=-1), (GE * GE).sum(dim=(-1, -2))], dim=-1)
-        A0 = torch.cat([A0, inv], dim=-1)
-        # the field takes the vector slot; `vector_mix` contracts over n_vectors channels, so
-        # broadcast the single field vector across them -- the mix then learns one scale.
-        v = E.unsqueeze(1).expand(-1, v.shape[1], -1)
-        return A0, v, GE
+        if not getattr(self, "cf_linear", False):
+            A0 = torch.cat([A0, inv], dim=-1)
+        # The field takes the vector slot. With `crystal_field` the head is built with
+        # `n_vectors = 1`, so this is literally the ruling's `a_i (E_i . T_sp)` -- one species
+        # scalar times the field -- rather than a broadcast contracted by a redundant mix.
+        v = E.unsqueeze(1)
+        return A0, v, GE, V
 
     def directional_site_blocks(self, scalars: torch.Tensor, vectors: torch.Tensor,
                                 species: torch.Tensor, edge_index: torch.Tensor,
@@ -665,19 +761,29 @@ class H0(nn.Module):
         edge_vector = edge_vector.to(torch.float64)
         Q_geo = None
         base_scalars = scalars
+        V_cf = None
         if getattr(self, "decoupled", False):                 # O3, as in `batched`
-            scalars, vectors, Q_geo = self.geometric_inputs(species, edge_index, edge_vector, n)
+            scalars, vectors, Q_geo, V_cf = self.geometric_inputs(species, edge_index, edge_vector, n)
         scalars = scalars.to(torch.float64)
         # O3.D: the readouts see the BASE's block 0; the descriptor still drives the hoppings
         # (which read nothing, the modulation being off) and the directional block's v and Q.
         site_feats = (base_scalars.to(torch.float64)
                       if getattr(self, "on_site_from_base", False) else scalars)
-        # O5a: the polarity modulation needs the potential; it is the third-from-last column of
-        # the scalar block that `geometric_inputs` appended, so no second pass over the edges.
-        pot = scalars[:, -3] if getattr(self, "crystal_field", False) else None
+        # O5: the polarity modulation and the linear on-site shift both need `V`, which
+        # `geometric_inputs` RETURNS (it used to be stashed on the module, which worked only
+        # because the producer happened to run immediately before the consumer). `V` exists
+        # only on the decoupled path, and O5 is decoupled; say so rather than raise a
+        # NoneType error three frames down.
+        if getattr(self, "crystal_field", False) and V_cf is None:
+            raise ValueError("the crystal field needs the decoupled path, which computes `V`")
+        pot = V_cf
         H = self.sk(site_feats, species, edge_index, edge_vector, madelung=None, n_nodes=n,
                     potential=pot)
         levels = self.sk.on_site(site_feats, species, None)
+        if getattr(self, "cf_mlp", False):
+            levels = levels + self.cf_shift(scalars, species)
+        if getattr(self, "cf_linear", False):
+            levels = levels + self.cf_linear_shift(V_cf, species)
         diag = torch.cat([levels[:, :1], levels[:, 1:].expand(-1, 3)], dim=-1).reshape(-1)
         H = H - torch.diag(torch.diagonal(H)) + torch.diag(diag)
         if self.directional:

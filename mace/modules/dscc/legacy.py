@@ -552,6 +552,8 @@ class SlaterKosterH(nn.Module):
         # ~20 % modulation W6 uses on the flanking bonds, which O3.2's angular screening could
         # not stand in for -- and unlike that screening it is two-body.
         self.polarity = nn.Parameter(torch.zeros(num_elements, num_elements)) if polarity else None
+        if polarity:                     # the sign floor's accumulator; see `polarity_floor`
+            self.register_buffer("_pol_floor", torch.full((), float("inf")), persistent=False)
                 
         if envelope not in ENVELOPES:
             raise ValueError(f"unknown radial envelope {envelope!r}; expected one of "
@@ -727,9 +729,19 @@ class SlaterKosterH(nn.Module):
         e_node = self.elem(species)
         lo = torch.minimum(src, dst)
         hi = torch.maximum(src, dst)
-        key = lo * int(node_feats.shape[0]) + hi
-        uniq, inverse = torch.unique(key, return_inverse=True)
-        ulo, uhi = uniq // int(node_feats.shape[0]), uniq % int(node_feats.shape[0])
+        if getattr(self, "dedupe_pairs", True):
+            key = lo * int(node_feats.shape[0]) + hi
+            uniq, inverse = torch.unique(key, return_inverse=True)
+            ulo, uhi = uniq // int(node_feats.shape[0]), uniq % int(node_feats.shape[0])
+        else:
+            # CAPTURE-SAFE. `torch.unique` produces a VALUE-DEPENDENT SHAPE, which CUDA-graph
+            # capture forbids outright ("operation not permitted when stream is capturing") --
+            # and which, if it were somehow captured, would bake one frame's unique set into
+            # the replay. Evaluating the MLP once per EDGE instead of once per unique pair is
+            # the same function of the same inputs, so the values are bit-identical (the gate
+            # holds them at 0.0); it costs the 2-3x redundancy O1 removed. Used only inside a
+            # capture, where a fixed shape is worth more than the saving.
+            ulo, uhi, inverse = lo, hi, torch.arange(lo.shape[0], device=lo.device)
         si, sj = s_node[ulo], s_node[uhi]
         ei, ej = e_node[ulo], e_node[uhi]
         sym = torch.cat([si + sj, (si - sj).abs(), ei + ej, (ei - ej).abs()], dim=-1)
@@ -761,7 +773,9 @@ class SlaterKosterH(nn.Module):
             b = 0.5 * (b + b.transpose(0, 1))            # Hermiticity, as for the screening
             dv = potential[src] - potential[dst]
             self._audit_store("polarity", (dv * dv).unsqueeze(-1))
-            t_sk = t_sk * (1.0 + b[node_species[src], node_species[dst]] * (dv * dv)).unsqueeze(-1)
+            factor = 1.0 + b[node_species[src], node_species[dst]] * (dv * dv)
+            self._polarity_floor_store(factor)
+            t_sk = t_sk * factor.unsqueeze(-1)
         pre = None
         if getattr(self, "hop_modulation", True):
             _, pre = self.pair_correction(node_feats, node_species, src, dst)
@@ -801,6 +815,11 @@ class SlaterKosterH(nn.Module):
             beta = float(getattr(self, "hop_log_beta", HOP_LOG_BETA_DEFAULT))
             return torch.exp(beta * torch.tanh(pre))
         return 1.0 + self.hop_range * torch.tanh(pre)
+
+    # O1's pair deduplication. A CLASS ATTRIBUTE rather than a `getattr` default, so it can be
+    # read and asserted on without an AttributeError -- CUDA-graph capture turns it off (see
+    # `GraphedStep`) and a gate checks it is turned back on.
+    dedupe_pairs: bool = True
 
     _audit = False
     _audit_bin: Dict[str, list] = {}
@@ -906,6 +925,38 @@ class SlaterKosterH(nn.Module):
     def regularisation(self) -> Dict[str, torch.Tensor]:
         """`mean(tanh^2)` per term over everything seen since the last reset."""
         return {k: v[0] / max(v[2], 1) for k, v in getattr(self, "_reg_bin", {}).items()}
+
+    # ------------------------------------------- O5: the polarity factor's sign floor
+    #
+    # `t -> t (1 + beta_ZZ' dV^2)` is the ONE term in the O5 head that is not bounded by a
+    # tanh. `dV^2` is non-negative, so a beta that goes negative drives the factor through
+    # ZERO and out the other side -- the hopping changes sign, which is the failure mode
+    # `modulation`'s docstring records for the linear form and the reason W6's hopping is
+    # `1 + range*tanh`. Nothing in the ruling bounds it, so it is watched instead: the
+    # per-epoch minimum over every edge seen, with a hard stop the moment it is not positive.
+    # Cheap (one `min` per batch, no graph), and it turns a silent sign flip into a stop.
+    # KEPT ON THE DEVICE. `float(t.min())` here is a device-to-host sync, which is exactly
+    # what CUDA-graph capture forbids -- it took the capture gate down with
+    # "operation not permitted when stream is capturing". The running minimum is therefore a
+    # non-persistent buffer updated in place with `torch.minimum`, and the ONE host read
+    # happens in the trainer, once an epoch, outside any captured region.
+    def _polarity_floor_store(self, factor: torch.Tensor) -> None:
+        buf = getattr(self, "_pol_floor", None)
+        if buf is None:
+            return
+        buf.copy_(torch.minimum(buf, factor.detach().min().to(buf.dtype)))
+
+    def polarity_floor(self, reset: bool = False) -> Optional[float]:
+        """`min(1 + beta dV^2)` over every edge since the last reset; `None` if no polarity.
+
+        Syncs. Call it once an epoch, never inside a captured or timed region."""
+        buf = getattr(self, "_pol_floor", None)
+        if buf is None:
+            return None
+        v = float(buf)
+        if reset:
+            buf.fill_(float("inf"))
+        return None if v == float("inf") else v
 
     def barrier(self) -> Dict[str, torch.Tensor]:
         """`mean(relu(|pre| - knee)^2)` per term: zero in normal operation, and its gradient

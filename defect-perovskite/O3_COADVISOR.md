@@ -346,3 +346,54 @@ Two things we would want your view on first:
 
 Also recorded, unchanged by these arms: **the decoupled head with electrostatics (13.32 at best)
 is still worse than the coupled head without them (`Phi = 0`, 12.22).**
+
+---
+
+## 9. Corrections of record (added 2026-09-14, after the report was first sent)
+
+Two things in this report describe arms that differ from what was specified. They are listed
+here rather than silently amended, because you have already read the numbers once.
+
+**9.1 O3.3's invariants were the full pairwise Gram, not the norms.** The ruling specified the
+correlation-2 invariants `|A^(1)_n|^2` of the head's own A-tensors — 6 channels at `N_r = 6`.
+What was built and run is `A^(1)_n . A^(1)_m`, the full symmetric pairwise set — **21 channels**,
+which contains the specified 6 as its diagonal. This was not flagged when O3.3 was registered.
+It propagates into **O3.3b and O5b**, both of which sit on the same descriptor, so every number
+reported for those three arms is a number for the 21-channel form. The direction of the effect
+is not obvious a priori: it is a strictly larger basis, which fits the observed larger on-site
+corrections and the faster arrival at the A1 barrier (§8.5), but the arms were *not* worse than
+the specified form would have been by any argument we can make without running it. Alex's
+decision is not to re-run O3.3; §8's conclusions stand as conclusions about the 21-channel form.
+
+**9.2 The first O5a runs were not O5a, and were cancelled.** The O5 ruling says "on-site shift,
+linear, no MLP" and "linear readouts". The first implementation appended `(V_i, |E_i|,
+tr(grad E . grad E))` to the 211-wide scalar block and fed them to the existing on-site MLP — a
+strictly larger hypothesis class that confounds the crystal field with an MLP you declined.
+Those runs were cancelled before completion and none of their numbers appear anywhere. The
+corrected arm (`--cf_linear`, `delta_eps_i = s_Z (V_i - V_bar_Z)`, invariants kept out of the
+readout) is queued alongside your MLP fallback (`--cf_mlp`) as a matched pair; full registration
+in `DSCC_V5_IMPLEMENTATION_SPEC.md` under "O5 — CORRECTION OF RECORD AND RE-REGISTRATION",
+including two stated departures from the letter (`s_Z` is per-shell, and O5c keeps the B-basis
+readout beside the new MLP).
+
+**9.3 A gate you named found a real bug.** `capture.fits()` had not been run. Running it showed
+that `GraphedStep` kept its own guard list, separate from the forward's analytic-route gate, and
+did not exclude the crystal field — so a captured O5-linear model replayed forces **19 meV/Å
+wrong**, the crystal-field terms simply absent from the closed-form gradient, with nothing
+raised. Both callers now ask one predicate and capture refuses O5 with a reason. The primitive
+itself is two-body and pads exactly (`V` and `E` bit-identical under 216 to 3288 dummy edges);
+what it lacks is `dV/dR` in the analytic kernel. Neither capture nor the analytic force is on
+the training path, so this costs the arms nothing, but the two-body claim does have that hole.
+
+**9.4 O5b is not the radial-resolution control it was registered as.** It was registered as
+"O3.3b with `N_r = 16` against the standing 6. One flag." With correlation-2 on, `N_r` enters the
+scalar block quadratically (the `l = 0` Gram is `n0(n0+1)/2` with `n0 = N_r × n_species`): the
+readout input goes 211 → **1,361** channels and live parameters 18,596 → **92,406**, a 5× capacity
+increase that brings it within 20 % of W6's own 110,314. A train-versus-held probe on the saved
+checkpoints confirms the consequence — O5b fits the training set *better* than O3.3b (12.1 against
+13.7 meV/Å per component) and carries the only real generalisation gap in the programme (+1.1,
+where every other arm including W6 is within 0.4 of zero). **Its result has to be read as a
+capacity arm; the resolution question is still open.** The control that actually asks it is a
+*smaller* cutoff at fixed `N_r` — the O3 descriptor spreads six Bessels over 10 Å (1.67 Å
+resolution) where W6's base features covered one 6.0 Å hop and its rank-2 quadrupole stopped at
+4.5 Å, so the near field is resolved about twice as coarsely as in the model being matched.

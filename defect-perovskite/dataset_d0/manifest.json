@@ -1,0 +1,51 @@
+{
+ "stage": "label",
+ "n_parents": 2817,
+ "counts": {
+  "charged_relabelled": 1047,
+  "neutral": 1770,
+  "perturbed": 25353,
+  "strained": 1980,
+  "polar": 168
+ },
+ "total": 21870,
+ "built": "2026-09-15 12:52:04",
+ "teacher": "/home/alex/.cache/mace/macemh1model",
+ "teacher_sha256": "a522eb7f59c7879963d41586528f4980baf33e086c94aa92e3eafdeccad3be47",
+ "head": "omat_pbe",
+ "precision": "float32",
+ "cueq": true,
+ "E0_predicted": {
+  "17": -2.2518937587738037,
+  "55": -0.9701953530311584,
+  "82": -1.0371778011322021
+ },
+ "E0_stored_row": {
+  "17": -0.25740036368370056,
+  "55": -0.12969280779361725,
+  "82": -0.7736063599586487
+ },
+ "split_seed": 0,
+ "split": {
+  "train": {
+   "IsolatedAtom": 3,
+   "charged_relabelled": 943,
+   "neutral": 1593,
+   "perturbed": 15216,
+   "polar": 152,
+   "strained": 1812
+  },
+  "valid": {
+   "charged_relabelled": 104,
+   "neutral": 177,
+   "perturbed": 1686,
+   "polar": 16,
+   "strained": 168
+  }
+ },
+ "n_held_parents": 281,
+ "labelled": "2026-09-15 13:11:28",
+ "seconds": 338.04712772369385,
+ "amendment_2026-09-15_13:40": "tilings family (300 structures, 159/319/639 atoms) removed per the D0 cell-size amendment: no structure larger than 160 atoms; labels from a local teacher on cells beyond its receptive field contain the absence of long-range physics and would train the LES term to suppress it; kept in tilings_removed.xyz, unused",
+ "amendment_2026-09-16_09:50": "perturbed sigma=0.2 copies dropped (kept in *_s02dropped.xyz); sigma 0.05/0.10 kept"
+}

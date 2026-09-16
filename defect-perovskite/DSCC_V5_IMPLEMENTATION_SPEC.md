@@ -3857,6 +3857,12 @@ on-site bound; G2a and G2b; the analytic-force FD gate; `capture.fits()`.
 - **O5a closes the near field and the `q0` disagreement** → adopt the crystal-field head.
 - **O5b closes it and O5a does not** → the basis was simply under-resolved, and the physics
   argument was unnecessary.
+  **VOID as written (2026-09-14, see the architecture audit below).** `N_r` enters the
+  correlation-2 scalar block QUADRATICALLY, so O5b is not a resolution control: it is a 6.4x
+  widening of the readout input and a 5x increase in live parameters, and it carries the only
+  real generalisation gap in the programme (+1.1 meV/Å). Its result must be read as a CAPACITY
+  arm. **The radial-resolution question is still open**, and the control that actually asks it
+  is a SMALLER cutoff at fixed `N_r`, not a larger `N_r`.
 - **Neither** → the deficit is the pretrained prior, and the cached-Jacobian W6 (below) is the
   model.
 
@@ -3868,3 +3874,1215 @@ and cacheable per frame (sparse within 6 Å, tens of MB/frame). The force loss w
 `create_graph` traversal of block 0, taking W6's training from 124 s/epoch to roughly the
 decoupled head's speed **with no change to the model**. That is the fallback if the physics arms
 do not land, and it is worth doing on its own merits.
+
+---
+
+## O5 — CORRECTION OF RECORD and RE-REGISTRATION (2026-09-14, written before either arm runs)
+
+Three entries below are corrections to what this tracker already says, written because the
+record has to describe what was BUILT, not what was intended. They are listed before the
+re-registration because the re-registration only makes sense against them.
+
+### Correction 1 — the cancelled `dscc_o5a_s*` runs were not O5a
+
+The ruling says, twice and unambiguously: `delta_eps_i = s_Z (V_i - V_bar_Z)`, **"on-site
+shift, linear, no MLP"**, and **"linear readouts"**. What was built and launched appended the
+three invariants `(V_i, |E_i|, tr(grad E . grad E))` to the 211-channel scalar block and fed
+the 214-wide result to the existing on-site MLP. That is a strictly larger hypothesis class
+than the one registered, it confounds the crystal field with an MLP the ruling declined, and
+the result would not have answered the question the arm was set to answer. **Those runs are
+cancelled and their partial results are not to be read as O5a.** The queue file is at
+`~/runs/o5a_mlp_CANCELLED.txt`.
+
+### Correction 2 — O3.3's invariants were pairwise, not the specified norms
+
+The ruling for O3.3 specified the correlation-2 invariants `|A^(1)_n|^2` of the head's own
+A-tensors — 6 channels at `N_r = 6`. What was built is the full pairwise Gram
+`A^(1)_n . A^(1)_m` — 21 channels, containing the 6 as its diagonal. This was not disclosed
+when O3.3 was registered. **It propagates into O3.3b and into O5b**, both of which are built
+on the O3.3 descriptor, so every reading of those arms is a reading of the 21-channel form.
+The user's decision is not to re-run O3.3; the record states what the arm was.
+
+### Correction 3 — gates named in the ruling that had not been run
+
+`capture.fits()` and the analytic-force FD gate were named in the O5 gate list and neither had
+been exercised. Both have now been run and one of them found a live bug; see **Gate status**
+below. Separately: O3.3 and O3.D ran sequentially rather than in parallel, the optional
+learning curve was never run, and **O3.3b was not the coadvisor's arm — it was proposed here**
+(user-approved) after the instability diagnosis.
+
+### Arm O5a (corrected) — the crystal field with LINEAR readouts
+
+O3.3b with the damped-Coulomb primitive, **exactly as the ruling writes it**:
+
+| term | form | flag |
+|---|---|---|
+| potential (l = 0) | `V_i = sum_j q_{Z_j} erf(r_ij / a_{Z_iZ_j}) / r_ij . f_cut(r_ij)` | |
+| on-site | `delta_eps_i = s_Z (V_i - V_bar_Z)`, **linear, no MLP** | `--cf_linear` |
+| rank-1 | `a_i (E_i . T_sp)`, `E_i = -grad_i V_i` | |
+| rank-2 | `b_i (grad E_i : T_pp)`, traceless | |
+| hopping | `t_ij -> t_ij [1 + beta_{ZZ'} (V_i - V_j)^2]`, `beta` zero-init, symmetrised | |
+
+`q_Z` from the pristine Mulliken means (hard-fails if they are zero — the LES lesson), `a_Z`
+per species, `V_bar_Z` the pristine per-species mean, `s_Z` zero-init so the arm **starts
+exactly at O3.3b**. A1.1 standardisation stays on the scalar block; the B-basis is kept as the
+second `l = 0` input; **the three invariants do not enter the readout** in this arm.
+
+Two departures from the letter of the ruling, stated rather than left to be found:
+
+1. **`s_Z` is `[n_elements, 2]`, not one scalar per species** — an independent shift for the s
+   and p levels. The natural generalisation (the ruling's own `T_sp`/`T_pp` split treats the
+   shells separately), one extra number per species, but it is a choice.
+2. **`delta_eps_i` sits OUTSIDE A1's `Delta_Z tanh` bound by construction.** It is a linear
+   term; bounding it would make it not the term that was specified. `V` is bounded in practice
+   by the cutoff and the fixed charges, and the on-site saturation report still covers the
+   tanh'd part.
+
+### Arm O5c — the MLP fallback, run alongside rather than after
+
+The ruling offered "a small MLP on `(V_i, |E_i|, tr(grad E . grad E))` with A1.1
+standardisation" as "the lightweight place for one, but I would not start there". Both are
+queued together, because the pair IS the measurement: same primitive, same everything else,
+linear against MLP. `--cf_mlp` adds a dedicated `[3 + elem_dim, hidden, 2]` MLP with a
+zero-initialised final layer, inside the `Delta_Z tanh`.
+
+**One departure, stated:** the ruling's fallback reads as an MLP *instead of* the linear form
+on those three inputs. O5c keeps the B-basis readout alongside it, so its on-site channel has
+two MLPs. That is deliberate — the only difference between O5a and O5c is then the form of the
+crystal-field term, which is the comparison worth making — but it is not the letter.
+
+### The one unbounded term, and what watches it
+
+`t_ij [1 + beta (V_i - V_j)^2]` is the only term in either arm that no `tanh` bounds, and
+`(V_i - V_j)^2 >= 0`, so a `beta` that goes negative drives the factor through **zero** and
+flips the sign of a hopping. That is the documented failure of the linear modulation form and
+the reason W6's hopping is `1 + range tanh`. The ruling does not bound it, so it is **watched**
+instead: `SlaterKosterH.polarity_floor` accumulates `min(1 + beta dV^2)` over every edge, the
+trainer reads it once an epoch into `history.json` as `polarity_floor`, and **the run stops**
+the moment it is not positive. A sign flip otherwise yields a complete run of plausible
+numbers with nothing visibly wrong.
+
+### Gate status (of the gates the ruling named)
+
+| gate | status |
+|---|---|
+| paired TOST vs W6 (τ = 1.7) and vs O3.3b | on the result, as for every arm |
+| by-shell table, flanking Pb / first-shell Cl | on the result |
+| `q0` disagreement with W6 by shell | on the result — the diagnostic that chose this target |
+| saturation, incl. whether the new channels re-saturate the bound | on the result |
+| energies G2a / G2b | on the result |
+| **analytic-force FD gate** | **not applicable, and now enforced** — see below |
+| **`capture.fits()`** | **run; it found a live bug** — see below |
+
+**`capture.fits()` found that capture was silently wrong for O5.** The ruling's argument for
+the damped-Coulomb primitive was that it is two-body, so the capture and analytic paths keep
+working. The primitive is two-body and its padding is exact — `V` and `E` are bit-identical
+under 216, 1240 and 3288 dummy edges, and the force discrepancy (1.7e-18, autograd
+reassociation in the traceless-Hessian scatter) does not move with the dummy count, which is
+the gate that distinguishes reassociation from contamination. But the captured tail **is** the
+closed-form gradient `h0_position_gradient`, and the closed form contains no `dV/dR`.
+`MACEDSCC.forward` already refused the analytic route for `crystal_field`; `GraphedStep` kept
+its own separate guard list and did not. An O5-**linear** model therefore captured without
+complaint and replayed forces **19 meV/Å wrong**, the crystal-field terms simply absent from
+the gradient, widths matching by coincidence so nothing raised. (The MLP form crashed instead,
+101 channels against 104, which is how it was found.) Fixed by making both callers ask one
+predicate, `analytic.analytic_refusal(model)`; capture now refuses O5 with a reason, and a gate
+asserts the two callers agree. **Capture and the analytic force for O5 wait on extending the
+kernel with `dV/dR`; neither is on the training path, so neither costs the arm anything.**
+
+### Gates added with these arms (27 in `TestO5aCrystalField` / `TestO5OnSiteForms`, 4 in `test_capture.py`)
+
+The potential is a RETURN VALUE of `geometric_inputs`, not stashed on the module (it was, and
+it worked only because the producer happened to run immediately before the consumer); the
+linear shift starts at zero and moves; with the crystal field on there is exactly **one**
+vector channel and it is the field itself, so the rank-1 block is literally `a_i (E_i . T_sp)`
+rather than the field broadcast across `N_r` channels and contracted by a redundant mix; the
+charges come from the pristine means; forces match finite differences in both forms; the head
+still reads nothing from the base; the polarity floor is recorded, reset, and acted on.
+
+---
+
+## W6 → O5 ARCHITECTURE AUDIT (2026-09-14, requested: has anything changed beyond the registered scope?)
+
+### 1. Verified IDENTICAL between W6 and O5a (checked, not assumed)
+
+The energy expression is gated on `scf_free`, **not** on `decoupled`: both arms sum
+`E_base + dF_band(H0) + E_host + E_M + C_Q`, the same code path, no term dropped for the
+decoupled head. Hyperparameters read from the runs' own logs, not from defaults:
+`eta 1.0986`, `beta_a 0.00`, `beta_b 0.00`, `Delta_Z 3.079 eV`, `l2 1.8e-6`, `lr 2e-3` cosine
+to `1e-4`, knee 2.0, grad_clip 10, 60 epochs, batch 4, `energy_weight 0.05`, `force_weight 1.0`,
+`gap_weight 1.0`, `e_gap 2.4`, `r_cut 10.0`, `avg_window 10`, same folds and seeds.
+
+`beta_a = beta_b = 0` in **both** means `a_i` and `b_i` are pure species scalars in W6 and in
+O5a alike (`site_coefficients`: "at beta = 0 this is `b_max tanh(beta_Z)`, the species
+coefficient EXACTLY") -- which is also exactly what the O5 ruling asked for.
+
+### 2. Registered changes, all traced to their registration
+
+`decoupled` + `hop_modulation = False` (O3); standardisation and `readout_init_scale`
+0.05 -> 0.1 (A1.1 at O3.1, registered in as many words); correlation-2 (O3.3, with the
+21-vs-6 correction already on record); `sat_weight` 1e-3 -> 1.0 (O3.3b); crystal field,
+polarity, `cf_linear` (O5a); `n_vectors = 1` (today).
+
+### 3. Registered but NEVER ISOLATED: every H0 input channel's REACH changed, and its RESOLUTION with it
+
+Cutoffs read off the saved checkpoints, not inferred: `h0.r_cut` 10.0 and `h0.q_cut` 4.5 on every
+model; `descriptor.r_cut` 10.0 on O3.3b, O5b and O5lin; `cfield.r_cut` 10.0 on O5lin. The base is
+`r_max` **6.0 A** with two interaction blocks, and the head reads `first_block` ONLY -- so W6's
+scalar and vector inputs have a ONE-HOP, 6.0 A receptive field, not the two-hop 12 A.
+
+| H0 input | W6 | O3 / O3.1 / O3.3 / O3.3b / O5b | O5a / O5c |
+|---|---|---|---|
+| `l = 0` on-site | base block 0, **6.0 A**, learned many-body within the hop | descriptor, **10 A**, two-body sums | same (B-basis kept) |
+| `l = 1` rank-1 | base `l = 1`, **6.0 A** | descriptor, **10 A** | crystal field `E`, **10 A** |
+| `l = 2` rank-2 | fixed quadrupole, **4.5 A**, no learned coefficients | descriptor, **10 A**, learned `c2` | field gradient `grad E`, **10 A** |
+
+Every channel's reach grew. This follows from the registered "Radial family" decision -- "Bessel,
+`N_r = 6`, on `[0, r_cut]`, times H0's own taper, so the head carries ONE cutoff radius and one
+smoothness class" -- so it is in scope. But that argument is UNIFORMITY, and this tracker records a
+PHYSICS argument for 4.5 A on the `l = 2` channel specifically: "it reaches the first coordination
+shell and the Cs neighbours (Pb-Cl 2.8, Cs-Cl 3.5-4.1 A) and **not the second Pb shell**".
+
+**The operative variable may be RESOLUTION, not reach.** `N_r` Bessels spread over `[0, r_cut]`
+resolve `r_cut / N_r`:
+
+| basis | radial resolution | first shell (Pb-Cl 2.8 A) |
+|---|---|---|
+| W6's base features, 6.0 A | (learned, many-body) | one hop |
+| O3+ descriptor, `N_r = 6` on 10 A | **1.67 A** | ~1.7 shells per basis function |
+| the same 6 on 6.0 A | 1.00 A | |
+| the same 6 on 4.5 A | 0.75 A | |
+
+The same six functions spread over 10 A resolve the near field roughly **2x more coarsely** than
+over the window W6's inputs actually covered. **O5b is evidence that this bites**: raising `N_r`
+6 -> 16 improved the TRAINING fit markedly (12.1 against O3.3b's 13.7, section 6) -- which is what
+buying back near-field resolution looks like -- but it bought it at 5x the live parameters and
+brought the only real generalisation gap in the programme (+1.1).
+
+**So the untried control is a SMALLER cutoff, not a larger `N_r`**: it buys the same resolution at
+fixed `N_r` and fixed parameter count, and it is the opposite lever from O5b. Matched to what W6
+actually had, that is **6.0 A for `l = 0` and `l = 1`, 4.5 A for `l = 2`** -- not 4.5 everywhere,
+which would be smaller than anything W6 used on the first two channels. Note this is a control on
+**O3.3b**, not on O5a: O5a's rank-1 and rank-2 slots carry the crystal field, whose reach is
+`cfield.r_cut`, so a descriptor-cutoff arm tests the B-basis channel underneath both.
+
+Not a flag: `GeometricDescriptor` carries one `r_cut` across all `l`, so per-`l` cutoffs are an
+implementation and a registration, not a rerun. Registered here as the recommendation; not built.
+
+### 4. Parameter counts: O5a has 6x FEWER LIVE parameters than W6
+
+A `requires_grad` count is not a capacity count: modules that are never evaluated still report
+their weights. `f_read`/`g_read` are unreachable whenever `beta_a = beta_b = 0` (every arm), and
+`sk.hop` is unreachable whenever `hop_modulation = False` (every arm from O3 on; **live in W6**).
+Verified by backward -- the listed parameters receive exactly zero gradient.
+
+| model | total `h0` | **live** | structurally dead | scalar block |
+|---|---:|---:|---:|---:|
+| W6 | 177,132 | **110,314** | 66,818 | base block-0 invariants |
+| O3.1 | 17,642 | **6,244** | 11,398 | 18 |
+| O3.3b | 79,402 | **18,596** | 60,806 | 211 |
+| **O5b** | **447,612** | **92,406** | 355,206 | **1,361** |
+| O5a-lin | 79,414 | **18,608** | 60,806 | 211 |
+| O5c-mlp | 81,266 | **19,692** | 61,574 | 211 |
+
+O5a carries 18,608 live parameters against W6's 110,314 -- a sixth. Every decoupled arm EXCEPT
+O5b is far smaller than the model it is trying to match; O5b at 92,406 is within 20 % of W6 and is
+the exception (section 5).
+
+**The single largest registered difference is `sk.hop`**: 71,044 of W6's 110,314 live parameters --
+64 % of the model -- is the hopping-modulation MLP that made W6's `t_ij` depend on the two atoms'
+BASE FEATURES. O3 deleted it (`hop_modulation = False`), leaving two-body hoppings `v0 . radial(r)`.
+If the user asks what could be impacting performance, that is the answer: the programme's whole
+premise is whether physics (three-body screening, then the crystal field) can replace a learned
+environment dependence that was two thirds of the shipped model.
+
+### 5. O5b was mis-registered as a cheap control. It is the largest arm in the programme.
+
+O5b was registered as "O3.3b with `N_r = 16` against the standing 6. **One flag.**" With
+correlation-2 on, `N_r` enters the scalar block QUADRATICALLY -- the `l = 0` Gram is
+`n0 (n0+1) / 2` with `n0 = N_r x n_species`:
+
+* `N_r = 6`  -> `n0 = 18`, block `18 + 171 + 21 + 1 = 211`, **18,596 live parameters**
+* `N_r = 16` -> `n0 = 48`, block `48 + 1176 + 136 + 1 = 1,361`, **92,406 live parameters**
+
+Not a 2.7x radial-resolution control: a **6.4x** widening of the readout input and a **5x**
+increase in live parameters over its own parent -- the largest of the decoupled arms, and the only
+one that approaches W6's live-parameter count (92,406 against 110,314). The registration did not
+say so and I did not notice when writing it. Its result has to be read as
+a capacity arm, not as a resolution control, and **the resolution question remains unanswered.**
+
+### 6. Train-vs-held probe: the direct measurement, and a correction
+
+`history.json`'s `force` is a stratum-WEIGHTED loss term accumulated over an epoch while the
+weights were still moving. I used it to claim O5b "fits ~2 % worse on the data it trained on".
+**That was wrong.** Re-evaluating the saved checkpoints with the same `evaluate` that produces
+the held numbers (200-frame training sample; per-component meV/A):
+
+| model | epoch | train | held | gap |
+|---|---:|---:|---:|---:|
+| W6 s0 | 60 | 11.1 | 11.2 | +0.1 |
+| O3.1 s1 | 60 | 13.9 | 14.2 | +0.4 |
+| O3.3b s0 | 60 | 13.7 | 13.6 | -0.1 |
+| **O5b s0** | 60 | **12.1** | **13.2** | **+1.1** |
+| O5a-lin s0 | 57 | 13.7 | 13.8 | +0.1 |
+| O5c-mlp s0 | 54 | 14.7 | 14.6 | -0.1 |
+
+**The O5a and O5c rows are mid-run checkpoints at DIFFERENT epochs (57 and 54) and are not
+comparable to each other or to the finished ep-60 rows.** They are listed for their gap, which is
+what this table is for, not for their level.
+
+O5b fits the training set **better** than O3.3b (12.1 against 13.7) and carries the only real
+generalisation gap in the table (+1.1 where every other arm is within 0.4 of zero). That is the
+signature of the capacity increase in section 5, and it is consistent with O5b winning on seed 0
+(13.2 against 13.6) while losing the six-seed mean (14.5 against 13.6): it uses the extra
+capacity, and across seeds the added variance costs more than the added fit.
+
+Every other arm sits at gap ~0 -- W6 included, at a LOWER absolute error with 6x more live
+parameters. So the O3-lineage deficit is not overfitting and not a parameter shortfall; the
+untested candidate the audit surfaces is section 3, the rank-2 reach.
+
+---
+
+## M1 / M2 — THE REGRESSIONS THAT DECIDE O6, AND THE DECISION (2026-09-15)
+
+The O5 wave was **killed at 4 of 12 runs** on the user's explicit instruction (a stated deviation
+from the plan's "let them finish for the record"). `dscc_o5lin_s0/s1` and `dscc_o5mlp_s0/s1`
+completed 60 epochs and are the record; `s2`/`s3` were killed mid-run and their partial histories
+are not to be read. Queues moved to `~/runs/o5{lin,mlp}_queue_KILLED.txt`.
+
+### Before the numbers: `pre` is not a function of `r` by construction
+
+`pair_correction` builds the hopping pre-activation from `feats_i + feats_j`,
+`|feats_i - feats_j|` and the species embeddings, and its own docstring says none of them is a
+function of `r`. Two periodic images of one node pair at different separations therefore share
+one `pre`. So M1 does not ask whether the MLP was *given* the distance; it asks whether it
+**learned** to encode it. That makes a high `R^2` the interesting outcome, and it is not what
+came back.
+
+### M1 — W6's hopping factor `exp(eta tanh pre)` against `r_ij`
+
+60 training frames, 547,730 edges, `eta = 1.0986` (so the factor is bounded to [0.333, 3.0]).
+`R^2` is the CEILING for any function of `r`: each edge predicted by its `r`-bin mean.
+
+| pair | factor sd | observed range | `R^2(r)` all | `R^2(r)` r < 4 Å |
+|---|---|---|---|---|
+| Cl-Cl | 0.065-0.103 | 0.52 - 1.83 | 0.006-0.010 | 0.015-0.049 |
+| Cl-Cs | 0.084-0.218 | 0.39 - 2.11 | 0.003-0.019 | 0.009-0.028 |
+| Cl-Pb | 0.072-0.458 | 0.36 - 2.89 | 0.004-0.052 | 0.025-**0.122** |
+| Cs-Cs | 0.094-0.253 | 0.42 - 2.33 | 0.009-0.013 | (no bonded edges) |
+| Cs-Pb | 0.123-0.482 | 0.35 - 2.91 | 0.003-0.017 | (no bonded edges) |
+| Pb-Pb | 0.058-0.585 | 0.36 - 2.95 | 0.018-0.026 | (no bonded edges) |
+
+**The modulation is doing a great deal and none of it is radial.** It spans nearly the full
+bound (0.36 to 2.95, a factor of 8) and rides its stops, yet distance explains **0.3-5 %** of its
+variance overall and at most **12 %** in the bonded shell. The 71,044-parameter hopping MLP is a
+genuine environment dependence, not a flexible radial correction in disguise.
+
+### M2 — W6's on-site correction against the atom's 12 sorted neighbour distances
+
+k-nearest-neighbour regression on a held-out half (so it is prediction, not memorisation),
+alongside a linear fit:
+
+| species | shell | p95 \|correction\| | `R^2` kNN | `R^2` linear |
+|---|---|---|---|---|
+| Cl | s / p | 0.144 / 0.445 eV | 0.64 / 0.72 | 0.58 / 0.76 |
+| Cs | s / p | 0.232 / 0.475 eV | 0.48 / 0.39 | 0.51 / 0.47 |
+| Pb | s / p | 0.197 / 0.550 eV | 0.70 / 0.77 | 0.64 / 0.61 |
+
+The ON-SITE term **is** substantially radial -- roughly half to three quarters of it. But it is
+the small term (p95 0.14-0.55 eV), it is not what O3 deleted, and a radial parameterisation of it
+would be replacing the part of W6 that the geometric heads already reproduce.
+
+### The decision, by the rule as written
+
+> "Regression `R^2` high → O6. `R^2` low, or O6 stalls → block-0 copy with cached Jacobians is
+> the model, the geometric head is closed."
+
+**`R^2` is low. O6 is NOT indicated and is not built.** Its central premise -- that a learned SK
+radial `t_Harrison(r)[1 + tanh(Σ c_n B_n(r))]` replaces the hopping MLP with ~300 parameters --
+is refuted by M1: the function being replaced is not a function of `r`. Building O6 would spend
+six seeds confirming a negative that two regressions already give.
+
+**One thing the rule does not cover, flagged as outside it, not as a proposal.** M1 rules out a
+function of `r_ij` ALONE. It does not rule out a learned function of both atoms' GEOMETRIC
+descriptors on the bond -- `f(A0_i + A0_j, |A0_i - A0_j|, Z_i, Z_j)`, which is W6's `sk.hop` with
+block 0 swapped for the head's own descriptor. No arm has run it: O3 deleted the hop MLP as a
+founding principle, and O3.2 and O5 both put PHYSICS on the bond rather than a learned function of
+the descriptor. The decision rule is binary and is followed as written; the coadvisor should see
+that "closed" rests on that binary.
+
+**The geometric head is closed.** The record states the finding: *the pretrained block-0
+representation carries about 2 meV/Å of force accuracy (W6 11.6 against the best decoupled arm's
+13.6) that geometric tight-binding parameterisations at this data scale do not recover, and the
+carrier is a genuinely non-radial, environment-dependent modulation of the hoppings.*
+
+## The guaranteed route: LESS work than assumed for accuracy, MORE for speed
+
+**Accuracy: it already exists.** In training, with `cache_base` on, `MACEDSCC.forward` takes the
+`cached_base` branch and evaluates **`first_block` alone** from the frozen base modules, with
+`E_base`/`F_base` read from the cache -- the full base is never run. That IS "the head carries a
+frozen copy of block 0, W6's weights load unchanged, bit-for-bit W6". It is the shipped model at
+**11.6 meV/Å**, four seeds, today. What is missing is not the model but **capture**:
+`GraphedStep` refuses any head that is not `decoupled`, because its captured tail is the
+closed-form gradient. Extending capture to a block-0-reading head means bringing block 0 inside
+the captured region -- real work, but bounded and two-body-free.
+
+**Speed: the cached-Jacobian item does not survive its own arithmetic.** Measured on b3, warmed,
+medians (the first call is 1.5 s of CUDA warm-up and was nearly reported as the cost):
+
+| quantity | measured |
+|---|---|
+| channels the head reads | `n_scalars` 512 + 3 × `n_vectors` 512 = **F = 2048** |
+| base graph mean degree within `r_max` | **22.8** |
+| one vector-Jacobian product | **11.6 ms** |
+| full `∂features/∂R`, forward mode (3N = 237 tangents) | **2.7 s/frame** → 0.6 h for 785 frames |
+| full `∂features/∂R`, reverse mode (F = 2048) | 23.7 s/frame → 5.2 h |
+| storage, sparse at degree 22.8 | **89 MB/frame → 70 GB** over the training set |
+| block 0, forward + ONE backward | 78.6 ms / 4-frame batch → 15.4 s/epoch |
+| **block 0, forward + `create_graph` + the SECOND traversal** | **115.2 ms / batch → 22.6 s/epoch** |
+
+**Block 0's WHOLE training-step cost is 22.6 s/epoch — 18 % of W6's ~124 s.** Measured in
+isolation, with nothing else in the timed region: forward, the `create_graph` backward, and the
+second traversal that the loss makes through the retained graph, which is what `create_graph`
+exists for. (An earlier version of this line reported only the first traversal and called it a
+ceiling; it is a floor, and the isolated measurement was made because of that. The second
+traversal turns out to be 0.5x the first, not the 2-4x that would have overturned the reading.)
+
+W6 is ~124 s/epoch against O3's ~32, a gap of 92 s. Block 0 accounts for **23 of those 92 s**.
+The rest is the head itself: W6's `sk.hop` is live and evaluated per unique node pair, and it is
+71,044 of its 110,314 live parameters, where O3's is dead. **Removing block 0's traversal
+entirely cannot take W6 below ~101 s/epoch**, so the cached Jacobian cannot deliver what the plan
+asks of it — and it costs 70 GB plus per-step I/O to buy at most 23 s. **Recommend NOT building
+it.**
+
+**The version of the idea that DOES survive the arithmetic is not a cache.** The force loss never
+needs `J` itself, only `J·r` for the force residual `r`: the parameter gradient of the force term
+contracts to `(d2E/dtheta df)·(J r)`, and `J r` is ONE forward-mode JVP with tangent
+`r` in R^{3N}. That is ~11.6 ms/frame — about 9 s/epoch — **exact, with no storage at all**.
+Registered here as the speed item worth having; not built.
+
+## Process fixes applied
+
+* **Launch gate: `tests/extensions/dscc/test_analytic_composition.py`** (13 gates). For every
+  composition of head modules the closed-form gradient either **equals autograd** or is
+  **refused** — there is no third option, and a term added to `H0` but not to the kernel cannot
+  pass silently. It also asserts capture declines exactly what the closed form declines, and that
+  every H0-changing flag is either in the kernel with a covered case or named in
+  `analytic_refusal`. This is the gate the 19 meV/Å bug would have caught.
+* **The Gram is recorded as built** — O3.3, O3.3b and O5b are 21-channel results (§Correction 2).
+* **O5b's reading is marked void** — it is a 5× capacity arm, not a resolution control.
+* **The train/held gap table and the by-shell table are standard readouts** — they are what made
+  this diagnosable, and both are in the O5 report.
+
+---
+
+## CAPTURE FOR A BLOCK-0-READING HEAD — BUILT (2026-09-15)
+
+Registered as "the one real piece of engineering left on the production route" and built rather
+than left open. Three blockers, all found by building it, and one of them is much larger than
+this route.
+
+### 1. The gradient — solved, and it fixes O5 as a side effect
+
+The captured tail WAS the closed-form gradient and nothing else, which is why capture refused
+every head the kernel could not differentiate, and why it silently mis-served an O5 head by
+19 meV/Å before that refusal existed. **Capture does not need a closed form.** It needs a
+gradient with a fixed kernel sequence and fixed shapes, and at fixed cotangent `X` that is one
+ordinary backward: `h0_position_gradient_vjp` rebuilds the features and the assembly from
+`positions` with grad on, contracts against a detached `X`, and takes one backward. No
+`create_graph`, no parameter gradients.
+
+**A backward IS capturable** — verified directly before anything was built on it: a capture
+containing `torch.autograd.grad` replays **bit-identically** to eager (max |diff| 0.0).
+
+`head_tail` now dispatches on `analytic_refusal`: closed form where valid (~2.7 ms), VJP where
+not. Consequences:
+
+* **O5 captures correctly now** rather than being refused — `test_an_o5_head_now_captures_through_the_vjp`, both forms, replay vs eager < 1e-9 on energy, `dq` and forces.
+* **W6 captures** — `test_a_block_zero_reading_head_captures`, < 1e-9 on all three, and on a moved frame.
+* `analytic_refusal` gained the term it was missing: **a non-decoupled head**. The kernel's own
+  first line refuses one, but the predicate did not say so, so W6 routed into a function that
+  raised. A predicate that callers trust has to be complete.
+* `capture_refusal` is now its own, **shorter** list: what capture cannot take is a
+  **value-dependent shape**, not a missing closed form.
+
+### 2. Two value-dependent shapes on the block-0 path — both removed, both bit-gated
+
+| where | was | now |
+|---|---|---|
+| `SlaterKosterH.pair_correction` | `torch.unique` over node-pair keys (the O1 dedup) | `dedupe_pairs=False` during capture: the same MLP per EDGE. Energy and `dq` bit-identical; forces within one ULP (3.5e-17 — the GEMM has a different row count, so its reduction is tiled differently). Costs the 2-3× O1 removed, for the life of the capture only. |
+| `quadrupole_descriptor` | `r[inside]` boolean indexing | masked by multiplication: the weight is zero beyond `q_cut` by construction, so every excluded edge contributes exactly 0.0 and the sum is the same sum, with a shape that no longer depends on the positions. |
+
+### 3. CORRECTION: production capture has REGRESSED in this environment. It is not my change, and it is not this route.
+
+**An earlier draft of this section claimed "CUDA-graph capture has never worked at production
+width, for any head". That was wrong, and the record refutes it.** §"O5 TIMING (idle A4000, fake
+O3 weights, P4.3 protocol, `dscc_benchmark.py --graphed`)" is a methodical measurement at
+production width on this very card: base captured 32.4 ms, **model graphed 39.7 ms** at 79 atoms
+against a <= 53 ms deliverable. Capture worked. The claim was made from a single failed run
+tonight and should not have been made.
+
+What is true, established by reverting: **production capture fails today, and it failed before
+any of this session's changes.** With the four modified modules reverted to HEAD, the same
+benchmark on the same checkpoint fails identically. Two distinct faults, in order:
+
+1. **`torch.compile` recompiled INSIDE the captured region** -- `h0_position_gradient` calls
+   `_compiled(_site_blocks)`, and dynamo/inductor running during `g_tail`'s capture is a hard
+   CUDA failure. **FIXED, by construction**: `GraphedStep` now turns `analytic.COMPILE` off for
+   the life of the capture and restores it on `release()`. This costs nothing -- those kernels
+   are compiled because they are LAUNCH-bound eagerly, and removing launch overhead is exactly
+   what capture itself does, so inside a graph the compile buys nothing. Capture now BUILDS at
+   production width with no environment variable.
+2. **The replay then raised an illegal memory access** at `H_host.copy_(self.H)`, on the FIRST
+   replay of the very frame the capture was built from. **FIXED.**
+
+   Localisation, because the wrong answers were instructive: `g_assembly` alone captures and
+   replays correctly; it is still correct after `_base` and `_tail` are WARMED UP; it breaks the
+   moment a SECOND GRAPH IS CAPTURED, either one. Not the shared pool (one pool per graph changes
+   nothing). Not the assembly's kernels (clean eagerly under `PYTORCH_NO_CUDA_MEMORY_CACHING=1`,
+   which turns a benign overrun into a fault). Not a general torch bug (a minimal two-graph
+   reproducer replays the first correctly after capturing the second, torch 2.13.0+cu129).
+
+   **The cause: the assembly's OUTPUTS were allocated inside the captured region**, so `H` and
+   `ev` lived in a graph pool -- and they are consumed by the two graphs captured after it, whose
+   capture can reuse that memory underneath them. The inputs were already static buffers for
+   exactly this reason; the outputs now are too. `_assembly` is run once before capture to size
+   `self.H` and `self.ev`, and the captured region copies into them.
+
+   **Verified against the recorded measurement.** `dscc_benchmark.py --graphed --fixed_cell`,
+   production O3 checkpoint, 79 atoms, idle A4000:
+
+   | | recorded (P4.3) | now |
+   |---|---|---|
+   | base captured | 32.4 ms | **32.27 ms** |
+   | model graphed | **39.7 ms** | **39.67 ms** |
+
+   Replay agrees with eager to 1.15e-06 eV/Å, in line with this tracker's own production
+   tolerance for the captured path (1.6e-6 eV/Å).
+
+Both reproduce on the reverted tree. The likely cause is an environment move (the suite now
+warns on `torch.jit.load`, `torch.jit.script_method` and NumPy 2.5 deprecations, and
+openequivariance reports its precompiled extension missing and falls back to JIT), but **that is
+a hypothesis, not a measurement** -- what is measured is only that the fault predates this
+session. Registered as a live regression against the recorded 39.7 ms, to be bisected against the
+torch/openequivariance versions that measurement was taken on.
+
+**It says nothing about the block-0-reading route.** The fault is in the decoupled head's own
+captured assembly, which is the path that has always been captured. The design work in 1 and 2
+above stands on its own gates, which run on the in-process bases and pass.
+
+### Gates added (`test_capture.py`, now 23)
+
+`test_an_o5_head_now_captures_through_the_vjp` (both forms), `test_a_block_zero_reading_head_captures`,
+`test_a_moved_block_zero_frame_replays`, `test_the_pair_dedupe_switch_changes_no_value`,
+`test_a_genuinely_COUPLED_head_is_still_refused`, `test_the_two_refusals_are_separate_and_each_is_honest`.
+The composition gate is restated: capture's list is shorter than the closed form's, and what must
+hold is that no head is accepted while `analytic_refusal` is `None` and the kernel nonetheless
+raises — the exact gap W6 fell into.
+
+
+### W6 captured: measured, and it is not a gain (2026-09-15)
+
+Alternated in one loop (the card drifts ~15 % between separate runs): **O3 40.3 ms captured
+against 76.2 eager, 1.89x; W6 97.0 ms captured against 92.9 eager, 0.96x.** Capture is now
+AVAILABLE to a block-0-reading head and is not worth using on one. The captured step assembles
+TWICE -- the closed form works on the already-captured `H`, whereas the VJP rebuilds features and
+assembly under grad (~22 ms) -- and capture also forces the per-edge hop MLP, O1's dedup being
+4.95 of the assembly's 7.7 ms, now paid twice. **W6's production speed is unchanged at ~93 ms
+eager.** The avoidable half is the second assembly: capture the assembly WITH grad and capture
+the backward as the tail, rather than rebuilding the forward inside the tail. Not built, saving
+not measured, not estimated.
+
+
+# LES head line (plan of 2026-09-15) — L0 registration, written before any run is opened
+
+## L0 — `base_v4_lesmh`: base v2 recipe + LES readout
+
+**Recipe (one addition to base v2, nothing else moves).** `~/runs/w1_run.sh` verbatim (MH-1
+multi-head fine-tune, `omat_pbe` foundation head, the sel10k fps/combinations replay, energy 10 /
+forces 10, lr 1e-4 forced, EMA 0.9999, clip 1.0, wd 0, 30 epochs, batch 8, float32, cueq, E0s as
+IsolatedAtom frames at config_weight 1000 in `train_iso.xyz`) plus `--model MACELES
+--les_readout_scale 0.01` — the scale LES-FT2 ran at (its debug log: `les_readout_scale=0.01`).
+The code resolves this to `FoundationMACELES` with heads `['pt_head', 'Default']`; each head gets
+its own latent-charge readout (`les_readouts`, per-head channels exactly as the energy readouts).
+Runs: `base_v4_lesmh_prod` (`dataset_e0/train_iso.xyz` / `valid.xyz`) and `base_v4_lesmh_f{0..3}`
+(`dataset_cf/fold{k}/train_iso.xyz` / `valid.xyz`), seed 1 — the same five files base v2 used.
+Script `defect-perovskite/w1les_run.sh`; queue `w1les_queue.sh` on b3 GPUs **5 and 7 only** (GPU 4
+has now joined 6 off the bus; 0–3 are never used), one run per card. Base v2 took 1 h 52 for 30
+epochs (`base_v2_prod.log`, epoch 0 at 20:49 → epoch 29 at 22:41), so ≈ 6 h for the five.
+**Nothing is tuned for the LES term** — not the scale, the lr, or the replay — because L1's
+cross-base reference to W6-on-v2 needs the recipe identical apart from the readout.
+
+**Known, registered, not gated.** The `pt_head` also acquires a latent-charge readout, trained
+against MH-1 pseudolabels that contain no long-range term; it is discarded at conversion.
+
+**LES conventions as run (library defaults, read off LES-FT2's `les` module and `les/module/ewald.py`).**
+σ = 1.0 Å, dl = 2.0 (k-cutoff |k| ≤ 2π/dl), `remove_self_interaction = True`, `remove_mean = True`
+(the BEC only), `epsilon_factor = 1`, reciprocal sum only with **k = 0 excluded** (`mask = k_sq > 0`),
+so the net latent charge is unconstrained and a net charge carries the neutralising-background
+Madelung energy. Measured (`scratchpad/les_convention2.py`, the library's own `Les`): the pair
+kernel is `C erf(r / (2 r_g)) / r` with **r_g = σ/√2 = 0.7071 Å** — cross(∞) −9.8305 / −6.8686 /
+−4.7836 / −2.8704 eV·e⁻² at r = 1 / 2 / 3 / 5 Å against −9.8305 / −6.8722 / −4.7869 / −2.8799
+for r_g = σ/√2 and −7.4950 / −6.0673 at r = 1 / 2 for r_g = σ. A single unit charge in a 20 Å
+cube: −1.0256 eV (background Madelung −αC/2L = −1.0213). **Registered for L2/L3:** `K_LR` is
+built at `r_g = σ_LES/√2`, `k = 0` dropped in every kernel that touches `q_LES`; the global sign
+of `q_LES` is fixed once per base so that `Z*(Cs) > 0`; the scale is untouched.
+
+**Gates (thresholds fixed here; readers named; nothing opened yet).**
+- G-L0.1 *Neutral validation* (the run's own epoch-29 `Default` row, the same 154 frames):
+  **≤ 10.23 meV/Å (MACE table, per component) and ≤ 1.16 meV/atom** — base v2 prod epoch 29.
+  Fold bases: reported, compared with `base_v2_f{k}` epoch 29 (f0: 3.88 / 0.43).
+- G-L0.2 *Replay robustness — charged-frame base-alone shell table*, `base_compare_n.py
+  --model` (each model through ITS OWN forward, so the Ewald term is in): the converted
+  `base_v4_lesmh_prod_base.pt` on the charged 79-atom set must be **≤ base v2 at every shell**:
+  total 33.22; 2–4 Å 74.9; 4–8 30.4; 8–10 15.3; 10–12 8.9; >12 8.0 (per-component meV/Å, the
+  §"LES report" table). Neutral 79-atom rows reported against base v2's 10.96 / 20.0 / 10.0 /
+  8.8 / 7.1 / 6.5 (in-sample; a floor, not a gate).
+- G-L0.3 *Born check* (`les_gates.py`: `compute_bec=True` through the model's own forward,
+  isotropic part, 8 neutral 80-atom frames, the LES-report protocol): after the sign fix
+  (Z*(Cs) > 0) **Cl < 0, Cs > 0, Pb > 0; |Pb/Cs| ∈ [2, 3.5]; |Σ Z*| ≤ 0.3 e per cell.**
+  LES-FT2 reference: −0.466 / +0.382 / +1.028, 2.69, +0.18.
+- G-L0.4 *Liveness*: `les_live_check.py` — final-layer ‖W‖ > 0 on **both** heads' latent-charge
+  readouts before conversion, and on the converted Default head.
+- G-L0.5 *Conversion is exact*: `w1les_make_base.py` asserts, on real frames, that the
+  single-head pruned model reproduces the multi-head model's Default-head `energy`, `forces`,
+  `latent_charges` and `les_energy` to 1e-5 (eV, eV/Å, e) and that `vars(les)` is identical.
+- Recorded, not gated: net latent charge per cell and per-species means (neutral 79/80),
+  `E_LES` per atom, readout ‖W‖.
+- *Fallback (plan):* if multi-head + LES cannot be built in ≈ 1 day, LES-FT2 with its
+  charges-off control, recorded as lacking replay robustness; REF never used.
+
+**Decision rule.** All of G-L0.1–G-L0.5 pass → `base_v4_lesmh` is the base of the line and L1
+starts. G-L0.2 fails at any shell → the line has no replay-robust LES base; the fallback is
+taken and the failure recorded. G-L0.3 fails → the charges are not a usable static pattern for
+L2 (E_cross needs a physical q_LES); L1 still runs, L2 is not opened until the reading is
+understood.
+
+### L0 smoke and launch (2026-09-15, written before any epoch-29 row is opened)
+
+**Head-side change, gated (`tests/extensions/dscc/test_les_base.py`, 7 gates; suite of
+`test_les_base` + `test_capture` + `test_model` = 75 passing).** `MACEDSCC.base_forward` was pinned to
+`ScaleShiftMACE.forward`, which silently drops a MACELES base's Ewald term; it now dispatches on the
+base's class (`type(self.base).forward`), the neutral null is the LES base bit-identically, charged
+forces stay exact against central differences (2e-6) with the Ewald term in the base energy, and the
+base's `latent_charges` / `les_energy` are surfaced in the forward dict (`base_latent_charges`,
+`base_les_energy`) — `q_LES` differentiable in the positions (autograd d(Σq)/dR against central
+differences to 1e-4 relative). `capture_refusal` refuses a MACELES base first (the line runs eager).
+
+**Local smoke (A4000, float32, cueq, one epoch, `train_iso.xyz` + the sel10k replay,
+`v4_smoke_lesmh`).** Initial Default head 1.72 meV/atom, 43.88 meV/Å (base v2 smoke: 1.69 / 43.9 —
+the 1e-2-scaled Ewald term adds 0.03 meV/atom at start); pt_head initial 0.98 / 1.72 (v2: exactly 0;
+the LES term on the pseudolabels). **After one epoch 0.92 meV/atom, 13.90 meV/Å** (v2 smoke: 0.90 /
+13.86). 4.5 min per epoch. Conversion (`w1les_make_base.py`) on 6 OOF-neutral + 6 charged frames:
+max |multi(Default) − single| = 1.7e-13 eV, 9.4e-15 eV/Å, 3.5e-17 e, 4.2e-17 eV; `les` conventions
+identical; latent-charge readouts live on both heads (Default final ‖W‖ 0.231 / 0.032, pt_head
+0.227 / 0.029). Readers exercised on the smoke artefact (numbers are a one-epoch smoke, not a
+result): `les_gates.py` runs (signs already Cl −/Cs +/Pb + after a −1 sign fix; ratio 4.5, ASR
+0.54 — a one-epoch model), `base_compare_n.py --model` runs with the shell rows.
+
+**Launched on b3 (10:04 b3 clock):** `w1les_queue.sh`, queue prod, f0, f1, f2, f3 on GPUs 5 and 7,
+one per card, `~/runs/w1les_queue.log`, run logs `~/runs/base_v4_lesmh_*.log`. Expected ≈ 2 h 15
+per run → all five by ≈ 16:30–17:00.
+
+### L0 unattended pipeline, L1 registration and the L2 pre-test registration (2026-09-15, before any L0 row is opened)
+
+**Pipeline (`l0_watch.sh`, running locally).** Waits for each `base_v4_lesmh_*.model` on b3, pulls it,
+converts it (`w1les_make_base.py`: G-L0.4 liveness on both heads and G-L0.5 exactness asserted). For
+the production base it then runs, in order, `les_live_check.py`, `les_gates.py` (G-L0.3),
+`base_compare_n.py --model v2 --model v4` on the full 2877 frames (G-L0.2), `l2_pretest.py` (the L2
+pre-test, sign from the Born fix) and `l0_gates.py`, which applies the registered thresholds and writes
+`~/runs/base_v4_lesmh_prod/L0_GATES.json`. **On `L0: PASS` it launches L1 without further approval**
+(the user is not monitoring); on FAIL it stops. The fold bases are converted afterwards for the OOF floor.
+
+**L1 — plain W6 on `base_v4_lesmh_prod` (registered command).** Exactly `launch_w6_s0.sh`'s flags
+with the new base: `dscc_train.py --name dscc_l1_s{s} --seed s --fold f --epochs 60 --directional 1
+--regime B --base ~/runs/base_v4_lesmh_prod/base_v4_lesmh_prod_base.pt --coupling 0 --scf_free 1
+--route_b 1 --beta_b 0.0 --beta_a 0.0 --energy_weight 0.05 --base_float32 1 --setup_batch_size 4
+--base_cache_batch_size 4`. Six seeds {0,1,2,3,4,6} → folds {0,1,2,3,0,2}. Seeds 0 1 2 sequential on the
+local A4000 (`l1_local_queue.sh`; W6 took 2 h 11 per seed there), seeds 3 4 6 on b3 GPUs 5/7 through
+`w3_queue.sh` (`W3_GPUS="5 7"`, one per card, 13 GB headroom — they start as the fold bases free the
+cards). E_host with the head's own `q0` pattern, as shipped; the base's Ewald term is inside `E_base`
+through the dispatched `base_forward` (gated above); `E_base`/`F_base` cached per frame as before.
+No capture (refused on a MACELES base); the step time is reported in absolute ms.
+- *Gates, all from the shipped readers:* neutral null and FD forces (`test_les_base.py`, passing on
+  a toy MACELES base; on the production base the trainer's own warm check); C5 localisation
+  (`dscc_arm1_gates.py --no_ladder --winners <six runs>`: shell mass ≥ 0.70, Cs mass < 0.05,
+  N_eff ≤ 8, the arm_gates thresholds); G2a energy RMSE at 79 after one `C_Q` and G2b
+  |between-size| ≤ 10 meV (`held_final.json`, cohort median as for W6); by-shell force table
+  (`held_final["shell_rmse"]`, per component) against the out-of-fold neutral floor of the fold
+  bases; saturation (`held_final["saturation"]`: `hop` and `on_site` saturated fractions,
+  `on_site_shift_eV_p95`); hop-modulation knee fraction = `saturation["hop"]` (the fraction of
+  `|pre| > 2.0`, W6-on-v2: 1.4e-5).
+- *Cross-base reference, reported, not a criterion:* paired TOST (τ = 1.7, six seeds by fold) of L1's
+  epoch-averaged held force RMSE against W6-on-v2 (11.58 meV/Å cohort mean; G2a 0.515 meV/atom;
+  G2b +5.0 meV). L1 is the baseline of the line; L2 is judged against L1, not against W6-on-v2.
+
+**L2 pre-test (`l2_pretest.py`, kernel level, registered readings and thresholds).** Frozen-core
+ladder (R_core 8 Å, the relaxed 2,2,2 core of `relax159`, tilings 2,2,2 / 2,2,3 / 3,3,3 / 3,3,4 =
+639 / 959 / 2159 / 2879 atoms) with `q_LES` from the converted base on the actual cells (float32 base,
+energies only) and a fixed localised unit carrier (Gaussian weights σ = 2 Å on the atoms within 4 Å of
+the vacancy, identical in every cell because the core is rigid). `K_LR = gamma_lr(r_g = 1.0,
+r_split = 2.5, ε∞ = 4)`, reciprocal, k = 0 dropped — the L2 kernel exactly.
+- *Monopole exact (must hold):* `E_self − ½ ξ(cell)/ε∞` fits `a + c/V` with max residual ≤ 2 % of the
+  monopole span over the ladder (the fitted-slope reading is NOT used: with four cells in x ∈
+  [0.06, 0.095] the x and x³ columns are collinear and the linear slope under-reads the monopole by
+  5–7 % on the smoke base while the subtraction test shows 0.9 %).
+- *Local neutrality (recorded; gates the cross-size energy claim for `E_cross`, forces unaffected):*
+  `Q_delta` = Σ(q_LES − q_pristine) over the cell (the base's response to the defect), its partial sums
+  within 4 / 6 / 8 / 12 Å, the removed site's pristine charge `q_site`, and `Q_defect = Q_delta −
+  q_site`. The 1/L slope of `E_cross` must agree with `−Q_defect C/ε∞` (consistency of the reading;
+  on the smoke base 0.0779 fitted against 0.0793 expected). **The residual at 79 atoms,
+  `b · α/L`, is the between-size energy term `C_Q` cannot absorb: ≤ 10 meV (the G2b tolerance) for
+  the cross-size energy claim to stand at L2; above it, `E_cross` is registered as forces-only.**
+  On the one-epoch smoke base: Q_delta −0.039 e, q_site −0.016 e, residual 7.4 meV — a scaffold
+  reading, not a result.
+- The pristine pattern's net charge per cell does not enter: a pattern periodic with the unit cell
+  has an L-independent potential under the k = 0-dropped kernel; only the defect's net charge
+  (`Q_defect`) carries 1/L. Verified on the smoke base (`E_host` slope −0.049 fitted, −0.059 from
+  `q_site`).
+
+### L2 built and gated (2026-09-15; NOT trained — L2 opens only after L1's six seeds are read)
+
+**Implementation (`MACEDSCC(les_cross=True, les_sign=±1)`, `dscc_train.py --les_cross 1 --les_sign ±1
+--les_cache FILE`).** In `scf_free_terms` the host term becomes `E_cross = s_c · dqᵀ K q_LES`:
+`q_LES` is the frozen MACELES base's latent charge on the actual frame (sign-fixed by `les_sign`),
+`K = gamma_lr(r_g = 1.0, r_split = 2.5)` **bare** (`eps_inf = 1`: the latent charges are the
+base's effective response already), `s_c = s_max tanh(·)` in [−2, 2] initialised at
+**+1/√ε∞ = 0.5**. No reference fill enters the energy (`q0` is not formed); `occ_R` is still
+computed because `dq = occ_R − occ_S` needs it. `E_M(Q; h)` is unchanged. Serialised in the extra
+state. **Interpretation registered:** the plan's `K_LR(r_g, σ_LES)` with "registered r_split" is
+read as `gamma_lr(r_g, r_split = 2.5)`; the reading where σ_LES replaces r_split is not
+constructible (`gamma_lr` requires r_split > r_g, and σ_LES/√2 = 0.71 Å < 1.0 Å) — the LES
+density's own width is narrower than r_split and does not enter the long-range kernel.
+
+**Forces.** `(e_cross, 1)` cotangent (dq's two Fréchet contractions, `s_c`); `K`'s geometry from
+its pair derivatives under the pair route (autograd under the stress route), as E_host's;
+`q_LES(R)`'s geometry **from a per-frame Jacobian cache** `J = ∂q_LES/∂R [N, N, 3]` (N first-order
+backward passes through the float32 base, 1.7 s per 79-atom frame on the A4000, ~150 KB per
+frame; `l2_les_cache.py`, keyed by geometry key, built once per base and loaded by the trainer):
+`∂E/∂R_k += s_c Σ_j (K dq)_j J_jk`, J a constant of the geometry contracted with attached `s_c`
+and `dq`. This is the plan's "base backward with cotangent `s_c K_LR dq` on `q_LES`" evaluated once
+per frame rather than once per step — the training step runs no base (as W6 with the cached
+base), and the force loss's parameter gradient needs no `create_graph` through the base. At
+inference (ladders, new geometries) the base runs in the forward and the same cotangent covers
+`q_LES` through the attached graph; the two routes are gated equal.
+
+**Gap regulariser:** unchanged. In W6 it already acts on `H0` alone (the host term is an energy,
+never a potential — `model.py` "NOT in W6"), so removing `q0` changes nothing there; `K q_LES` does
+not enter `H0` at L2 (that is L3's physics).
+
+**Gates (`test_les_base.py`, now 17; full dscc suite re-run below).** Construction guards (needs
+`scf_free`, a MACELES base, sign ±1); `s_c` = 0.5 at init and bounded at ±s_max; state round trip
+keeps flag and sign; neutral null is the LES base bit-identically; `E_cross` equals
+`s_c dqᵀ K_bare q_LES` recomputed by hand and no `q0_sum` diagnostic exists; the sign fix flips
+`E_cross` exactly; forces against central differences on the attached route (2e-6); **the cached
+Jacobian route equals the attached route** (energy 1e-10, forces 1e-8); the cached route in
+training mode against central differences (2e-6); dropping J moves a force by > 1e-5 eV/Å (the
+term is not negligible). Trainer smoke on the one-epoch smoke base (8 frames, 1 epoch,
+`--les_cross 1 --les_sign -1`): cache built, step runs, `held_final.json` written.
+
+**Named superiority metric for L2 adoption (fixed now, before L1 or L2 is read):** the
+**far-field shell force RMSE, 8–12 Å (per component, `held_final["shell_rmse"]` at 8–10 and 10–12
+combined by count), epoch-averaged, paired by seed against L1**: L2 is superior if its paired mean
+difference's one-sided 90 % CI upper bound is below 0 and it is lower on ≥ 5 of 6 seeds.
+Not-inferior on forces = paired TOST at τ = 1.7 against L1. The 159-atom energy is reported, not
+the criterion. The Born-fixed sign for the production base comes from `L0_GATES.json` (`sign_fix`).
+
+### L3 built and gated (2026-09-15; NOT trained — L3 opens only if L2 is adopted, and starts from L2's model)
+
+**Implementation (`MACEDSCC(les_well=True)`, requires `les_cross`; `dscc_train.py --les_well 1`).**
+`W = s_W (K_bare q_LES − mean_i)` per frame, geometry-only, and the head fills `H0' = H0 −
+diag(W ⊗ 1₄)` — both fillings (state and reference), so the level and the carrier shape see the
+host's long-range well; `E_cross` is computed from the resulting `dq` with the same kernel
+(computed once per frame, shared). **Centring registered:** under the k = 0-dropped kernel the
+potential of a net-charged pattern carries the background's arbitrary constant, and a uniform
+diagonal shift moves `dF_band` by `c·Q` for a charged state, so `W` is centred per cell. `s_W =
+s_max sigmoid(·)` in [0, 2]; **initialised at 1e-3, not 0**: a smooth bounded map has zero gradient
+at its boundary (the LES zero-pinning lesson), and Adam's normalised step moves the raw logit at
+`lr` per step regardless of the gradient's size. Gated: at `s_W → 0` L3 equals L2 to 1e-9 eV /
+1e-8 eV/Å. **The gap regulariser acts on `H0'`** (W6's rule: on the Hamiltonian actually filled);
+the static cell's `q_LES` is attached once by the trainer (`dscc_base_q` on the static batch).
+
+**Forces.** `(H', dP)` and `(E_cross, 1)` cotangents carry `s_W`, `q_LES` (attached route) and
+`H0`; what they cannot carry — `K`'s geometry under the pair route (K detached) and `q_LES(R)`
+on the cached route — uses the **total** `dE/dW` from one backward through the fill graph
+(band energy through `dP` PLUS `E_cross` through the fill's response `d dq/dW`, which `−n_site`
+alone misses: the first build used `−n_site` and failed FD by 8e-6 and the pair/autograd
+agreement by 1.9e-4), contracted with `K`'s pair derivative and with the cached Jacobian.
+
+**Gates (`test_les_base.py`, now 27 = 7 head-side + 10 L2 + 10 L3).** L3: needs `les_cross`; starts
+at L2 within the registered init and equals L2 exactly at `s_W → 0`; bounded at `s_max`; state round
+trip; neutral null is the LES base bit-identically; the well moves the charged energy (> 1e-5 eV at
+`s_W = 0.5`); `pristine_gap` equals the by-hand gap of `H0 − diag(s_W (K q_LES − mean))` to 1e-9 and
+differs from `H0`'s; forces against central differences on the attached route and on the cached
+route in training mode (2e-6); cached Jacobian route equals the attached route (1e-10 / 1e-8);
+the stress (autograd-kernel) route matches the pair route (1e-8). Trainer smoke (`--les_well 1`,
+8 frames, 1 epoch): static-cell charges attached, step runs, `s_well` logged.
+
+### Unattended chain L1 → L2 → L3 (registered 2026-09-15, before L0 is read)
+
+`lx_watch.sh STAGE` (armed by `l1_arm.sh` once `l0_watch.sh` has launched L1): waits for the
+stage's six seeds (0 1 2 local, 3 4 6 on b3, pulled when complete), reads the stage with
+`lx_read.py` (the registered W6 reader generalised — self-test: reproduces the W6-vs-B′ record
+exactly, G1 +0.14 [−0.21, +0.50], G2a −0.0688, G2b +5.0; **the epoch-averaged `held_final_avg`
+is the line's primary estimator, the W6-era `held_final` is reported alongside**), runs C5
+(`dscc_arm1_gates.py --no_ladder`, the W6 protocol: separation p50, N_eff p50, pass fraction at
+the 95 %-of-frames rule), and writes `~/runs/dscc/{STAGE}_GATES.json` (`lx_verdict.py`).
+- **L1 → L2:** L1 is the baseline and is judged against nothing; its C5, G2a/G2b, shells and
+  saturation are recorded as its description and the cross-base TOST against W6-on-v2 is
+  reported. L2 launches once L1's six seeds are read (`--les_cross 1 --les_sign <L0 sign fix>
+  --les_cache ~/runs/base_v4_lesmh_prod/les_cache.pt`, the same six seeds/folds, the same
+  local/b3 split).
+- **L2 → L3:** L2 is ADOPTED iff (a) paired TOST on the epoch-averaged held force RMSE against
+  L1 is not inferior (lower bound of L1 − L2 above −1.7) and (b) the named metric — far-field
+  8–12 Å shell force RMSE — is superior (lower bound of L1 − L2 above 0 and L2 lower on ≥ 5 of
+  6 seeds). Adopted → L3 launches from L2's same-seed models (`--init_state`, parameters copied,
+  `s_W` at its init) with `--les_well 1`; not adopted → the chain stops, L1 stands, L4 runs on L1.
+- **L3:** adopted by the same two-part rule against L2 (the plan's "named superiority" for L3 is
+  read with the same far-field metric; C5 separation and N_eff and the energies are reported);
+  the selected model goes to L4, which is not automated.
+- No stage is opened before the previous stage's reading is written; L2/L3 results are never
+  read against W6-on-v2 (cross-base), only against their own previous stage.
+
+### L4 registration: the tabulated ε₀ (2026-09-15, before any ladder of this line is fitted)
+
+The plan's L4 compares `ε₀^model` (from the relaxation-ladder fit and, independently, from base
+phonons with `Z*_eff = s√ε∞ · q_LES`) with a tabulated ε₀ of the same status as the registered
+`ε∞ = 4.0`. Registered now: **ε₀ = 7.2 ± 0.6 (cubic CsPbCl₃, DFPT Γ-point IR phonons through
+Lyddane–Sachs–Teller; RSC Advances 2026, DOI 10.1039/D5RA07356A, the pristine reference of a
+doping study), whose own ε∞ is 2.40 ± 0.06** — so the tabulated ratio is ε₀/ε∞ ≈ 3.0. Because the
+registered `ε∞ = 4.0` is from a different source, the comparison is made on BOTH the absolute
+ε₀ and the ratio ε₀/ε∞ (the model's ε∞ is the registered 4.0 by construction, so the model's
+ratio is `ε₀^model / 4`). An earlier report line ("order 20 against 4 in this material") was an
+order-of-magnitude remark without a source and is superseded by this registration; no
+experimental cubic-phase capacitance value with a citable number was found in this search
+(Raman/IR work on the phase transitions exists — J. Raman Spectrosc. 2003, DOI 10.1002/jrs.1005 —
+without a static constant), so none is registered. The phonon route (`l4_eps0_phonon.py`):
+finite-difference Γ-point force constants of the 5-atom pristine cell with the base alone,
+acoustic modes removed, `ε₀ − ε∞ = (4π C / 3Ω) Σ_m Σ_α |Σ_κ Z*_κ e^α_{κm} / √M_κ|² / ω_m²`
+with `Z*_κ = s√ε∞ · q_LES,κ` (rigid latent charges as Born charges, the plan's definition) and
+`s` the trained L2 scale (`1/√ε∞` for a base-only pre-reading).
+*Phonon-route note (exercised on the smoke base, not a result):* the 80-atom static cell folds the
+primitive cell's R- and M-point octahedral-tilt modes to Γ, and they come out imaginary for the
+base (20 of 237 optical modes on the smoke base); they are non-polar and are excluded from the
+dipole sum, which is recorded as an approximation of the route. The smoke base's rigid `Z*_eff`
+(0.003–0.03 e at `s = 1/√ε∞`) gives ε₀ − ε∞ = 0.004 — a one-epoch base, which is why the
+reading waits for the trained base and the trained `s`.
+
+### L0 option registered by the user (2026-09-15, 11:45): distil MH-1, train MACELES on the distilled labels, fine-tune on the defect set
+Registered as an option, not taken: distil MACE-MH-1 (the neutral distribution) into a MACELES
+trained from the distilled energies/forces, then fine-tune on the defect data set — the
+distillation + fine-tuning route reported successful at arXiv:2606.15001. The user's caveat: the
+point of fine-tuning from MH-1 is to capture the base error on the *charged* defect structures,
+and MD-generated distillation data would relax back to the neutral distribution, so the
+distillation geometries would need a different generator than MD. Sits alongside the three
+options listed in the same turn (continue L0 for more epochs; a per-group lr for `les_readouts`;
+the plan's FT2 fallback), to be chosen only after G-L0.3 is read at epoch 29.
+
+# Distilled LES base — plan of 2026-09-15 (12:20): registration record
+
+**Plan received (user, 12:20):** MH-1 → lightweight LES student trained on MH-1's predictions
+(Wang & Cheng, arXiv:2606.15001) → DFT fine-tune with the distillation set as replay → head line
+(D0 distillation set, D1 student with the pre-registered three-arm architecture control, D2
+fine-tune, D3 hand-off). Design principle: the student must be cutoff- and capacity-limited
+relative to the teacher so the Coulomb term is *needed* to reproduce the teacher's 12 Å behaviour.
+
+**Record, as instructed by the plan.**
+- *Retractions:* "MH-1 labels carry no long-range content" (coadvisor) and "no label in this
+  lineage carries long-range content for the replay" (my L0 report and the pt_head answer of
+  ~12:00) — both wrong per arXiv:2606.15001: latent electrostatics are extractable from local
+  foundation models by distillation into a cutoff-limited student.
+- *Mechanism of L0's shrinkage:* distillation into a student that *is* the teacher (the multi-head
+  run: same architecture, MH-1's weights, MH-1's replay labels) gives the charges nothing to
+  explain; identification requires a cutoff-limited student.
+- LES-FT2 and LES-REF: references for the Born check only; not bases of this line.
+- **Base v4 (multi-head + LES): closed at epoch 29 with its gate file; not continued.** Epoch 29
+  Default row: 1.23 meV/atom (the force column is read from the gate file). The L0→L1
+  automation (`l1_arm.sh`, the L1 launch inside `l0_watch.sh`) was stopped at 12:41 before the
+  gate file was written; fold bases f1–f3 removed from the b3 queue (f0 completes and is
+  converted, nothing else runs on it). The gate reading itself completes and is appended below
+  when written — a record, not a decision input.
+- The head line's L1–L4 registrations of this morning carry over to D3 on the student base;
+  L2/L3 code and gates are unchanged (they take any MACELES base).
+
+## Distilled LES base — the plan as pasted (2026-09-15 12:20), D0–D3
+
+> **D0 — distillation set** (no MD; MH-1 `omat_pbe` head as teacher, PBE-consistent). Structures
+> (target ~30–50k, all labelled by MH-1 with energy, forces, stress): the 1047 charged-frame
+> geometries labelled as neutral systems; the 1770 neutral frames (train + val), teacher-labelled;
+> 3–5 perturbed copies of every frame above (Gaussian σ ∈ {0.05, 0.1, 0.2} Å); strains of pristine
+> and vacancy cells (isotropic ±2 %, ±4 %; shear ±3 %; ~2k); vacancy tilings at 159, 319, 639 atoms
+> with thermal displacements (~300); polar sublattice displacements of the pristine 80-atom cell
+> (Cs, Pb, Cl sublattices rigidly displaced along x, y, z by 0.02–0.10 Å, ~200) — identify Born
+> charges; optional ~2k MP halide perovskites (not required). Register teacher hash and head, E0s,
+> 90/10 split by structure family, the seed of every perturbation.
+> **D1 — student:** lightweight MACELES from scratch on D0 (`les_fit` recipe): r_max 6.0,
+> num_interactions 1, correlation 3, max_L 1, hidden 96x0e+96x1o, num_radial_basis 8, LES readout
+> at the recipe's init scale, ε_factor 1, σ as measured (r_g = σ/√2); loss energy + forces (+ stress
+> on the strained subset, small weight), scheduler patience 15, Stage Two at 50 %, lr 1e-2.
+> Gates: G-D1.1 student vs teacher on the held 10 % ≤ 1 meV/atom, ≤ 5 meV/Å per family; G-D1.2 Born
+> (8 neutral 80-atom frames, EMA weights, one global sign fix: Cl −, Cs +, Pb +, |Pb/Cs| ∈ [2, 3.5],
+> |ΣZ*| ≤ 0.3); G-D1.3 charge necessity: the LES ablation raises the student-vs-teacher force error
+> on the long-range families. Fail on G-D1.2 → one change (r_max 5.5 or a larger polar family), rerun.
+> **D1 amendment — architecture control (pre-registered):** D1-light (primary; prediction: charges
+> live, G-D1.2 passes, ablation raises long-range-family error); D1-full-scratch (MH-1 shape, scratch,
+> les_fit; prediction: fits the teacher at least as well, charges smaller, ablation effect small);
+> D1-full-init (MH-1 shape, MH-1 weights, lr 1e-4, EMA 0.9999, 30 epochs; prediction: E_LES → 0,
+> |q| falls from init — reproduces L0's shrinkage). Reading rule: light passes and the full arms do
+> not → identification confirmed, light is the base; full-scratch also passes → choose on G-D1.1 and
+> robustness, speed deciding ties; light fails and full-scratch passes → one change to light, rerun
+> light only; full-init not collapsing → L0 mis-diagnosed, revisit before D2.
+> **D2 — DFT fine-tune with distillation replay:** init from D1; multi-head `dft` (1616 DFT frames)
+> + `teacher` (D0), shared backbone, shared LES readout, per-head energy readouts, replay 1:1 by
+> batch, lr 1e-4, EMA 0.9999, 30–60 epochs, float32; four cross-fit bases. Gates: G-D2.1 neutral
+> validation ≤ 1.2 × base v2 (12.3 / 1.4); G-D2.2 charged shell table ≤ base v2 at every shell
+> (decisive); G-D2.3 Born repeated, drift reported, must pass G-D1.2; G-D2.4 cross-fit agreement
+> (0.01 meV/Å); recorded: isolated-atom offsets.
+> **D3 — hand-off to the head line** on this base: pre-test, L1 (readouts re-dimensioned to the
+> student's single block; W3-type retrain, six seeds), L2, L3; M1 the registered fallback,
+> initialised from q_LES; ε₀^model from student phonons; absolute ms; no capture.
+
+### D0 enumeration (registered before the set is built)
+
+| family (`config_type` = `d0_family`) | source | count | perturbation |
+|---|---|---:|---|
+| `charged_relabelled` | `dataset_pbe/{train,valid}.xyz`, `cell_charge ≠ 0` | 1047 | none; written with `cell_charge 0`, `carrier_counts 0`, provenance in `d0_source_charge` |
+| `neutral` | `dataset_e0/{train,valid}.xyz` | 1770 | none |
+| `perturbed` | every parent of the two rows above | 25 353 | 9 copies: 3 each at σ = 0.05, 0.10, 0.20 Å Gaussian (seed = 1000·parent + copy) |
+| `strained` | 330 parents (110 pristine-80, 110 neutral-vacancy, 110 charged-relabelled, every k-th by index) | 1 980 | isotropic ±2 %, ±4 %; xy shear ±3 % (6 modes); `config_stress_weight = 1` here, 0 elsewhere |
+| `tilings` | static pristine cell tiled 1,1,2 / 2,2,1 / 2,2,2 minus one Cl (159 / 319 / 639 atoms) | 300 | 100 each, thermal Gaussian σ = 0.10 Å (seed 5000 + i) |
+| `polar` | static 80-atom cell | 180 | one sublattice (Cs, Pb, Cl) rigidly displaced along x/y/z by ±{0.02, 0.04, 0.06, 0.08, 0.10} Å (90); Pb-vs-Cl and Cs-vs-Cl opposite (60); Cs+Pb vs Cl (30) |
+| isolated atoms | 20 Å box, one Cl / Cs / Pb | 3 | teacher-labelled, `config_type IsolatedAtom`, `config_weight 1000`, train only |
+
+Total 30 630 (+3). Teacher: `~/.cache/mace/macemh1model` (sha256 `a522eb7f59c78799…`), head
+`omat_pbe`, float64 forward with stress, batched by size. Labels `REF_energy / REF_forces /
+REF_stress`. **E0s:** the teacher's *predicted* isolated-atom energies (its stored `omat_pbe`
+row −0.2574 / −0.1297 / −0.7736 eV is recorded alongside; a ScaleShiftMACE adds its shift and
+readout on top of the row). **Split 90/10 by parent geometry, stratified by family, seed 0** —
+perturbed and strained copies of a held-out parent are held out with it. Manifest
+`dataset_d0/manifest.json` (counts per family and split, seeds, E0s, teacher hash). The optional
+MP pool is not built.
+
+### D1 flags and budgets (registered)
+
+Common (`les_fit`): `--model MACELES --loss stress --energy_weight 10 --forces_weight 1000
+--stress_weight 10` (stress acts only on the strained family through `config_stress_weight`),
+`--lr 0.01 --amsgrad --scheduler ReduceLROnPlateau --scheduler_patience 15 --patience 200 --ema
+--ema_decay 0.99 --clip_grad 10 --stage_two --start_stage_two <50 %>`, batch 8, float32, cueq,
+`--keep_isolated_atoms True` (E0s from the isolated frames), `--les_readout_scale 1.0`,
+`--error_table PerAtomRMSEstressvirials` (per-`config_type` = per-family rows).
+- **D1-light:** `--r_max 6.0 --num_interactions 1 --hidden_irreps 96x0e+96x1o --max_ell 1
+  --correlation 3 --num_radial_basis 8 --num_cutoff_basis 5 --MLP_irreps 16x0e --radial_MLP
+  [64,64,64] --pair_repulsion --distance_transform Agnesi`, interaction blocks as the reference
+  recipe. **80 epochs, Stage Two at 40.** Local A4000.
+- **D1-full-scratch:** the reference recipe's MH-1 shape (`les_ref_run.sh`), **40 epochs, Stage
+  Two at 20** (≈ 15 min/epoch on 27.6k training frames → ≈ 10 h). b3 GPU 5.
+- **D1-full-init:** `ft_les_run.sh`'s path (MH-1 weights, `--multiheads_finetuning False`),
+  lr 1e-4, EMA 0.9999, energy 10 / forces 10 constant, clip 1, 30 epochs (≈ 7.5 h). b3 GPU 7.
+- Readers, ready before any result: per-family teacher-fit table (G-D1.1) from the run's own
+  error table plus `d1_read.py` on the held split; `les_gates.py` on the saved EMA model
+  (G-D1.2); `d1_ablate.py` — `les_readouts` zeroed, teacher-fit force error on `tilings` and
+  `polar` (G-D1.3); `d1_traj.py` — |q|, E_LES, readout norms per checkpoint; inference ms per
+  80-atom frame. Wall-clock: light ≈ 3 min/epoch (estimate; measured at the smoke).
+
+*D0 built (12:52):* 30 618 structures — charged_relabelled 1047, neutral 1770, perturbed 25 353,
+strained 1980, tilings 300, **polar 168** (the Cs+Pb-vs-Cl pattern has 18 members at d ∈ {0.04,
+0.08, 0.10}, not 30 as enumerated; recorded, not changed). Label-stage smoke (18 structures, CPU):
+labels, per-config stress weight and the isolated atoms written; **teacher-predicted E0s Cl −2.252 /
+Cs −0.970 / Pb −1.037 eV against the stored `omat_pbe` row −0.257 / −0.130 / −0.774** — the
+predicted values are the D1 E0s. Labelling of the full set queued behind the L0 gate readers on
+the local card (`d0_label_run.sh`). b3: the fold bases f1 and f2, dispatched by the w1les runner
+before the queue was emptied, killed at 12:58 — cards 5 and 7 free for the D1 full-shape arms.
+
+### L0 gate file (record only; the v4 run is closed) — `~/runs/base_v4_lesmh_prod/L0_GATES.json`, 13:1x
+
+- **G-L0.1** epoch 29 Default: **1.23 meV/atom, 9.81 meV/Å** against ≤ 1.16 / ≤ 10.23 → FAIL (energy).
+- **G-L0.2** charged 79-atom base-alone shells (total / 2–4 / 4–8 / 8–10 / 10–12 / >12, per component):
+  v4 **32.0 / 68.5 / 30.2 / 16.7 / 9.0 / 7.8** against base v2 (same run) 33.2 / 74.9 / 30.4 / 15.3 / 8.9 / 8.0 → fails at 8-10, 10-12 Å → **FAIL**.
+  Neutral 79 (in-sample): v4 10.3 / 20.1 / 9.3 / 7.4 / 6.1 / 5.2 against v2's floor 10.96 / 20.0 / 10.0 / 8.8 / 7.1 / 6.5.
+- **G-L0.3** Born (EMA model, sign fix -1): Cl -0.360, Cs +0.257, Pb +0.680; |Pb/Cs| 2.65 (in [2, 3.5]); **ΣZ* -2.27 e per cell** against ≤ 0.3 → **FAIL on the sum rule**; signs and ratio pass.
+- Recorded: net latent charge -0.817 e/cell (raw), species means Cl -0.0117 / Cs -0.0038 / Pb -0.0121, |q| mean 0.0109 e, E_LES -0.45 meV/atom.
+- Verdict `FAIL`. Consistent with the trajectory read in flight (charges ~40 % of FT2's, ΣZ* far from zero); the shell-table failure is at the far field (8–12 Å), where the base's Ewald term acts.
+
+*D0 labelling precision (13:2x, user: "Ensure you're training the base models using f32 and with
+cueq or oeq enabled"):* every D1 arm trains in float32 with cuEquivariance (`d1_run.sh`:
+`--default_dtype float32 --enable_cueq True`), as the v4 runs did. The teacher labelling was
+started in float64 (registered above) and ran at 99 % utilisation for minutes without completing a
+batch — FP64 on the A4000 is ~30× slower than FP32; restarted at **float32 + cueq** (the teacher's
+own training precision; force/stress values stored as float64), the manifest records
+`precision` / `cueq`. Registration amended accordingly.
+
+*D2 prerequisite built (13:35, not trained):* `MACELES(les_shared_readout=True)` / `--les_shared_readout`
+— ONE latent-charge readout (one output channel, applied to every node regardless of head) beside
+the per-head energy readouts; `remove_pt_head` carries it through unsliced. Gates
+(`tests/extensions/les/test_shared_readout.py`, 2): charges identical under either head and
+non-zero while the energies differ per head; the single-head model after head removal reproduces
+them to 1e-10; the unshared default stays head-dependent.
+
+### D0 amendment — cell sizes (user, 2026-09-15 13:40; applied before any D1 epoch completed)
+
+- Removed: "vacancy tilings at 159, 319, 639 atoms with thermal displacements" — the 300
+  `tilings` structures (270 train / 30 held) taken out of `dataset_d0/{train,valid}.xyz`
+  (kept in `tilings_removed.xyz`, unused); D0 is now **30 318 structures** (27 327 train + 3
+  isolated atoms / 2 994 held).
+- Rule: every distillation structure has all cell vectors within the teacher's reach in the
+  sense already satisfied by the 80- and 160-atom cells; **no structure larger than 160 atoms
+  enters D0 or the D2 replay set.**
+- Long-range identification comes from the 6 → 12 Å range gap on these cells plus the
+  polar-displacement family (80-atom cell); the student's behaviour beyond 12 Å is evaluated on
+  the D3 ladders, not trained. G-D1.3 (charge necessity) is therefore read on the `polar` family
+  and on the whole held set, not on tilings.
+- Reason recorded: labels from a local teacher on cells larger than its receptive field contain
+  the *absence* of long-range physics and would train the LES term to suppress it.
+- The three D1 arms had been launched at 13:32 on the unamended set and were still loading data;
+  killed and relaunched on the amended set at 13:4x. Measured D1-light epoch time from the smoke:
+  22 s per 1 600 frames → ≈ 6.3 min per epoch on 27.3k frames → 80 epochs ≈ 8.5 h (the
+  registered 3 min estimate was wrong); full-shape arms ≈ 13 min/epoch → full-scratch ≈ 8.7 h,
+  full-init ≈ 6.5 h.
+*D1-light batch size (user, 13:55: "That seems slow for a light model. Can you increase batch size?"):*
+at batch 8 the light student ran 110 ms per step — launch-bound, the card idle — so D1-light is
+relaunched at **batch 32** (`D1_BATCH=32`; lr and every other setting unchanged; 80 epochs are now
+≈ 850 steps each instead of 3 400). The full-shape arms stay at batch 8 (compute-bound). Registered
+as the light arm's setting before any of its epochs is read.
+*b3 arms measured, not assumed (user, 14:0x: "Have you confirmed or asserted that the b3 arms are
+compute bound"):* asserted. Measured: GPU 5 (full-scratch) 31–38 %, GPU 7 (full-init) 41–46 %
+utilisation at 3.8 GB — launch-bound at batch 8 too. **D1-full-scratch relaunched at batch 32**
+(after its epoch 0: 16.51 meV/atom / 40.31 meV/Å; 40 epochs kept), the same optimiser regime as
+D1-light. **D1-full-init stays at batch 8**: its settings are base v2's (lr 1e-4, EMA 0.9999,
+batch 8) because it tests whether L0's shrinkage reproduces from a converged start, and its epoch
+0 is already 1.38 / 6.74 (≈ 17 min/epoch → ≈ 8 h).
+*Divergence guard (user, 14:30: "Those spikes look concerning. Was the LR set properly?"):* the
+light arm's settings are as registered (`lr=0.01`, patience 15, factor 0.8, clip 10, EMA 0.99,
+batch 32, Stage Two at 40). LES-REF on the same recipe showed the same early energy spikes
+(epochs 5–8: 5.5 → 26.6 → 57.0 → 8.9 meV/atom; forces 29.7 → 26.3 → 29.5 → 23.4) and trained
+320 epochs cleanly; the divergence of `base_v3_les` was patience 50 holding lr at 0.01 while the
+forces degraded for ~17 epochs. D1-light epoch 7: 90.7 meV/atom, 71.8 meV/Å (from 18.9 / 61.2).
+**Rule registered now:** `d1_guard.sh` (every 5 min, the two from-scratch arms) — force RMSE
+NaN, or above 2× its running minimum on 3 consecutive epochs → the arm is killed and relaunched
+from scratch at **lr 0.005** (`D1_LR`), once, as `<arm>_lr5e3`; the event is logged
+(`~/runs/d1_guard.log`) and the relaunch is the arm of record.
+*Caveat on the in-flight checkpoint reads (16:20):* the raw-weight snapshots reported for the v4
+run at epochs 17 and 23 (readout norms, |q|, E_LES) were taken by loading a cuEquivariance
+checkpoint into an e3nn template with `strict=False`; the cueq product weights
+(`symmetric_contractions.weight/projection`) do not exist under those names in e3nn and were
+silently left at the template's (epoch-0 EMA) values. The readout-norm numbers are exact (those
+keys load); the charge magnitudes are approximate. The epoch-29 gate file used the saved EMA
+model and is unaffected. `d1_common.load_checkpoint` now converts the template to cueq first and
+refuses any non-trivial missing key; every D1 snapshot uses it.
+
+### D1 amendment 2 — two more architecture classes (user, 2026-09-15 17:30; registered before either runs)
+
+"Run two additional models: the light model with two interaction layers (small width, larger
+receptive field) and the full-scratch model with one interaction layer (big width, smaller
+receptive field). That way we cover the full set of model classes. The init model does not need to
+be retrained as it is a clear dead end." Same D0 set and split, `les_fit` recipe, batch 32, lr 0.01,
+same gates and readers; the divergence guard covers them.
+
+| arm | architecture | reach | epochs | prediction (written now) |
+|---|---|---|---:|---|
+| `d1_light2` | 96x0e+96x1o, max_L 1, corr 3, **2 interactions** | 12 Å | 80 (Stage Two 40) | fits the teacher better than D1-light (its reach now spans the teacher's); charges smaller than D1-light's — with the 12 Å behaviour reachable locally the Coulomb term is needed less; if the identification argument is right its Born check is weaker than D1-light's |
+| `d1_full1` | 512x0e+512x1o, edge 128, max_L 3, corr 3, **1 interaction** | 6 Å | 40 (Stage Two 20) | fits the teacher worse than D1-full-scratch but better than D1-light; charges larger than D1-full-scratch's and Born-physical — the cleanest test of the principle at high capacity: capacity alone cannot supply the 6 → 12 Å physics |
+
+The 2 × 2 (width × reach) table then reads: reach is what identifies the charges (both 6 Å arms
+Born-physical, both 12 Å arms weaker) → principle confirmed, base chosen among the 6 Å arms on
+G-D1.1 and speed; width is what matters instead → the principle is wrong and the base is the
+best-fitting arm with live charges. `d1_full_init` runs to completion as the mechanism control
+(16/30 at registration: |q| 0.028 e, all species one sign, E_LES −3.8 meV/atom — the predicted
+L0-like state) and is not retrained. Scheduling: `d1_light2` on the local card after `d1_light`
+(≈ 18:15), `d1_full1` on b3 GPU 5 after `d1_full_scratch` (≈ 19:45); `d1_queue2.sh`.
+
+### D1-light — RESULT (2026-09-15 18:30; final stage-two EMA model `d1_light_stagetwo.model`, 80 epochs, batch 32)
+
+Run's own table: train 1.2 meV/atom / 39.0 meV/Å, valid 1.1 / 38.5 (relative F 4.4 %).
+
+**G-D1.1 teacher fit on the 2 994 held frames, per family (E meV/atom / F meV/Å / S meV/Å³):**
+charged_relabelled 0.68 / 25.2 / 0.59; neutral 0.73 / 24.8 / 0.69; perturbed 1.14 / 40.5 / 0.73;
+strained 0.82 / 27.1 / 0.77; polar 0.93 / 6.3 / 0.43. Energies pass (≤ 1 meV/atom) on four families
+and miss on `perturbed` (1.14); **forces fail every family** against ≤ 5 meV/Å (25–40, polar 6.3).
+**G-D1.1 FAIL** — the light student cannot reproduce the teacher's forces on this set.
+
+**G-D1.2 Born (8 neutral 80-atom held frames, sign fix −1):** Cl −0.730, Cs +0.568, Pb +1.372 —
+signs right, |Pb/Cs| 2.42 in [2, 3.5]; **ΣZ* −4.00 e/cell against ≤ 0.3 → FAIL on the sum rule.**
+Recorded: |q| 0.168 e (raw Cl +0.133, Cs −0.261, Pb −0.183), net −0.72 e/cell, E_LES −114 meV/atom.
+
+**G-D1.3 ablation (LES readouts zeroed):** every family collapses — 125 meV/atom, 229 meV/Å
+overall; polar 66 meV/Å (from 6.3). PASS as written, but not discriminating: with E_LES at
+−114 meV/atom the Ewald term is a structural part of the light student's energy on every
+frame, not a long-range correction, so the ablation measures the model's dependence on it, not
+the 6 → 12 Å physics.
+
+Reading: the light student is under-fitted (forces 8× the gate) and its charges, although
+ionic-signed with the right Pb/Cs ratio, are 5× LES-FT2's and violate the acoustic sum rule by
+4 e/cell. Per the amendment's reading rule the decision waits for D1-full-scratch (≈ 19:45) and the
+two new classes (`d1_light2`, `d1_full1`).
+
+### D1-full-scratch — RESULT (2026-09-15 20:45; stage-two EMA model `d1_full_scratch_stagetwo.model`, 40 epochs, batch 32)
+
+Run's own table: train 1.2 / 14.0, valid 0.4 / 14.1 meV/Å (relative F 1.6 %). *Note:* the first
+automatic read used `d1_full_scratch.model` (the stage-one best, 10.6 meV/atom / 15.7 meV/Å); the
+registered model is the stage-two final and the watcher now prefers it.
+
+**G-D1.1 per family (E / F / S):** charged_relabelled 0.26 / 7.5 / 0.34; neutral 0.21 / 7.2 / 0.46;
+perturbed 0.36 / 14.9 / 0.44; strained 0.64 / 10.5 / 0.45; polar 0.56 / **0.76** / 0.46. Energies pass
+everywhere (≤ 1); forces pass on `polar` only and fail on the other four (7–15 against ≤ 5) →
+**G-D1.1 FAIL** on forces, by 1.5–3× (the light arm: 5–8×).
+**G-D1.2 Born (sign fix −1):** Cl −0.487, Cs +0.438, Pb +1.064; |Pb/Cs| 2.43 ✓; **ΣZ* +0.64 e/cell**
+(≤ 0.3) → **FAIL on the sum rule**, by 2× (the light arm: −4.0). Recorded: |q| 0.148 e (raw Cl
++0.134, Cs −0.082, Pb −0.256), net +1.02 e/cell, E_LES −98 meV/atom.
+**G-D1.3 ablation:** LES zeroed → 99.7 meV/atom, 38.8 meV/Å (polar 0.76 → 4.8): the term is
+structural here too (E_LES −98 meV/atom); PASS as written, not discriminating.
+
+Against the amendment's prediction for this arm ("fits the teacher at least as well; charges
+smaller than D1-light; ablation effect small"): the fit is 2.7× better on forces ✓; the charges
+are smaller in |q| (0.148 vs 0.168) but not by much and E_LES is the same order (−98 vs −114); the
+ablation effect is NOT small ✗. Both from-scratch students build ~100 meV/atom of their energy on the
+Ewald term regardless of width; the Born pattern is the same in both (Cl −, Cs +, Pb +, ratio
+2.4), and the sum rule is closer to holding in the full-shape one.
+
+### D1-full-init — RESULT (20:42; `d1_full_init.model`, 30 epochs at base v2's optimiser settings)
+Teacher fit: 0.39 meV/atom / 2.11 meV/Å overall (charged 0.19 / 0.84; neutral 0.40 / 0.87; perturbed
+0.39 / 2.26; strained 0.39 / 1.22; polar 0.55 / 0.18) — **G-D1.1 PASS on every family** (it is the
+teacher's own shape and weights). E_LES −4.0 meV/atom on every family (init scale). Born and
+ablation appended below when read.
+*D1-full-init, Born and ablation (20:55; read on b3 GPU 7 — the local card OOMs the BEC gradient
+beside the light2 training):* Z* after the sign fix Cl −0.109, Cs +0.058, Pb +0.118 (|Pb/Cs| 2.04,
+signs right) but **ΣZ* −2.45 e/cell** → G-D1.2 FAIL; |q| 0.027 e at the 0.01-init scale, raw species
+means all negative (Cl −0.025, Cs −0.035, Pb −0.026: no ionic pattern), net −2.19 e/cell, E_LES
+−3.7 meV/atom. Ablation: LES zeroed → 3.7 meV/atom, 2.95 meV/Å (from 0.39 / 2.11) — a ~1 meV/Å effect,
+i.e. the term is a small correction that does not identify anything. **Matches the pre-registered
+prediction** (E_LES stays at the init scale, no ionic pattern — the L0 mechanism reproduced from a
+converged start), with the nuance that |q| did not fall below its init value here; it stayed there.
+
+### D2 launched for the two students (user, 2026-09-15 21:05: "start doing the multi head finetuning with our actual data of the small and full scratch models"; registered before any epoch is read)
+
+`d2_run.sh STUDENT NAME`: `--model MACELES --foundation_model <D1 stage-two model> --foundation_head
+Default --multiheads_finetuning True --pt_train_file dataset_d0/replay_1616.xyz --les_shared_readout
+True`, DFT data `dataset_e0/train_iso.xyz` / `valid.xyz` (the base v2 files), base v2's optimiser
+settings (10/10, lr 1e-4 forced, EMA 0.9999, clip 1, wd 0, 30 epochs, batch 8, float32, cueq).
+Interpretations registered: the plan's `dft` head is MACE's `Default`, the `teacher` head is
+`pt_head`; **replay 1:1 by count** — a fixed stratified 1 616-frame subset of D0 train (seed 0;
+charged_relabelled 56, neutral 94, perturbed 1 350, strained 107, polar 9) plus the teacher-labelled
+isolated atoms, since this MACE loads a custom `--pt_train_file` whole and cannot resample per
+epoch; the student's **latent-charge readout is transferred unscaled** into the shared readout
+(`model_script_utils`, new: a MACELES foundation's `les_readouts` load when the shapes match;
+previously they were re-initialised and scaled); each head keeps its own E0s from its isolated
+atoms. Arms: `d2_light` (from `d1_light_stagetwo.model`, local card beside `d1_light2`) and
+`d2_full_scratch` (from `d1_full_scratch_stagetwo.model`, b3 GPU 7). Gates G-D2.1–2.4 as in the
+plan; G-D2.2 (charged shell table ≤ base v2 at every shell) decisive. Cross-fit bases (G-D2.4)
+only for the arm that passes.
+*D2 smoke and launch (21:40).* Two loader defects found and fixed by the one-epoch smoke before
+launch: (i) the multi-head loader never transferred a MACELES foundation's latent-charge readouts
+(re-initialised and scaled) — now copied unscaled when the shapes match; (ii) the cueq ⇄ e3nn
+converters and `remove_pt_head` rebuild the model through `extract_config_mace_model`, which did
+not carry `les_shared_readout`, so the shared readout silently became per-head (192 channels) and
+the transferred charges were scrambled (initial replay error 270 meV/Å) — the flag is now part of
+the config and gated (`test_shared_readout.py`, 3 incl. the cueq round trip). After the fixes the
+replay head's initial error equals the student's own teacher fit (1.04 meV/atom / 37.95 meV/Å
+against 1.09 / 38.5) — the transfer is exact — and the DFT head starts at 52.4 meV/Å. Launched:
+`d2_light` (local card, beside `d1_light2`) and `d2_full_scratch` (b3 GPU 7), 30 epochs each.
+
+### D2 — first results (2026-09-15 22:30; 30 epochs each)
+
+**d2_full_scratch** (from the D1 full-shape student): final DFT head **2.28 meV/atom / 14.62 meV/Å**
+(replay head 1.98 / 14.92); G-D2.1 (≤ 1.4 / 12.3) **FAIL** on both. Converted base
+(exactness 1e-13): charged 79-atom shells **35.9 / 82.0 / 32.3 / 16.4 / 10.7 / 9.5** against base v2's
+33.2 / 74.9 / 30.4 / 15.3 / 8.9 / 8.0 — worse at every shell → **G-D2.2 FAIL**; neutral 79 (in-sample)
+17.8 / 32.1 / 16.4 / 14.1 / 10.6 / 9.0 against base v2's 10.96 / 20.0 / 10.0 / 8.8 / 7.1 / 6.5. Born:
+Cl −0.518, Cs +0.444, Pb +1.143, |Pb/Cs| 2.57 ✓, **ΣZ* +0.52** (≤ 0.3) → G-D2.3 FAIL (the D1 student
+was at +0.64: drift −0.12). Recorded: **|q| 0.332 e, E_LES −480 meV/atom** — the DFT fine-tune grew the
+Ewald term 5× (student: 0.148 e, −98 meV/atom), net −1.99 e/cell.
+**d2_light** (from the light student): final DFT head **4.23 / 37.54** (replay 3.01 / 44.81) — G-D2.1
+FAIL by 3×; conversion first failed in `prune_elements` (the light student's product block carries
+per-element weights and needs no pruning — the converter now prunes only when the element table
+differs); shell table and Born being read.
+Reading so far: the distilled students are weaker starting points for the DFT fine-tune than MH-1
+itself (base v2 reached 10.23 meV/Å from MH-1's 43.9 start; d2_full_scratch reaches 14.6 from the
+student's 15.4 replay error, i.e. the fine-tune barely moves the forces), and the replay does not
+hold the charges: they grow rather than shrink. D2's decisive gate (G-D2.2) fails for the full-shape
+student at every shell. The two remaining classes (light2, full1) are queued for the same fine-tune.
+
+### D3 on the benchmark base (user, 2026-09-15 22:45: "Go ahead with the rest of the plan using the full scratch model as a benchmark. I will no longer be monitoring.")
+
+Base of the head line: **`d2_full_scratch_base.pt`** — the DFT fine-tune of the D1 full-shape
+student — used as a *benchmark* base: it failed G-D2.1 (2.28 / 14.62), G-D2.2 (every shell) and
+G-D2.3 (ΣZ* +0.52), so nothing built on it is an adoption; the readings are the line's mechanics
+on a base with live ionic charges. Sign fix -1 (Born: Cs > 0). Chain armed unattended:
+- pre-test (`l2_pretest.py`, b3 GPU 7) and the L2 Jacobian cache (`l2_les_cache.py`, same card,
+  ~30 min), then the L1 b3 seeds 3 4 6 (`w3_queue.sh`, GPUs 5/7, one per card, 13 GB headroom —
+  they start as `d1_full1` / `d2_full1` free the cards); local seeds 0 1 2 start when `d2_light2`
+  exits (`l1_local_after_d2.sh`);
+- `lx_watch.sh L1` (env `lx_env.sh`: base, sign, cache) reads L1 against W6-on-v2 (reference
+  only) and launches L2 (`--les_cross 1 --les_sign -1 --les_cache …/d2_full_scratch/les_cache.pt`),
+  then L3 from L2's models if L2 is adopted by the registered rule; L4 is not automated;
+- the remaining D1/D2 arms (`d1_light2`, `d1_full1`, `d2_light2`, `d2_full1`) complete and are read by
+  their watchers; `morning_summary.sh` writes `~/runs/morning_summary.txt` at 07:30.
+
+*L2 pre-test on the benchmark base (23:05, sign -1):*
+    2,2,2 n=639 E_self 0.2219 E_cross 0.0849 (host 0.0862 delta -0.0014) Q_delta 0.145 q_site -0.253 Q_defect 0.398 dq(R<=4/8) -0.045/-0.004
+    2,2,3 n=959 E_self 0.2364 E_cross 0.0958 (host 0.0936 delta 0.0022) Q_delta 0.145 q_site -0.253 Q_defect 0.398 dq(R<=4/8) -0.045/-0.004
+    3,3,3 n=2159 E_self 0.2750 E_cross 0.1239 (host 0.1126 delta 0.0113) Q_delta 0.145 q_site -0.253 Q_defect 0.398 dq(R<=4/8) -0.045/-0.004
+    3,3,4 n=2879 E_self 0.2809 E_cross 0.1285 (host 0.1156 delta 0.0129) Q_delta 0.145 q_site -0.253 Q_defect 0.398 dq(R<=4/8) -0.045/-0.004
+    monopole test resid/span 0.0088
+    E_cross cubic: b -1.2158 expected -1.4331 implied Q 0.338 residual@79 -115.6 meV
+Monopole exact (registered ≤ 2 %). The 1/L residual of E_cross at 79 atoms against the ≤ 10 meV rule
+decides whether L2's cross-size energy claim can stand on this base; the E_cross slope agrees with
+−Q_defect·C/ε∞ as the consistency check requires.
+
+### D3 run (user, 2026-09-16 09:15: "Run D3")
+L2 running since 08:38 (its overnight launch was blocked by my verdict script — the epoch-averaged
+block pairs only two W6-on-v2 seeds; fixed, recorded); seeds 1 and 2 moved from the local queue to
+b3 (placeholders skip them locally; pulled back when done) so all six finish by ≈ 11:00. `lx_watch L2`
+reads L2 vs L1 and launches L3 on adoption. **L4 armed (`l4_run.sh`):** on the chain's final line it
+selects the last adopted stage's best seed — the lowest held force RMSE among C5-passing seeds, else
+the lowest force — and runs the frozen-core ladder (R_core 8 Å; 959/2159/2879), the relaxation
+ladder (959/2879), the leak readout, ε₀ by phonons with the trained `s_c` (0.5 if the stage has no
+E_cross), and absolute ms per frame (`l4_ms.py`, held charged 79-atom frames, eager). The far-field
+table against an out-of-fold neutral floor cannot be read on this base (no cross-fit bases: G-D2.4 was
+not run because no D2 arm passed); the base's in-sample neutral shells stand in, marked as such.
+M1 (the registered fallback) is built only if the L2 read triggers it (E_cross does not move the
+far-field shells); the pre-test has already put E_cross forces-only on this base.
+
+# Amendment — bond-transfer LES charges and the distillation fixes (user, 2026-09-16 09:40; registered verbatim before anything runs)
+
+> LES charges: q_i = Σ_j [T(f_i,f_j,Z_i,Z_j) − T(f_j,f_i,Z_j,Z_i)] w(r_ij), T a small edge readout on
+>   the student's node features; Ewald unchanged. Tests: Σq = 0 to 1e-12 on every structure;
+>   vacancy Q_defect within 4 Å = 0 by construction; Born check reduces to sign and ratio.
+> D0: drop σ = 0.2 Å (keep 0.05, 0.10); keep the rest.
+> D1: full-shape student, MACE-standard schedule, train until teacher-fit forces ≤ 5 meV/Å
+>   (this is the gate that was skipped); lightweight student only as a speed variant.
+> D2: replay restricted to the charged-manifold family (the geometries whose MH-1 extrapolation
+>   is the point), weight registered ≤ 0.3; lr for a from-scratch model; gates G-D2.1/2.2 must
+>   pass before any head is trained — a head on a failing base measures the base.
+> D3: re-run the L2 pre-test with the bond-transfer pattern (expected: no residual by
+>   construction); E_cross cross-size claim reinstated if it passes.
+> Parallel, base v2: M1 (head-learned bond-transfer host pattern) — same construction,
+>   best base, identified by the charged forces. Whichever base passes its gates carries the
+>   head; if neither LES base reaches base v2's robustness, M1 is the product.
+> Record: identification-by-reach hypothesis withdrawn for ionic solids; ΣZ* = Σq identity;
+>   the +0.40 e defect charge and the base's neutral-energy degradation share one cause.
+
+**Corrections of record (user's reading, adopted).** (1) The students' large charges are the
+expected result, not a defect: the Born pattern (Cl −0.5 to −0.8, Cs +0.4 to +0.6, Pb +1.0 to +1.4,
+|Pb/Cs| 2.4–2.7) is the halide-perovskite signature at about Z*/√ε∞, which is what a latent charge
+in an ε∞ medium should be; LES-FT2's 0.03 e charges were the anomaly. An E_LES of −100 to −300
+meV/atom on every frame is the Madelung partition of an ionic crystal's cohesion between a local and
+a Coulomb term — what LES does in an ionic solid; my report's "not a long-range correction" misread
+the method and is withdrawn. (2) The head's 2× deficit on the benchmark base is the base, not LES:
+the full-shape student fits its teacher to only 14 meV/Å where a distillation should reach a few,
+the σ = 0.2 Å copies dominate every miss and are out of distribution for the teacher too, and D2's
+1:1 replay anchored the fine-tune to that bad teacher fit (15.4 → 14.6); in base v2's recipe the
+replay was free because MH-1's weights reproduced the replay labels exactly — here it is a constraint
+fighting the DFT fit. (3) Non-neutrality has one root: for environment-dependent charges Σ_i Z*_i =
+Σ_i q_i identically, so the sum-rule failure IS the net charge (the report scored two findings); the
++0.40 e compact defect charge carries an image self-energy ≈ αQ²C/2L (≈ 0.25 eV at 79 atoms, 0.16 at
+159 — a spurious ≈ 1 meV/atom size dependence in the base's own neutral vacancy energies, the size of
+the D2 energy degradation); and its sign is wrong — a neutral vacancy is locally neutral (the missing
+Cl⁻ compensated by the electron on the flanking Pb), which an environment-to-charge map trained on
+neutral data cannot express (under-coordinated Pb is made more positive), which is why E_cross had a
+−116 meV residual. (4) "Cutoff-limited student" identification is withdrawn for ionic solids:
+from-scratch students adopt the Ewald term as a cohesion device whatever their reach, because it is
+the cheapest representation of ionic energetics; the paper's water and TiO₂ cases are different
+physics. The mechanism control did what it was registered to do.
+
+**Jobs cancelled 09:45:** L2 seeds (local s0, b3 s3/s4/s6/s1 queue), the L2→L3 chain, the L4 runner
+(which had already started on L1 s1 from the stale 06:05 line), all D-watchers. Both cards idle.

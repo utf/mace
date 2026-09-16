@@ -137,7 +137,8 @@ def _states_and_counts(model, data):
 
 def head_tail(model, H, spectrum, fills_s, fills_r, counts_s, counts_r, n0, positions, cell,
               charges, species, edge_index, edge_vector, local, batch, edge_graph,
-              n_nodes: int, num_graphs: int, plan, xi):
+              n_nodes: int, num_graphs: int, plan, xi, vjp_data=None,
+              base_capacity=None, n_kept=None, dummy=None):
     """Everything the head does on the GPU once the spectrum is known: the site charges, the
     two SCF-free terms, the one cotangent `X`, and the analytic contraction.
 
@@ -149,7 +150,8 @@ def head_tail(model, H, spectrum, fills_s, fills_r, counts_s, counts_r, n0, posi
 
     Returns `(head_energy, dq, head_position_gradient, e_host, e_m)`.
     """
-    from mace.modules.dscc.analytic import h0_position_gradient, head_cotangent_eager
+    from mace.modules.dscc.analytic import (analytic_refusal, h0_position_gradient,
+                                            h0_position_gradient_vjp, head_cotangent_eager)
     from mace.modules.dscc.fill import DEGENERACY_TOL
     from mace.modules.dscc.scf import ORBITALS
     eps, U = spectrum
@@ -173,8 +175,16 @@ def head_tail(model, H, spectrum, fills_s, fills_r, counts_s, counts_r, n0, posi
     X = head_cotangent_eager(eps, U, (f_s_up, f_s_dn, f_r_up, f_r_dn),
                              (mu_s_up, mu_s_dn, mu_r_up, mu_r_dn), g_s, g_r,
                              model.sigma_s, DEGENERACY_TOL)
-    grad = h0_position_gradient(model.h0, X, species, edge_index, edge_vector,
-                                local, batch, edge_graph, n_nodes, num_graphs)
+    # ONE DISPATCH, and it asks the same predicate the forward asks. Where the closed form is
+    # valid it is used (2.7 ms); where it is not -- a head reading block 0, or one carrying a
+    # term the kernel does not differentiate -- the VJP serves it instead of the closed form
+    # silently omitting that term, which is what cost a captured O5 head 19 meV/A.
+    if analytic_refusal(model) is None:
+        grad = h0_position_gradient(model.h0, X, species, edge_index, edge_vector,
+                                    local, batch, edge_graph, n_nodes, num_graphs)
+    else:
+        grad = h0_position_gradient_vjp(model, X, vjp_data, species, n_nodes, num_graphs,
+                                        base_capacity=base_capacity, n_kept=n_kept, dummy=dummy)
     return energy + e_host + e_m, dq, grad + pair_grad.reshape(-1, 3), e_host, e_m
 
 
@@ -205,17 +215,44 @@ class GraphedStep:
     def __init__(self, model, data: Dict[str, torch.Tensor], head_capacity: Optional[int] = None,
                  base_capacity: Optional[int] = None, warmup: int = 3) -> None:
         import math as _math
+        from mace.modules.dscc.analytic import capture_refusal
         from mace.modules.dscc.ewald import madelung_self, reciprocal_plan
-        if getattr(model.h0.sk, "screen", None) is not None:   # the module, not the flag
-            raise ValueError(
-                "capture is not available for the screened head (O3.2): its triplet list is "
-                "built with `nonzero`, so the shapes are data dependent and a replay would "
-                "silently reuse the captured frame's triplets. Registered as a follow-up "
-                "alongside the analytic three-body force; neither is on the training path")
-        if not (model.decoupled and model.scf_free and not model.coupling):
-            raise ValueError("capture is for the decoupled SCF-free head (O3): the coupled "
-                             "head solves, and a head that reads the base cannot be split "
-                             "from it by an event")
+        # CAPTURE'S OWN REFUSAL, which is shorter than the closed form's. The tail used to be
+        # the closed-form gradient and nothing else, so a head the kernel could not
+        # differentiate could not be captured -- and worse, that decision lived here separately
+        # from the forward's, drifted, and let an O5-linear model capture and replay 19 meV/A
+        # wrong. The tail now DISPATCHES: closed form where it is valid, one capturable VJP
+        # where it is not. What remains genuinely uncapturable is a data-dependent SHAPE.
+        refusal = capture_refusal(model)
+        if refusal is not None:
+            raise ValueError(f"capture is not available for {refusal}")
+        # The O1 pair deduplication uses `torch.unique`, whose output shape is value dependent
+        # -- capture refuses it outright. The per-edge path computes the same function to the
+        # bit (`test_the_pair_dedupe_switch_changes_no_value`), at the 2-3x redundancy O1
+        # removed.
+        #
+        # IT STAYS OFF FOR THE LIFE OF THIS OBJECT, and that is not a detail. The recorded
+        # graphs replay the kernel sequence they were captured with, so flipping the flag back
+        # while they exist would leave the replay computing the per-edge form while the eager
+        # path computed the deduplicated one -- the same model answering differently depending
+        # on which route was taken. `release()` restores it and invalidates the graphs
+        # together, and `__del__` calls `release`, so a capture that goes out of scope does not
+        # leave the model permanently slower. An earlier version of this comment claimed the
+        # restore happened and no restore existed.
+        self._dedupe_was = getattr(model.h0.sk, "dedupe_pairs", True)
+        self._released = False
+        model.h0.sk.dedupe_pairs = False
+        # TORCH.COMPILE IS TURNED OFF FOR THE CAPTURED REGION, and it costs nothing to do so.
+        # `analytic`'s kernels are compiled because they are LAUNCH-bound eagerly (542 kernels,
+        # 2.7 ms of arithmetic in 7.5 ms of wall) -- and removing launch overhead is precisely
+        # what capture itself does, so inside a graph the compile buys nothing. It does cost
+        # something: dynamo/inductor invoked during `g_tail`'s capture is a hard CUDA failure
+        # ("operation failed due to a previous error during capture"), and the warm-up does not
+        # reliably leave every artefact compiled. Off by construction is better than warmed and
+        # hoped for.
+        from mace.modules.dscc import analytic as _analytic
+        self._compile_was = _analytic.COMPILE
+        _analytic.COMPILE = False
         if int(data["ptr"].numel() - 1) != 1:
             raise ValueError("capture is a one-frame path")
         self.model = model
@@ -271,7 +308,15 @@ class GraphedStep:
         send, recv = d["edge_index"][0], d["edge_index"][1]
         ev = d["positions"][recv] - d["positions"][send] + d["shifts"]
         with torch.no_grad():
-            H = self.model.h0.batched(None, None, self.species, d["edge_index"], ev,
+            scalars = vectors = None
+            if not self.model.decoupled or getattr(self.model, "on_site_from_base", False):
+                # The head reads the base's block 0, so block 0 is part of the captured
+                # assembly. `E_base`/`F_base` still come from `_base`, which runs the whole
+                # base in its own graph; this is the frozen early block only.
+                trunk = self.model._trunk_data(d, capacity=self.base_capacity,
+                                               n_kept_out=self.n_kept, dummy=self.dummy)
+                scalars, vectors = self.model.features(self.model.first_block(trunk))
+            H = self.model.h0.batched(scalars, vectors, self.species, d["edge_index"], ev,
                                       d["batch"], 1, self.n_nodes)
         return H, ev, d
 
@@ -288,7 +333,9 @@ class GraphedStep:
                              d["positions"].detach().reshape(1, self.n_nodes, 3),
                              d["cell"].view(-1, 3, 3), self.charges, self.species,
                              d["edge_index"], ev.detach(), self.local, d["batch"],
-                             d["batch"][d["edge_index"][0]], self.n_nodes, 1, self.plan, self.xi)
+                             d["batch"][d["edge_index"][0]], self.n_nodes, 1, self.plan, self.xi,
+                             vjp_data=d, base_capacity=self.base_capacity,
+                             n_kept=self.n_kept, dummy=self.dummy)
 
     def _build(self, warmup: int) -> None:
         dev = self.static["positions"].device
@@ -317,8 +364,24 @@ class GraphedStep:
 
         self.pool = torch.cuda.graph_pool_handle()
         self.g_assembly = torch.cuda.CUDAGraph()
+        # THE ASSEMBLY'S OUTPUTS GO INTO PERSISTENT BUFFERS, not into whatever the allocator
+        # hands the captured region. `H` and `ev` are consumed by the two graphs captured
+        # AFTER this one, and if they live in a graph pool, capturing those graphs can reuse
+        # the memory underneath them: the symptom is an illegal memory access on the first
+        # replay of `g_assembly`, appearing the moment the second graph is captured and
+        # independent of whether the pool is shared. The inputs were already static for the
+        # same reason; the outputs now are too, and `_edges` returns views of the static
+        # inputs so `d` needs no copy.
+        with torch.no_grad():
+            H0_, ev0_, d0_ = self._assembly()
+            self.H = torch.zeros_like(H0_)
+            self.ev = torch.zeros_like(ev0_)
+            del H0_, ev0_, d0_
+        torch.cuda.synchronize()
         with torch.cuda.graph(self.g_assembly, pool=self.pool):
-            self.H, self.ev, self.d = self._assembly()
+            H_, ev_, self.d = self._assembly()
+            self.H.copy_(H_)
+            self.ev.copy_(ev_)
         self.g_base = torch.cuda.CUDAGraph()
         with torch.cuda.graph(self.g_base, pool=self.pool):
             self.e_base, self.f_base = self._base(self.d)
@@ -329,6 +392,30 @@ class GraphedStep:
         torch.cuda.synchronize()
 
     # ------------------------------------------------------------------ one step
+
+    def release(self) -> None:
+        """Drop the recorded graphs and restore the model's pair deduplication.
+
+        Idempotent. After this the object must not be called -- the graphs are gone and the
+        model no longer computes what they recorded."""
+        if getattr(self, "_released", False):
+            return
+        self._released = True
+        from mace.modules.dscc import analytic as _analytic
+        _analytic.COMPILE = getattr(self, "_compile_was", _analytic.COMPILE)
+        try:
+            self.model.h0.sk.dedupe_pairs = self._dedupe_was
+        except AttributeError:                     # a head with no such attribute
+            pass
+        for name in ("g_assembly", "g_base", "g_tail"):
+            if getattr(self, name, None) is not None:
+                setattr(self, name, None)
+
+    def __del__(self):
+        try:
+            self.release()
+        except Exception:                          # interpreter teardown: never raise here
+            pass
 
     def fits(self, data: Dict[str, torch.Tensor]) -> bool:
         """Whether this capture is valid for the frame.
@@ -355,6 +442,9 @@ class GraphedStep:
 
     def __call__(self, data: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         from mace.modules.dscc.fill import chemical_potential, occupations
+        if getattr(self, "_released", False):
+            raise RuntimeError("this capture has been released; its graphs no longer exist and "
+                               "the model no longer computes what they recorded. Re-capture.")
         if not self.fits(data):
             raise RuntimeError(
                 f"this frame is outside the capture: {int(data['edge_index'].shape[1])} edges "

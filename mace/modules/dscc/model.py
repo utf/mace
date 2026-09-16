@@ -35,7 +35,8 @@ from mace.modules.dscc.fill import SIGMA_S
 from mace.modules.dscc.hamiltonian import (A_MAX_DEFAULT, B_MAX_DEFAULT, DELTA_FRACTION_DEFAULT,
                                            ETA_DEFAULT, H0, Q_CUT_DEFAULT, R_CUT_DEFAULT,
                                            R_S3_DEFAULT)
-from mace.modules.dscc.analytic import assemble_compiled, h0_position_gradient, head_cotangent
+from mace.modules.dscc.analytic import (analytic_refusal, assemble_compiled,
+                                        h0_position_gradient, head_cotangent)
 from mace.modules.dscc.ewald import (COULOMB, gradient_of_contraction, madelung_self,
                                      reciprocal_matrix_planned, reciprocal_pair_gradient_planned)
 from mace.modules.dscc.kernels import (KernelConfig, gamma_lr, gamma_matrix, gamma_pair_derivative, host_potential,
@@ -59,6 +60,7 @@ R_SPLIT_DEFAULT = 2.5           # Route B', A (> r_g)
 # holds the two to 1e-10, and the difference is float reassociation only.
 FUSED_HF_BACKWARD = True
 S_MAX_DEFAULT = 2.0             # Route B': the single global scale s in [0, s_max], init 1 (v4.2)
+S_WELL_INIT = 1e-3              # L3: s_W at initialisation (see the constructor)
 
 
 def block0_layout(base: nn.Module) -> Tuple[int, int, int]:
@@ -110,7 +112,8 @@ class MACEDSCC(nn.Module):
                  decoupled: bool = False, n_radial: int = 6, directional: bool = True,
                  screened: bool = False, r_s3: float = R_S3_DEFAULT,
                  correlation2: bool = False, on_site_from_base: bool = False,
-                 crystal_field: bool = False,
+                 crystal_field: bool = False, cf_linear: bool = False,
+                 cf_mlp: bool = False,
                  standardise_inputs: Optional[bool] = None,
                  readout_init_scale: Optional[float] = None,
                  lambda_0: float = LAMBDA_0_DEFAULT, lambda_max: float = LAMBDA_MAX_DEFAULT,
@@ -119,7 +122,8 @@ class MACEDSCC(nn.Module):
                  b_max: float = B_MAX_DEFAULT, hidden: int = 64,
                  eta: float = ETA_DEFAULT, beta_b: float = 0.0, beta_a: float = 0.0,
                  delta_frac: float = DELTA_FRACTION_DEFAULT,
-                 scf: Optional[ScfOptions] = None) -> None:
+                 scf: Optional[ScfOptions] = None,
+                 les_cross: bool = False, les_sign: float = 1.0, les_well: bool = False) -> None:
         super().__init__()
         self.scf_options = scf or ScfOptions()
         self.base = base
@@ -159,6 +163,9 @@ class MACEDSCC(nn.Module):
         self.correlation2 = bool(correlation2)
         self.on_site_from_base = bool(on_site_from_base)
         self.crystal_field = bool(crystal_field)
+        self.cf_linear, self.cf_mlp = bool(cf_linear), bool(cf_mlp)
+        if self.cf_linear and self.cf_mlp:
+            raise ValueError("O5a (linear) and O5c (MLP) are alternative on-site forms; pick one")
         if self.on_site_from_base and not decoupled:
             raise ValueError("on_site_from_base is the O3.D diagnostic on a DECOUPLED head; "
                              "a coupled head already reads block 0 everywhere")
@@ -170,7 +177,8 @@ class MACEDSCC(nn.Module):
                      screened=self.screened, r_s3=self.r_s3,
                      correlation2=self.correlation2,
                      on_site_from_base=self.on_site_from_base,
-                     crystal_field=self.crystal_field)
+                     crystal_field=self.crystal_field,
+                     cf_linear=self.cf_linear, cf_mlp=self.cf_mlp)
         if self.decoupled:
             self.h0.sk.hop_modulation = False
         n_el = len(self.atomic_numbers)
@@ -193,6 +201,29 @@ class MACEDSCC(nn.Module):
         self.init_from: Optional[str] = None
         self.s_max = float(S_MAX_DEFAULT)
         self.s_raw = nn.Parameter(torch.zeros((), dtype=torch.float64))       # s_max sigmoid(0) = 1
+        # L2 (LES head line): `E_cross = s_c dq^T K_LR q_LES` replaces E_host -- the host pattern is
+        # the frozen MACELES base's latent charge `q_LES(R)` (no reference fill, no q0), the
+        # kernel is the BARE `gamma_lr(r_g, r_split)` (no 1/eps_inf: the latent charges are the
+        # base's effective response already), `s_c` in [-s_max, s_max] initialised at
+        # +1/sqrt(eps_inf) after the Born sign fix `les_sign` (fixed once per base: Z*(Cs) > 0).
+        self.les_cross, self.les_sign = bool(les_cross), float(les_sign)
+        if self.les_cross:
+            if not self.scf_free:
+                raise ValueError("les_cross is the L2 model: it sits on the SCF-free (W6) path")
+            if not hasattr(base, "les_readouts"):
+                raise ValueError("les_cross needs a MACELES base (latent charges); got " + type(base).__name__)
+            if self.les_sign not in (1.0, -1.0):
+                raise ValueError("les_sign is the Born sign fix: +1 or -1")
+        s_c0 = 1.0 / math.sqrt(self.kernel.eps_inf)
+        self.s_cross_raw = nn.Parameter(torch.atanh(torch.tensor(s_c0 / self.s_max, dtype=torch.float64)))
+        # L3: the host's long-range well in H0 itself, `H0' = H0 - s_W (K q_LES - mean)`, geometry-only,
+        # `s_W = s_max sigmoid(.)` in [0, s_max]. Starts at L2 exactly up to `S_WELL_INIT`: a smooth
+        # bounded map has zero gradient AT its boundary (the LES zero-pinning lesson), so the start
+        # is 1e-3 and not 0; Adam's normalised step moves the raw logit at `lr` per step regardless.
+        self.les_well = bool(les_well)
+        if self.les_well and not self.les_cross:
+            raise ValueError("les_well is the L3 model: it starts at L2 (les_cross) exactly")
+        self.s_well_raw = nn.Parameter(torch.logit(torch.tensor(S_WELL_INIT / self.s_max, dtype=torch.float64)))
         # A1.1: the readouts must see standardised features. A model that runs without the
         # statistics reproduces the A1 failure silently (corrections that never leave 0.1 eV),
         # so this is a hard guard rather than a default. Set False only for unit tests that
@@ -219,11 +250,15 @@ class MACEDSCC(nn.Module):
                 "r_cut": self.r_cut, "sigma_s": self.sigma_s,
                 "coupling": self.coupling, "route_b": self.route_b, "r_split": self.r_split,
                 "scf_free": getattr(self, "scf_free", False),
+                "les_cross": getattr(self, "les_cross", False), "les_sign": getattr(self, "les_sign", 1.0),
+                "les_well": getattr(self, "les_well", False),
                 "decoupled": getattr(self, "decoupled", False),
                 "screened": getattr(self, "screened", False),
                 "correlation2": getattr(self, "correlation2", False),
                 "on_site_from_base": getattr(self, "on_site_from_base", False),
                 "crystal_field": getattr(self, "crystal_field", False),
+                "cf_linear": getattr(self, "cf_linear", False),
+                "cf_mlp": getattr(self, "cf_mlp", False),
                 "r_s3": getattr(self, "r_s3", R_S3_DEFAULT),
                 "lambda_max": self.lambda_max, "c_q_table": dict(self.c_q_table),
                 "calibration_record": self.calibration_record,
@@ -237,11 +272,16 @@ class MACEDSCC(nn.Module):
         self.r_cut, self.sigma_s = float(state["r_cut"]), float(state["sigma_s"])
         self.coupling, self.route_b = bool(state["coupling"]), bool(state["route_b"])
         self.scf_free = bool(state.get("scf_free", False))      # W6; absent in pre-W6 checkpoints
+        self.les_cross = bool(state.get("les_cross", False))    # L2
+        self.les_sign = float(state.get("les_sign", 1.0))
+        self.les_well = bool(state.get("les_well", False))      # L3
         self.decoupled = bool(state.get("decoupled", False))    # O3
         self.screened = bool(state.get("screened", False))      # O3.2
         self.correlation2 = bool(state.get("correlation2", False))   # O3.3
         self.on_site_from_base = bool(state.get("on_site_from_base", False))   # O3.D
-        self.crystal_field = bool(state.get("crystal_field", False))           # O5a
+        self.crystal_field = bool(state.get("crystal_field", False))           # O5
+        self.cf_linear = bool(state.get("cf_linear", False))
+        self.cf_mlp = bool(state.get("cf_mlp", False))
         self.r_s3 = float(state.get("r_s3", R_S3_DEFAULT))
         self.r_split, self.lambda_max = float(state["r_split"]), float(state["lambda_max"])
         self.c_q_table = {int(k): float(v) for k, v in state.get("c_q_table", {}).items()}
@@ -339,6 +379,101 @@ class MACEDSCC(nn.Module):
         """Route B': the single global scale `s = s_max sigmoid(s_raw)`, 1 at initialisation."""
         return self.s_max * torch.sigmoid(self.s_raw)
 
+    def cross_scale(self) -> torch.Tensor:
+        """L2: `s_c = s_max tanh(s_cross_raw)` in `[-s_max, s_max]`, `1/sqrt(eps_inf)` at init."""
+        return self.s_max * torch.tanh(self.s_cross_raw)
+
+    def well_scale(self) -> torch.Tensor:
+        """L3: `s_W = s_max sigmoid(s_well_raw)` in `[0, s_max]`, `S_WELL_INIT` at init."""
+        return self.s_max * torch.sigmoid(self.s_well_raw)
+
+    def _les_kernel(self, positions: torch.Tensor, cell: torch.Tensor, use_pairs: bool):
+        """L2/L3: the BARE `gamma_lr` per graph `[B, N, N]` (detached under the pair route, whose
+        geometry term comes from the pair derivative `[B, N, N, 3]` returned alongside)."""
+        n_graphs = positions.shape[0]
+        with torch.set_grad_enabled(torch.is_grad_enabled() and not use_pairs):
+            g_lr = torch.stack([gamma_lr(positions[g], cell[g], self.kernel.r_g, self.r_split, 1.0,
+                                         tol=self.kernel.tol, route=self._lr_route(), background=self._background())
+                                for g in range(n_graphs)])
+        d_w = None
+        if use_pairs:
+            with torch.no_grad():
+                d_w = torch.stack([gamma_lr_pair_gradient(positions[g], cell[g], self.kernel.r_g, self.r_split, 1.0,
+                                                          tol=self.kernel.tol, route=self._lr_route())
+                                   for g in range(n_graphs)])
+        return g_lr, d_w
+
+    def _les_charges(self, data, base_out, num_graphs: int, n_nodes: Optional[int], graph=None):
+        """L2/L3: the sign-fixed `q_LES [B, N]` and, on the cached route, its Jacobian
+        `[B, N, N, 3]`; `graph = (g, lo, hi)` selects one graph of a mixed-size batch (B = 1)."""
+        sign = self.les_sign
+        if torch.is_tensor(data.get("dscc_base_q")):
+            q, J = data["dscc_base_q"].to(torch.float64), data["dscc_base_J"].to(torch.float64)
+            if graph is None:
+                return q.reshape(num_graphs, n_nodes) * sign, J.reshape(num_graphs, n_nodes, n_nodes, 3) * sign
+            g, lo, hi = graph
+            if J.dim() != 4 or J.shape[0] != num_graphs:
+                raise RuntimeError("les_cross: a mixed-size batch on the cached route needs J per graph")
+            return q[lo:hi].unsqueeze(0) * sign, J[g].unsqueeze(0) * sign
+        if torch.is_tensor(base_out.get("latent_charges")):
+            q = base_out["latent_charges"]
+            if graph is None:
+                return q.reshape(num_graphs, n_nodes) * sign, None
+            g, lo, hi = graph
+            return q[lo:hi].unsqueeze(0) * sign, None
+        raise RuntimeError("les_cross: no latent charges -- the base was neither run in this "
+                           "forward nor cached (dscc_base_q / dscc_base_J)")
+
+    def well_potential(self, g_lr: torch.Tensor, q_les: torch.Tensor) -> torch.Tensor:
+        """L3: `W = s_W (K q_LES - mean_i)` per graph `[B, N]` -- centred, because under the
+        k = 0-dropped kernel the potential of a net-charged pattern carries an arbitrary
+        constant (the background), and a uniform shift of the diagonal moves `dF_band` by
+        `c Q` for a charged state."""
+        w = torch.einsum("bij,bj->bi", g_lr, q_les)
+        return self.well_scale() * (w - w.mean(-1, keepdim=True))
+
+    def well_terms(self, H: torch.Tensor, g_lr: torch.Tensor, q_les: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """L3: `H0' = H0 - diag(W x 1_4)` and `W`."""
+        W = self.well_potential(g_lr, q_les)
+        return H - torch.diag_embed(W.repeat_interleave(4, dim=-1)), W
+
+    def well_geometry_terms(self, W: torch.Tensor, head_energy: torch.Tensor, q_les: torch.Tensor,
+                            g_lr: torch.Tensor, d_w: Optional[torch.Tensor], j_les: Optional[torch.Tensor],
+                            create: bool) -> Optional[torch.Tensor]:
+        """L3 force pieces the `(H', dP)` and `(E_cross, 1)` cotangents do not carry, because
+        `K` is detached under the pair route and `q_LES` is a cached constant: the TOTAL
+        `dE/dW` (band energy through `dP`, PLUS `E_cross` through `d dq / dW` -- the fill's
+        response to the well, which `-n_site` alone misses) by one backward through the fill
+        graph, contracted with (a) `K`'s pair derivative and (b) the cached Jacobian of
+        `q_LES`. `W` is centred, so the cotangent is used as is (the projector is in the graph).
+        Returns `dE/dR [B, N, 3]` or None."""
+        if not W.requires_grad or (d_w is None and j_les is None):
+            return None
+        (cot,) = torch.autograd.grad(head_energy.sum(), W, retain_graph=True, create_graph=create)
+        cot = cot - cot.mean(-1, keepdim=True)      # exact: sum_i dE/dW_i = 0 for a centred W
+        out = None
+        if d_w is not None:
+            A = cot.unsqueeze(-1) * (self.well_scale() * q_les).unsqueeze(-2)
+            out = gradient_of_contraction(A, d_w)
+        if j_les is not None:
+            v = self.well_scale() * torch.einsum("bij,bi->bj", g_lr, cot)
+            g_q = torch.einsum("bjkc,bj->bkc", j_les, v)
+            out = g_q if out is None else out + g_q
+        return out
+
+    def latent_charge_jacobian(self, data: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
+        """L2 cache: `q_LES [N]` and `J = d q_LES / d R [N, N, 3]` (row j: the charge on atom j
+        against every position) of ONE frame from the frozen MACELES base, float64, RAW sign
+        (the head applies `les_sign`). N first-order backward passes through the base; the
+        trainer stores the result per frame so the training step never runs the base."""
+        d = dict(data)
+        pos = d["positions"].detach().clone().requires_grad_(True)
+        d["positions"] = pos
+        out = self.base_forward(self._trunk_data(d), training=False, compute_force=False)
+        q = out["latent_charges"].reshape(-1)
+        rows = [torch.autograd.grad(q[j], pos, retain_graph=(j + 1 < q.numel()))[0] for j in range(q.numel())]
+        return q.detach(), torch.stack(rows).detach()
+
     def reference_charges_batched(self, H: torch.Tensor, n0: torch.Tensor, n_up: torch.Tensor,
                                   n_dn: torch.Tensor) -> torch.Tensor:
         """`reference_charges` for `H [B, 4n, 4n]` with per-graph `n0 [B, N]` and counts."""
@@ -378,9 +513,21 @@ class MACEDSCC(nn.Module):
                        positions: torch.Tensor, cell: torch.Tensor, charges: torch.Tensor,
                        use_pairs: bool, need_cotangents: bool = False,
                        plan=None, xi: Optional[torch.Tensor] = None,
-                       fills_s=None, fills_r=None):
+                       fills_s=None, fills_r=None,
+                       q_les: Optional[torch.Tensor] = None, j_les: Optional[torch.Tensor] = None,
+                       g_lr: Optional[torch.Tensor] = None, d_w: Optional[torch.Tensor] = None):
         """W6: the two SCF-free terms that sit on top of the `Phi = 0` band energy, from the
         SAME eigendecomposition the fill used.
+
+        L2 (`les_cross`): `E_host` is replaced by `E_cross = s_c dq^T K q_LES` with `q_LES [B, N]`
+        the base's sign-fixed latent charges and `K` the BARE `gamma_lr` (eps_inf = 1). No
+        reference fill enters the energy (`q0` is not formed; `occ_R` is still needed for `dq`).
+        `q_LES`'s own geometry derivative comes either through the attached base graph (the
+        `(e_cross, 1)` cotangent, when the base ran in this forward) or, in training with the
+        base cached, from the per-frame Jacobian `j_les [B, N, N, 3] = d q_LES_j / d R_k`
+        supplied by the trainer: `dE/dR_k += s_c sum_j (K dq)_j J_jk`, a constant of the
+        geometry contracted with attached `s_c` and `dq` -- exactly the base backward with
+        cotangent `s_c K dq` on `q_LES`, evaluated once per frame instead of once per step.
 
         `E_host = dq^T Gamma_LR (s q0)` -- non-self-consistent: `dq` and `q0` are both fills
         of `H0` itself, no potential ever enters `H`. `E_M = 1/2 Q^2 xi(h) / eps_inf` is the
@@ -405,15 +552,23 @@ class MACEDSCC(nn.Module):
         n_graphs = H.shape[0]
         occ_s = site_occupation(H, spectrum, counts_s[0], counts_s[1], self.sigma_s, fills_s)
         occ_r = site_occupation(H, spectrum, counts_r[0], counts_r[1], self.sigma_s, fills_r)
-        dq, q0 = occ_r - occ_s, n0 - occ_r
-        sq0 = self.pattern_scale() * q0
+        les = bool(getattr(self, "les_cross", False))
+        if les and q_les is None:
+            raise RuntimeError("les_cross: the base's latent charges were not supplied "
+                               "(run the base in this forward, or cache dscc_base_q / dscc_base_J)")
+        eps_k = 1.0 if les else self.kernel.eps_inf          # L2: the bare kernel
+        dq = occ_r - occ_s
+        q0 = None if les else n0 - occ_r
+        sq0 = (self.cross_scale() * q_les) if les else (self.pattern_scale() * q0)
         with torch.set_grad_enabled(torch.is_grad_enabled() and not use_pairs):
-            if plan is not None:            # capture: the cell-dependent half hoisted out
-                g_lr = torch.stack([reciprocal_matrix_planned(positions[g], plan) / self.kernel.eps_inf
+            if g_lr is not None:            # L2/L3: the bare kernel computed once by the caller
+                pass
+            elif plan is not None:          # capture: the cell-dependent half hoisted out
+                g_lr = torch.stack([reciprocal_matrix_planned(positions[g], plan) / eps_k
                                     for g in range(n_graphs)])
             else:
                 g_lr = torch.stack([gamma_lr(positions[g], cell[g], self.kernel.r_g, self.r_split,
-                                             self.kernel.eps_inf, tol=self.kernel.tol,
+                                             eps_k, tol=self.kernel.tol,
                                              route=self._lr_route(), background=self._background())
                                     for g in range(n_graphs)])
         w = torch.einsum("bij,bj->bi", g_lr, sq0)
@@ -423,22 +578,32 @@ class MACEDSCC(nn.Module):
         # `dE/d occ_S = -Gamma_LR s q0` and `dE/d occ_R = Gamma_LR s q0 - s Gamma_LR^T dq`.
         occ_cotangents = None
         if need_cotangents:
-            occ_cotangents = (-w, w - self.pattern_scale() * torch.einsum("bji,bj->bi", g_lr, dq))
+            occ_cotangents = ((-w, w) if les else
+                              (-w, w - self.pattern_scale() * torch.einsum("bji,bj->bi", g_lr, dq)))
         pair_grad = None
         if use_pairs:
             with torch.no_grad():
-                if plan is not None:
+                if d_w is not None:
+                    pass
+                elif plan is not None:
                     d_w = torch.stack([reciprocal_pair_gradient_planned(positions[g], plan) / self.kernel.eps_inf
                                        for g in range(n_graphs)])
                 else:
                     d_w = torch.stack([gamma_lr_pair_gradient(positions[g], cell[g], self.kernel.r_g,
-                                                              self.r_split, self.kernel.eps_inf,
+                                                              self.r_split, eps_k,
                                                               tol=self.kernel.tol, route=self._lr_route())
                                        for g in range(n_graphs)])
             # ATTACHED, as route B's own `A_w`: `d_w` is the constant of the geometry, but
             # the contraction's parameter gradient (`s` above all, which enters the force only
             # here and through the cotangent) has to survive `create_graph` in training.
             pair_grad = gradient_of_contraction(dq.unsqueeze(-1) * sq0.unsqueeze(-2), d_w)
+        if les and j_les is not None:
+            # q_LES's geometry derivative from the cached per-frame Jacobian (the base did not
+            # run in this forward): dE/dR_k = s_c sum_j (K dq)_j J_jk. J is a constant of the
+            # geometry; `s_c` and `dq` stay attached for the force loss's parameter gradient.
+            v = self.cross_scale() * torch.einsum("bij,bi->bj", g_lr, dq)          # K^T dq, K symmetric
+            g_q = torch.einsum("bjkc,bj->bkc", j_les, v)
+            pair_grad = g_q if pair_grad is None else pair_grad + g_q
         # C13 (registered): E_M carries the model density's second-moment term
         # `4 pi r_g^2 C / Omega` alongside the point-charge Madelung constant, so that W6 and
         # the SCF models agree at fixed cell -- `xi + 4 pi r_g^2 C / Omega` is exactly
@@ -485,14 +650,18 @@ class MACEDSCC(nn.Module):
                 for k, v in d.items()}
 
     def base_forward(self, data: Dict[str, torch.Tensor], **kwargs):
-        """`ScaleShiftMACE.forward` on the frozen base in the BASE's precision, with every
+        """The base's OWN forward on the frozen base in the BASE's precision, with every
         floating output returned in the head's float64. The single entry point to the base, so
-        the precision split lives in one place."""
-        from mace.modules.models import ScaleShiftMACE
+        the precision split lives in one place. Dispatched on the base's class, not pinned to
+        `ScaleShiftMACE.forward`: a MACELES base (the LES head line, L0) adds its latent Ewald
+        term inside its own forward, and the pinned call silently dropped it -- the head then
+        wrapped a base that was not the one that was trained. Its `latent_charges` come back
+        in the dict as a tensor differentiable in the positions (L2's `q_LES`)."""
         dtype = self.base_dtype()
+        fwd = type(self.base).forward
         if dtype == torch.float64:
-            return ScaleShiftMACE.forward(self.base, data, **kwargs)
-        out = ScaleShiftMACE.forward(self.base, self._cast_floats(data, dtype), **kwargs)
+            return fwd(self.base, data, **kwargs)
+        out = fwd(self.base, self._cast_floats(data, dtype), **kwargs)
         return {k: (v.to(torch.float64) if torch.is_tensor(v) and v.is_floating_point() else v)
                 for k, v in out.items()}
 
@@ -610,6 +779,18 @@ class MACEDSCC(nn.Module):
         # is the one place that has the numbers, so it is the one place that sets them.
         if getattr(self, "crystal_field", False):
             self.h0.cfield.charge.copy_(self.q0_pristine.to(self.h0.cfield.charge.dtype))
+            if getattr(self.h0, "cf_linear", False):
+                # V_bar_Z over the same pristine ensemble, with the charges now in place.
+                vs, sps = [], []
+                for b in batches:
+                    sp_ = b["node_attrs"].argmax(dim=-1)
+                    vec = self.head_edge_vectors(b)
+                    V, _, _ = self.h0.cfield(sp_, b["edge_index"], vec, int(sp_.shape[0]))
+                    vs.append(V.detach()); sps.append(sp_)
+                V, sp_ = torch.cat(vs), torch.cat(sps)
+                for s_ in range(len(self.atomic_numbers)):
+                    if bool((sp_ == s_).any()):
+                        self.h0.cf_vbar[s_] = V[sp_ == s_].mean()
         return int(sp.shape[0])
 
     @torch.no_grad()
@@ -736,6 +917,17 @@ class MACEDSCC(nn.Module):
         shifts = torch.einsum("ei,eij->ej", data["unit_shifts"].to(positions.dtype), cell[edge_graph])
         edge_vector = positions[receiver] - positions[sender] + shifts
         ptr = data["ptr"]
+        q_les_all = None
+        if getattr(self, "les_well", False):
+            # L3: the regulariser acts on the Hamiltonian actually filled, H0 - W. The static
+            # cell's charges come cached (`dscc_base_q`, the trainer) or from one base pass.
+            if torch.is_tensor(data.get("dscc_base_q")):
+                q_les_all = data["dscc_base_q"].to(torch.float64).reshape(-1)
+            else:
+                with torch.no_grad():
+                    q_les_all = self.base_forward(self._trunk_data(dict(data)), training=False,
+                                                  compute_force=False)["latent_charges"].reshape(-1)
+            q_les_all = q_les_all * self.les_sign
         gaps = []
         for g in range(num_graphs):
             lo, hi = int(ptr[g]), int(ptr[g + 1])
@@ -743,6 +935,9 @@ class MACEDSCC(nn.Module):
             e_mask = edge_graph == g
             H = self.h0(scalars[nodes], vectors[nodes], species[nodes],
                         data["edge_index"][:, e_mask] - lo, edge_vector[e_mask])
+            if q_les_all is not None:
+                g_lr, _ = self._les_kernel(positions[nodes].detach().unsqueeze(0), cell[g].detach().unsqueeze(0), True)
+                H = self.well_terms(H.unsqueeze(0), g_lr, q_les_all[nodes].unsqueeze(0))[0][0]
             sp_g = species[nodes]
             numbers = [self.atomic_numbers[int(s_)] for s_ in sp_g.tolist()]
             if self.route_b and not getattr(self, "scf_free", False):
@@ -826,6 +1021,7 @@ class MACEDSCC(nn.Module):
         # `base_forces` keys, filled with zeros when absent -- a different thing.)
         cached_base = (torch.is_tensor(data.get("dscc_base_energy")) and torch.is_tensor(data.get("dscc_base_forces"))
                        and not compute_stress)
+        base_out: Dict[str, Optional[torch.Tensor]] = {}     # the base's own outputs (L0: latent_charges)
         if cached_base:
             # O3: a decoupled head reads nothing from the base, so with E_base/F_base cached
             # the base is not evaluated at all -- block 0 and its `create_graph` traversal
@@ -843,6 +1039,7 @@ class MACEDSCC(nn.Module):
             out = self.base_forward(self._trunk_data(strained), training=training,
                                          compute_force=False)
             node_feats, e_base, f_base = out["node_feats"], out["energy"], None
+            base_out = out
         # O3.D cannot defer the base: H0's on-site readout needs block 0 to assemble at all.
         # That is exactly the cost this arm is registered as not being willing to pay in
         # production, made explicit here rather than hidden.
@@ -850,6 +1047,7 @@ class MACEDSCC(nn.Module):
 
         def run_base():
             o = self.base_forward(self._trunk_data(strained), training=training, compute_force=False)
+            base_out.update(o)
             return o["energy"]
         scalars, vectors = (self._descriptor_placeholders(int(data["node_attrs"].shape[0]), device)
                             if (self.decoupled and not self.on_site_from_base)
@@ -892,23 +1090,13 @@ class MACEDSCC(nn.Module):
         # eager `_DensityMatrix` was 8 ms of the 159-atom step). Inference only -- under
         # `create_graph` the parameter gradient still needs the graph -- and forces only; the
         # stress keeps the cotangent route, which needs the strain graph anyway.
-        # O3.2 is REGISTERED as outside the analytic kernel: `h0_position_gradient` writes
-        # dH0/dR assuming `t_ij` depends on `r_ij` alone, and the screening makes it depend on
-        # every third atom's position -- a genuine three-body force term the closed form does
-        # not contain. A screened head falls back to the autograd cotangent route (gated
-        # against finite differences) until the kernel is extended; the training path never
-        # used the analytic route, so this costs the arm nothing.
-        # GATED ON THE MODULE, NOT ON `self.screened`. The flag travels in the extra state, so
-        # loading an UNSCREENED parent's `state_dict` into a screened model clears it while
-        # `sk.screen` stays live -- and then the closed form runs on a screened Hamiltonian,
-        # with wrong forces and no error. The module is what decides whether the closed form
-        # is valid, so the module is what the gate asks.
+        # WHICH HEADS THE CLOSED FORM IS VALID FOR is `analytic.analytic_refusal`, shared with
+        # `capture.GraphedStep` -- the two used to decide it separately and drifted, which
+        # cost a captured O5 model 19 meV/A of silently wrong force. The conditions here are
+        # the ones about this CALL (what is being asked for), not about the model.
         analytic = (uniform and self.decoupled and self.scf_free and not self.coupling
                     and compute_force and not compute_stress and not create
-                    and getattr(self.h0.sk, "screen", None) is None
-                    and not getattr(self, "on_site_from_base", False)   # O3.D: cotangent
-                                                                       # would need block 0
-                    and not getattr(self, "crystal_field", False)       # O5a: dV/dR pending
+                    and analytic_refusal(self) is None
                     and getattr(self, "analytic_head_forces", True))
         analytic_pack = None
         if uniform:
@@ -946,19 +1134,35 @@ class MACEDSCC(nn.Module):
                         # cuSOLVER beyond that anyway.
                         eps_c, U_c = torch.linalg.eigh(H_cpu)
                     spectrum = (eps_c.to(H.device), U_c.to(H.device))
+                q_les_b = j_les_b = g_lr_b = d_w_b = W_b = None
+                pos_b = positions.reshape(num_graphs, n_nodes, 3)
+                if self.scf_free and getattr(self, "les_cross", False):            # L2 / L3
+                    q_les_b, j_les_b = self._les_charges(data, base_out, num_graphs, n_nodes)
+                    g_lr_b, d_w_b = self._les_kernel(pos_b, cell, use_pairs)
+                    if getattr(self, "les_well", False):                           # L3: H0' = H0 - W
+                        H, W_b = self.well_terms(H, g_lr_b, q_les_b)
+                        if spectrum is not None:
+                            raise RuntimeError("les_well: the deferred-base spectrum was taken on H0, not H0'")
                 with torch.set_grad_enabled(torch.is_grad_enabled() and not analytic):
                     sol = two_fillings(H, counts_s, counts_r, self.sigma_s, spectrum=spectrum)
                 head_energy = sol.energy
+                dP_sym = 0.5 * (sol.dP + sol.dP.transpose(-1, -2))
                 if not analytic:
-                    cotangent_terms.append((H, 0.5 * (sol.dP + sol.dP.transpose(-1, -2))))
+                    cotangent_terms.append((H, dP_sym))
                 dq_all = sol.dq.reshape(-1)
                 if self.scf_free:                                   # W6
-                    pos_b = positions.reshape(num_graphs, n_nodes, 3)
                     q_form = t([float(s_.Q) for s_ in states])
                     with torch.set_grad_enabled(torch.is_grad_enabled() and not analytic):
                         e_host, e_m, pg, _, q0, occ_cot = self.scf_free_terms(
                             H, (sol.fills[0].eps, sol.fills[0].U), counts_s, counts_r, t(n0_rows),
-                            pos_b, cell, q_form, use_pairs, need_cotangents=analytic)
+                            pos_b, cell, q_form, use_pairs, need_cotangents=analytic,
+                            q_les=q_les_b, j_les=j_les_b, g_lr=g_lr_b, d_w=d_w_b)
+                    if W_b is not None:                                         # L3 force pieces
+                        gw = self.well_geometry_terms(W_b, sol.energy + e_host, q_les_b, g_lr_b, d_w_b, j_les_b, create)
+                        if gw is not None:
+                            pg = gw if pg is None else pg + gw
+                        diagnostics["well_p95_eV"] = float(W_b.detach().abs().reshape(-1).quantile(0.95))
+                        diagnostics["s_well"] = float(self.well_scale().detach())
                     head_energy = head_energy + e_host + e_m
                     if analytic:
                         analytic_pack = (sol.fills, occ_cot, n_nodes)
@@ -966,11 +1170,16 @@ class MACEDSCC(nn.Module):
                         cotangent_terms.append((e_host, torch.ones_like(e_host)))
                         if compute_stress:  # E_M is a function of the cell alone: no force
                             cotangent_terms.append((e_m, torch.ones_like(e_m)))
-                    if pg is not None:
-                        pair_grad = pair_grad + pg.reshape(-1, 3)
-                    diagnostics["q0_sum"] = q0.detach().sum(-1).cpu().tolist()
+                    if pg is not None:      # None under the cotangent route unless L2's J term
+                        pair_grad = pg.reshape(-1, 3) if pair_grad is None else pair_grad + pg.reshape(-1, 3)
+                    if q0 is not None:
+                        diagnostics["q0_sum"] = q0.detach().sum(-1).cpu().tolist()
                     diagnostics["e_host"] = e_host.detach().cpu().tolist()
                     diagnostics["e_madelung"] = e_m.detach().cpu().tolist()
+                    if q_les_b is not None:
+                        diagnostics["e_cross"] = e_host.detach().cpu().tolist()
+                        diagnostics["s_cross"] = float(self.cross_scale().detach())
+                        diagnostics["q_les_sum"] = q_les_b.detach().sum(-1).cpu().tolist()
             else:
                 gammas, Ws = [], []
                 pos_b = positions.reshape(num_graphs, n_nodes, 3)
@@ -1194,23 +1403,42 @@ class MACEDSCC(nn.Module):
                                     g, self.scf_options.n_max, res.residual)
                 diagnostics["dq_sum"].append(float(res.dq.sum()))
             else:
+                q_les_g = j_les_g = g_lr_g = d_w_g = W_g = None
+                if self.scf_free and getattr(self, "les_cross", False):            # L2 / L3 at B = 1
+                    q_les_g, j_les_g = self._les_charges(data, base_out, num_graphs, None, graph=(g, lo, hi))
+                    g_lr_g, d_w_g = self._les_kernel(positions[nodes].unsqueeze(0), cell[g].unsqueeze(0), use_pairs)
+                    if getattr(self, "les_well", False):
+                        H1, W_g = self.well_terms(H.unsqueeze(0), g_lr_g, q_les_g)
+                        H = H1[0]
                 sol = two_fillings(H, n_s, n_r, self.sigma_s)
                 e_g = sol.energy
-                cotangent_terms.append((H, 0.5 * (sol.dP + sol.dP.transpose(0, 1))))
+                dP_sym_g = 0.5 * (sol.dP + sol.dP.transpose(0, 1))
+                cotangent_terms.append((H, dP_sym_g))
                 if self.scf_free:                                   # W6, at B = 1
                     one = lambda v: torch.tensor([float(v)], dtype=torch.float64, device=device)  # noqa: E731
                     n0_g = torch.tensor([[float(N0[z]) for z in numbers]], dtype=torch.float64, device=device)
                     e_host, e_m, pg, _, q0, _ = self.scf_free_terms(
                         H.unsqueeze(0), (sol.fills[0].eps.unsqueeze(0), sol.fills[0].U.unsqueeze(0)),
                         (one(n_s[0]), one(n_s[1])), (one(n_r[0]), one(n_r[1])), n0_g,
-                        positions[nodes].unsqueeze(0), cell[g].unsqueeze(0), one(state.Q), use_pairs)
+                        positions[nodes].unsqueeze(0), cell[g].unsqueeze(0), one(state.Q), use_pairs,
+                        q_les=q_les_g, j_les=j_les_g, g_lr=g_lr_g, d_w=d_w_g)
+                    if W_g is not None:
+                        gw = self.well_geometry_terms(W_g, sol.energy + e_host[0], q_les_g, g_lr_g, d_w_g, j_les_g, create)
+                        if gw is not None:
+                            pg = gw if pg is None else pg + gw
                     e_g = e_g + e_host[0] + e_m[0]
                     cotangent_terms.append((e_host, torch.ones_like(e_host)))
                     if compute_stress:
                         cotangent_terms.append((e_m, torch.ones_like(e_m)))
                     if pg is not None:
+                        if pair_grad is None:
+                            pair_grad = torch.zeros_like(positions)
                         pair_grad = pair_grad.index_add(0, torch.arange(lo, hi, device=device), pg[0])
-                    diagnostics.setdefault("q0_sum", []).append(float(q0.detach().sum()))
+                    if q0 is not None:
+                        diagnostics.setdefault("q0_sum", []).append(float(q0.detach().sum()))
+                    if q_les_g is not None:
+                        diagnostics.setdefault("e_cross", []).append(float(e_host.detach()))
+                        diagnostics["s_cross"] = float(self.cross_scale().detach())
                     diagnostics.setdefault("e_host", []).append(float(e_host.detach()))
                     diagnostics.setdefault("e_madelung", []).append(float(e_m.detach()))
                 head_energy[g] = e_g
@@ -1226,6 +1454,10 @@ class MACEDSCC(nn.Module):
             "base_energy": e_base, "head_energy": head_energy, "c_q": c_q,
             "dq": dq_all, "node_feats": node_feats, "short_circuit": False,
             "calibrated": self.calibrated, "diagnostics": diagnostics,
+            # A MACELES base's latent charges and Ewald energy, differentiable in the positions
+            # when the base ran in this forward; None with a cached or plain base.
+            "base_latent_charges": base_out.get("latent_charges"),
+            "base_les_energy": base_out.get("les_energy"),
         }
         if compute_force or compute_stress:
             inputs = [positions] + ([strain] if compute_stress else [])

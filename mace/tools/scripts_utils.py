@@ -385,6 +385,10 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         ).copy()
         config["field_readout_config"] = getattr(model, "_field_readout_config").copy()
         config["keep_last_layer_irreps"] = model.keep_last_layer_irreps
+    if model.__class__.__name__ == "MACELES":
+        # the shared latent-charge readout (D2) must survive every rebuild -- the cueq/e3nn
+        # converters and remove_pt_head all reconstruct through this config
+        config["les_shared_readout"] = bool(getattr(model, "les_shared_readout", False))
     return config
 
 
@@ -456,6 +460,9 @@ def remove_pt_head(
     model_config["atomic_inter_shift"] = model.scale_shift.shift[head_idx].item()
     mlp_count_irreps = model_config["MLP_irreps"].count((0, 1))
 
+    shared_les = bool(getattr(model, "les_shared_readout", False))
+    if shared_les:
+        model_config["les_shared_readout"] = True     # MACELES only; extract_config does not carry it
     new_model = model.__class__(**model_config)
     state_dict = model.state_dict()
     new_state_dict = {}
@@ -470,6 +477,8 @@ def remove_pt_head(
                 :, head_idx
             ].flatten()
 
+        elif shared_les and name.startswith("les_readouts"):
+            new_state_dict[name] = param            # one readout for every head: nothing to slice
         elif "readouts" in name:
             channels_per_head = param.shape[0] // len(model.heads)
             start_idx = head_idx * channels_per_head

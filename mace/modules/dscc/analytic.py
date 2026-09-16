@@ -42,6 +42,61 @@ from mace.modules.dscc.legacy import ORBITALS_PER_ATOM, _dk_eigenbasis
 
 # ------------------------------------------------------------------ radial derivatives
 
+def capture_refusal(model) -> Optional[str]:
+    """Why this model cannot be CUDA-graph captured, or `None` if it can.
+
+    A SHORTER LIST than `analytic_refusal`. Capture needs fixed shapes and a fixed kernel
+    sequence; it does not need a closed-form gradient, because `h0_position_gradient_vjp`
+    serves any head with one capturable backward. What capture genuinely cannot take is a
+    DATA-DEPENDENT SHAPE, and in this head there is exactly one: the screened triplet list,
+    built with `nonzero`. A replay would silently reuse the captured frame's triplets.
+    """
+    if type(model.base).__name__ == "MACELES":
+        return ("a MACELES base (the LES head line): its Ewald sum builds a k-grid with a "
+                "cell-dependent count and the line is registered to run without capture, "
+                "absolute ms reported instead")
+    if getattr(model.h0.sk, "screen", None) is not None:
+        return ("the screened head (O3.2): its triplet list is built with `nonzero`, so the "
+                "shapes are data dependent and a replay would silently reuse the captured "
+                "frame's triplets")
+    if not (model.scf_free and not model.coupling):
+        return ("a coupled or SCF-solving head: the solve is a host iteration with a "
+                "value-dependent trip count")
+    return None
+
+
+def analytic_refusal(model) -> Optional[str]:
+    """Why the closed-form head gradient is not valid for this model, or `None` if it is.
+
+    ONE PREDICATE, TWO CALLERS. `MACEDSCC.forward` and `capture.GraphedStep` both decide
+    whether to take the analytic route, and they had decided it separately: the forward
+    excluded O3.D and O5 (the crystal field), the capture did not, and a captured O5-linear
+    model replayed through the closed form came out 19 meV/A wrong on the forces WITH NO
+    ERROR -- the widths happen to match, so nothing raised. (The MLP form crashed instead,
+    101 channels against 104, which is how it was found.) Any future term that the kernel
+    does not differentiate belongs here and nowhere else.
+
+    GATED ON THE MODULES, NOT ON THE FLAGS. The flags travel in the extra state, so loading
+    an unscreened parent's `state_dict` into a screened model clears `screened` while
+    `sk.screen` stays live. What is asked is what is built.
+    """
+    if not getattr(model, "decoupled", False):
+        # The kernel itself raises on this (`h0_position_gradient`, first line). The predicate
+        # has to say so or a caller that trusts it -- as the captured tail now does -- routes a
+        # block-0-reading head into a function that refuses it.
+        return ("a head that reads the base's block 0: the derivative runs through the base's "
+                "graph, which the closed form does not contain")
+    if getattr(model.h0.sk, "screen", None) is not None:
+        return ("the screened head (O3.2): `t_ij` depends on every third atom's position, a "
+                "genuine three-body force term the closed form does not contain")
+    if getattr(model, "on_site_from_base", False):
+        return "O3.D: the on-site term reads the base's block 0, whose cotangent is not formed"
+    if getattr(model.h0, "crystal_field", False) or getattr(model, "crystal_field", False):
+        return ("O5: the damped-Coulomb potential, field and field gradient depend on every "
+                "neighbour's position, and dV/dR is not in the kernel")
+    return None
+
+
 def _taper(x: torch.Tensor, r_cut: float):
     """H0's cutoff taper `(1 - x^6)^2` and `d/dr` of it, with `x = (r/r_cut)` clamped at 1
     (the clamp makes the derivative zero beyond the cutoff, as autograd's does)."""
@@ -241,6 +296,45 @@ def _edge_gradient(h0, Xe: torch.Tensor, u: torch.Tensor, r: torch.Tensor,
 
 def assemble_compiled(h0, *args):
     return _compiled(assemble)(h0, *args)
+
+
+def h0_position_gradient_vjp(model, X: torch.Tensor, d: dict, species: torch.Tensor,
+                             n_nodes: int, num_graphs: int, base_capacity=None,
+                             n_kept=None, dummy=None) -> torch.Tensor:
+    """`d <X, H0(R)> / dR` for a head the CLOSED FORM cannot serve, by one ordinary VJP.
+
+    WHY THIS EXISTS. `h0_position_gradient` is a closed form, and a closed form has to contain
+    every term: the screened head's three-body `dt/dR`, O5's `dV/dR`, and -- the case this was
+    written for -- a head that reads the base's block 0, whose derivative runs through the
+    base's graph. A term it does not contain is missing SILENTLY, which cost a captured O5 head
+    19 meV/A. But capture does not need a closed form. It needs a gradient whose kernel
+    sequence and shapes are fixed, and at fixed cotangent `X` that is one backward pass.
+
+    So: rebuild the features and the assembly from `positions` with grad on, contract against
+    the DETACHED `X`, take one backward. No `create_graph` (inference wants no parameter
+    derivative), no parameter gradients, static shapes. Verified capturable -- a backward
+    inside `torch.cuda.graph` replays bit-identically to eager.
+
+    Correct by construction for ANY head, because it differentiates whatever `h0.batched`
+    actually computed rather than a transcription of it. The cost is the second assembly and
+    the block-0 backward (~22 ms at 79 atoms, measured) against the closed form's ~2.7 ms; it
+    buys capture for heads that would otherwise have none.
+    """
+    pos = d["positions"]
+    with torch.enable_grad():
+        p = pos.detach().requires_grad_(True)
+        dd = dict(d)
+        dd["positions"] = p
+        send, recv = dd["edge_index"][0], dd["edge_index"][1]
+        ev = p[recv] - p[send] + dd["shifts"]
+        scalars = vectors = None
+        if not getattr(model.h0, "decoupled", False) or getattr(model, "on_site_from_base", False):
+            trunk = model._trunk_data(dd, capacity=base_capacity, n_kept_out=n_kept, dummy=dummy)
+            scalars, vectors = model.features(model.first_block(trunk))
+        H = model.h0.batched(scalars, vectors, species, dd["edge_index"], ev,
+                             dd["batch"], num_graphs, n_nodes)
+        (g,) = torch.autograd.grad((X.detach() * H).sum(), p)
+    return g
 
 
 def h0_position_gradient(h0, X: torch.Tensor, species: torch.Tensor,

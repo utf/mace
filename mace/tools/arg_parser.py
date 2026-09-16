@@ -538,6 +538,14 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=1.0,
     )
     parser.add_argument(
+        "--les_shared_readout",
+        help="MACELES: ONE latent-charge readout shared by every head (D2: the dft and teacher "
+             "label sets both carry electrostatics, so the charges live on one scale); energy "
+             "readouts stay per head.",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
         "--les_zero_readouts",
         help="MACELES: zero the last layer of each latent-charge readout at construction, so "
              "the model starts with NO long-range term and grows it. Always applied when "

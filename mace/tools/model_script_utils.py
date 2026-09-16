@@ -243,6 +243,19 @@ def configure_model(
                 max_L=args.max_L,
                 default_dtype=dtype_dict.get(args.default_dtype, torch.float64),
             )
+        # D2 (distilled base): when the FOUNDATION is itself a MACELES (the D1 student), its
+        # latent-charge readouts ARE the physics carried into the fine-tune. They transfer here,
+        # unscaled, whenever the shapes match (a shared readout, or a single head); the generic
+        # loader above copies only embeddings for modules it does not know, and the scaling in
+        # `_build_model` is overridden by this copy.
+        if hasattr(model_foundation, "les_readouts") and hasattr(model, "les_readouts"):
+            src = model_foundation.les_readouts.state_dict(); dst = model.les_readouts.state_dict()
+            if set(src) == set(dst) and all(src[k].shape == dst[k].shape for k in src):
+                model.les_readouts.load_state_dict({k: v.to(dst[k].dtype) for k, v in src.items()})
+                logging.info("MACELES foundation: latent-charge readouts transferred from the foundation (unscaled)")
+            else:
+                logging.warning("MACELES foundation has latent-charge readouts but the shapes differ; NOT "
+                                "transferred -- use --les_shared_readout to carry them")
 
     return model, output_args
 
@@ -390,8 +403,10 @@ def _build_model(
     if args.model == "FoundationMACELES":
         from mace.modules.extensions import MACELES
 
+        model_config_foundation.pop("les_shared_readout", None)   # a MACELES foundation carries its own; the flag decides
         model = MACELES(
             les_arguments=args.les_arguments,
+            les_shared_readout=bool(getattr(args, "les_shared_readout", False)),
             **model_config_foundation,
         )
         # ZERO THE LATENT-CHARGE READOUTS when starting from a foundation model.
@@ -470,6 +485,7 @@ def _build_model(
         from mace.modules.extensions import MACELES
 
         model = MACELES(
+            les_shared_readout=bool(getattr(args, "les_shared_readout", False)),
             les_arguments=args.les_arguments,
             **model_config,
             pair_repulsion=args.pair_repulsion,
