@@ -128,3 +128,67 @@ def test_cueq_round_trip_reproduces_response():
     for key in ("energy", "forces", "polarization", "becs", "polarizability"):
         assert torch.allclose(ref[key], out_c[key].cpu(), atol=1e-8, rtol=0), ("cueq", key, (ref[key] - out_c[key].cpu()).abs().max())
         assert torch.allclose(ref[key], out_b[key], atol=1e-8, rtol=0), ("back", key)
+
+
+def _pp_model(pp_r_split):
+    model, table = _small_model()
+    from mace.tools.scripts_utils import extract_config_mace_model
+    cfg = extract_config_mace_model(model)
+    cfg["pp_r_split"] = pp_r_split
+    cfg["pp_eps_inf"] = 4.0
+    m2 = MACEField(**cfg)
+    m2.load_state_dict(model.state_dict())
+    return model, m2, table
+
+
+def test_e_pp_in_forward_off_is_identical_and_on_matches_finite_differences():
+    model, m2, table = _pp_model(2.5)
+    batch = _batch(model, table, [_cell(seed=9)], field=(0.0, 0.01, 0.0))
+    off = _run(model, dict(batch))
+    on = _run(m2, dict(batch))
+    assert off["e_pp"] is None and on["e_pp"] is not None and float(on["e_pp"].abs()) > 1e-9
+    assert torch.allclose(on["energy"] - off["energy"], on["e_pp"], atol=1e-12)
+    # forces of the composed enthalpy by central differences (E_PP's p(R) included)
+    f = on["forces"].detach()
+    h = 1e-4
+    for a, c in [(1, 0), (4, 2)]:
+        def e(shift):
+            b2 = {k: (v.clone() if torch.is_tensor(v) else v) for k, v in batch.items()}
+            b2["positions"][a, c] += shift
+            return float(m2(b2, training=False, compute_force=False)["energy"])
+        fd = -(e(h) - e(-h)) / (2 * h)
+        assert abs(fd - float(f[a, c])) < 1e-6 * max(1.0, abs(fd)), (a, c, fd, float(f[a, c]))
+    # the response is a derivative of the same enthalpy: P from the global field equals the
+    # summed node dipoles of the node-field path with E_PP on
+    n = batch["positions"].shape[0]
+    e_node = torch.tensor([0.0, 0.01, 0.0]).expand(n, 3).clone().requires_grad_(True)
+    node = _run(m2, dict(batch), electric_field_node=e_node, compute_node_dipoles=True)
+    assert torch.allclose(node["energy"], on["energy"], atol=1e-10)
+    assert torch.allclose(node["polarization"], on["polarization"], atol=1e-9)
+
+
+def test_e_pp_survives_config_and_head_removal():
+    from mace.tools.scripts_utils import extract_config_mace_model, remove_pt_head
+    _, m2, table = _pp_model(3.0)
+    cfg = extract_config_mace_model(m2)
+    assert cfg["pp_r_split"] == 3.0 and cfg["pp_eps_inf"] == 4.0
+    m3 = MACEField(**cfg)
+    assert m3.pp_r_split == 3.0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="cueq round trip needs a GPU")
+def test_e_pp_cueq_round_trip():
+    from mace.cli.convert_e3nn_cueq import run as to_cueq
+    from mace.cli.convert_cueq_e3nn import run as to_e3nn
+    _, m2, table = _pp_model(2.5)
+    batch = _batch(m2, table, [_cell(seed=7)], field=(0.0, 0.01, 0.0))
+    ref = _run(m2, dict(batch))
+    cu = to_cueq(m2, device="cuda")
+    assert cu.pp_r_split == 2.5
+    batch_c = {k: (v.cuda() if torch.is_tensor(v) else v) for k, v in batch.items()}
+    out_c = _run(cu, batch_c)
+    back = to_e3nn(cu, device="cpu")
+    out_b = _run(back, dict(batch))
+    for key in ("energy", "forces", "polarization", "becs", "polarizability", "e_pp"):
+        assert torch.allclose(ref[key], out_c[key].cpu(), atol=1e-8, rtol=0), ("cueq", key)
+        assert torch.allclose(ref[key], out_b[key], atol=1e-8, rtol=0), ("back", key)

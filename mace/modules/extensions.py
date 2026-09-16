@@ -1787,7 +1787,18 @@ class MACEField(ScaleShiftMACE):
     (tested in tests/extensions/field/test_macefield_node_field.py)."""
 
     def __init__(self, **kwargs):
+        # Plan P (Phase 1): the host--host dipole term `E_PP` inside the forward, from the
+        # model's own zero-field node dipoles (`pp_r_split` > 0 switches it on; the smoothing
+        # width is the Phase 0 r_split, `pp_eps_inf` the one eps_inf of the run). It is added
+        # to the interaction energy BEFORE forces, stress and the response are taken, so every
+        # observable is a derivative of the one enthalpy. Known approximation: the k set and
+        # volume of the kernel are built on the detached cell, so E_PP's cell derivative is
+        # not in the stress (E_PP is -0.01 meV/atom on the training cells).
+        pp_r_split = float(kwargs.pop("pp_r_split", 0.0))
+        pp_eps_inf = float(kwargs.pop("pp_eps_inf", 4.0))
         super().__init__(**kwargs)
+        self.pp_r_split = pp_r_split
+        self.pp_eps_inf = pp_eps_inf
         hidden_irreps = o3.Irreps(kwargs["hidden_irreps"])
         cueq_config = kwargs.get("cueq_config", None)
         irreps_1o = o3.Irreps("1o")
@@ -1884,6 +1895,13 @@ class MACEField(ScaleShiftMACE):
                 global_field = global_field.detach().requires_grad_(True)
             field_leaf = global_field
             per_atom_electric_field = global_field[batch_index]
+        # E_PP needs the node dipoles: a zero per-node leaf ADDED to the field keeps the global
+        # field's graph intact (P, alpha) while giving d/dE_node.
+        pp_on = float(getattr(self, "pp_r_split", 0.0)) > 0.0
+        node_zero: Optional[torch.Tensor] = None
+        if pp_on and not node_field_mode:
+            node_zero = torch.zeros_like(per_atom_electric_field).requires_grad_(True)
+            per_atom_electric_field = per_atom_electric_field + node_zero
 
         volume = torch.linalg.det(cell.view(-1, 3, 3)).abs()
 
@@ -1984,6 +2002,26 @@ class MACEField(ScaleShiftMACE):
         node_inter_es = torch.sum(torch.stack(node_es_list, dim=0), dim=0)
         node_inter_es = self.scale_shift(node_inter_es, node_heads)
         inter_e = scatter_sum(node_inter_es, data["batch"], dim=-1, dim_size=num_graphs)
+
+        e_pp: Optional[torch.Tensor] = None
+        if pp_on:
+            from mace.modules.dscc.polarisation import dipole_dipole_energy
+            leaf = field_leaf if node_field_mode else node_zero
+            g_pp = torch.autograd.grad(
+                outputs=[inter_e], inputs=[leaf], grad_outputs=[torch.ones_like(inter_e)],
+                retain_graph=True, create_graph=True, allow_unused=True,
+            )[0]
+            p_pp = -g_pp if g_pp is not None else torch.zeros_like(leaf)
+            cell3 = cell.view(-1, 3, 3)
+            ptr = data["ptr"]
+            terms: List[torch.Tensor] = []
+            for g in range(num_graphs):
+                lo, hi = int(ptr[g]), int(ptr[g + 1])
+                terms.append(dipole_dipole_energy(
+                    positions[lo:hi].to(torch.float64), cell3[g].to(torch.float64),
+                    p_pp[lo:hi].to(torch.float64), self.pp_r_split, self.pp_eps_inf))
+            e_pp = torch.stack(terms).to(inter_e.dtype)
+            inter_e = inter_e + e_pp
 
         total_energy = e0 + inter_e
         node_energy = node_e0.clone().double() + node_inter_es.clone().double()
@@ -2090,4 +2128,5 @@ class MACEField(ScaleShiftMACE):
             "becs": becs,
             "polarizability": polarizability,
             "node_dipoles": node_dipoles,
+            "e_pp": e_pp,
         }
