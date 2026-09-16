@@ -5310,3 +5310,10 @@ Placement update (23:58): with the float64 base the two arms no longer share a 2
 local CPU (`p0_var_local.sh`, `ladder2_var_local/`, 48 threads) and the W6 arm keeps its b3
 core/small rungs with the 2159/2879 rungs local (`p0_w6_large.sh`). Same tolerances, same
 scripts, same cells.
+
+**Jobs stopped (user, 2026-09-17 00:35).** Killed by PID: the local variant tight ladder
+(`p0_var_local.sh`, its 639-atom far-field relaxation at step ≈ 30) and the local W6 large-rung
+chain (`p0_w6_large.sh`, 2159-atom relaxation at step ≈ 12); b3 idle (W6 tight 639/959 done:
+−0.4331 / −0.4369 eV, two-point eps0 5.3; the smoke `p1/smoke2` complete). Tight-ladder state
+of record: W6 639/959 tight, variant core only (−0.3957 eV). Nothing else running on either
+machine.
