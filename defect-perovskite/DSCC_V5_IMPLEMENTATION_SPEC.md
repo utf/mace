@@ -5317,3 +5317,56 @@ chain (`p0_w6_large.sh`, 2159-atom relaxation at step ≈ 12); b3 idle (W6 tight
 −0.4331 / −0.4369 eV, two-point eps0 5.3; the smoke `p1/smoke2` complete). Tight-ladder state
 of record: W6 639/959 tight, variant core only (−0.3957 eV). Nothing else running on either
 machine.
+
+## Plan P — AMENDMENT A1 (user, 2026-09-17 00:45; registered before any amended result is opened)
+
+Verbatim: (1) r_split is set by matching, not locality: the largest E_PP force on training
+frames that stays under 2 meV/Å → **r_split = 4.5 Å** (all-families RMS 1.86 meV/Å) for both
+E_cP and E_PP; the r90 rule and the "mid-field reverts to H0" clause are dropped. (2) 0.1 is
+replaced by the form factor: the provider's modulated-displacement response at λ = 48, 24, 16,
+12 Å along the three axes, f(q) with the fitted Gaussian w_eff (expected ≈ 4 Å; the LO–TO test
+already gave f = 0.94 at q = 0.131 Å⁻¹ ⇒ w ≈ 3.8 Å); if w_eff exceeds r_split on any axis,
+raise r_split to w_eff, no further. (3) 0.3 rerun at r_split 4.5 Å: LO–TO (expect E_PP ≈ g² f² ×
+0.746 with g = 0.71 at this q, ≈ 0.45) and the variant ladder at fmax 0.002; the W6 tight ladder
+is kept as the control. (4) Decision 0 restated: **variant eps0_ladder ≥ 8 and ≥ 2 × W6's, with
+LO–TO matching the smoothed expectation to 10 %**; quantitative agreement with eps0_LST is a
+Phase 3 question at sizes where g → 1. (5) Phase 1 runs with r_split 4.5 Å in the forward (the
+1.9 meV/Å is what the fine-tune matches the local part to); the pseudolabel fix stands; the base
+is MH-0 lineage, 128 channels, r_max 6 against base v2's 512-channel MH-1 — the relative
+robustness gate is the one that matters most, and the head's readouts port to 128-dimensional
+features. (6) Phase 2 is no longer a null; (M) ε∞ is v5's on the relaxed cell, the 3.55–3.90
+spread its uncertainty. Flagged for after Phase 2: distil the provider's Z*(R) into a small
+local bond-dipole model (unlimited labels at any geometry, locality by construction, no nested
+autograd at inference). The Z* validation gap is accepted (ε∞ within 10 % of MP DFPT and the
+anomalous pattern are what a tabulated tensor would have checked).
+
+Reading of record of the r90-based 0.3: a null by construction (w_PP = 19.3 Å carries 20 % of
+the dipole physics at λ = 48 Å and none in the 4–15 Å region; eps0_ladder 4.1–4.3 for both arms
+is what that model must give); the LO–TO agreement to 0.3 % is the positive finding.
+
+Implementation registered: `p0_formfactor.py` (3×3×3 tiling, 2160 atoms, strongest-IR-mode
+pattern e/√M · cos(q·R), q = n · 2π/L_axis, n = 1…4, along x, y, z; f = |Σ (q̂·Δp_a) e^{iq·R_a}| /
+|Σ (q̂·Z*_a u_a) e^{iq·R_a}| with Δp from ±A central differences of the provider's node dipoles;
+w_eff per axis by least squares of −4 ln f against q²); the variant re-cut at r_split 4.5
+(`w6_s1_pol_r45.pt`, gate as before); `p0_loto.py` at 4.5; variant tight ladder core + 639/959
+on b3 GPU 7, 2159/2879 local CPU; W6 tight 2159/2879 completed locally (control). Decision 0 is
+computed by `p0_decision.py` from the JSON records into `~/runs/dscc/p0/DECISION0_STATUS`, and
+Phase 1 (`p1_run.sh`, `--pp_r_split 4.5`, 30 epochs, b3 GPU 5) launches on PASS.
+
+**A1 variant gate (00:50; `p0_variant_s1_r45.json`, `w6_s1_pol_r45.pt`, float64 base).** Same
+charged 79-atom frame: dq, band energy (6.816157 eV) and e_madelung identical to W6; e_host
+−20.5 meV → **e_cP −40.9 meV**, e_PP +0.2 meV; central-difference checks 0.35 and 0.002 meV/Å.
+Forces of the untrained composition: 11.1 meV/Å RMS from W6, 11.8 vs 8.4 against the label
+(was 17.1 at r_split 9.645): the coupling is now active where the data are.
+
+**A1 form factor (01:05; `p0_formfactor.json`; 3×3×3 cell 47.1 × 48.5 × 34.1 Å, strongest IR
+mode, A = 0.05).** f(q): x 0.945 / 0.810 / 0.528 at λ = 48.1 / 24.1 / 12.0 Å; y 0.939 / 0.787 /
+0.454 at 48.2 / 24.1 / 12.1; z 0.834 / 0.531 at 34.2 / 17.1 (z has the short axis, c = 11.4 Å).
+The n = 3 points (λ = a, b, c: lattice-periodic patterns, not modulations; f = 0.11, 0.61, 1.58
+with a 180° phase on x) and the z n = 4 point (λ = 8.5 Å, f = 0.09, phase −23°: sub-cell
+aliasing) are outside the method and excluded from the fit. **w_eff (least squares of −4 ln f on
+q²): x 3.09, y 3.43, z 4.21 Å; max 4.21 < 4.5 → r_split = 4.5 Å stands.** Noted: the z axis is at
+the edge (its n = 1 and 2 points alone give 4.6 and 4.3 Å). Launched 01:07: LO–TO at 4.5 (local
+CPU), the variant tight ladder at 4.5 (`ladder3_var`: b3 GPU 7 core + 639/959, local 2159/2879),
+the W6 tight control rungs (running since 00:36), and the Decision 0 → Phase 1 chain
+(`p1_launch_on_pass.sh`, status files).
