@@ -49,6 +49,10 @@ def fit(rows):
 w6, var = rows_of(args.w6), rows_of(args.var)
 out = {"w6": fit(w6) if len(w6) >= 2 else None, "var": fit(var) if len(var) >= 2 else None}
 lo = json.load(open(Path(args.loto).expanduser())) if Path(args.loto).expanduser().exists() else None
+if lo is not None and not lo.get("nac_pm_q_fixed"):      # records written before the +-q correction
+    import subprocess
+    subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "p0_loto_fix2.py"), str(Path(args.loto).expanduser())], check=True)
+    lo = json.load(open(Path(args.loto).expanduser()))
 status = "INCOMPLETE"
 if lo is not None:
     b_ = lo["branches"]; split_pp = b_["LO"]["k_pp"] - b_["TO"]["k_pp"]
