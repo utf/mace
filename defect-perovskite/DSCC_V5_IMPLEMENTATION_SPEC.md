@@ -5370,3 +5370,23 @@ the edge (its n = 1 and 2 points alone give 4.6 and 4.3 Å). Launched 01:07: LO�
 CPU), the variant tight ladder at 4.5 (`ladder3_var`: b3 GPU 7 core + 639/959, local 2159/2879),
 the W6 tight control rungs (running since 00:36), and the Decision 0 → Phase 1 chain
 (`p1_launch_on_pass.sh`, status files).
+
+**Phase 1 instruments (01:20).** `p1_make_base.py`: the MACE-Field density block's skip_tp
+carries per-element weights the old `prune_elements` refuses, so the {Cl, Cs, Pb} base is built
+through MACE's element-filtered loader and checked against the unpruned Default head (E 1e-13,
+F 1e-14, P 1e-19, Z* 1e-14, α 1e-16 on six frames). `p1_gates.py`: the three registered gates
+(neutral validation; Z* Frobenius per species and ε∞ within 10 % of the 0.2 values; charged
+shells vs base v2 33.2 / 74.9 / 30.4 / 15.3 / 8.9 / 8.0 + 3). Exercised on the one-epoch smoke
+(r_split 9.645, not a reading): the response of a one-epoch fine-tune already drifts 14–22 %
+from the checkpoint (ε∞ 3.55 → 3.06, |Z*| −19…−22 %) — gate 2 is a live risk for Phase 1; if it
+fails, the registered deviation is to halve the learning rate once (plan) and, failing that,
+raise the response weights on the replay head with the change written here first.
+
+**Correction of the LO–TO reference (01:30).** The single-q expression in `p0_loto.py` omitted
+the −q partner of the structure factor; the k-space kernel counts both (checked numerically on
+the pattern p = Z* u: kernel = 2 × single-q to 0.3 %). The reference fields are doubled in the
+script and in the records (`p0_loto_fix2.py`); the model-side numbers are unchanged. Restated
+9.645 Å reading: E_PP splitting 0.136 vs 0.154 smoothed (0.135 with the form factor), 0.746
+unsmoothed — as already written in the report. Preliminary 4.5 Å LO branch: E_PP 0.461 vs
+0.467 smoothed × ff² (g = 0.709, f = 0.939), i.e. 1.3 % — within the A1 10 % criterion; the TO
+branch and the JSON follow.

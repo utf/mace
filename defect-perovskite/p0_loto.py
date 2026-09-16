@@ -144,7 +144,9 @@ for name, axis in (("LO", lo_axis), ("TO", to_axis)):
     dp = (dip(displaced(args.amp)) - dip(displaced(-args.amp))) / (2 * args.amp)
     Sq_model = np.sum([(qhat @ dp[k]) * np.exp(1j * (q @ Rb[k])) for k in range(NB)])
     form_factor = abs(Sq_model) / abs(Sq) if abs(Sq) > 0 else float("nan")
-    e_nac_raw = 0.5 * (4 * math.pi * COULOMB / (Omega * args.eps_inf)) * abs(Sq) ** 2
+    # x2: the k-space kernel counts the +q and -q structure-factor terms (checked numerically
+    # against dipole_dipole_energy on the pattern p = Z* u to 0.3 %)
+    e_nac_raw = 2.0 * 0.5 * (4 * math.pi * COULOMB / (Omega * args.eps_inf)) * abs(Sq) ** 2
     g = math.exp(-w * w * float(q @ q) / 4)
     res["branches"][name] = {"q": q.tolist(), "k_base": k_base, "k_var": k_var, "k_pp": k_pp,
                              "k_nac_raw": 2 * e_nac_raw, "k_nac_smoothed": 2 * e_nac_raw * g, "g_w_q": g,
