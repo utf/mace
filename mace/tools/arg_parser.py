@@ -125,6 +125,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
             "DipoleMAE",
             "DipolePolarRMSE",
             "EnergyDipoleRMSE",
+            "PerAtomFieldRMSE",
         ],
         default="PerAtomRMSE",
     )
@@ -140,6 +141,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
             "ScaleShiftMACE",
             "PolarMACE",
             "MACELES",
+            "MACEField",
             "ScaleShiftBOTNet",
             "AtomicDipolesMACE",
             "AtomicDielectricMACE",
@@ -423,10 +425,31 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=False,
     )
     parser.add_argument(
+        "--electric-field",
+        help="Uniform electric field components in V/A",
+        type=float,
+        nargs=3,
+        metavar=("Ex", "Ey", "Ez"),
+        required=False,
+        default=None,
+    )
+    parser.add_argument(
         "--compute_forces",
         help="Select True to compute forces",
         type=str2bool,
         default=True,
+    )
+    parser.add_argument(
+        "--compute_polarization",
+        help="Select True to compute polarization",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
+        "--compute_becs",
+        help="Select True to compute becs",
+        type=str2bool,
+        default=False,
     )
     parser.add_argument(
         "--compute_polarizability",
@@ -725,6 +748,24 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=DefaultKeys.DIPOLE.value,
     )
     parser.add_argument(
+        "--electric_field_key",
+        help="Key of electric field in training xyz",
+        type=str,
+        default=DefaultKeys.ELECTRIC_FIELD.value,
+    )
+    parser.add_argument(
+        "--polarization_key",
+        help="Key of polarization in training xyz",
+        type=str,
+        default=DefaultKeys.POLARIZATION.value,
+    )
+    parser.add_argument(
+        "--becs_key",
+        help="Key of becs in training xyz",
+        type=str,
+        default=DefaultKeys.BECS.value,
+    )
+    parser.add_argument(
         "--polarizability_key",
         help="Key of polarizability in training xyz",
         type=str,
@@ -819,6 +860,7 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
             "universal",
             "energy_forces_dipole",
             "l1l2energyforces",
+            "universal_field",
         ],
     )
     parser.add_argument(
@@ -891,18 +933,73 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         dest="swa_dipole_weight",
     )
     parser.add_argument(
-        "--swa_polarizability_weight",
-        "--stage_two_polarizability_weight",
-        help="weight of polarizability after starting Stage Two (previously called swa)",
+        "--polarization_weight",
+        help="weight of polarization loss",
+        type=float,
+        default=10.0,
+    )
+    parser.add_argument(
+        "--polarization_loss_mode",
+        help=(
+            "polarization loss form: folded Cartesian Huber residuals or the "
+            "normalized geometry-aware metric loss in folded polarization-"
+            "quantum coordinates"
+        ),
+        type=str,
+        choices=["cartesian_huber", "normalized_metric"],
+        default="normalized_metric",
+    )
+    parser.add_argument(
+        "--polarization_loss_scale",
+        help=(
+            "explicit multiplier applied to the reduced polarization loss "
+            "term before polarization_weight"
+        ),
         type=float,
         default=1.0,
-        dest="swa_polarizability_weight",
+    )
+    parser.add_argument(
+        "--polarization_huber_delta",
+        help=(
+            "Huber delta for folded polarization in e/A^2 when "
+            "polarization_loss_mode=cartesian_huber; defaults to 5 * "
+            "huber_delta"
+        ),
+        type=float,
+        default=None,
+    )
+    parser.add_argument(
+        "--swa_polarization_weight",
+        "--stage_two_polarization_weight",
+        help="weight of polarization after starting Stage Two (previously called swa)",
+        type=float,
+        default=1000.0,
+        dest="swa_polarization_weight",
+    )
+    parser.add_argument(
+        "--becs_weight", help="weight of becs loss", type=float, default=100.0
+    )
+    parser.add_argument(
+        "--swa_becs_weight",
+        "--stage_two_becs_weight",
+        help="weight of becs after starting Stage Two (previously called swa)",
+        type=float,
+        default=100.0,
+        dest="swa_becs_weight",
     )
     parser.add_argument(
         "--polarizability_weight",
         help="weight of polarizability loss",
         type=float,
-        default=1.0,
+        default=10.0,
+    )
+    parser.add_argument(
+        "--swa_polarizability_weight",
+        "--stage_two_polarizability_weight",
+        help="weight of polarizability after starting Stage Two (previously called swa)",
+        type=float,
+        default=1000.0,
+        dest="swa_polarizability_weight",
     )
     parser.add_argument(
         "--config_type_weights",
@@ -1331,6 +1428,24 @@ def build_preprocess_arg_parser() -> argparse.ArgumentParser:
         help="Key of reference dipoles in training xyz",
         type=str,
         default=DefaultKeys.DIPOLE.value,
+    )
+    parser.add_argument(
+        "--electric_field_key",
+        help="Key of electric field in training xyz",
+        type=str,
+        default=DefaultKeys.ELECTRIC_FIELD.value,
+    )
+    parser.add_argument(
+        "--polarization_key",
+        help="Key of polarization in training xyz",
+        type=str,
+        default=DefaultKeys.POLARIZATION.value,
+    )
+    parser.add_argument(
+        "--becs_key",
+        help="Key of becs in training xyz",
+        type=str,
+        default=DefaultKeys.BECS.value,
     )
     parser.add_argument(
         "--polarizability_key",

@@ -427,7 +427,7 @@ def run(args) -> None:
         logging.info(
             "==================Using multiheads finetuning mode=================="
         )
-        args.loss = "universal"
+        args.loss = "universal_field" if args.model == "MACEField" else "universal"
 
         all_ase_readable = all(
             all(check_path_ase_read(f) for f in head_config.train_file)
@@ -614,6 +614,16 @@ def run(args) -> None:
             args.compute_virials = False
             args.compute_stress = False
             args.compute_polarizability = False
+        elif args.model == "MACEField":
+            # MACE-Field: the response observables are opted into by the
+            # `--compute_{polarization,becs,polarizability}` flags; the loss is the field one.
+            args.compute_energy = True
+            args.compute_dipole = False
+            if args.loss not in ("universal_field", "UniversalField"):
+                logging.info(
+                    f"MACEField model: using the universal_field loss (was {args.loss})"
+                )
+                args.loss = "universal_field"
         else:
             args.compute_energy = True
             args.compute_dipole = False
@@ -848,6 +858,7 @@ def run(args) -> None:
             "MACE",
             "ScaleShiftMACE",
             "MACELES",
+            "MACEField",
             "PolarMACE",
             "MagneticScaleShiftMACE",
             "AtomicDielectricMACE",
@@ -859,6 +870,7 @@ def run(args) -> None:
             "MACE",
             "ScaleShiftMACE",
             "MACELES",
+            "MACEField",
             "PolarMACE",
             "MagneticScaleShiftMACE",
         ]

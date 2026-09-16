@@ -30,11 +30,15 @@ from mace.modules.models import ScaleShiftMACE
 from mace.modules.utils import (
     compute_total_charge_dipole_permuted,
     get_atomic_virials_stresses,
+    get_becs,
     get_outputs,
+    get_polarization,
     prepare_graph,
 )
 from mace.modules.wrapper_ops import (
     CuEquivarianceConfig,
+    FullyConnectedTensorProduct,
+    Linear,
     OEQConfig,
     TransposeIrrepsLayoutWrapper,
 )
@@ -1755,3 +1759,335 @@ class MagneticSCFMACE(torch.nn.Module):
         final_output["equilibrated_magmom"] = magmom.detach()
 
         return final_output
+
+
+# =====================================================================================
+# MACE-Field (Martin, Ganose, Kapil, Li, Butler, PRX Intelligence 1, 013006 (2026);
+# mdi-group/mace-field at 45d5c5f, mace 0.3.15), ported onto this tree 2026-09-16.
+# =====================================================================================
+@compile_mode("script")
+class MACEField(ScaleShiftMACE):
+    """ScaleShiftMACE whose latent features couple to a uniform electric field (`1o`)
+    after every interaction layer but the last:
+
+        h_i  <-  h_i - Linear_i( FCTP_i(h_i, E) )
+
+    so the model output is the electric enthalpy E(R, E_field) and the response follows by
+    differentiation: `P = -dE/dE_field / Omega` (e/A^2), `Z*_a = dP_alpha/dR_a Omega`
+    (e; `becs[a, alpha, beta] = d(Omega P_alpha)/dR_{a beta}`), `alpha = dP/dE_field /
+    eps0` (dimensionless, per unit eps0). At zero field the model IS its ScaleShiftMACE
+    backbone, so foundation weights carry over.
+
+    Plan P extension: `electric_field_node [N, 3]` supplies the field PER NODE. With
+    `electric_field_node[a] = E` for every `a` the forward reproduces the global-field
+    path exactly (same tensor products, same graph), and `node_dipoles[a] =
+    -dE/dE_node[a]` (e A) are the atomic dipoles of the field-response partition, with
+    `sum_a node_dipoles[a] = Omega P`. The global-field observables are then formed from
+    the node field by summation over each graph, so the two paths agree bit-for-bit
+    (tested in tests/extensions/field/test_macefield_node_field.py)."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        hidden_irreps = o3.Irreps(kwargs["hidden_irreps"])
+        cueq_config = kwargs.get("cueq_config", None)
+        irreps_1o = o3.Irreps("1o")
+        n_field = int(self.num_interactions) - 1
+        self.field_feats = torch.nn.ModuleList(
+            FullyConnectedTensorProduct(
+                irreps_in1=hidden_irreps,
+                irreps_in2=irreps_1o,
+                irreps_out=hidden_irreps,
+                cueq_config=cueq_config,
+            )
+            for _ in range(n_field)
+        )
+        self.field_linear = torch.nn.ModuleList(
+            Linear(
+                irreps_in=hidden_irreps,
+                irreps_out=hidden_irreps,
+                cueq_config=cueq_config,
+            )
+            for _ in range(n_field)
+        )
+
+    # Vacuum permittivity in e / (V A): alpha is reported per unit eps0.
+    EPS0_E_PER_V_A: float = 8.8541878128e-12 / 1.602176634e-19 / 1e10
+
+    def forward(
+        self,
+        data: Dict[str, torch.Tensor],
+        training: bool = False,
+        compute_force: bool = True,
+        compute_virials: bool = False,
+        compute_stress: bool = False,
+        compute_displacement: bool = False,
+        compute_hessian: bool = False,
+        compute_edge_forces: bool = False,
+        compute_atomic_stresses: bool = False,
+        lammps_mliap: bool = False,
+        compute_polarization: bool = False,
+        compute_becs: bool = False,
+        compute_polarizability: bool = False,
+        electric_field: Optional[torch.Tensor] = None,
+        electric_field_node: Optional[torch.Tensor] = None,
+        compute_node_dipoles: bool = False,
+    ) -> Dict[str, Optional[torch.Tensor]]:
+        # Setup
+        ctx = prepare_graph(
+            data,
+            compute_virials=compute_virials,
+            compute_stress=compute_stress,
+            compute_displacement=compute_displacement,
+            lammps_mliap=lammps_mliap,
+        )
+
+        is_lammps = ctx.is_lammps
+        num_atoms_arange = ctx.num_atoms_arange.to(torch.int64)
+        num_graphs = ctx.num_graphs
+        displacement = ctx.displacement
+        positions = ctx.positions
+        vectors = ctx.vectors
+        lengths = ctx.lengths
+        cell = ctx.cell
+        node_heads = ctx.node_heads.to(torch.int64)
+        interaction_kwargs = ctx.interaction_kwargs
+        lammps_natoms = interaction_kwargs.lammps_natoms
+        lammps_class = interaction_kwargs.lammps_class
+        batch_index = data["batch"].to(torch.int64)
+
+        # ---- the electric field: one vector per graph, or one per node (Plan P) ----
+        node_field_mode = electric_field_node is not None
+        if electric_field_node is not None:
+            per_atom_electric_field = electric_field_node.to(
+                device=vectors.device, dtype=vectors.dtype
+            )
+            if not per_atom_electric_field.requires_grad:
+                per_atom_electric_field = per_atom_electric_field.detach().requires_grad_(True)
+            field_leaf = per_atom_electric_field
+        else:
+            if electric_field is not None:
+                global_field = electric_field.to(
+                    device=vectors.device, dtype=vectors.dtype
+                ).reshape(-1, 3)
+            elif "electric_field" in data:
+                global_field = data["electric_field"].to(
+                    device=vectors.device, dtype=vectors.dtype
+                ).reshape(-1, 3)
+            else:
+                global_field = torch.zeros(
+                    num_graphs, 3, device=vectors.device, dtype=vectors.dtype
+                )
+            # One vector for several graphs: a global field applied to all of them.
+            if global_field.shape[0] == 1 and num_graphs > 1:
+                global_field = global_field.expand(num_graphs, 3)
+            if not global_field.requires_grad:
+                global_field = global_field.detach().requires_grad_(True)
+            field_leaf = global_field
+            per_atom_electric_field = global_field[batch_index]
+
+        volume = torch.linalg.det(cell.view(-1, 3, 3)).abs()
+
+        # Atomic energies
+        node_e0 = self.atomic_energies_fn(data["node_attrs"])[
+            num_atoms_arange, node_heads
+        ]
+        e0 = scatter_sum(
+            src=node_e0, index=data["batch"], dim=0, dim_size=num_graphs
+        ).to(
+            vectors.dtype
+        )  # [n_graphs, num_heads]
+
+        # Embeddings
+        node_feats = self.node_embedding(data["node_attrs"])
+        edge_attrs = self.spherical_harmonics(vectors)
+        edge_feats, cutoff = self.radial_embedding(
+            lengths, data["node_attrs"], data["edge_index"], self.atomic_numbers
+        )
+
+        if hasattr(self, "pair_repulsion"):
+            pair_node_energy = self.pair_repulsion_fn(
+                lengths, data["node_attrs"], data["edge_index"], self.atomic_numbers
+            )
+            if is_lammps:
+                pair_node_energy = pair_node_energy[: lammps_natoms[0]]
+        else:
+            pair_node_energy = torch.zeros_like(node_e0)
+
+        # Embeddings of additional features
+        if hasattr(self, "joint_embedding"):
+            embedding_features: Dict[str, torch.Tensor] = {}
+            for name, _ in self.embedding_specs.items():
+                embedding_features[name] = data[name]
+            node_feats += self.joint_embedding(
+                data["batch"],
+                embedding_features,
+            )
+            if hasattr(self, "embedding_readout"):
+                embedding_node_energy = torch.atleast_1d(
+                    self.embedding_readout(node_feats, node_heads)[
+                        num_atoms_arange, node_heads
+                    ].squeeze(-1)
+                )
+                embedding_energy = scatter_sum(
+                    src=embedding_node_energy,
+                    index=data["batch"],
+                    dim=0,
+                    dim_size=num_graphs,
+                )
+                e0 += embedding_energy
+
+        # Interactions
+        node_es_list = [pair_node_energy]
+        node_feats_list: List[torch.Tensor] = []
+        n_field = len(self.field_feats)
+
+        for i, (interaction, product) in enumerate(
+            zip(self.interactions, self.products)
+        ):
+            node_attrs_slice = data["node_attrs"]
+            if is_lammps and i > 0:
+                node_attrs_slice = node_attrs_slice[: lammps_natoms[0]]
+            node_feats, sc = interaction(
+                node_attrs=node_attrs_slice,
+                node_feats=node_feats,
+                edge_attrs=edge_attrs,
+                edge_feats=edge_feats,
+                edge_index=data["edge_index"],
+                cutoff=cutoff,
+                first_layer=(i == 0),
+                lammps_class=lammps_class,
+                lammps_natoms=lammps_natoms,
+            )
+            if is_lammps and i == 0:
+                node_attrs_slice = node_attrs_slice[: lammps_natoms[0]]
+            node_feats = product(
+                node_feats=node_feats, sc=sc, node_attrs=node_attrs_slice
+            )
+            # Field coupling on all but the last interaction layer (the fork's form).
+            if i < n_field:
+                field_input = per_atom_electric_field
+                if is_lammps:
+                    field_input = field_input[: node_feats.shape[0]]
+                delta_node_feats = self.field_feats[i](node_feats, field_input)
+                node_feats = node_feats - self.field_linear[i](delta_node_feats)
+            node_feats_list.append(node_feats)
+
+        for i, readout in enumerate(self.readouts):
+            feat_idx = -1 if len(self.readouts) == 1 else i
+            node_es_list.append(
+                readout(node_feats_list[feat_idx], node_heads)[
+                    num_atoms_arange, node_heads
+                ]
+            )
+
+        node_feats_out = torch.cat(node_feats_list, dim=-1)
+        node_inter_es = torch.sum(torch.stack(node_es_list, dim=0), dim=0)
+        node_inter_es = self.scale_shift(node_inter_es, node_heads)
+        inter_e = scatter_sum(node_inter_es, data["batch"], dim=-1, dim_size=num_graphs)
+
+        total_energy = e0 + inter_e
+        node_energy = node_e0.clone().double() + node_inter_es.clone().double()
+
+        forces, virials, stress, hessian, edge_forces, _ = get_outputs(
+            energy=inter_e,
+            positions=positions,
+            displacement=displacement,
+            vectors=vectors,
+            cell=cell,
+            training=training,
+            compute_force=compute_force,
+            compute_virials=compute_virials,
+            compute_stress=compute_stress,
+            compute_hessian=compute_hessian,
+            compute_edge_forces=compute_edge_forces or compute_atomic_stresses,
+        )
+
+        atomic_virials: Optional[torch.Tensor] = None
+        atomic_stresses: Optional[torch.Tensor] = None
+        if compute_atomic_stresses and edge_forces is not None:
+            atomic_virials, atomic_stresses = get_atomic_virials_stresses(
+                edge_forces=edge_forces,
+                edge_index=data["edge_index"],
+                vectors=vectors,
+                num_atoms=positions.shape[0],
+                batch=data["batch"],
+                cell=cell,
+            )
+
+        # ---- the response: derivatives of the one enthalpy ----
+        polarization: Optional[torch.Tensor] = None
+        becs: Optional[torch.Tensor] = None
+        polarizability: Optional[torch.Tensor] = None
+        node_dipoles: Optional[torch.Tensor] = None
+        want_response = (
+            compute_polarization or compute_becs or compute_polarizability
+            or compute_node_dipoles
+        )
+        if want_response:
+            if node_field_mode:
+                # node_dipoles[a] = -dE/dE_node[a]  (e A);  Omega P = sum_a node_dipoles[a]
+                g = torch.autograd.grad(
+                    outputs=[inter_e],
+                    inputs=[field_leaf],
+                    grad_outputs=[torch.ones_like(inter_e)],
+                    retain_graph=True,
+                    create_graph=True,
+                    allow_unused=True,
+                )[0]
+                node_dipoles = -g if g is not None else torch.zeros_like(field_leaf)
+                omega_p = scatter_sum(node_dipoles, batch_index, dim=0, dim_size=num_graphs)
+            else:
+                omega_p = get_polarization(energy=inter_e, electric_field=field_leaf)
+            if compute_becs:
+                if omega_p.requires_grad:
+                    becs = get_becs(polarization=omega_p, positions=positions)
+                else:
+                    becs = torch.zeros(
+                        positions.shape[0], 3, 3, device=positions.device, dtype=positions.dtype
+                    )
+            if compute_polarizability:
+                if omega_p.requires_grad:
+                    cols: List[torch.Tensor] = []
+                    for d in range(3):
+                        comp = omega_p[:, d]
+                        gd = torch.autograd.grad(
+                            outputs=[comp],
+                            inputs=[field_leaf],
+                            grad_outputs=[torch.ones_like(comp)],
+                            retain_graph=True,
+                            create_graph=True,
+                            allow_unused=True,
+                        )[0]
+                        if gd is None:
+                            gd = torch.zeros_like(field_leaf)
+                        if node_field_mode:
+                            gd = scatter_sum(gd, batch_index, dim=0, dim_size=num_graphs)
+                        cols.append(gd)
+                    polarizability = torch.stack(cols, dim=1)  # [n_graphs, 3, 3]
+                    polarizability = (
+                        polarizability / volume.view(-1, 1, 1) / self.EPS0_E_PER_V_A
+                    )
+                else:
+                    polarizability = torch.zeros(
+                        num_graphs, 3, 3, device=positions.device, dtype=positions.dtype
+                    )
+            polarization = omega_p / volume.view(-1, 1)
+
+        return {
+            "energy": total_energy,
+            "node_energy": node_energy,
+            "interaction_energy": inter_e,
+            "forces": forces,
+            "edge_forces": edge_forces,
+            "virials": virials,
+            "stress": stress,
+            "atomic_virials": atomic_virials,
+            "atomic_stresses": atomic_stresses,
+            "hessian": hessian,
+            "displacement": displacement,
+            "node_feats": node_feats_out,
+            "polarization": polarization,
+            "becs": becs,
+            "polarizability": polarizability,
+            "node_dipoles": node_dipoles,
+        }

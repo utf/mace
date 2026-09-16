@@ -21,6 +21,10 @@ _GRAPH_LEVEL_TENSOR_KEYS = {
     "polarizability_sh",
     "polarizability_weight",
     "dipole_weight",
+    "electric_field",
+    "polarization",
+    "polarization_weight",
+    "becs_weight",
 }
 
 

@@ -47,14 +47,18 @@ def configure_model(
 ):
     # Selecting outputs
     compute_virials = args.loss == "virials"
-    compute_stress = args.loss in ("stress", "huber", "universal")
+    compute_stress = args.loss in ("stress", "huber", "universal", "universal_field")
+    compute_dielectric = args.loss in ("universal_field", "UniversalField")
 
     if compute_virials:
         args.compute_virials = True
     elif compute_stress:
         args.compute_stress = True
 
-    if compute_virials or compute_stress:
+    if compute_dielectric:
+        args.error_table = "PerAtomFieldRMSE"
+
+    if (compute_virials or compute_stress) and not compute_dielectric:
         if args.error_table in ["PerAtomRMSE", "PerAtomMAE", "TotalRMSE", "TotalMAE"]:
             args.error_table = (
                 "PerAtomRMSEstressvirials"
@@ -70,6 +74,10 @@ def configure_model(
         "dipoles": args.compute_dipole,
         "polarizabilities": args.compute_polarizability,
         "magforces": args.compute_magforces,
+        # MACE-Field observables (all derivatives of the one enthalpy)
+        "polarization": bool(getattr(args, "compute_polarization", False)),
+        "becs": bool(getattr(args, "compute_becs", False)),
+        "polarizability": bool(getattr(args, "compute_polarizability", False)),
     }
     logging.info(
         f"During training the following quantities will be reported: {', '.join([f'{report}' for report, value in output_args.items() if value])}"
@@ -112,6 +120,7 @@ def configure_model(
         "MACE",
         "ScaleShiftMACE",
         "MACELES",
+        "MACEField",
         "PolarMACE",
     ]:
         logging.info("Loading FOUNDATION model")
@@ -153,6 +162,8 @@ def configure_model(
         args.avg_num_neighbors = model_config_foundation["avg_num_neighbors"]
         if args.model == "MACELES":
             args.model = "FoundationMACELES"
+        elif args.model == "MACEField":
+            args.model = "FoundationMACEField"
         elif args.model in ("MACE", "ScaleShiftMACE"):
             args.model = "FoundationMACE"
         model_config_foundation["heads"] = heads
@@ -400,6 +411,13 @@ def _build_model(
         )
     if args.model == "FoundationMACE":
         return modules.ScaleShiftMACE(**model_config_foundation)
+    if args.model == "FoundationMACEField":
+        from mace.modules.extensions import MACEField
+
+        # The field modules are new when the foundation is a plain MACE (fresh init: the
+        # model is field-blind until trained) and transferred by the generic state-dict copy
+        # in `load_foundations_elements` when the foundation is itself a MACEField.
+        return MACEField(**model_config_foundation)
     if args.model == "FoundationMACELES":
         from mace.modules.extensions import MACELES
 
@@ -480,6 +498,27 @@ def _build_model(
                 "RealAgnosticInteractionBlock"
             ],
             MLP_irreps=o3.Irreps(args.MLP_irreps),
+        )
+    if args.model == "MACEField":
+        from mace.modules.extensions import MACEField
+
+        return MACEField(
+            **model_config,
+            pair_repulsion=args.pair_repulsion,
+            distance_transform=args.distance_transform,
+            correlation=args.correlation,
+            gate=modules.gate_dict[args.gate],
+            interaction_cls_first=modules.interaction_classes[args.interaction_first],
+            MLP_irreps=o3.Irreps(args.MLP_irreps),
+            atomic_inter_scale=args.std,
+            atomic_inter_shift=args.mean,
+            radial_MLP=ast.literal_eval(args.radial_MLP),
+            radial_type=args.radial_type,
+            heads=heads,
+            embedding_specs=args.embedding_specs,
+            use_embedding_readout=args.use_embedding_readout,
+            use_last_readout_only=args.use_last_readout_only,
+            use_agnostic_product=args.use_agnostic_product,
         )
     if args.model == "MACELES":
         from mace.modules.extensions import MACELES

@@ -60,8 +60,10 @@ def update_keyspec_from_kwargs(
         "total_charge_key",
         "polarizability_key",
         "total_spin_key",
+        "electric_field_key",
+        "polarization_key",
     ]
-    arrays = ["forces_key", "charges_key", "magmom_key", "magforces_key"]
+    arrays = ["forces_key", "charges_key", "magmom_key", "magforces_key", "becs_key"]
     info_keys = {}
     arrays_keys = {}
     for key in infos:
@@ -588,6 +590,9 @@ def save_AtomicData_to_HDF5(data, i, h5_file) -> None:
     grp["dipole"] = data.dipole
     grp["charges"] = data.charges
     grp["polarizability"] = data.polarizability
+    grp["electric_field"] = data.electric_field
+    grp["polarization"] = data.polarization
+    grp["becs"] = data.becs
     grp["head"] = data.head
 
 

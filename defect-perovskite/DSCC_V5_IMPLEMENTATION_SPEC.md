@@ -5086,3 +5086,68 @@ physics. The mechanism control did what it was registered to do.
 
 **Jobs cancelled 09:45:** L2 seeds (local s0, b3 s3/s4/s6/s1 queue), the L2→L3 chain, the L4 runner
 (which had already started on L1 s1 from the stale 06:05 line), all D-watchers. Both cards idle.
+
+## Plan P — polarisation coupling via MACE-Field: REGISTRATION (2026-09-16, before any Phase 0 result is opened)
+
+**Governs.** `PLAN_P_polarisation_coupling.md` (user's, 2026-09-16) supersedes the LES head line
+(L0–L4), the distilled-base line (D0–D3) and the bond-transfer amendment entirely. Nothing of those
+lines runs again; their records above stand as history. Branch `plan-p-polarisation` off `defect`
+at `97996ec`. Standing mandate unchanged: no new DFT, every threshold written before its result is
+opened, F-SCC finals a separate record. Units as before (forces per component meV/Å, energies
+meV/atom, τ = 1.7 meV/Å, six seeds {0,1,2,3,4,6} → folds {0,1,2,3,0,2}); b3 GPUs 5 and 7 only.
+
+**MACE-Field port (done, gated).** mdi-group/mace-field at `45d5c5f` (mace 0.3.15) cherry-picked
+onto this tree (0.3.17 + D-SCC): `MACEField` in `mace/modules/extensions.py` (field FCTP + Linear
+after every interaction layer but the last, the fork's `h ← h − Linear(FCTP(h, E))` form),
+`UniversalFieldLoss` + `fold_polarization`, `electric_field / polarization / becs` data keys and
+weights, `--compute_{polarization,becs,polarizability}`, `PerAtomFieldRMSE` table, MACEField
+paths in `configure_model` / `_build_model` / `remove_pt_head` / cueq-oeq asserts / the ASE
+calculator (`model_type="MACEField"`, `electric_field=` override); `eval_configs`, `visualise_train`
+and the LAMMPS wrappers of the fork NOT taken. Plan P extension: `electric_field_node [N, 3]`
+replaces the broadcast field (`compute_node_dipoles` → `node_dipoles[a] = −dE/dE_node[a]`, e Å).
+Tests `tests/extensions/field/test_macefield_node_field.py` (5 pass): node field = broadcast field
+reproduces E, F, P, Z*, α bit-for-bit; Σ_a node_dipoles = Ω P to 1e-12; node dipoles = finite
+difference; the delivered checkpoint loads; e3nn→cueq→e3nn round trip reproduces P, Z*, α to 1e-8.
+Regression: `tests/extensions/dscc` + `tests/extensions/les` 351 pass; one shared-readout test
+failed in the full run and passes alone (order-dependent, pre-existing, noted).
+
+**Checkpoint (as delivered, `~/src/macefield/MACEField-ASE-MD/MACEField-omat-dielectric-converged.model`,
+sha256 `f92e043aaf2cd8879919db8452503553fe7b608cb749d8d169dd96d4aa094aa2`).** `MACEField`, heads
+[`pt_head`, `mp-dielectric`, `mp-ferroelectric`], float32, r_max 6.0 Å, 2 interactions (one field
+layer), 128x0e+128x1o, `RealAgnosticDensityInteractionBlock` (MACE-MH-0 / mp-0b3 lineage, per the
+user: fine-tuned from MH-0, not MH-1 — differences from base v2's backbone expected), 79 elements,
+8.17 M parameters. Head for all Plan P response work: `mp-dielectric` (the BEC/α head).
+Load-gate readings (float64, informational): dataset frame 719 (CsPbCl3 polar path, mp-675524
+branch) P_z 1.396e-3 vs label 1.409e-3 e/Å²; MP CsPbCl3 cells (mp-23037 cubic, mp-675524 Amm2,
+mp-1539667 P4/mbm, mp-675022 R32): Z* tr/3 Cl −1.67…−1.74, Cs +1.22…+1.27, Pb +3.75…+4.01,
+polycrystalline ε∞ 3.83–3.90 (MP DFPT e_electronic 3.62–3.64 for the two entries that have it).
+The dataset `dielectric_ferroelectric_combined.xyz` (8446 frames) holds CsPbCl3 only as 10
+polarisation-path frames (BEC weight 0), so the Plan P "tabulated PBE Born tensors" come from the
+literature, recorded as validation not input; MP exposes ε tensors, not Born charges (DFPT task
+docs carry no `born` field through the API).
+
+**Definitions fixed for the implementation (plan §0, with the conventions this tree already has).**
+Smoothed periodic kernels are the pure reciprocal-space sums of `mace/modules/dscc/ewald.py`
+(`route="reciprocal"`, `background="density"`, k ≠ 0). `E_c(R_a)` uses the existing carrier–host
+kernel `gamma_lr(r_g, r_split)` (pair width √(2(r_g²+r_split²)), r_g = 0.7071 Å) over ε∞; `T_LR`
+is the Hessian of the same kernel form with both widths r_split (pair width 2 r_split), images
+included, the a = b, L = 0 term removed analytically (−p_aᵀ∇∇Γ_w(0)p_a = 4C|p_a|²/(3√π w³)), the
+k = 0 (surface) term excluded, over ε∞. Both matrix-free in k-space (structure factors, O(N·n_k)).
+`p[a] = node_dipoles` of the MACE-Field provider at E_node = 0, attached to the positions (nested
+autograd) so one backward of the composed energy delivers `dp/dR`. ε∞ appears in `E_M`, `E_c`,
+`T_LR` only, one scalar per run: (R) 4.0, (M) the polycrystalline mean of the provider's ε∞ tensor
+on the relaxed pristine cell.
+
+**Phase 0 thresholds (verbatim from the plan).** 0.1 `r_split = max(3.0 Å, 1.2 × r90)`, r90 the
+radius enclosing 90 % of Σ_b|dp[b]| per species for a 0.01 V/Å node field on ≥ 2×2×2 tilings of the
+relaxed pristine cell; if r90 > 6 Å, accept and proceed (no second coupling representation);
+partition-ambiguity RMS(p − p′)/RMS(p) recorded, not gated. 0.3 matching: RMS per component of
+the `E_PP` forces on the neutral and charged training frames ≤ 3 meV/Å, else raise r_split until it
+is. Decision 0: mechanism confirmed if `eps0_ladder` (route-1 relaxation ladder 639/959/2159/2879
+atoms, fit `dE_relax(L) = dE_relax(∞) + (A/L)(1/ε∞ − 1/eps0_ladder)`, A = α(h)Q²C/2) is within 30 %
+of `eps0_LST` (base v2 Γ Hessian + provider Z*, polycrystalline) AND the W6-as-shipped ladder is not.
+Fallback: LO–TO splitting of the strongest IR mode at the smallest nonzero q of the 3×3×3 cell must
+appear with `E_PP` and match the nonanalytic value to 20 %; splitting present + ladder failing →
+base v2's restoring forces, Phase 1 proceeds; no splitting → stop and report. Run directory
+`~/runs/dscc/p0/`, deliverable `P0_REPORT.md`. Phase 1–3 thresholds are in the plan file and are
+copied here when each phase is registered.

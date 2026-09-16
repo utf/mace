@@ -121,6 +121,8 @@ class MACECalculator(Calculator):
         warmup: bool = False,
         **kwargs,
     ):
+        # MACE-Field: a global field override (V/A); None = take it from atoms.info or zero.
+        self.electric_field = kwargs.pop("electric_field", None)
         Calculator.__init__(self, **kwargs)
 
         self._enable_cueq = enable_cueq
@@ -130,9 +132,10 @@ class MACECalculator(Calculator):
         if self._uses_accelerated_backend:
             assert model_type in [
                 "MACE",
+                "MACEField",
                 "PolarMACE",
                 "DipolePolarizabilityMACE",
-            ], "CuEq/OEq only supports MACE, PolarMACE, and DipolePolarizabilityMACE models"
+            ], "CuEq/OEq only supports MACE, MACEField, PolarMACE, and DipolePolarizabilityMACE models"
         if enable_cueq and enable_oeq:
             if not HYBRID_AVAILABLE:
                 raise ImportError(
@@ -185,12 +188,13 @@ class MACECalculator(Calculator):
             "EnergyDipoleMACE",
             "DipolePolarizabilityMACE",
             "PolarMACE",
+            "MACEField",
         ]:
             raise ValueError(
-                f"Give a valid model_type: [MACE, PolarMACE, DipoleMACE, DipolePolarizabilityMACE, EnergyDipoleMACE], {model_type} not supported"
+                f"Give a valid model_type: [MACE, MACEField, PolarMACE, DipoleMACE, DipolePolarizabilityMACE, EnergyDipoleMACE], {model_type} not supported"
             )
 
-        if model_type in ["MACE", "EnergyDipoleMACE", "PolarMACE"]:
+        if model_type in ["MACE", "EnergyDipoleMACE", "PolarMACE", "MACEField"]:
             self.implemented_properties.extend(
                 [
                     "energy",
@@ -206,6 +210,10 @@ class MACECalculator(Calculator):
                 self.compute_atomic_stresses = True
         if model_type == "PolarMACE":
             self.implemented_properties.extend(["fukui_functions"])
+        if model_type == "MACEField":
+            self.implemented_properties.extend(
+                ["polarization", "becs", "polarizability"]
+            )
         if model_type in ["EnergyDipoleMACE", "DipoleMACE", "DipolePolarizabilityMACE"]:
             self.implemented_properties.extend(["dipole"])
         if model_type == "DipolePolarizabilityMACE":
@@ -244,7 +252,7 @@ class MACECalculator(Calculator):
         if self.num_models > 1:
             logging.info(f"Running committee mace with {self.num_models} models")
 
-            if model_type in ["MACE", "EnergyDipoleMACE", "PolarMACE"]:
+            if model_type in ["MACE", "EnergyDipoleMACE", "PolarMACE", "MACEField"]:
                 self.implemented_properties.extend(
                     ["energy_comm", "energy_var", "forces_comm", "stress_var"]
                 )
@@ -462,6 +470,21 @@ class MACECalculator(Calculator):
                 sliced[key] = value
         return sliced
 
+    def _resolve_electric_field(self, atoms) -> torch.Tensor:
+        """MACE-Field: the uniform field (V/A) for this call -- the calculator's
+        `electric_field` override, else `atoms.info['electric_field']`, else
+        `atoms.info['REF_electric_field']`, else zero."""
+        ef = self.electric_field
+        if ef is None and atoms is not None:
+            ef = atoms.info.get("electric_field", None)
+            if ef is None:
+                ef = atoms.info.get("REF_electric_field", None)
+        if ef is None:
+            ef = (0.0, 0.0, 0.0)
+        return torch.as_tensor(
+            np.asarray(ef, dtype=float), dtype=torch.get_default_dtype(), device=self.device
+        ).reshape(1, 3)
+
     def _create_result_tensors(
         self, num_models: int, num_atoms: int, batch, out: dict
     ) -> dict:
@@ -476,6 +499,8 @@ class MACECalculator(Calculator):
             "charges": [num_atoms],
             "polarizability": [3, 3],
             "polarizability_sh": [6],
+            "polarization": [3],
+            "becs": [num_atoms, 3, 3],
         }
         if self.model_type == "PolarMACE":
             tensor_shapes.update(
@@ -613,7 +638,12 @@ class MACECalculator(Calculator):
         num_real_atoms = len(atoms)
         is_padded = self.pad_num_atoms > 0 or self.pad_num_edges > 0
 
-        compute_stress = self.model_type in ["MACE", "EnergyDipoleMACE", "PolarMACE"]
+        compute_stress = self.model_type in [
+            "MACE",
+            "EnergyDipoleMACE",
+            "PolarMACE",
+            "MACEField",
+        ]
         # For oeq/hybrid + compile: create displacement outside the compiled
         # graph so autograd.grad (which runs as a graph break) can
         # differentiate energy w.r.t. displacement for stress.
@@ -647,6 +677,14 @@ class MACECalculator(Calculator):
                 "compute_edge_forces": self.compute_atomic_stresses,
                 "compute_atomic_stresses": self.compute_atomic_stresses,
             }
+            if self.model_type == "MACEField":
+                model_kwargs.update(
+                    training=True,  # the response observables are second derivatives
+                    compute_polarization=True,
+                    compute_becs=True,
+                    compute_polarizability=True,
+                    electric_field=self._resolve_electric_field(atoms),
+                )
             out = model(batch_dict, **model_kwargs)
             if is_padded:
                 out = self._slice_real_outputs(out, num_real_atoms)
@@ -681,6 +719,8 @@ class MACECalculator(Calculator):
             ("charges", "charges", 1.0),
             ("polarizability", "polarizability", 1.0),
             ("polarizability_sh", "polarizability_sh", 1.0),
+            ("polarization", "polarization", 1.0),
+            ("becs", "becs", 1.0),
         ]
         if self.model_type == "PolarMACE":
             results_map.extend(

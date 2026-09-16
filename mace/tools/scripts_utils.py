@@ -231,6 +231,7 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
     if model.__class__.__name__ not in [
         "ScaleShiftMACE",
         "MACELES",
+        "MACEField",
         "PolarMACE",
         "MagneticScaleShiftMACE",
         "AtomicDielectricMACE",
@@ -816,6 +817,21 @@ def get_loss_fn(
             magforces_weight=args.magforces_weight,
             huber_delta=args.huber_delta,
         )
+    elif args.loss in ("universal_field", "UniversalField"):
+        loss_fn = modules.UniversalFieldLoss(
+            energy_weight=args.energy_weight,
+            forces_weight=args.forces_weight,
+            stress_weight=args.stress_weight,
+            huber_delta=args.huber_delta,
+            polarization_loss_mode=getattr(
+                args, "polarization_loss_mode", "normalized_metric"
+            ),
+            polarization_huber_delta=getattr(args, "polarization_huber_delta", None),
+            polarization_weight=args.polarization_weight,
+            polarization_loss_scale=getattr(args, "polarization_loss_scale", 1.0),
+            becs_weight=args.becs_weight,
+            polarizability_weight=args.polarizability_weight,
+        )
     elif args.loss == "l1l2energyforces":
         loss_fn = modules.WeightedEnergyForcesL1L2Loss(
             energy_weight=args.energy_weight,
@@ -909,6 +925,24 @@ def get_swa(
         )
         logging.info(
             f"Stage Two (after {args.start_swa} epochs) with loss function: {loss_fn_energy}, with energy weight : {args.swa_energy_weight}, forces weight : {args.swa_forces_weight}, stress weight : {args.swa_stress_weight}, magforces weight : {args.swa_magforces_weight} and learning rate : {args.swa_lr}"
+        )
+    elif args.loss in ("universal_field", "UniversalField"):
+        loss_fn_energy = modules.UniversalFieldLoss(
+            energy_weight=args.swa_energy_weight,
+            forces_weight=args.swa_forces_weight,
+            stress_weight=args.swa_stress_weight,
+            polarization_weight=args.swa_polarization_weight,
+            polarization_loss_mode=getattr(
+                args, "polarization_loss_mode", "normalized_metric"
+            ),
+            polarization_huber_delta=getattr(args, "polarization_huber_delta", None),
+            polarization_loss_scale=getattr(args, "polarization_loss_scale", 1.0),
+            becs_weight=args.swa_becs_weight,
+            polarizability_weight=args.swa_polarizability_weight,
+            huber_delta=args.huber_delta,
+        )
+        logging.info(
+            f"Stage Two (after {args.start_swa} epochs) with loss function: {loss_fn_energy}, with energy weight : {args.swa_energy_weight}, forces weight : {args.swa_forces_weight}, stress weight : {args.swa_stress_weight}, polarization weight : {args.swa_polarization_weight}, becs weight : {args.swa_becs_weight}, polarizability weight : {args.swa_polarizability_weight} and learning rate : {args.swa_lr}"
         )
     else:
         loss_fn_energy = modules.WeightedEnergyForcesLoss(
@@ -1029,6 +1063,17 @@ def get_params_options(
                 "weight_decay": 0.0,
             }
         )
+    # MACE-Field: the field tensor products and their linear maps (new modules on top of
+    # the backbone; decayed like the products, at the base learning rate).
+    for field_attr in ("field_feats", "field_linear"):
+        if hasattr(model, field_attr) and getattr(model, field_attr) is not None:
+            param_options["params"].append(
+                {
+                    "name": field_attr,
+                    "params": getattr(model, field_attr).parameters(),
+                    "weight_decay": args.weight_decay,
+                }
+            )
     if (
         hasattr(model, "onebody_magmombasis_coeffs")
         and args.train_one_body_contribution
