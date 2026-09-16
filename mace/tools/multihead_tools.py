@@ -273,13 +273,23 @@ def generate_pseudolabels_for_configs(
             batch = torch_geometric.Batch.from_data_list(batch_data).to(device)
             batch_dict = batch.to_dict()
 
-            # Run model inference with computation of all properties
+            # Run model inference with computation of all properties. A MACE-Field model
+            # (Plan P) also pseudolabels its response: without these flags the replay's
+            # polarization / BECs / polarizability come back None, the loader fills zeros
+            # with unit weight, and the fine-tune drives the response to zero (seen on the
+            # p1 smoke: replay alpha RMSE 3.87 -> 0.79 in one epoch).
+            field_kwargs = (
+                {"compute_polarization": True, "compute_becs": True, "compute_polarizability": True}
+                if hasattr(model, "field_feats")
+                else {}
+            )
             out = model(
                 batch_dict,
-                training=False,
+                training=bool(field_kwargs),
                 compute_force=True,
                 compute_virials=True,
                 compute_stress=True,
+                **field_kwargs,
             )
 
             # Process each configuration in the batch

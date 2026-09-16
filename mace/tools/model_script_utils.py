@@ -417,6 +417,11 @@ def _build_model(
         # The field modules are new when the foundation is a plain MACE (fresh init: the
         # model is field-blind until trained) and transferred by the generic state-dict copy
         # in `load_foundations_elements` when the foundation is itself a MACEField.
+        if float(getattr(args, "pp_r_split", 0.0)) > 0.0:       # Plan P: E_PP in the forward
+            model_config_foundation["pp_r_split"] = float(args.pp_r_split)
+            model_config_foundation["pp_eps_inf"] = float(args.pp_eps_inf)
+            logging.info("MACEField: E_PP in the forward, r_split %.3f A, eps_inf %.3f",
+                         args.pp_r_split, args.pp_eps_inf)
         return MACEField(**model_config_foundation)
     if args.model == "FoundationMACELES":
         from mace.modules.extensions import MACELES
@@ -503,6 +508,8 @@ def _build_model(
         from mace.modules.extensions import MACEField
 
         return MACEField(
+            pp_r_split=float(getattr(args, "pp_r_split", 0.0)),
+            pp_eps_inf=float(getattr(args, "pp_eps_inf", 4.0)),
             **model_config,
             pair_repulsion=args.pair_repulsion,
             distance_transform=args.distance_transform,

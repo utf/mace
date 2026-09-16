@@ -53,6 +53,8 @@ out_dir = Path(args.out).expanduser(); out_dir.mkdir(parents=True, exist_ok=True
 doc = json.load(open(Path(args.cell).expanduser()))
 unit = Atoms(numbers=doc["numbers"], positions=doc["positions"], cell=doc["cell"], pbc=True)
 model = torch.load(Path(args.model).expanduser(), weights_only=False, map_location=args.device).to(args.device).eval()
+model.base = model.base.double()      # the W6 checkpoints carry a float32 base (base_float32); Phase 0 evaluates in float64
+print("base precision:", next(model.base.parameters()).dtype, flush=True)
 calc = DSCCCalculator(model, args.counts, args.charge, device=args.device)
 
 

@@ -45,6 +45,7 @@ dev = args.device
 
 def load_w6():
     m = torch.load(args.w6, map_location="cpu", weights_only=False)
+    m.base = m.base.double()      # the W6 checkpoints carry a float32 base; Phase 0 evaluates in float64
     return m
 
 

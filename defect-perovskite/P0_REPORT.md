@@ -1,0 +1,110 @@
+# P0_REPORT — Plan P Phase 0 (diagnostics on the universal MACE-Field checkpoint, no training)
+
+Run directory `~/runs/dscc/p0/`. Checkpoint `MACEField-omat-dielectric-converged.model`
+(sha256 f92e043a…4aa2; heads pt_head / mp-dielectric / mp-ferroelectric; head used:
+mp-dielectric; r_max 6.0 Å, 128x0e+128x1o, one field layer; MACE-MH-0 lineage). Units: forces
+meV/Å per component, energies meV/atom, dipoles e Å, Born charges e, ε dimensionless.
+Everything below was registered in `DSCC_V5_IMPLEMENTATION_SPEC.md` ("Plan P — REGISTRATION"
+and the dated addenda) before the corresponding result was opened.
+
+## Port and standing tests
+
+MACE-Field (mdi-group/mace-field 45d5c5f) is ported onto this tree with a per-node field
+(`electric_field_node`), a frozen `FieldProvider`, matrix-free k-space kernels for `E_cP` and
+`E_PP` (`mace/modules/dscc/polarisation.py`) and the head coupling `host_coupling="polarisation"`.
+Tests (all pass): node field = broadcast field bit-for-bit for E, F, P, Z*, α; Σ node dipoles =
+ΩP to 1e-12; node dipoles = finite differences; cueq round trip to 1e-8; E_PP = dense-Hessian
+reference to 1e-9 and real-space image sum to 1e-4 relative; E_cP = −Σ p·E_c with E_c from the
+dense kernel; forces of both kernels = finite differences; head: neutral null = base + E_PP,
+charged forces = central differences including dp/dR, Σdq = Q, batched = per-graph, translation
+invariance, analytic and capture routes refused.
+
+## 0.2 — Response on the pristine cell (base-v2-relaxed 80-atom cell)
+
+| quantity | value |
+|---|---|
+| ε∞ tensor (diag) | 3.531, 3.535, 3.575 |
+| ε∞ polycrystalline (variant M) | **3.547**; anisotropy 1.2 % (tensor kernel not needed) |
+| Z* trace/3: Cl / Cs / Pb | −1.618 / +1.277 / +3.577 |
+| Z* Frobenius: Cl / Cs / Pb | 3.52 / 2.24 / 6.21 |
+| ΣZ* (acoustic sum rule) | 0 to 1e-12 (by construction of the enthalpy derivative) |
+| same checkpoint on the MP CsPbCl3 cells (cubic, Amm2, P4/mbm, R32) | ε∞ 3.83–3.90; Z* Cl −1.67…−1.74, Cs +1.22…+1.27, Pb +3.75…+4.01 |
+| MP DFPT e_electronic (mp-675022, mp-1539667) | 3.64, 3.62 |
+
+The spread 3.55 (relaxed v2 cell) vs 3.83–3.90 (MP cells) vs 3.62–3.64 (MP DFPT) is the (M)
+variant's uncertainty. Tabulated PBE Born tensors for orthorhombic CsPbCl3: the Materials
+Project API exposes ε tensors but no Born charges, the training set holds CsPbCl3 only as ten
+polarisation-path frames (BEC weight 0), JARVIS-DFT has no CsPbCl3 entry, and phonondb was not
+reachable from this machine; the pattern (Pb ≈ +3.6…+4.0, Cs ≈ +1.3, Cl trace/3 ≈ −1.7 with a
+strongly anisotropic Cl tensor) is the anomalous-Born-charge signature reported for the
+CsPbX3 family, but no tabulated tensor was obtained in this session — recorded as a gap, not a
+validation. Base-relaxed cell: E −281.152 → −281.876 eV, rms displacement 0.253 Å, same tilt
+topology (every Cl bridges two Pb), Pb–Cl–Pb 167.1° → 156.1°, Pb–Cl 2.860 → 2.905 Å.
+
+## 0.1 — Locality (decides r_split)
+
+2×2×2 tiling (640 atoms), node field 0.01 V/Å on one atom per species, three directions.
+
+| species | r90 of Σ|dp| (x, y, z) | r90 of Σ|dF| | share on the perturbed atom |
+|---|---|---|---|
+| Cl | 7.17, 7.00, 7.42 Å | 8.5 Å | 0.22–0.27 |
+| Cs | 8.02, 8.04, 7.71 Å | 8.0–8.4 Å | 0.26–0.27 |
+| Pb | 6.65, 6.65, 6.65 Å | 8.0 Å | 0.35–0.39 |
+
+r90_max = 8.04 Å > 6 Å: by the plan's rule the mid-field coupling reverts to H0 for this
+iteration (accepted; no second representation). **r_split = max(3.0, 1.2 × 8.04) = 9.645 Å** for
+both E_cP and E_PP. Partition ambiguity RMS(p − p′)/RMS(p) = **1.11** (rms p 0.043, rms p′ 0.077
+e Å; both sum to ΩP) — the per-atom-energy partition is a different object from the node-field
+one; recorded, not gated.
+
+## 0.3 — Mechanism test with a frozen provider
+
+**Matching (E_PP forces alone, all 2560 training frames, dp/dR included).** At r_split 9.645 Å:
+RMS 0.13 (pristine-80), 0.13 (neutral vacancy 79), 0.05 (159), 0.12 (charged 79), 0.04 (charged
+159) meV/Å; E_PP −0.01 meV/atom. Threshold 3 meV/Å met (no raise). Scan: 8.50 / 4.74 / 1.86 /
+0.56 / 0.13 meV/Å at r_split 3.0 / 3.6 / 4.5 / 6.0 / 9.645. With w_PP = 19.3 Å and w_cP = 13.7 Å
+the kernels are smoother than the training cells, so E_PP is inert in the training domain by
+construction and only the ladder's larger cells exercise it.
+
+**eps0_LST** (base v2 Γ Hessian on the relaxed cell, h = 0.01 Å, ASR; provider Born tensors;
+polycrystalline): ionic part 20.63 → **24.63 (R, ε∞ = 4.0) / 24.18 (M)**. No imaginary optical
+modes; optical range 1.9–27.9 meV; the four strongest IR modes at 8.6–10.5 meV carry 9.1 of 20.6.
+
+**Model.** W6 s1 (seed-median by held force RMSE; `~/runs/dscc/dscc_w6_s1/model.pt`,
+uncalibrated — C_Q and E_M cancel in dE_relax at fixed cell and charge) with E_host → E_cP,
+plus E_PP, provider attached, ε∞ 4.0 (variant R). Gate on a charged 79-atom training frame: dq
+identical, band energy identical (6.816156 eV), e_madelung identical (−0.338319 eV); e_host
+−20.5 meV → e_cP −0.13 meV + e_PP −0.49 meV; central-difference force check 2.1 and 0.8 meV/Å.
+The untrained composition's forces differ from W6's by 16.9 meV/Å RMS (17.1 vs 8.4 against the
+label): the W6 head was trained with E_host in the loop — a mechanism model, not a force claim.
+
+**Cost.** One energy+force, charged +1, float64: 639 atoms W6 2.25 s / 5.8 GB, variant 3.75 s /
+8.8 GB (A4000); 959 atoms 5.7 s / 8.5 GB and 7.9 s / 13.0 GB; 2159 atoms on 96 CPU cores 45 s
+(W6) and 66 s (variant).
+
+**Relaxation ladders (route 1).** Cells tiled from the base-relaxed pristine cell with the
+first Cl removed (639 / 959 / 2159 / 2879 atoms; α(h)/L = 0.0950 / 0.0864 / 0.0634 / 0.0599),
+core = the +1 vacancy fully relaxed in the 639-atom cell, embedded within 8 Å (56 atoms), far
+field relaxed with the core fixed; fit `dE_relax = dE_∞ + (Q²C/2) x (1/ε∞ − 1/eps0_ladder)`.
+
+*First run (fmax 0.02 eV/Å; stands in the record).* Every far-field relaxation converged in 6–7
+BFGS steps at fmax 0.015–0.017.
+
+| atoms | W6 dE_relax (eV) | variant dE_relax (eV) |
+|---|---|---|
+| 639 | −0.4219 | −0.3847 |
+| 959 | −0.4255 | −0.3890 |
+| 2159 | −0.4266 | −0.3884 |
+| 2879 | −0.4278 | −0.3876 |
+| slope (eV Å) | +0.133 | +0.056 |
+| **eps0_ladder** | **4.32** (leave-one-out 4.17–4.39) | **4.13** (3.91–4.22) |
+| slope eps0_LST = 24.6 would give | +1.51 | +1.51 |
+
+Read before Decision 0 was taken: the criterion cannot measure this quantity. The far-field
+response is driven by forces Z* C/(ε∞ r²) ≈ 0.026 eV/Å at 15 Å and 0.010 at 24 Å — at or below
+fmax = 0.02 — so the optimiser stops with the dielectric shell unrelaxed, whose energy
+(Σ F²/2k over ~2000 atoms) is ≈ 0.05–0.1 eV, the size of the missing ≈ 48 meV between the
+639- and 2879-atom cells. The tolerance was re-registered at fmax 0.002 eV/Å for the core and
+the far field (nothing else changed) and the ladders rerun (`ladder2_*`); the LO–TO fallback
+runs in parallel. _Tight-ladder results, Decision 0 and the fallback reading are appended below
+when they land._

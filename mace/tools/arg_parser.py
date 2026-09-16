@@ -440,6 +440,18 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         default=True,
     )
     parser.add_argument(
+        "--pp_r_split",
+        help="MACEField: smoothing width (A) of the in-forward host-host dipole term E_PP; 0 = off (Plan P)",
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--pp_eps_inf",
+        help="MACEField: eps_inf dividing E_PP (Plan P)",
+        type=float,
+        default=4.0,
+    )
+    parser.add_argument(
         "--compute_polarization",
         help="Select True to compute polarization",
         type=str2bool,

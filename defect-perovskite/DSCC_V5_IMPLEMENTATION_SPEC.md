@@ -5224,3 +5224,84 @@ both cards; W6 ≈ 19 / 25 GB. **Launched (22:52) on b3:** W6 ladder on GPU 5, v
 ladder at 2,2,2 and 2,2,3); the 2159/2879 rungs are being timed on the CPU (96 cores, local) before
 their placement is decided — if unaffordable, the ladder is fitted on 639/959 (+2159 for W6) and
 that truncation is written here before the fit is read.
+CPU timing at 2159 atoms (local, 96 cores, float64; `p0_variant_cpu2159.json`): W6 45.1 s,
+variant 65.7 s per energy+force — affordable (a 150-step far-field relaxation ≈ 2–3 h). **Placement
+decided before any rung is read:** 639/959 on b3 GPUs 5/7 (running), 2159/2879 on the local CPU
+(48 threads per arm, `p0_large_rungs.sh`, chained on the b3 `CORE_DONE` status files; the core
+displacements come from the b3 639-atom relaxation of the same arm). No truncation of the
+registered ladder.
+
+## Plan P Phase 1 — base v5: REGISTRATION (2026-09-16 23:20, written before Decision 0 is read; the run opens only on a passing Decision 0 or the LO–TO fallback)
+
+Recipe (`defect-perovskite/p1_run.sh`, the user's MACE-Field fine-tuning example adapted to the
+base v2 registration): foundation = the delivered MACE-Field checkpoint, `--foundation_head
+pt_head`; head `Default` on `dataset_e0/train.xyz` (1616 neutral: pristine 80, vacancy 79/159;
+E/F/stress) with `valid.xyz` (154); replay `~/runs/dscc/p1/replay_fps1000.xyz` =
+`fine_tuning_select` on `dielectric_ferroelectric_combined.xyz` with `--subselect fps
+--num_samples 1000 --filtering_type combinations` (16 Cs/Pb/Cl configurations + 984 random
+padding, as the filter gives on this set), `--pseudolabel_replay True` (E, F, stress, P, Z*, α
+labels are the checkpoint's own predictions on the replay: the response losses on the bulk
+labels are carried by the replay head, no new DFT); `--model MACEField --loss universal_field`,
+`--E0s foundation`; weights E 10 / F 10 / stress 1 (base v2) and P 1000 / Z* 100 / α 100 (the
+user's example, in place of "the original MACE-Field values" which the fork does not record);
+lr 1e-4 (`--force_mh_ft_lr`), EMA 0.9999, weight decay 0, clip 1.0, no SWA, 30 epochs, batch 8,
+float32, cueq, seed 1; **E_PP in the forward** with r_split 9.645 Å, ε∞ 4.0 (variant R);
+`--compute_{polarization,becs,polarizability}`. Deviation if the response loss fails to hold:
+halve the learning rate once (plan). Smoke: one epoch locally (`~/runs/dscc/p1/smoke`) to
+validate the pipeline; production on b3 GPU 5 or 7 after Phase 0 closes.
+
+Gates (plan §Phase 1, verbatim): (1) neutral validation forces ≤ 10.2 + 1.0 = 11.2 meV/Å per
+component, energies ≤ 1.5 meV/atom; (2) pristine-cell Z* (per species, Frobenius) and
+polycrystalline ε∞ within 10 % of the checkpoint's 0.2 values (Frobenius Cl 3.52 / Cs 2.24 /
+Pb 6.21; ε∞ 3.547 on the relaxed cell); (3) base-alone force error on the charged frames by
+shell not worse than base v2 (33 meV/Å total, 75 in 2–4 Å) by more than 3 meV/Å in any shell.
+Deliverable `base_v5.model`, `P1_REPORT.md` with the three tables and ε∞(M) of v5.
+
+**Ladder as first run (23:20; fmax 0.02 eV/Å, `ladder_fit.json`) — read, and the convergence
+criterion found unfit before Decision 0 is taken.** dE_relax (eV) at 639/959/2159/2879 atoms: W6
+−0.4219/−0.4255/−0.4266/−0.4278 → slope +0.133 eV Å, eps0_ladder **4.32** (leave-one-out 4.17–4.39);
+variant −0.3847/−0.3890/−0.3884/−0.3876 → slope +0.056, eps0_ladder **4.13** (3.91–4.22). eps0_LST
+24.6 would need a slope of +1.51 eV Å, i.e. ≈ 48 meV more relaxation between the 639- and
+2879-atom cells; the ladders show 6 and 3 meV. Every far-field relaxation stopped after 6–7 BFGS
+steps at fmax 0.015–0.017 eV/Å. **Why that criterion cannot measure this quantity:** the
+far-field response to the +1 charge is a displacement field driven by forces F ≈ Z* E_c ≈ Z* C /
+(ε∞ r²): 0.026 eV/Å on a Cl at 15 Å, 0.010 at 24 Å — at or below fmax = 0.02, so the optimiser
+declares convergence with the whole dielectric shell unrelaxed; its energy, Σ F²/2k over ~2000
+atoms at k ≈ 5 eV/Å², is ≈ 0.05–0.1 eV, exactly the size of the missing term. The threshold on
+eps0 (30 %) is untouched; the relaxation tolerance is re-registered at **fmax 0.002 eV/Å** for
+the core and the far field (≤ 1000 steps, BFGS maxstep 0.1), output `ladder2_*`, and the
+fmax-0.02 numbers stand in the record as the first run. The LO–TO fallback (`p0_loto.py`) is run
+in parallel so that Decision 0 can be read either way as soon as the tight ladders land.
+
+**Precision of record (23:45).** The W6 checkpoints carry their base in float32 (`base_float32`
+in the W6 training); every Phase 0 evaluation from here casts it to float64 at load
+(`p0_ladder.py`, `p0_loto.py`, `p0_variant.py`), so the ladder energies are free of the ≈ 1 meV
+float32 summation noise that the fmax-0.02 first run and the variant gate carried. The tight
+ladders (fmax 0.002) launched at 23:19 with the float32 base are stopped and relaunched with
+the float64 base; nothing else changes. The variant gate's timings (8.8 / 13.0 GB) were with the
+float32 base and are indicative only.
+
+**LO–TO fallback, first reading (float64 base v2, float32-base variant; A = 0.02):** strongest
+IR mode of the base-v2 Hessian at 10.06 meV, Z̃ = −1.894 e/√amu along y; q = 2π/(3b) = 0.131 Å⁻¹.
+Curvatures (eV Å⁻² amu): base alone LO 0.581 / TO 0.331 (finite-q dispersion, not a nonanalytic
+term); E_PP alone LO +0.135 / TO −0.001, i.e. **the splitting appears with E_PP: +0.136**;
+nonanalytic expectation for the same pattern from Z* and ε∞ = 4: 0.373 raw (q → 0 kernel),
+0.077 at the registered smoothing (g = e^{−w²q²/4} = 0.206 at this q). The variant's total
+curvature was float32 noise at this amplitude (−0.02 / −0.61) and is rerun at A = 0.05 with the
+float64 base, with the provider's dipole response to the pattern (form factor against Z* u) as a
+diagnostic before the 20 % criterion is read.
+
+**LO–TO fallback, second reading (float64 base and variant, A = 0.05; `p0_loto.json`).** The
+variant's curvature is now additive (LO 0.716 = 0.581 + 0.135; TO 0.331 = 0.331 − 0.001). E_PP
+alone splits the strongest IR mode by **+0.136 eV Å⁻² amu**. Reference from Z* and ε∞ = 4 for the
+same displacement pattern, with the ±q structure-factor pair counted (checked numerically: the
+kernel on the pattern p = Z* u equals twice the single-q expression to 0.3 %): **0.746 unsmoothed
+(q → 0 kernel)**, **0.154 at the registered smoothing** (g = 0.206 at q = 0.131 Å⁻¹), and 0.135
+once the provider's own dipole response to the pattern is used (form factor 0.94 of Z* u along
+the LO axis, 0.83 along TO). So: the splitting appears; it matches the registered kernel's
+value to 0.3 % (the kernel and the provider do exactly what they are built to do), and it is 18 %
+of the unsmoothed nonanalytic value — the 79 % deficit is the smoothing that r_split = 9.645 Å
+(the plan's own locality rule, > 6 Å accepted) puts on the mid field at this q. Reading by the
+plan's fallback text: "the splitting appears" — the deficit, if the tight ladder confirms one,
+is not in the dipole mechanism; Phase 1 proceeds, and the plan's "mid-field reverts to H0"
+acceptance is what limits E_PP/E_cP to the far field (beyond ≈ 2 r_split).
