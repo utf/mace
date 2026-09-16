@@ -5305,3 +5305,8 @@ of the unsmoothed nonanalytic value — the 79 % deficit is the smoothing that r
 plan's fallback text: "the splitting appears" — the deficit, if the tight ladder confirms one,
 is not in the dipole mechanism; Phase 1 proceeds, and the plan's "mid-field reverts to H0"
 acceptance is what limits E_PP/E_cP to the far field (beyond ≈ 2 r_split).
+Placement update (23:58): with the float64 base the two arms no longer share a 24 GB card (W6
+10.7 GB + variant > 12.2 GB at 639 atoms), so the variant's tight ladder runs entirely on the
+local CPU (`p0_var_local.sh`, `ladder2_var_local/`, 48 threads) and the W6 arm keeps its b3
+core/small rungs with the 2159/2879 rungs local (`p0_w6_large.sh`). Same tolerances, same
+scripts, same cells.

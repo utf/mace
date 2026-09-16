@@ -106,5 +106,75 @@ fmax = 0.02 — so the optimiser stops with the dielectric shell unrelaxed, whos
 (Σ F²/2k over ~2000 atoms) is ≈ 0.05–0.1 eV, the size of the missing ≈ 48 meV between the
 639- and 2879-atom cells. The tolerance was re-registered at fmax 0.002 eV/Å for the core and
 the far field (nothing else changed) and the ladders rerun (`ladder2_*`); the LO–TO fallback
-runs in parallel. _Tight-ladder results, Decision 0 and the fallback reading are appended below
-when they land._
+runs in parallel. 
+*Tight run (fmax 0.002 eV/Å, float64 base; in progress at 00:25 on 2026-09-17).* The W6
+checkpoint stores its base in float32 (from `base_float32` in W6 training); all Phase 0
+evaluations from the tight run on cast it to float64 (the first run carried ≈ 1 meV summation
+noise per energy). Core relaxations now take 84–86 BFGS steps (fmax 0.0019 / 0.0018), the
+far-field relaxations 50–60 instead of 6–7.
+
+| atoms | W6 dE_relax (eV), tight | first run | variant, tight | first run |
+|---|---|---|---|---|
+| 639 | **−0.4331** | −0.4219 | running (core −0.3957) | −0.3847 |
+| 959 | step 49 of the far field at fmax 0.004 | −0.4255 | queued | −0.3890 |
+| 2159 | step 8 (local CPU) | −0.4266 | queued | −0.3884 |
+| 2879 | queued | −0.4278 | queued | −0.3876 |
+
+The tight tolerance recovers 11 meV at 639 atoms (W6) and 11 meV in the variant's core
+(−0.3957 vs −0.3847). Whether the size dependence changes is what the remaining rungs decide;
+the fit needs ≈ 48 meV between 639 and 2879 atoms for eps0_ladder to reach eps0_LST.
+
+**Decision 0 fallback: LO–TO splitting (`p0_loto.json`, float64 base and variant, A = 0.05).**
+Strongest IR mode of base v2's Hessian: 10.06 meV, Z̃ = −1.894 e/√amu along y. Frozen phonon
+in the 3×3×3 cell (2160 atoms) at q = 2π/(3b) = 0.131 Å⁻¹, curvatures in eV Å⁻² amu:
+
+| | LO (q ∥ y) | TO (q ∥ z) | LO − TO |
+|---|---|---|---|
+| base v2 alone | 0.581 | 0.331 | 0.250 (finite-q dispersion, not nonanalytic) |
+| E_PP alone | +0.135 | −0.001 | **+0.136** |
+| variant total | 0.716 | 0.331 | 0.386 |
+| nonanalytic from Z*, ε∞ = 4, unsmoothed (q → 0 kernel) | 0.746 | 0 | 0.746 |
+| same, at the registered smoothing (g = e^{−w²q²/4} = 0.206) | 0.154 | 0 | 0.154 |
+| same, with the provider's actual response (form factor 0.94 of Z* u) | 0.135 | 0 | 0.135 |
+
+(The ±q pair of the structure factor is counted; checked numerically against the kernel on the
+pattern p = Z* u to 0.3 %.) Reading: the splitting appears with E_PP and matches the value the
+registered kernel and provider are built to give to 0.3 %; it is 18 % of the unsmoothed
+nonanalytic splitting because r_split = 9.645 Å (the plan's own locality rule, > 6 Å accepted)
+smooths the dipole kernel over w = 19.3 Å, four fifths of it at this q. By the plan's fallback
+text the mechanism is present; the plan's "mid-field reverts to H0" acceptance is what confines
+E_cP and E_PP to the far field (beyond ≈ 2 r_split).
+
+## Phase 1 pipeline (smoke, one epoch, b3 GPU 5, batch 4)
+
+`p1_run.sh`: MACE-Field checkpoint → multihead fine-tune on the neutral defect data with a
+pseudolabelled replay (`fine_tuning_select`, fps 1000, combinations: 16 Cs/Pb/Cl + 984 random),
+`universal_field` loss, E 10 / F 10 / stress 1 / P 1000 / Z* 100 / α 100, lr 1e-4, EMA 0.9999,
+E_PP in the forward at r_split 9.645. A bug found by the first smoke and fixed: the pseudolabel
+generator did not request the response, so the replay's P / Z* / α labels were zeros with unit
+weight and the fine-tune drove the response to zero (replay α RMSE 3.87 → 0.79 in one epoch).
+With the fix the replay head starts at 0.0005 e (Z*) / 0.004 ε0 (α) and after one epoch holds
+0.019 e / 0.081 ε0 (≈ 2 % of the response), while the neutral head goes 20.9 → 4.7 meV/atom
+and 67.0 → 37.3 meV/Å (stress 0.49 → 0.88 meV/Å³). Batch 8 does not fit the 16 GB card, and
+with a second job on a 24 GB card batch 4 is the limit; the production run has its own card.
+
+## Preliminary conclusions (to be confirmed by the tight ladder)
+
+1. **The instruments are exact.** Port, per-node field, kernels, head coupling and the frozen
+   provider pass every registered test; the kernel and provider deliver precisely the smoothed
+   nonanalytic response (0.3 %).
+2. **The coupling is confined to the far field by the plan's own rule.** r90 = 8.0 Å puts
+   r_split at 9.645 Å; at that width E_PP and E_cP are inert on every training frame (forces
+   0.13 meV/Å, E_cP −0.13 meV where E_host was −20.5 meV) and carry 18–21 % of the dipole physics
+   at the shortest wavelength of a 48 Å cell. Phase 2's arm B versus A comparison on 79/159-atom
+   frames is therefore expected to be a null by construction unless r_split is revisited; the
+   frozen composition also loses W6's trained host term (17.1 vs 8.4 meV/Å on the charged frame).
+3. **The ladder, as first run, showed no lattice screening beyond ε∞** (eps0_ladder 4.3 / 4.1 vs
+   eps0_LST 24.6) for W6 and the variant alike; the loose tolerance was unable to measure the
+   quantity and the tight rerun is in progress (11 meV recovered at 639 atoms so far). If the
+   tight ladder still gives eps0 ≈ ε∞ for both arms, the fallback assigns the deficit to base v2's
+   restoring forces and Phase 1 proceeds by the plan's text; the reading I would give is that the
+   dielectric relaxation is not resolved by a route-1 ladder at these sizes with either model.
+4. **Phase 1 is ready to run** (recipe registered, smoke clean after the pseudolabel fix); it
+   opens on Decision 0 or the fallback, i.e. either way, but the r_split question above is
+   the decision that matters for what Phase 2 can show.
