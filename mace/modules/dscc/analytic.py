@@ -51,6 +51,9 @@ def capture_refusal(model) -> Optional[str]:
     DATA-DEPENDENT SHAPE, and in this head there is exactly one: the screened triplet list,
     built with `nonzero`. A replay would silently reuse the captured frame's triplets.
     """
+    if getattr(model, "host_coupling", "mulliken") == "polarisation":
+        return ("Plan P: the polarisation coupling's dipoles come from the field provider's "
+                "graph (cell-dependent k sets, its own backward); not captured")
     if type(model.base).__name__ == "MACELES":
         return ("a MACELES base (the LES head line): its Ewald sum builds a k-grid with a "
                 "cell-dependent count and the line is registered to run without capture, "
@@ -80,6 +83,9 @@ def analytic_refusal(model) -> Optional[str]:
     an unscreened parent's `state_dict` into a screened model clears `screened` while
     `sk.screen` stays live. What is asked is what is built.
     """
+    if getattr(model, "host_coupling", "mulliken") == "polarisation":
+        return ("Plan P: E_cP and E_PP depend on the provider's dipoles p(R), whose derivative "
+                "runs through the MACE-Field graph the closed form does not contain")
     if not getattr(model, "decoupled", False):
         # The kernel itself raises on this (`h0_position_gradient`, first line). The predicate
         # has to say so or a caller that trusts it -- as the captured tail now does -- routes a

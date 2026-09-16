@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 import logging
 import sys
@@ -126,6 +127,12 @@ def main() -> None:
                     help="L3: H0' = H0 - s_W (K q_LES - mean), the host's long-range well in H0; starts at L2")
     ap.add_argument("--les_cache", default="",
                     help="L2: q_LES / Jacobian cache file for this base (built on first use)")
+    ap.add_argument("--host_coupling", default="mulliken",
+                    help="Plan P: mulliken (W6's E_host) | polarisation (E_cP + E_PP from a MACE-Field provider)")
+    ap.add_argument("--field_provider", default="/home/alex/src/macefield/MACEField-ASE-MD/MACEField-omat-dielectric-converged.model")
+    ap.add_argument("--field_head", default="mp-dielectric")
+    ap.add_argument("--r_split", type=float, default=-1.0, help="Plan P: the smoothing width of E_cP and E_PP (and Gamma_LR); <0 = model default")
+    ap.add_argument("--eps_inf", type=float, default=-1.0, help="Plan P: eps_inf in E_M, E_c, T_LR; <0 = kernel default (4.0)")
     ap.add_argument("--on_site_from_base", type=int, default=0,
                     help="O3.D (diagnostic, not adoptable): feed the ON-SITE readout the base's "
                          "block-0 invariants while the head's own descriptor still drives the "
@@ -170,7 +177,19 @@ def main() -> None:
     base = torch.load(args.base, weights_only=False, map_location="cpu")
     base = base.float() if args.base_float32 else base.double()
     logging.info("base precision: %s (head float64)", next(base.parameters()).dtype)
+    provider = None
+    if args.host_coupling == "polarisation":
+        from mace.modules.dscc.field import load_field_provider
+        provider = load_field_provider(args.field_provider, head=args.field_head, device="cpu")
+        logging.info("Plan P: polarisation coupling; provider %s (head %s)", args.field_provider, args.field_head)
+    kernel_cfg = KernelConfig(regime=cfg.regime)
+    if args.eps_inf > 0:
+        kernel_cfg = KernelConfig(**{**asdict(kernel_cfg), "eps_inf": float(args.eps_inf)})
+    extra_model_kwargs = {"host_coupling": args.host_coupling, "field_provider": provider}
+    if args.r_split > 0:
+        extra_model_kwargs["r_split"] = float(args.r_split)
     model = MACEDSCC(base, r_cut=cfg.r_cut, directional=cfg.directional, coupling=cfg.coupling,
+                     **extra_model_kwargs,
                      route_b=cfg.route_b, scf_free=cfg.scf_free, decoupled=cfg.decoupled,
                      n_radial=args.n_radial, standardise_inputs=cfg.standardise_inputs,
                      screened=cfg.screened, r_s3=cfg.r_s3,
@@ -180,7 +199,7 @@ def main() -> None:
                      cf_linear=cfg.cf_linear, cf_mlp=cfg.cf_mlp,
                      les_cross=cfg.les_cross, les_sign=cfg.les_sign, les_well=cfg.les_well,
                      readout_init_scale=cfg.readout_init_scale,
-                     kernel=KernelConfig(regime=cfg.regime),
+                     kernel=kernel_cfg,
                      eta=args.eta, beta_b=args.beta_b, beta_a=args.beta_a,
                      delta_frac=args.delta_frac,
                      scf=ScfOptions(n_max=args.n_max)).to(args.device)

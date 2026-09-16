@@ -39,6 +39,7 @@ from mace.modules.dscc.analytic import (analytic_refusal, assemble_compiled,
                                         h0_position_gradient, head_cotangent)
 from mace.modules.dscc.ewald import (COULOMB, gradient_of_contraction, madelung_self,
                                      reciprocal_matrix_planned, reciprocal_pair_gradient_planned)
+from mace.modules.dscc.polarisation import carrier_dipole_energy, dipole_dipole_energy
 from mace.modules.dscc.kernels import (KernelConfig, gamma_lr, gamma_matrix, gamma_pair_derivative, host_potential,
                                        kernel_components, kernel_pair_gradients, gamma_lr_pair_gradient)
 from mace.modules.dscc.scf import (ScfOptions, ScfResult, continuation_solve, continuation_solve_batched,
@@ -123,7 +124,8 @@ class MACEDSCC(nn.Module):
                  eta: float = ETA_DEFAULT, beta_b: float = 0.0, beta_a: float = 0.0,
                  delta_frac: float = DELTA_FRACTION_DEFAULT,
                  scf: Optional[ScfOptions] = None,
-                 les_cross: bool = False, les_sign: float = 1.0, les_well: bool = False) -> None:
+                 les_cross: bool = False, les_sign: float = 1.0, les_well: bool = False,
+                 host_coupling: str = "mulliken", field_provider: Optional[nn.Module] = None) -> None:
         super().__init__()
         self.scf_options = scf or ScfOptions()
         self.base = base
@@ -206,6 +208,23 @@ class MACEDSCC(nn.Module):
         # kernel is the BARE `gamma_lr(r_g, r_split)` (no 1/eps_inf: the latent charges are the
         # base's effective response already), `s_c` in [-s_max, s_max] initialised at
         # +1/sqrt(eps_inf) after the Born sign fix `les_sign` (fixed once per base: Z*(Cs) > 0).
+        # Plan P (2026-09-16): the host coupling. "mulliken" is W6's `E_host = dq^T Gamma_LR (s q0)`;
+        # "polarisation" replaces it by `E_cP = -sum_a p_a . E_c(R_a)` with `p` the zero-field
+        # atomic dipoles of a frozen MACE-Field provider (no reference fill, no pattern, no
+        # learned scale) and adds `E_PP = 1/2 sum_{a != b} p_a^T T_LR p_b / eps_inf` on EVERY
+        # state (a neutral-model term). `eps_inf` is `kernel.eps_inf` in E_M, E_c and T_LR alike;
+        # the smoothing width of both new kernels is `r_split`.
+        self.host_coupling = str(host_coupling)
+        if self.host_coupling not in ("mulliken", "polarisation"):
+            raise ValueError(f"host_coupling must be 'mulliken' or 'polarisation'; got {host_coupling!r}")
+        self.field_provider = field_provider
+        if self.host_coupling == "polarisation":
+            if not self.scf_free:
+                raise ValueError("the polarisation coupling sits on the SCF-free (W6) path")
+            if field_provider is None:
+                raise ValueError("the polarisation coupling needs a field provider (FieldProvider)")
+            if les_cross or les_well:
+                raise ValueError("the polarisation coupling and the LES terms are alternatives")
         self.les_cross, self.les_sign = bool(les_cross), float(les_sign)
         if self.les_cross:
             if not self.scf_free:
@@ -252,6 +271,7 @@ class MACEDSCC(nn.Module):
                 "scf_free": getattr(self, "scf_free", False),
                 "les_cross": getattr(self, "les_cross", False), "les_sign": getattr(self, "les_sign", 1.0),
                 "les_well": getattr(self, "les_well", False),
+                "host_coupling": getattr(self, "host_coupling", "mulliken"),
                 "decoupled": getattr(self, "decoupled", False),
                 "screened": getattr(self, "screened", False),
                 "correlation2": getattr(self, "correlation2", False),
@@ -275,6 +295,7 @@ class MACEDSCC(nn.Module):
         self.les_cross = bool(state.get("les_cross", False))    # L2
         self.les_sign = float(state.get("les_sign", 1.0))
         self.les_well = bool(state.get("les_well", False))      # L3
+        self.host_coupling = str(state.get("host_coupling", "mulliken"))   # Plan P
         self.decoupled = bool(state.get("decoupled", False))    # O3
         self.screened = bool(state.get("screened", False))      # O3.2
         self.correlation2 = bool(state.get("correlation2", False))   # O3.3
@@ -291,6 +312,45 @@ class MACEDSCC(nn.Module):
         self.lambda_fixed = state.get("lambda_fixed")
         self.u_zero = bool(state.get("u_zero", False))
         self.init_from = state.get("init_from")
+
+    # ----------------------------------------------------------------- Plan P: the provider's dipoles
+
+    def _node_dipoles(self, d: Dict[str, torch.Tensor], species: torch.Tensor) -> torch.Tensor:
+        """`p [N, 3]` from the field provider on this graph (its own cutoff), attached to
+        `d['positions']` -- the one nested-autograd pass of the plan."""
+        numbers = torch.tensor(self.atomic_numbers, dtype=torch.long, device=species.device)[species]
+        return self.field_provider.node_dipoles(d["positions"], d["cell"], d["batch"], d["ptr"],
+                                                d["edge_index"], d["shifts"], d["unit_shifts"], numbers)
+
+    def _pp_energy(self, positions: torch.Tensor, cell: torch.Tensor, p: torch.Tensor,
+                   ptr: torch.Tensor) -> torch.Tensor:
+        """`E_PP` per graph, `[B]`."""
+        cell = cell.view(-1, 3, 3)
+        out = []
+        for g in range(int(ptr.numel() - 1)):
+            lo, hi = int(ptr[g]), int(ptr[g + 1])
+            out.append(dipole_dipole_energy(positions[lo:hi], cell[g], p[lo:hi], self.r_split,
+                                            self.kernel.eps_inf, tol=self.kernel.tol))
+        return torch.stack(out)
+
+    def _pp_neutral(self, data: Dict[str, torch.Tensor], compute_force: bool):
+        """`E_PP` and its forces in the reference state, on its own positions leaf (the base's
+        graph is not touched: the short circuit stays the base's outputs plus this term)."""
+        pos = data["positions"].detach().clone().requires_grad_(True)
+        cell = data["cell"].view(-1, 3, 3)
+        batch = data["batch"]
+        shifts = torch.einsum("ei,eij->ej", data["unit_shifts"].to(pos.dtype), cell[batch[data["edge_index"][0]]])
+        d = dict(data)
+        d["positions"], d["shifts"] = pos, shifts
+        species = data["node_attrs"].argmax(dim=-1)
+        with torch.enable_grad():
+            p = self._node_dipoles(d, species)
+            e_pp = self._pp_energy(pos, cell, p, data["ptr"])
+            f_pp = None
+            if compute_force:
+                (g,) = torch.autograd.grad(e_pp.sum(), pos)
+                f_pp = -g
+        return e_pp, f_pp
 
     # ----------------------------------------------------------------- learnables
 
@@ -515,7 +575,8 @@ class MACEDSCC(nn.Module):
                        plan=None, xi: Optional[torch.Tensor] = None,
                        fills_s=None, fills_r=None,
                        q_les: Optional[torch.Tensor] = None, j_les: Optional[torch.Tensor] = None,
-                       g_lr: Optional[torch.Tensor] = None, d_w: Optional[torch.Tensor] = None):
+                       g_lr: Optional[torch.Tensor] = None, d_w: Optional[torch.Tensor] = None,
+                       p: Optional[torch.Tensor] = None):
         """W6: the two SCF-free terms that sit on top of the `Phi = 0` band energy, from the
         SAME eigendecomposition the fill used.
 
@@ -558,52 +619,64 @@ class MACEDSCC(nn.Module):
                                "(run the base in this forward, or cache dscc_base_q / dscc_base_J)")
         eps_k = 1.0 if les else self.kernel.eps_inf          # L2: the bare kernel
         dq = occ_r - occ_s
-        q0 = None if les else n0 - occ_r
-        sq0 = (self.cross_scale() * q_les) if les else (self.pattern_scale() * q0)
-        with torch.set_grad_enabled(torch.is_grad_enabled() and not use_pairs):
-            if g_lr is not None:            # L2/L3: the bare kernel computed once by the caller
-                pass
-            elif plan is not None:          # capture: the cell-dependent half hoisted out
-                g_lr = torch.stack([reciprocal_matrix_planned(positions[g], plan) / eps_k
-                                    for g in range(n_graphs)])
-            else:
-                g_lr = torch.stack([gamma_lr(positions[g], cell[g], self.kernel.r_g, self.r_split,
-                                             eps_k, tol=self.kernel.tol,
-                                             route=self._lr_route(), background=self._background())
-                                    for g in range(n_graphs)])
-        w = torch.einsum("bij,bj->bi", g_lr, sq0)
-        e_host = (dq * w).sum(-1)
-        # The analytic route needs `d E_host / d occ` explicitly, where the cotangent route
-        # gets it from `(e_host, 1)`: `dq = occ_R - occ_S` and `s q0 = s (n0 - occ_R)`, so
-        # `dE/d occ_S = -Gamma_LR s q0` and `dE/d occ_R = Gamma_LR s q0 - s Gamma_LR^T dq`.
-        occ_cotangents = None
-        if need_cotangents:
-            occ_cotangents = ((-w, w) if les else
-                              (-w, w - self.pattern_scale() * torch.einsum("bji,bj->bi", g_lr, dq)))
-        pair_grad = None
-        if use_pairs:
-            with torch.no_grad():
-                if d_w is not None:
+        if p is not None:
+            # Plan P: E_cP = -sum_a p_a . E_c(R_a) replaces E_host. `dq`, `p` and the positions
+            # all carry graphs and the kernel stays attached (no pair route, no reference fill,
+            # no pattern scale); the analytic force route is refused for this model.
+            if need_cotangents:
+                raise RuntimeError("the analytic force route is refused under the polarisation coupling")
+            e_host = torch.stack([carrier_dipole_energy(positions[g], cell[g], dq[g], p[g],
+                                                        self.kernel.r_g, self.r_split, self.kernel.eps_inf,
+                                                        tol=self.kernel.tol)
+                                  for g in range(n_graphs)])
+            q0, occ_cotangents, pair_grad = None, None, None
+        else:
+            q0 = None if les else n0 - occ_r
+            sq0 = (self.cross_scale() * q_les) if les else (self.pattern_scale() * q0)
+            with torch.set_grad_enabled(torch.is_grad_enabled() and not use_pairs):
+                if g_lr is not None:            # L2/L3: the bare kernel computed once by the caller
                     pass
-                elif plan is not None:
-                    d_w = torch.stack([reciprocal_pair_gradient_planned(positions[g], plan) / self.kernel.eps_inf
-                                       for g in range(n_graphs)])
+                elif plan is not None:          # capture: the cell-dependent half hoisted out
+                    g_lr = torch.stack([reciprocal_matrix_planned(positions[g], plan) / eps_k
+                                        for g in range(n_graphs)])
                 else:
-                    d_w = torch.stack([gamma_lr_pair_gradient(positions[g], cell[g], self.kernel.r_g,
-                                                              self.r_split, eps_k,
-                                                              tol=self.kernel.tol, route=self._lr_route())
-                                       for g in range(n_graphs)])
-            # ATTACHED, as route B's own `A_w`: `d_w` is the constant of the geometry, but
-            # the contraction's parameter gradient (`s` above all, which enters the force only
-            # here and through the cotangent) has to survive `create_graph` in training.
-            pair_grad = gradient_of_contraction(dq.unsqueeze(-1) * sq0.unsqueeze(-2), d_w)
-        if les and j_les is not None:
-            # q_LES's geometry derivative from the cached per-frame Jacobian (the base did not
-            # run in this forward): dE/dR_k = s_c sum_j (K dq)_j J_jk. J is a constant of the
-            # geometry; `s_c` and `dq` stay attached for the force loss's parameter gradient.
-            v = self.cross_scale() * torch.einsum("bij,bi->bj", g_lr, dq)          # K^T dq, K symmetric
-            g_q = torch.einsum("bjkc,bj->bkc", j_les, v)
-            pair_grad = g_q if pair_grad is None else pair_grad + g_q
+                    g_lr = torch.stack([gamma_lr(positions[g], cell[g], self.kernel.r_g, self.r_split,
+                                                 eps_k, tol=self.kernel.tol,
+                                                 route=self._lr_route(), background=self._background())
+                                        for g in range(n_graphs)])
+            w = torch.einsum("bij,bj->bi", g_lr, sq0)
+            e_host = (dq * w).sum(-1)
+            # The analytic route needs `d E_host / d occ` explicitly, where the cotangent route
+            # gets it from `(e_host, 1)`: `dq = occ_R - occ_S` and `s q0 = s (n0 - occ_R)`, so
+            # `dE/d occ_S = -Gamma_LR s q0` and `dE/d occ_R = Gamma_LR s q0 - s Gamma_LR^T dq`.
+            occ_cotangents = None
+            if need_cotangents:
+                occ_cotangents = ((-w, w) if les else
+                                  (-w, w - self.pattern_scale() * torch.einsum("bji,bj->bi", g_lr, dq)))
+            pair_grad = None
+            if use_pairs:
+                with torch.no_grad():
+                    if d_w is not None:
+                        pass
+                    elif plan is not None:
+                        d_w = torch.stack([reciprocal_pair_gradient_planned(positions[g], plan) / self.kernel.eps_inf
+                                           for g in range(n_graphs)])
+                    else:
+                        d_w = torch.stack([gamma_lr_pair_gradient(positions[g], cell[g], self.kernel.r_g,
+                                                                  self.r_split, eps_k,
+                                                                  tol=self.kernel.tol, route=self._lr_route())
+                                           for g in range(n_graphs)])
+                # ATTACHED, as route B's own `A_w`: `d_w` is the constant of the geometry, but
+                # the contraction's parameter gradient (`s` above all, which enters the force only
+                # here and through the cotangent) has to survive `create_graph` in training.
+                pair_grad = gradient_of_contraction(dq.unsqueeze(-1) * sq0.unsqueeze(-2), d_w)
+            if les and j_les is not None:
+                # q_LES's geometry derivative from the cached per-frame Jacobian (the base did not
+                # run in this forward): dE/dR_k = s_c sum_j (K dq)_j J_jk. J is a constant of the
+                # geometry; `s_c` and `dq` stay attached for the force loss's parameter gradient.
+                v = self.cross_scale() * torch.einsum("bij,bi->bj", g_lr, dq)          # K^T dq, K symmetric
+                g_q = torch.einsum("bjkc,bj->bkc", j_les, v)
+                pair_grad = g_q if pair_grad is None else pair_grad + g_q
         # C13 (registered): E_M carries the model density's second-moment term
         # `4 pi r_g^2 C / Omega` alongside the point-charge Madelung constant, so that W6 and
         # the SCF models agree at fixed cell -- `xi + 4 pi r_g^2 C / Omega` is exactly
@@ -985,6 +1058,14 @@ class MACEDSCC(nn.Module):
             out = self.base_forward(self._trunk_data(dict(data)), training=training,
                                          compute_force=compute_force, compute_stress=compute_stress)
             out["head_energy"] = torch.zeros(num_graphs, dtype=torch.float64, device=out["energy"].device)
+            if getattr(self, "host_coupling", "mulliken") == "polarisation":
+                if compute_stress:
+                    raise NotImplementedError("Plan P: the stress of E_PP is not implemented (Phase 0 needs none)")
+                e_pp, f_pp = self._pp_neutral(data, compute_force)
+                out["energy"] = out["energy"] + e_pp.to(out["energy"].dtype)
+                if f_pp is not None and out.get("forces") is not None:
+                    out["forces"] = out["forces"] + f_pp.to(out["forces"].dtype)
+                out["e_pp"] = e_pp
             out["energy_uncalibrated"] = out["energy"]
             out["short_circuit"] = True
             return out
@@ -1058,6 +1139,17 @@ class MACEDSCC(nn.Module):
         create = bool(training)
         head_energy = torch.zeros(num_graphs, dtype=torch.float64, device=device)
         cotangent_terms: List[Tuple[torch.Tensor, torch.Tensor]] = []   # (tensor, cotangent)
+        # Plan P: the provider's dipoles once per forward (attached to `positions`), E_PP on
+        # every graph; E_cP replaces E_host inside `scf_free_terms` below. Both enter the force
+        # through the cotangent route (full derivatives: `dp/dR` included).
+        p_node: Optional[torch.Tensor] = None
+        e_pp = torch.zeros(num_graphs, dtype=torch.float64, device=device)
+        if getattr(self, "host_coupling", "mulliken") == "polarisation":
+            if compute_stress:
+                raise NotImplementedError("Plan P: the stress of E_PP / E_cP is not implemented (Phase 0 needs none)")
+            p_node = self._node_dipoles(strained, species)
+            e_pp = self._pp_energy(positions, cell, p_node, ptr)
+            cotangent_terms.append((e_pp, torch.ones_like(e_pp)))
         # Forces of the kernel terms (`-Tr(dP dV/dR) - 1/2 dq^T dGamma/dR dq`) from the
         # kernels' PAIR derivatives (constants of the geometry) contracted with the attached
         # charges: the same numbers as the cotangent route, without the autograd graph through
@@ -1156,7 +1248,8 @@ class MACEDSCC(nn.Module):
                         e_host, e_m, pg, _, q0, occ_cot = self.scf_free_terms(
                             H, (sol.fills[0].eps, sol.fills[0].U), counts_s, counts_r, t(n0_rows),
                             pos_b, cell, q_form, use_pairs, need_cotangents=analytic,
-                            q_les=q_les_b, j_les=j_les_b, g_lr=g_lr_b, d_w=d_w_b)
+                            q_les=q_les_b, j_les=j_les_b, g_lr=g_lr_b, d_w=d_w_b,
+                            p=(None if p_node is None else p_node.reshape(num_graphs, n_nodes, 3)))
                     if W_b is not None:                                         # L3 force pieces
                         gw = self.well_geometry_terms(W_b, sol.energy + e_host, q_les_b, g_lr_b, d_w_b, j_les_b, create)
                         if gw is not None:
@@ -1421,7 +1514,8 @@ class MACEDSCC(nn.Module):
                         H.unsqueeze(0), (sol.fills[0].eps.unsqueeze(0), sol.fills[0].U.unsqueeze(0)),
                         (one(n_s[0]), one(n_s[1])), (one(n_r[0]), one(n_r[1])), n0_g,
                         positions[nodes].unsqueeze(0), cell[g].unsqueeze(0), one(state.Q), use_pairs,
-                        q_les=q_les_g, j_les=j_les_g, g_lr=g_lr_g, d_w=d_w_g)
+                        q_les=q_les_g, j_les=j_les_g, g_lr=g_lr_g, d_w=d_w_g,
+                        p=(None if p_node is None else p_node[nodes].unsqueeze(0)))
                     if W_g is not None:
                         gw = self.well_geometry_terms(W_g, sol.energy + e_host[0], q_les_g, g_lr_g, d_w_g, j_les_g, create)
                         if gw is not None:
@@ -1448,10 +1542,10 @@ class MACEDSCC(nn.Module):
         if e_base is None:                      # per-graph path with a deferred base
             e_base = run_base()
         c_q = torch.stack([self.c_q(s.Q) for s in states]).to(device)
-        energy_uncal = e_base + head_energy
+        energy_uncal = e_base + head_energy + e_pp
         result: Dict[str, Optional[torch.Tensor]] = {
             "energy_uncalibrated": energy_uncal, "energy": energy_uncal + c_q,
-            "base_energy": e_base, "head_energy": head_energy, "c_q": c_q,
+            "base_energy": e_base, "head_energy": head_energy, "c_q": c_q, "e_pp": e_pp,
             "dq": dq_all, "node_feats": node_feats, "short_circuit": False,
             "calibrated": self.calibrated, "diagnostics": diagnostics,
             # A MACELES base's latent charges and Ewald energy, differentiable in the positions
