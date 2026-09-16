@@ -178,3 +178,32 @@ with a second job on a 24 GB card batch 4 is the limit; the production run has i
 4. **Phase 1 is ready to run** (recipe registered, smoke clean after the pseudolabel fix); it
    opens on Decision 0 or the fallback, i.e. either way, but the r_split question above is
    the decision that matters for what Phase 2 can show.
+
+## Amendment A1 (user, 2026-09-17 00:45) — r_split by matching, form factor in place of 0.1
+
+The r90 rule turned a bond-scale effect into a 19 Å smoothing that switched the coupling off at
+every testable size; the r90-based 0.3 is a null by construction and its LO–TO agreement (0.3 %)
+the positive finding. Amended: **r_split = 4.5 Å** (largest E_PP force on training frames under
+2 meV/Å: 1.86 all-families RMS); 0.1 replaced by the provider's plane-wave Born response;
+Decision 0 restated as variant eps0_ladder ≥ 8 and ≥ 2 × W6's with LO–TO within 10 % of the
+smoothed expectation; W6's tight ladder kept as the control.
+
+**Form factor** (`p0_formfactor.json`; 3×3×3 cell, strongest IR mode, ±0.05 central differences
+of the provider's node dipoles):
+
+| axis | λ = L (n = 1) | L/2 | L/4 | w_eff (Å) |
+|---|---|---|---|---|
+| x (L = 47.1 Å) | 0.945 | 0.810 | 0.528 | 3.09 |
+| y (L = 48.5 Å) | 0.939 | 0.787 | 0.454 | 3.43 |
+| z (L = 34.1 Å) | 0.834 | 0.531 | (0.09, aliasing) | 4.21 |
+
+The n = 3 points (λ = a, b, c) are lattice-periodic patterns, not modulations, and are excluded
+(x: f = 0.11 with a 180° phase). w_eff_max = 4.21 < 4.5 → r_split = 4.5 Å stands; z (the
+11.4 Å axis) sits at the edge (4.3–4.6 Å from its two clean points).
+
+**Variant at 4.5 Å** (`w6_s1_pol_r45.pt`, float64 base; same gate frame): dq, band energy,
+e_madelung identical to W6; e_host −20.5 meV → e_cP **−40.9 meV**, e_PP +0.2 meV; FD checks 0.35
+and 0.002 meV/Å; forces 11.8 vs W6 8.4 meV/Å against the label (17.1 at 9.645 Å).
+
+_Running: LO–TO at 4.5 Å; variant tight ladder at 4.5 Å; W6 tight control rungs (639/959 done:
+−0.4331/−0.4369 eV). Decision 0 (A1 form) and Phase 1's launch follow from the status chain._
