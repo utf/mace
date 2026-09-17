@@ -1843,6 +1843,20 @@ class MACEField(ScaleShiftMACE):
         electric_field_node: Optional[torch.Tensor] = None,
         compute_node_dipoles: bool = False,
     ) -> Dict[str, Optional[torch.Tensor]]:
+        # E_PP needs the node-dipole derivative even when the caller runs under no_grad (the
+        # head's reference passes do): run with grad enabled and hand back detached outputs.
+        if float(getattr(self, "pp_r_split", 0.0)) > 0.0 and not torch.is_grad_enabled():
+            with torch.enable_grad():
+                out = self.forward(
+                    data, training=training, compute_force=compute_force, compute_virials=compute_virials,
+                    compute_stress=compute_stress, compute_displacement=compute_displacement,
+                    compute_hessian=compute_hessian, compute_edge_forces=compute_edge_forces,
+                    compute_atomic_stresses=compute_atomic_stresses, lammps_mliap=lammps_mliap,
+                    compute_polarization=compute_polarization, compute_becs=compute_becs,
+                    compute_polarizability=compute_polarizability, electric_field=electric_field,
+                    electric_field_node=electric_field_node, compute_node_dipoles=compute_node_dipoles,
+                )
+            return {k: (v.detach() if torch.is_tensor(v) else v) for k, v in out.items()}
         # Setup
         ctx = prepare_graph(
             data,

@@ -218,13 +218,28 @@ class MACEDSCC(nn.Module):
         if self.host_coupling not in ("mulliken", "polarisation"):
             raise ValueError(f"host_coupling must be 'mulliken' or 'polarisation'; got {host_coupling!r}")
         self.field_provider = field_provider
+        # Phase 2 (plan section 0): with a MACE-Field BASE the dipoles come from the base's own
+        # forward ("the same backward as the forces"): no separate provider, one pass. And if
+        # the base carries E_PP in its forward (`pp_r_split` > 0, base v5), the head does not
+        # add it again -- E_PP belongs to the neutral model.
+        self.provider_is_base = False
+        self.head_adds_pp = True
         if self.host_coupling == "polarisation":
             if not self.scf_free:
                 raise ValueError("the polarisation coupling sits on the SCF-free (W6) path")
             if field_provider is None:
-                raise ValueError("the polarisation coupling needs a field provider (FieldProvider)")
+                if type(base).__name__ != "MACEField":
+                    raise ValueError("the polarisation coupling needs a field provider (FieldProvider) "
+                                     "or a MACEField base")
+                self.provider_is_base = True
             if les_cross or les_well:
                 raise ValueError("the polarisation coupling and the LES terms are alternatives")
+            base_pp = float(getattr(base, "pp_r_split", 0.0))
+            if base_pp > 0.0:
+                self.head_adds_pp = False
+                if abs(base_pp - float(r_split)) > 1e-9:
+                    raise ValueError(f"the base carries E_PP at r_split {base_pp}; the head's r_split "
+                                     f"({r_split}) must equal it (one eps_inf, one width per run)")
         self.les_cross, self.les_sign = bool(les_cross), float(les_sign)
         if self.les_cross:
             if not self.scf_free:
@@ -272,6 +287,8 @@ class MACEDSCC(nn.Module):
                 "les_cross": getattr(self, "les_cross", False), "les_sign": getattr(self, "les_sign", 1.0),
                 "les_well": getattr(self, "les_well", False),
                 "host_coupling": getattr(self, "host_coupling", "mulliken"),
+                "provider_is_base": getattr(self, "provider_is_base", False),
+                "head_adds_pp": getattr(self, "head_adds_pp", True),
                 "decoupled": getattr(self, "decoupled", False),
                 "screened": getattr(self, "screened", False),
                 "correlation2": getattr(self, "correlation2", False),
@@ -296,6 +313,8 @@ class MACEDSCC(nn.Module):
         self.les_sign = float(state.get("les_sign", 1.0))
         self.les_well = bool(state.get("les_well", False))      # L3
         self.host_coupling = str(state.get("host_coupling", "mulliken"))   # Plan P
+        self.provider_is_base = bool(state.get("provider_is_base", False))
+        self.head_adds_pp = bool(state.get("head_adds_pp", True))
         self.decoupled = bool(state.get("decoupled", False))    # O3
         self.screened = bool(state.get("screened", False))      # O3.2
         self.correlation2 = bool(state.get("correlation2", False))   # O3.3
@@ -318,9 +337,27 @@ class MACEDSCC(nn.Module):
     def _node_dipoles(self, d: Dict[str, torch.Tensor], species: torch.Tensor) -> torch.Tensor:
         """`p [N, 3]` from the field provider on this graph (its own cutoff), attached to
         `d['positions']` -- the one nested-autograd pass of the plan."""
+        if getattr(self, "provider_is_base", False):
+            trunk = self._trunk_data(d)
+            leaf = torch.zeros(d["positions"].shape[0], 3, dtype=torch.float64, device=d["positions"].device,
+                               requires_grad=True)
+            out = self.base_forward(trunk, training=True, compute_force=False,
+                                    electric_field_node=leaf, compute_node_dipoles=True)
+            return out["node_dipoles"]
         numbers = torch.tensor(self.atomic_numbers, dtype=torch.long, device=species.device)[species]
         return self.field_provider.node_dipoles(d["positions"], d["cell"], d["batch"], d["ptr"],
                                                 d["edge_index"], d["shifts"], d["unit_shifts"], numbers)
+
+    def _provider_kwargs(self, d: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """The node-field leaf for a MACEField base that is its own provider (Phase 2): the
+        base's forward then returns `node_dipoles` attached to the positions alongside its
+        energy -- the one nested-autograd pass of the plan."""
+        if not (getattr(self, "provider_is_base", False)
+                and getattr(self, "host_coupling", "mulliken") == "polarisation"):
+            return {}
+        leaf = torch.zeros(d["positions"].shape[0], 3, dtype=torch.float64,
+                           device=d["positions"].device, requires_grad=True)
+        return {"electric_field_node": leaf, "compute_node_dipoles": True}
 
     def _pp_energy(self, positions: torch.Tensor, cell: torch.Tensor, p: torch.Tensor,
                    ptr: torch.Tensor) -> torch.Tensor:
@@ -1058,7 +1095,7 @@ class MACEDSCC(nn.Module):
             out = self.base_forward(self._trunk_data(dict(data)), training=training,
                                          compute_force=compute_force, compute_stress=compute_stress)
             out["head_energy"] = torch.zeros(num_graphs, dtype=torch.float64, device=out["energy"].device)
-            if getattr(self, "host_coupling", "mulliken") == "polarisation":
+            if getattr(self, "host_coupling", "mulliken") == "polarisation" and getattr(self, "head_adds_pp", True):
                 if compute_stress:
                     raise NotImplementedError("Plan P: the stress of E_PP is not implemented (Phase 0 needs none)")
                 e_pp, f_pp = self._pp_neutral(data, compute_force)
@@ -1118,7 +1155,7 @@ class MACEDSCC(nn.Module):
             node_feats, e_base, f_base = None, None, None
         else:
             out = self.base_forward(self._trunk_data(strained), training=training,
-                                         compute_force=False)
+                                    compute_force=False, **self._provider_kwargs(strained))
             node_feats, e_base, f_base = out["node_feats"], out["energy"], None
             base_out = out
         # O3.D cannot defer the base: H0's on-site readout needs block 0 to assemble at all.
@@ -1127,7 +1164,10 @@ class MACEDSCC(nn.Module):
         deferred_base = self.decoupled and not cached_base and not self.on_site_from_base
 
         def run_base():
-            o = self.base_forward(self._trunk_data(strained), training=training, compute_force=False)
+            if base_out.get("energy") is not None:          # idempotent: the provider path may run it early
+                return base_out["energy"]
+            o = self.base_forward(self._trunk_data(strained), training=training, compute_force=False,
+                                  **self._provider_kwargs(strained))
             base_out.update(o)
             return o["energy"]
         scalars, vectors = (self._descriptor_placeholders(int(data["node_attrs"].shape[0]), device)
@@ -1147,9 +1187,18 @@ class MACEDSCC(nn.Module):
         if getattr(self, "host_coupling", "mulliken") == "polarisation":
             if compute_stress:
                 raise NotImplementedError("Plan P: the stress of E_PP / E_cP is not implemented (Phase 0 needs none)")
-            p_node = self._node_dipoles(strained, species)
-            e_pp = self._pp_energy(positions, cell, p_node, ptr)
-            cotangent_terms.append((e_pp, torch.ones_like(e_pp)))
+            if getattr(self, "provider_is_base", False):
+                if cached_base:
+                    raise RuntimeError("polarisation coupling with the base as provider needs the base "
+                                       "in the forward: train with cache_base off (Phase 2 arm B)")
+                if base_out.get("node_dipoles") is None:
+                    e_base = run_base()
+                p_node = base_out["node_dipoles"]
+            else:
+                p_node = self._node_dipoles(strained, species)
+            if getattr(self, "head_adds_pp", True):
+                e_pp = self._pp_energy(positions, cell, p_node, ptr)
+                cotangent_terms.append((e_pp, torch.ones_like(e_pp)))
         # Forces of the kernel terms (`-Tr(dP dV/dR) - 1/2 dq^T dGamma/dR dq`) from the
         # kernels' PAIR derivatives (constants of the geometry) contracted with the attached
         # charges: the same numbers as the cotangent route, without the autograd graph through
