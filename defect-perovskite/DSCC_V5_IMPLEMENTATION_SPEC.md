@@ -5928,3 +5928,19 @@ target outside at epoch 0 (34.3) — the pure-target steps are 1 in 6 with clipp
 target learns more slowly per epoch than in the mixed-batch arm b, but at similar pace per
 wall-clock minute (28.9 meV/Å at 18 min vs arm b 24.6 at 25 min). The fallback rule was keyed on
 replay drift and is not triggered; run continues. Energy is falling (2.28 → 2.17 → 1.78).
+
+Standing instruction (user, 2026-09-18 02:30): "If everything looks good at the end then continue
+with the rest of the plan. If not, try a higher learning rate." Registered before the gates are
+read: fallback lr = 3e-4 (same A5 recipe, `base_v7_lr3e4`, GPU 5); orchestration
+`p1v3_orchestrate.sh` (running): base_v7 gates ALL PASS → `p2_launch_on_gates.sh base_v7`; else
+launch the 3e-4 run with its gate chain, then Phase 2 on ALL PASS, else P2_STATUS BLOCKED.
+Phase 2 entry (A3 requirement) is now an instrument: `p2_epp_mismatch.py` = E_PP force RMS per
+component on the 154 neutral validation frames from the base's own dipoles at r_split 4.5 /
+eps_inf 4.0 (base + E_PP minus base alone), τ = 1.7 meV/Å, plus species-signed means. Tested on the
+base v5 base: 0.746 meV/Å → PASS (the 1.86 of record was training frames including charged cells
+with the raw provider). EXCEEDS → `p2_readout_refit.py` (readout-only, E_PP on, target frames
+only, 5 epochs lr 1e-3; acceptance: validation F with E_PP ≤ base-alone F + 1 meV/Å), and the refit
+base must still be ALL PASS on `p1_gates.py` before it replaces the base; `p2_launch_on_gates.sh`
+now takes the P1 run dir and applies this chain. Phase 2 arms unchanged (p2_queue.sh: B / B(M) /
+A seeds 3–6 on b3 GPUs 5+7 via w3_queue; p2_local.sh: A seeds 0–2 locally); when the base carries
+no E_PP the head adds it (head_adds_pp).
