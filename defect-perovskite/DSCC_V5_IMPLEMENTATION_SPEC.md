@@ -5921,3 +5921,10 @@ Run: base_v7 on b3 GPU 5; gate chain `p1v2_after.sh /home/alex/runs/dscc/p1v2/ba
 A5 launched (2026-09-18 01:25): smoke epoch clean with and without head-grouped batches (replay
 table without response columns, target table with them); field suites 21 passed + 3 new. base_v7
 running on b3 GPU 5 (`p1v3_runner.sh`), gate chain armed, monitor armed. Expect epoch time ≈ 10 min.
+base_v7 epochs 0–1 (b3 clock 23:08 / 23:17): epoch time 9.7 / 8.9 min (was 23; the skip works).
+Epoch 0: Default 2.17 meV/atom / 34.3 meV/Å, Z* 0.012 e; replay 7.45 / 27.2. Epoch 1: Default
+1.78 / 28.9; replay 6.13 / 21.6. Against the registered band (24.6 ± 5): replay inside (27.2 → 21.6),
+target outside at epoch 0 (34.3) — the pure-target steps are 1 in 6 with clipping per step, so the
+target learns more slowly per epoch than in the mixed-batch arm b, but at similar pace per
+wall-clock minute (28.9 meV/Å at 18 min vs arm b 24.6 at 25 min). The fallback rule was keyed on
+replay drift and is not triggered; run continues. Energy is falling (2.28 → 2.17 → 1.78).
