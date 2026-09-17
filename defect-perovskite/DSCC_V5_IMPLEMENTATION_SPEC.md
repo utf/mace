@@ -5512,3 +5512,9 @@ against base v2's 3.9 with the fit still falling at epoch 30; +5…+15 meV/Å on
 shell) are not expected to pass from it, and the recipe beyond that (epochs, replay composition
 — 16 relevant frames of 1000 —, response weights, or a larger MACE-Field backbone) is the
 user's decision. No other Phase 1 run is opened without it.
+Baseline for the reading (09:05; the shipped checkpoint's `pt_head`, pruned, no fine-tune;
+`~/runs/dscc/p1/raw_ckpt/gates_raw_pt_head.json`): neutral validation 67.0 meV/Å / 20.9
+meV/atom; charged shells total 62.0, 2–4 Å 102.6, 4–8 57.7, 8–10 55.5, 10–12 50.7, 12+ 39.8. The
+fine-tune therefore took the charged total from 62.0 to 41.7 (base v2 33.2) and the far shells
+from 40–56 to 10–21 — a real gain in robustness that stops short of the gate. `base_v5_lr5`
+started 08:48 on b3 GPU 5 (19.5 GB); tail chain and monitor armed.

@@ -60,5 +60,9 @@ Limit: no shell worse than base v2 by more than 3 meV/Å — not met (every shel
   every charged shell. The lr halving is not expected to change that; what would (more epochs,
   a replay with more Cs/Pb/Cl response frames than 16 of 1000, response weights, a larger
   MACE-Field backbone) is a recipe decision outside the registered plan.
+- Baseline: the shipped checkpoint's own `pt_head` (no fine-tune) gives 67.0 meV/Å on the
+  neutral validation and 62.0 meV/Å total on the charged frames (shells 102.6 / 57.7 / 55.5 /
+  50.7 / 39.8); the fine-tune brought the charged total to 41.7 and the far shells to 10–21 —
+  a real robustness gain that stops short of base v2 (33.2) and the gate.
 - Phase 2 stays blocked on this base (`P2_STATUS = BLOCKED`).
 
