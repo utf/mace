@@ -5574,3 +5574,39 @@ variant Cs −2.7, Pb −2.6, Cl −3.4 (polar r⁻², elastic steeper). Reading
 between the two forms; the anion does not follow the field in the variant — consistent with
 either explanation until diagnostic 1 says whether the Born force on Cl arrives.
 Diagnostics 1 and 3 launched 14:52 on the local CPU (`p0_bornforce.py`, `p0_epsq.py`).
+
+**Diagnostic 1 read (15:05; `p0_bornforce.json`; embedded 2879-atom variant structure, head dq
+at that geometry, Σdq = 1.000, E_cP −43.67 meV recomputed identically).** The E_cP Born force
+Σ_a (∂p_a/∂R_b)ᵀE_c(R_a) against Z*_b E_c(R_b), by shell: cosine 0.990–0.997 everywhere;
+magnitude ratio 0.73 (4–8 Å), 0.78 (8–10), 0.84 (10–12), 0.88 (12–14), 0.92 (14–17), 0.96
+(17–20), 0.97 (20–24), the same for Cs, Pb and Cl within 0.03 in every shell; the full E_cP force
+(field terms included) equals the Born force to 0.01 meV/Å. **Passes**: beyond the kernel width
+the far ions feel Z*·E_c (the deficit inside 14 Å is the nonlocal response averaging the
+smoothed field over ≈ 4 Å, as the form factor says). Also recorded: the registered smoothed
+periodic field |E_c| is 2.5× below the bare Coulomb Q C/(ε∞ r²) at every shell (0.0119 vs 0.0298
+V/Å at 10–12 Å, 0.0029 vs 0.0074 at 20–24 Å) — the periodic images and the neutralising
+background of a 47 × 48 × 45 Å cell, which the ladder's α(h)/L fit accounts for but a
+Q/(ε∞ r²) shell estimate does not. Diagnostic 3 at n = 0 reproduces the Hessian
+(eps_ion,yy 19.37 vs 19.36: the pattern normalisation is right); n = 1–3 running.
+
+**Diagnostic 3 read (15:45; `p0_epsq.json`; base v2 alone, 3×3×3 cell, y axis, eight
+y-polarised IR modes = 100 % of ε_ion,yy(0)).** ε_ion,yy(q): **19.4 (q = 0, = Hessian 19.36) →
+11.4 (0.130 Å⁻¹, λ = 48 Å) → 4.8 (0.261, λ = 24 Å) → 2.2 (0.391, λ = 16 Å ≈ b, lattice-periodic
+pattern, indicative only)**. Per mode, the strongest (10.06 meV at Γ, 9.1 of the 19.4) hardens
+to 13.4 / 18.8 / 22.5 meV and its mode charge falls to 0.94 / 0.79 / 0.61 of Z̃; the second
+(9.32 meV, 6.2) to 10.9 / 13.4 / 14.5 meV and 0.92 / 0.73 / 0.52. Caveat as registered: a
+modulated Γ pattern is a Rayleigh quotient, so ω(q) is an upper bound and ε_ion(q) a lower
+bound; the n = 1 and 2 points are clean modulations, n = 3 coincides with the cell length.
+
+**Reading (user's rule: (1) passes and (3) shows strong dispersion → mechanism sound, Phase 3
+needs bigger rungs).** (1) passed (Born force = Z*·E_c beyond the kernel width, cosine 0.99,
+ratio 0.92–0.97 from 14 Å out); (3) shows that base v2's ionic screening at the wavelengths a
+28–47 Å cell exercises (q ≥ 0.13 Å⁻¹) is at most 60 %, and at q ≈ 0.26 a quarter, of its q → 0
+value — explanation (b): the ladder null at 639–2879 atoms is what base v2's polar dispersion
+must give, not a coupling failure. The earlier attribution to "restoring forces" is now the
+measured statement "ε_ion(q) of the base falls from 19 to ≈ 5 between λ = ∞ and 24 Å". What
+follows: Decision 0's ladder criterion cannot be met at these sizes on any base with this
+dispersion; a quantitative ε0 needs rungs whose α(h)/L samples q ≲ 0.05 Å⁻¹ (cells ≳ 120 Å,
+≈ 50 000 atoms) or a base whose polar branches are flatter (a PBE question as much as a
+model one: the phonon dispersion of the polar modes in CsPbCl3 is not known here). Phase 1's
+blocked gates are unaffected by this reading.

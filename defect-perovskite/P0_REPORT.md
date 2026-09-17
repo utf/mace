@@ -269,3 +269,58 @@ up-to-288-atom structures; registered deviation).
    physics at these sizes. Quantitative eps0 is a Phase 3 question on base v5.
 4. **Phase 1 is running**; its pipeline is validated (pseudolabelled response held to ≈ 2 %
    after one epoch in the smoke), with gate 2 (response within 10 %) the live risk.
+
+## Decision 0 attribution (user, 2026-09-17 14:40): three diagnostics on the 2879-atom structures
+
+The attribution of the ladder null to base v2's restoring forces was a hypothesis. Two
+explanations were distinguished: (a) the E_cP Born forces do not reach the far ions as Z*·E_c
+(a coupling problem that would recur on any base); (b) they do, and base v2's polar modes are so
+dispersive that its ionic screening at q ≈ 0.2–0.3 Å⁻¹ is a small fraction of the q → 0 value.
+
+**1. Born force against Z*·E_c** (`p0_bornforce.json`; embedded 2879-atom variant structure,
+head dq at that geometry, E_cP −43.7 meV):
+
+| shell (Å) | rms F_born (meV/Å) | rms Z*·E_c | ratio | cosine | ratio Cs / Pb / Cl |
+|---|---|---|---|---|---|
+| 4–8 | 23.1 | 31.8 | 0.73 | 0.993 | 0.76 / 0.75 / 0.69 |
+| 8–10 | 26.1 | 33.6 | 0.78 | 0.997 | 0.79 / 0.77 / 0.78 |
+| 10–12 | 22.7 | 27.2 | 0.84 | 0.996 | 0.83 / 0.84 / 0.84 |
+| 12–14 | 20.0 | 22.8 | 0.88 | 0.997 | 0.88 / 0.89 / 0.86 |
+| 14–17 | 15.2 | 16.5 | 0.92 | 0.996 | 0.92 / 0.92 / 0.93 |
+| 17–20 | 10.3 | 10.7 | 0.96 | 0.995 | 0.96 / 0.96 / 0.96 |
+| 20–24 | 6.6 | 6.8 | 0.97 | 0.990 | 0.99 / 0.97 / 0.97 |
+
+Passes: beyond the kernel width the far ions feel Z*·E_c, identically for all species; the
+full E_cP force equals the Born force to 0.01 meV/Å. Side finding: the registered smoothed
+periodic field is 2.5× below Q/(ε∞ r²) at every shell (0.012 vs 0.030 V/Å at 10–12 Å, 0.003 vs
+0.007 at 20–24 Å) — the images and the neutralising background of a 47 Å cell, which the
+ladder's α(h)/L fit accounts for and a shell-wise Q/(ε∞ r²) estimate does not.
+
+**2. Species-signed displacement profile** (`p0_profile.json`; mean u_r in mÅ, + outward, at
+8–10 / 10–12 / 12–14 / 14–17 / 17–20 / 20–24 Å): W6 Cs +24 / +3 / +12 / +3 / +3 / +2, Pb +33 /
++4 / +9 / +4 / +2 / +2, Cl −18 / −1 / −3 / −1 / −1 / −1; variant Cs +27 / +4 / +10 / +4 / +3 / +1,
+Pb +23 / +5 / +8 / +3 / +2 / +1, Cl −12 / +1 / −1 / 0 / 0 / 0. Both arms carry the polar
+signature for the cations (out, u_r·r² 0.6–1.9 mÅ·Å² beyond 12 Å); the anion's inward response
+is small in W6 and absent beyond 12 Å in the variant; majority-sign exponents 10–24 Å: W6 −3.0 /
+−3.1 / −3.5, variant −2.7 / −2.6 / −3.4 (Cs / Pb / Cl; polar r⁻², elastic steeper).
+
+**3. ε_ion(q) of base v2 along y** (`p0_epsq.json`; frozen phonons of the eight y-polarised IR
+modes, which carry 100 % of ε_ion,yy(0); bare base curvature, longitudinal modulation; mode
+charge with the provider's form factor):
+
+| q (Å⁻¹) | λ | ε_ion,yy | strongest mode ω (meV) | its mode-charge factor |
+|---|---|---|---|---|
+| 0 | ∞ | 19.4 (Hessian 19.36) | 10.06 | 1.00 |
+| 0.130 | 48 Å | 11.4 | 13.4 | 0.94 |
+| 0.261 | 24 Å | 4.8 | 18.8 | 0.79 |
+| 0.391 | 16 Å (= b; indicative) | 2.2 | 22.5 | 0.61 |
+
+A modulated Γ pattern is a Rayleigh quotient, so ω(q) is an upper bound and ε_ion(q) a lower
+bound; n = 1 and 2 are clean modulations.
+
+**Reading.** (1) passes and (3) shows strong dispersion: explanation (b). The mechanism is
+sound; the ladder null at 639–2879 atoms is what base v2's polar dispersion must give — its
+ionic screening at the wavelengths a 28–47 Å cell exercises is at most 60 %, and at q ≈ 0.26
+Å⁻¹ a quarter, of the q → 0 value. Decision 0's ladder criterion cannot be met at these sizes on
+any base with this dispersion. A quantitative ε0 needs rungs sampling q ≲ 0.05 Å⁻¹ (cells of
+order 120 Å) or a base whose polar branches are flatter — a PBE question as much as a model one.
