@@ -218,6 +218,54 @@ structure factor, checked numerically to 0.3 %; the 9.645 Å numbers above are r
 E_PP reproduces the smoothed nonanalytic splitting to **0.17 %** (A1 criterion 10 %): the LO–TO
 half of Decision 0 passes.
 
-_Running: variant tight ladder at 4.5 Å (core −0.4072 eV; 639-atom rung −0.4072); W6 tight
-control rungs (639/959: −0.4331/−0.4369 eV). The ladder half of Decision 0 and Phase 1's launch
-follow from the status chain._
+**Tight ladders, complete (fmax 0.002 eV/Å, float64 base).**
+
+| atoms | α(h)/L | W6 (control) dE_relax (eV) | variant, r_split 4.5 Å |
+|---|---|---|---|
+| 639 | 0.0950 | −0.4331 | −0.4072 |
+| 959 | 0.0864 | −0.4369 | −0.4076 |
+| 2159 | 0.0634 | −0.4378 | −0.4058 |
+| 2879 | 0.0599 | −0.4392 | −0.4017 |
+| slope (eV Å) | | +0.137 | −0.127 |
+| **eps0_ladder** | | **4.33** (leave-one-out 4.16–4.40) | **3.74** (3.65–3.89) |
+
+Every far-field relaxation took 47–60 BFGS steps to fmax ≤ 0.0016 (the loose run's 6–7); each
+W6 rung is 11–12 meV deeper than at fmax 0.02 but the size dependence is unchanged (4.32 →
+4.33). Far-field displacement pattern of the 2879-atom cells (rms radial displacement by shell,
+8–10 / 10–12 / 12–14 / 14–16 / 16–18 / 18–20 / 20–24 / 24+ Å): W6 0.029 / 0.017 / 0.011 / 0.006 /
+0.006 / 0.003 / 0.0023 / 0.0010 Å, variant 0.023 / 0.016 / 0.009 / 0.005 / 0.005 / 0.0025 / 0.0018 /
+0.0008 Å; |u_r| ∝ r^b with b = −3.2 / −2.7 / −3.0 (Cl / Cs / Pb, W6) and −3.1 / −2.7 / −2.9
+(variant), against the continuum −2. The two arms relax the far field the same way.
+
+## Decision 0 (A1 form)
+
+| criterion | value | met |
+|---|---|---|
+| variant eps0_ladder ≥ 8 | 3.74 | no |
+| variant eps0_ladder ≥ 2 × W6 | 3.74 vs 4.33 | no |
+| LO–TO of E_PP within 10 % of the smoothed expectation | 0.17 % | yes |
+
+**Outcome: FALLBACK_PROCEED** (plan: "if the splitting appears but the ladder fails, the
+deficit is in base v2's restoring forces and Phase 1 proceeds anyway"). Phase 1 (base v5)
+launched 04:16 on b3 GPU 5 with r_split 4.5 Å in the forward (30 epochs, batch 4 — the
+registered batch 8 does not fit a 24 GB card with the BEC second derivatives on the replay's
+up-to-288-atom structures; registered deviation).
+
+## Conclusions
+
+1. **The instruments are exact.** Port, per-node field, kernels, head coupling and provider pass
+   every registered test; E_PP reproduces the smoothed nonanalytic LO–TO response to 0.3 %
+   (9.645 Å) and 0.17 % (4.5 Å), with the provider's plane-wave Born response at 0.94 of Z* u
+   at λ = 48 Å and a bond-scale effective width (3.1–4.2 Å).
+2. **The r90 rule was the wrong instrument** (a 4 Å effect turned into a 19 Å smoothing); with
+   r_split = 4.5 Å by matching, the coupling is active where the data are (E_cP −41 meV on the
+   charged 79-atom frame, forces of the frozen composition 11.8 vs W6's 8.4 meV/Å against the
+   label).
+3. **Neither the shipped W6 nor the frozen polarisation composition shows lattice screening
+   beyond ε∞ in the route-1 ladder at 639–2879 atoms** (eps0_ladder 4.33 and 3.74 against
+   eps0_LST 24.6), with a relaxation tolerance ten times tighter than the far-field forces and
+   identical far-field displacement patterns. The ladder measures the model's relaxation
+   response to the carrier, not the kernel; on base v2 that response does not carry the ε0
+   physics at these sizes. Quantitative eps0 is a Phase 3 question on base v5.
+4. **Phase 1 is running**; its pipeline is validated (pseudolabelled response held to ≈ 2 %
+   after one epoch in the smoke), with gate 2 (response within 10 %) the live risk.

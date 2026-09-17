@@ -60,7 +60,7 @@ if lo is not None:
     out["loto"] = {"split_e_pp": split_pp, "expected_smoothed_ff2": expect, "rel_dev": abs(split_pp - expect) / abs(expect) if expect else None}
 if out["w6"] and out["var"] and lo is not None and len(w6) >= args.min_rungs and len(var) >= args.min_rungs:
     e_var, e_w6 = out["var"]["eps0_ladder"], out["w6"]["eps0_ladder"]
-    c1 = e_var >= 8.0; c2 = e_var >= 2.0 * e_w6; c3 = out["loto"]["rel_dev"] is not None and out["loto"]["rel_dev"] <= 0.10
+    c1 = bool(e_var >= 8.0); c2 = bool(e_var >= 2.0 * e_w6); c3 = bool(out["loto"]["rel_dev"] is not None and out["loto"]["rel_dev"] <= 0.10)
     out["criteria"] = {"eps0_var_ge_8": c1, "eps0_var_ge_2x_w6": c2, "loto_within_10pct": c3}
     # Plan text (unchanged by A1): "if the splitting appears but the ladder fails, the deficit is
     # in base v2's restoring forces and Phase 1 proceeds anyway" -> FALLBACK_PROCEED.

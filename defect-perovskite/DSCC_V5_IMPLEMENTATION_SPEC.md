@@ -5407,3 +5407,44 @@ restoring forces and Phase 1 proceeds anyway") or FAIL (LO–TO not met); `p0_de
 the three states and the launcher opens Phase 1 on the first two. The LO–TO half is already met
 (0.17 %). Diagnostic to add for the report, not a gate: the far-field displacement pattern of
 the relaxed 2879-atom cells against the continuum q Z*/(ε0 r²) form, for both arms.
+
+**Far-field displacement diagnostic on the tight 959-atom cells (02:00; `p0_farfield.py`,
+`farfield_{w6,var45}_223.json`; not a gate).** Radial displacement from the ideal tiling, rms
+by shell: W6 0.030 / 0.017 / 0.011 / 0.006 / 0.006 / 0.0035 / 0.0023 Å at 8–10 / 10–12 / 12–14 /
+14–16 / 16–18 / 18–20 / 20–24 Å; variant (4.5) 0.024 / 0.016 / 0.009 / 0.005 / 0.005 / 0.0028 /
+0.0021. Far-field exponents of |u_r| against r (continuum −2): W6 Cl −2.97, Cs −2.30, Pb −3.45;
+variant Cl −2.53, Cs −2.31, Pb −3.03; amplitudes u_r r² (e Å²-scale, sign = outward): Cs
++1.05 / +0.88, Pb +0.89 / +0.71, Cl −0.22 / −0.10 (W6 / variant). Reading: both arms relax the
+far field with the same magnitude and the same faster-than-r⁻² fall-off (image truncation in a
+33 Å cell is expected to steepen it); the variant's active coupling does not enlarge the
+far-field response at this size. The 2879-atom cells will be read the same way.
+
+**W6 tight ladder complete (04:05; the control).** dE_relax at 639/959/2159/2879: −0.4331 /
+−0.4369 / −0.4378 / −0.4392 eV (far-field relaxations 57/60/49/56 BFGS steps, fmax 0.0012–0.0016);
+slope +0.137 eV Å → **eps0_ladder 4.33** (leave-one-out 4.16–4.40) — the same size dependence
+as the loose run (4.32) with every rung 11–12 meV deeper: the tolerance was not what hid the
+term; the shipped model's far-field relaxation carries no lattice screening beyond ε∞ at these
+sizes. Far field of the 2879-atom cell: rms u_r 0.029 / 0.017 / 0.011 / 0.006 / 0.006 / 0.003 /
+0.0023 / 0.0010 Å at 8–10 / … / 20–24 / 24+ Å; exponents Cl −3.24, Cs −2.70, Pb −3.01. Variant
+(4.5) so far: −0.4072 / −0.4076 / −0.4058 (three rungs, eps0 3.9); its 2879 rung is at fmax
+0.003.
+
+**Variant tight ladder at r_split 4.5 complete; DECISION 0 (A1) READ (04:15).** dE_relax at
+639/959/2159/2879: −0.4072 / −0.4076 / −0.4058 / −0.4017 eV (48/49/47/48 steps, fmax ≤ 0.0015);
+slope −0.127 eV Å → **eps0_ladder 3.74** (leave-one-out 3.65–3.89), against W6's 4.33. Far field
+of its 2879-atom cell: rms u_r 0.023 / 0.016 / 0.009 / 0.005 / 0.005 / 0.0025 / 0.0018 / 0.0008 Å
+by shell, exponents Cl −3.13, Cs −2.70, Pb −2.88 — the same pattern and magnitude as W6.
+Criteria: eps0_var ≥ 8 **not met**; eps0_var ≥ 2 × W6 **not met**; LO–TO within 10 % **met**
+(0.17 %). **Outcome: FALLBACK_PROCEED** — by the plan's unchanged fallback clause ("the
+splitting appears but the ladder fails → the deficit is in base v2's restoring forces and Phase
+1 proceeds anyway"). Reading of record: with the coupling active (E_cP −41 meV on the training
+frame, E_PP the exact smoothed nonanalytic response), the far-field relaxation energy of the
+frozen composition still carries no lattice screening beyond ε∞ between 639 and 2879 atoms; the
+relaxed far-field displacement pattern is the same as W6's. What the ladder measures is the
+model's (base v2 + head) relaxation response to the carrier, not the kernel; at these sizes it
+does not show the ε0 physics for either arm. Quantitative eps0 is a Phase 3 question on base v5.
+`DECISION0_STATUS` written by `p0_decision.py` (a JSON-bool bug in its first version crashed
+the chain once; fixed, rerun by hand, same outcome). **Phase 1 launched 04:16 on b3 GPU 5:**
+`p1_runner.sh base_v5 30 ~/runs/dscc/p1/base_v5 5 --pp_r_split 4.5 --batch_size 4
+--valid_batch_size 4` (batch 4: the registered batch 8 did not fit a 24 GB card with the BEC
+second derivatives on the up-to-288-atom replay structures in the smoke; registered deviation).
