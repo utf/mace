@@ -5480,3 +5480,17 @@ the paired table, shell table, energy table and cost per frame at 79 and 159 ato
 memory reported).
 Run-directory correction (04:58): `w3_queue.sh` places runs at `~/runs/dscc/<name>`; Phase 2 runs
 live there (`~/runs/dscc/dscc_p2{a,b,bm}_s*`), not under a `p2/` subdirectory.
+
+**Phase 1 training complete (08:34; b3 GPU 5, 30 epochs, 8.6 min/epoch).** Neutral head
+(`Default`, 154 validation frames, MACE table = per component): epoch 0 → 29: 4.90 → **3.00
+meV/atom**, 37.65 → **17.94 meV/Å**, stress 1.02 → 0.51 meV/Å³ (trajectory 29.3 / 25.3 / 22.2 /
+20.5 / 19.3 / 18.4 meV/Å at epochs 2 / 5 / 10 / 15 / 20 / 25: still falling at 30). Replay head
+(`pt_head`, 100 pseudolabelled frames): E 0.03 → 15.1 meV/atom, F 0.17 → 33.7 meV/Å, P 0.000 →
+0.209 m|e|/Å², Z* 0.0005 → 0.036 e, α 0.004 → 0.452 ε0. Read against the registered gates
+BEFORE the gate script runs: gate 1 (≤ 1.5 meV/atom, ≤ 11.2 meV/Å) is not met on either number;
+the replay's α drift (0.45 ε0 against a response of ≈ 2.5) makes gate 2 (10 %) doubtful. The
+gate chain (`p1_after.sh`) writes `P1_GATES.json` / `P1_STATUS`; the Phase 2 chain blocks on
+anything but ALL PASS. Context for the reading: base v2 (512-channel MH-1, lr 1e-4, 30 epochs)
+reached 3.9 meV/Å on the same split; the 128-channel MH-0-lineage checkpoint with the response
+losses in the loop reaches 17.9 — the user's A1 note that the base change makes the relative
+robustness gate the one that matters most applies here in full.
