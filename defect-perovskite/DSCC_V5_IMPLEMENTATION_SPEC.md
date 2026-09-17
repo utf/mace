@@ -5448,3 +5448,33 @@ the chain once; fixed, rerun by hand, same outcome). **Phase 1 launched 04:16 on
 `p1_runner.sh base_v5 30 ~/runs/dscc/p1/base_v5 5 --pp_r_split 4.5 --batch_size 4
 --valid_batch_size 4` (batch 4: the registered batch 8 did not fit a 24 GB card with the BEC
 second derivatives on the up-to-288-atom replay structures in the smoke; registered deviation).
+
+## Plan P Phase 2 — head W7 on base v5: REGISTRATION (2026-09-17 04:50, written before Phase 1 closes)
+
+Base: `~/runs/dscc/p1/base_v5/base_v5_base.pt` (`p1_make_base.py` from the Phase 1 model; opens
+only if the Phase 1 gates pass, or with the user's written deviation). Head: `MACEDSCC` on v5's
+first block (128x0e + 128x1o; `block0_layout` reads it; same bounds, pristine centring
+recomputed on v5 by `set_pristine_reference` / `set_feature_stats`). The registered W6 command
+(`launch_w6_s0.sh` flags: `--epochs 60 --directional 1 --regime B --coupling 0 --scf_free 1
+--route_b 1 --beta_b 0.0 --beta_a 0.0 --energy_weight 0.05 --base_float32 1 --setup_batch_size 4
+--base_cache_batch_size 4 --gpu_memory_fraction 0`, lr 2e-3 cosine, batch 4, grad clip 10,
+w_E = 0.05, gap regulariser, τ = 1.7 meV/Å) for every arm; six seeds {0,1,2,3,4,6} → folds
+{0,1,2,3,0,2}. Arms: **A** = W6 as shipped on v5 (`--host_coupling mulliken`, `--cache_base 1`),
+names `dscc_p2a_s*`; **B** = `--host_coupling polarisation --field_provider base --cache_base 0
+--r_split 4.5 --eps_inf 4.0` (the base is its own provider: dipoles from the base's forward,
+E_PP inside the base, E_cP replaces E_host, no learned scale; the q0 contraction is gone),
+names `dscc_p2b_s*`; **B(M)** = B with `--eps_inf` = v5's polycrystalline ε∞ on the relaxed cell
+(from `P1_GATES.json`), seeds 0, 1, 2 only, names `dscc_p2bm_s*`. Run dirs `~/runs/dscc/p2/`.
+Placement: b3 GPUs 5 and 7 one run each (`w3_queue.sh`, `W3_GPUS="5 7"`), arm A seeds on the
+local A4000 in series; s/epoch reported per arm (arm B carries the base's nested autograd every
+step: nothing cached). Gates (plan §Phase 2, verbatim): (1) paired TOST B vs A on charged-frame
+forces, total and 4–12 Å shell, τ = 1.7 meV/Å per component; B adopted on superiority in
+either; on equivalence B is still adopted; (2) `C_Q` profiled at 79 atoms transfers to 159
+within 10 meV; 79-atom energy ≤ 0.6 meV/atom. Standing tests on the new composition
+(`tests/extensions/dscc/test_polarisation_head.py`, the field-base block: neutral null
+bit-exact, Σδq = Q, FD forces including the nested-autograd terms, batched = per-graph,
+translation invariance, analytic/capture refused; the six strains are NOT covered — the stress
+path raises under the polarisation coupling and is registered as out of scope for Phase 2's
+force/energy gates). Deliverable: 15 checkpoints with calibration records, `P2_REPORT.md` with
+the paired table, shell table, energy table and cost per frame at 79 and 159 atoms (eager;
+memory reported).
