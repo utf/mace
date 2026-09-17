@@ -5750,3 +5750,7 @@ head's own). Incident: the launch chain fired twice (relaunched after the labell
 its first instance was still polling), so a duplicate of each run OOMed against the live one
 on the same card and wrote a FAILED status; the live instances are unaffected (one per card),
 their status files corrected to RUNNING, and the launcher now carries a one-shot guard.
+
+**`base_v6_lr2` (lr 1e-2) killed (user, 2026-09-17 19:30)** after epoch 0: 111 meV/atom, 201
+meV/Å, stress 6.9 meV/Å³ (the pretrained solution destroyed in one epoch). The lr 1e-3 and 1e-4
+arms continue (epoch 0: 5.27 / 59.9 and 2.41 / 57.4).
