@@ -5530,3 +5530,47 @@ shells total 43.5 (+10.3), 2–4 93.8 (+18.9), 4–8 41.2 (+10.8), 8–10 22.0 (
 (+7.5), 12+ 11.7 (+3.7). **The registered plan has no further move for Phase 1; Phase 2 stays
 blocked; the base recipe is the user's decision.** Both machines idle after this point except
 the finished runs' files.
+
+## Plan P — Decision 0 attribution: three diagnostics (user, 2026-09-17 14:40; registered before they run)
+
+Verbatim reading: not confirmed. FALLBACK_PROCEED was the correct procedural outcome, but the
+attribution to base v2's restoring forces is an untested hypothesis; the continuum expectation
+for the 12–17 Å shell is −40 to −50 meV, not the +5 meV observed. Two explanations: (a) the
+E_cP Born forces do not reach the far ions as Z*·E_c (a coupling problem that recurs on any
+base); (b) they do, and base v2's polar modes are so dispersive that its ionic screening at
+q ≈ 0.2–0.3 Å⁻¹ is a small fraction of the q → 0 value (a base property, possibly PBE's).
+Diagnostics on the existing 2879-atom structures, none blocking Phase 1:
+1. `p0_bornforce.py` — on the frozen (core-embedded, far field ideal) 2879-atom variant
+   structure, the E_cP Born force on each far-field ion, F_b = Σ_a (∂p_a/∂R_b)ᵀ E_c(R_a) by
+   autograd of −Σ_a p_a·E_c^{detached}(R_a) through the provider, against Z*_b·E_c(R_b) with Z*_b
+   the pristine-cell tensor of the ion's tiling counterpart and E_c the registered smoothed
+   carrier field of the head's dq at that geometry; ratio of magnitudes and cosine by shell.
+   Pass = ratio ≈ 1 and cosine ≈ 1 beyond the kernel width; the total E_cP force is reported
+   alongside.
+2. `p0_profile.py` — species-signed radial displacement profile of both relaxed 2879-atom
+   cells by shell (cations out, Cl in ∝ r⁻² is the polar response; same-sign and steeper is the
+   core's elastic field).
+3. `p0_epsq.py` — ε_ion(q) along y from frozen phonons in the 3×3×3 cell at n = 0, 1, 2, 3
+   (q = 0, 0.13, 0.26, 0.39 Å⁻¹): the eight strongest y-polarised IR modes of the Γ Hessian,
+   each modulated cos(q·R) and driven longitudinally, curvature of the BASE alone (bare, TO-like
+   restoring force; ω²(q) = 2k/27 with the pattern normalisation, checked at n = 0 against the
+   Hessian), mode charge f_m(q)·Z̃_m with the provider's form factor; ε_ion(q) = (4πC/Ω) Σ_m
+   (q̂·Z̃_m(q))²/ω_m(q)², reported with the full-Hessian ε_ion(0) = 20.6 and the eight modes'
+   share of it. A modulated Γ pattern is a Rayleigh quotient, not an eigenmode at q: ω(q) is an
+   upper bound and ε_ion(q) a lower bound; stated with the result.
+Reading rule (user): (1) passes and (3) shows strong dispersion → mechanism sound, Phase 3
+needs bigger rungs; (1) fails → stop and fix the coupling before any further base work.
+
+**Diagnostic 2 read (14:50; `p0_profile.json`, relaxed 2879-atom cells, mean radial displacement
+by shell in mÅ, sign + = outward).**
+W6: Cs +24.2 / +2.9 / +11.7 / +3.3 / +3.5 / +1.7, Pb +33.4 / +4.4 / +8.8 / +4.3 / +2.4 / +1.6, Cl
+−17.6 / −0.5 / −3.3 / −1.2 / −0.8 / −0.5 at 8–10 / 10–12 / 12–14 / 14–17 / 17–20 / 20–24 Å;
+variant (4.5): Cs +27.2 / +4.1 / +10.4 / +3.6 / +2.7 / +1.4, Pb +23.3 / +4.6 / +8.4 / +2.9 / +2.0 /
++1.3, Cl −12.4 / +0.6 / −1.2 / −0.2 / 0.0 / −0.1. Both arms carry the polar signature (cations
+out, Cl in) with the shell-to-shell alternation of the lattice; u_r·r² for the cations is
+0.6–1.9 mÅ·Å² beyond 12 Å in both; Cl's inward response is small in W6 (−0.2 to −0.5) and absent
+beyond 12 Å in the variant. Majority-sign exponents 10–24 Å: W6 Cs −3.0, Pb −3.1, Cl −3.5;
+variant Cs −2.7, Pb −2.6, Cl −3.4 (polar r⁻², elastic steeper). Reading: the cation profile is
+between the two forms; the anion does not follow the field in the variant — consistent with
+either explanation until diagnostic 1 says whether the Born force on Cl arrives.
+Diagnostics 1 and 3 launched 14:52 on the local CPU (`p0_bornforce.py`, `p0_epsq.py`).
