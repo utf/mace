@@ -631,6 +631,13 @@ def build_default_arg_parser() -> argparse.ArgumentParser:
         required=False,
     )
     parser.add_argument(
+        "--head_grouped_batches",
+        help="Multi-head training: never mix heads within a batch, so batches of a head "
+        "without response labels skip the field derivatives",
+        type=str2bool,
+        default=False,
+    )
+    parser.add_argument(
         "--multiheads_finetuning",
         help="Boolean value for whether the model is multiheaded",
         type=str2bool,

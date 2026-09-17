@@ -431,6 +431,24 @@ def train_one_epoch(
                 logger.log(opt_metrics)
 
 
+
+FIELD_KEYS = ("polarization", "becs", "polarizability")
+
+
+def batch_field_flags(batch, output_args: Dict[str, bool]) -> Dict[str, bool]:
+    """Which field observables to compute for this batch: the global request AND at
+    least one config in the batch carrying a non-zero per-config weight for it.  A
+    batch without response labels (per-config weights all zero) then skips the
+    second-derivative passes entirely."""
+    flags = {}
+    for key in FIELD_KEYS:
+        if not output_args.get(key, False):
+            flags[key] = False
+            continue
+        w = getattr(batch, f"{key}_weight", None)
+        flags[key] = True if w is None else bool(torch.any(w != 0))
+    return flags
+
 def take_step(
     model: torch.nn.Module,
     loss_fn: torch.nn.Module,
@@ -455,8 +473,8 @@ def take_step(
         )
         if output_args.get("magforces", False):
             kwargs["compute_magforces"] = True
-        for _field_key in ("polarization", "becs", "polarizability"):
-            if output_args.get(_field_key, False):
+        for _field_key, _on in batch_field_flags(batch, output_args).items():
+            if _on:
                 kwargs["compute_" + _field_key] = True
         output = model(batch_dict, **kwargs)
         loss = loss_fn(pred=output, ref=batch)
@@ -613,10 +631,8 @@ def evaluate(
         for batch in data_loader:
             batch = batch.to(device)
             batch_dict = batch.to_dict()
-            field_outputs = any(
-                output_args.get(k, False)
-                for k in ("polarization", "becs", "polarizability")
-            )
+            field_flags = batch_field_flags(batch, output_args)
+            field_outputs = any(field_flags.values())
             kwargs = dict(
                 # The field observables are second derivatives of the enthalpy: the
                 # graph must be kept (`training=True`), as in the MACE-Field fork.
@@ -627,8 +643,8 @@ def evaluate(
             )
             if output_args.get("magforces", False):
                 kwargs["compute_magforces"] = True
-            for _field_key in ("polarization", "becs", "polarizability"):
-                if output_args.get(_field_key, False):
+            for _field_key, _on in field_flags.items():
+                if _on:
                     kwargs["compute_" + _field_key] = True
             output = model(batch_dict, **kwargs)
             avg_loss, aux = metrics(batch, output)

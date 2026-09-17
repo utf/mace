@@ -5895,3 +5895,26 @@ base v2 pace (error ×0.34 in one epoch vs base v2's ×0.31) while the response 
 of Z* and 0.2 % of α. The energy no longer rises (2.28 → 2.20 in arm b). Replay drift is larger
 than with heavy anchors (24 vs 16–19 meV/Å) — the replay anchor is the same E/F/S pseudolabel
 spring as base v2's (17.4 meV/Å at epoch 0 there).
+
+## Plan P Phase 1 — AMENDMENT A5 (user, 2026-09-18 01:00): base v7 recipe
+
+Decision (user): "stick with the parameter set you identified" (anchor test arm b) and make the
+replay skip the field derivatives. Recipe (`p1v3_run.sh`): MACE-Field mp-dielectric head, lr 1e-4,
+E 10 / F 10 / S 1, P 10 / Z* 1 / α 1, target frames with MACE-Field response labels, replay
+`replay_v4.xyz` = the 9360 base v2 replay frames with E/F/S pseudolabels only (the 16 dielectric-set
+frames dropped), estimated E0s + isolated atoms, float32 + cueq, batch 4, EMA 0.9999, clip 1.0,
+30 epochs, no E_PP in the forward, `--head_grouped_batches True`. Code: `HeadGroupedBatchSampler`
+(mace/tools/head_batch_sampler.py; a batch never mixes heads), `batch_field_flags` in
+mace/tools/train.py (field derivatives only for batches with non-zero per-config response weights,
+used by take_step and evaluate), and UniversalFieldLoss skips a term whose per-config weights are
+all zero when the prediction is absent. Tests: tests/extensions/field/test_head_grouped_batches.py
+(3). Measured step cost (local card, batch 4): target 849 → 159 ms without derivatives, replay
+445 → 107 ms; expected epoch ≈ 10 min on b3 instead of ≈ 23.
+Expectation written before the result: epoch-0 Default F within 24.6 ± 5 meV/Å and replay F within
+24.6 ± 5 meV/Å (arm b, which ran with mixed batches). Head-homogeneous batches alternate pure-target
+and pure-replay Adam steps (≈ 1 in 6 target) with clipping per step; if the replay drift lands
+outside the band, the sampler changed the dynamics and the fallback is mixed batches with the
+per-batch skip only when a batch has no target frame (saves ≈ half instead of 2.2×). Gate 2 stays
+as registered (mp-dielectric relaxed-cell response, `p0_locality.json`); response drift at 10/1/1
+is the risk it measures — arm b's 0.4 % (Z*) / 0.2 % (α) after one epoch is the comparison point.
+Run: base_v7 on b3 GPU 5; gate chain `p1v2_after.sh /home/alex/runs/dscc/p1v2/base_v7 b3`.

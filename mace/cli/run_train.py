@@ -779,16 +779,43 @@ def run(args) -> None:
             )
             valid_samplers[head] = valid_sampler
 
-    train_loader = torch_geometric.dataloader.DataLoader(
-        dataset=train_set,
-        batch_size=args.batch_size,
-        sampler=train_sampler,
-        shuffle=(train_sampler is None),
-        drop_last=(train_sampler is None and not args.lbfgs),
-        pin_memory=args.pin_memory,
-        num_workers=args.num_workers,
-        generator=torch.Generator().manual_seed(args.seed),
-    )
+    if getattr(args, "head_grouped_batches", False) and train_sampler is None:
+        # Head-homogeneous batches: a batch never mixes heads, so batches of a head
+        # without response labels skip the field derivatives (see train.batch_field_flags).
+        from mace.tools.head_batch_sampler import (
+            HeadGroupedBatchSampler,
+            concat_group_ids,
+        )
+
+        logging.info(
+            "Head-grouped batches: every batch holds a single head; field derivatives "
+            "are computed only for batches carrying response labels."
+        )
+        train_loader = torch_geometric.dataloader.DataLoader(
+            dataset=train_set,
+            batch_size=1,
+            shuffle=False,
+            drop_last=False,
+            batch_sampler=HeadGroupedBatchSampler(
+                concat_group_ids(train_set),
+                batch_size=args.batch_size,
+                drop_last=not args.lbfgs,
+                seed=args.seed,
+            ),
+            pin_memory=args.pin_memory,
+            num_workers=args.num_workers,
+        )
+    else:
+        train_loader = torch_geometric.dataloader.DataLoader(
+            dataset=train_set,
+            batch_size=args.batch_size,
+            sampler=train_sampler,
+            shuffle=(train_sampler is None),
+            drop_last=(train_sampler is None and not args.lbfgs),
+            pin_memory=args.pin_memory,
+            num_workers=args.num_workers,
+            generator=torch.Generator().manual_seed(args.seed),
+        )
 
     valid_loaders = {heads[i]: None for i in range(len(heads))}
     if not isinstance(valid_sets, dict):

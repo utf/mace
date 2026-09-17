@@ -763,6 +763,13 @@ class UniversalFieldLoss(torch.nn.Module):
                 # Globally disabled: skip regardless of presence.
                 return False
 
+            # A batch whose per-config weights for this term are all zero (e.g. a
+            # head-homogeneous replay batch without response labels) contributes
+            # nothing; the caller may then have skipped the field derivatives.
+            cfg_w = getattr(ref, f"{name}_weight", None)
+            if cfg_w is not None and not bool(torch.any(cfg_w != 0)):
+                return False
+
             if not has_ref or not has_pred:
                 missing_side = []
                 if not has_ref:
