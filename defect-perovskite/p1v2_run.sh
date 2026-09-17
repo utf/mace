@@ -18,6 +18,6 @@ python -c "from mace.cli.run_train import main; main()" \
   --compute_forces True --compute_stress True --compute_polarization True --compute_becs True --compute_polarizability True \
   --force_mh_ft_lr True --lr $LR --ema --ema_decay 0.9999 --weight_decay 0.0 --clip_grad 1.0 \
   --max_num_epochs 30 --batch_size 4 --valid_batch_size 4 --default_dtype float32 --enable_cueq True \
-  --pp_r_split 4.5 --pp_eps_inf 4.0 --seed 1 --eval_interval 1 \
+  --pp_r_split 0 --pp_eps_inf 4.0 --seed 1 --eval_interval 1 \
   --results_dir $OUT --checkpoints_dir $OUT/checkpoints --log_dir $OUT --model_dir $OUT --downloads_dir $OUT \
   --device cuda "$@"

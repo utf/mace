@@ -5754,3 +5754,26 @@ their status files corrected to RUNNING, and the launcher now carries a one-shot
 **`base_v6_lr2` (lr 1e-2) killed (user, 2026-09-17 19:30)** after epoch 0: 111 meV/atom, 201
 meV/Å, stress 6.9 meV/Å³ (the pretrained solution destroyed in one epoch). The lr 1e-3 and 1e-4
 arms continue (epoch 0: 5.27 / 59.9 and 2.41 / 57.4).
+
+## Plan P Phase 1 — AMENDMENT A3 (user, 2026-09-17 20:40): E_PP out of the Phase 1 forward
+
+Finding of record: the A2 labels were made without E_PP while the training model carried it
+at r_split 4.5 Å; on 300 replay cells the mismatch is 0.5 meV/atom, 9.5 meV/Å, Z* 0.013 e,
+α 0.10 ε0 rms with α up to 2.0 ε0 on small cells — E_PP's periodic self-image in cells below the
+kernel width. With α at weight 100 those few cells carry a large unphysical gradient; at lr
+1e-3 it moved the shared backbone far enough to destroy the replay head (pt_head 1.1 → 155 →
+172 meV/atom after epochs 0–1; at 1e-4 the same pull, 1.1 → 6.6 → 8.6). The lr reading from
+epochs 0–1 is therefore not a verdict. Decision (user): **E_PP is removed from the Phase 1
+forward** (`--pp_r_split 0`); labels unchanged (they are the plain checkpoint's own outputs, so
+the replay loss is zero at step 0 and its drift becomes a clean measure of backbone movement).
+Recorded: at r_split 4.5 Å E_PP is 1.86 meV/Å RMS on the training frames (not 0.13, the 9.645 Å
+number), so the base is left unmatched to E_PP by that much (≈ 0.15 meV/Å in quadrature with a
+12 meV/Å base; the concern is bias, not RMSE); the P0 LO–TO result (base 0.25 + E_PP 0.47 = 0.72
+against 0.746 unsmoothed, 4 %) says post-hoc addition does not double count at this smoothing;
+relabelling with E_PP would bake the small-cell artefact into the targets. **Phase 2 must
+measure base + E_PP against base alone on the neutral validation**; if the mismatch exceeds τ,
+the remedy is a readout-only refit with E_PP on the target frames alone, never on replay cells.
+Weights unchanged (P 1000 / Z* 100 / α 100 are anchors with zero initial gradient); the larger
+replay is the heavier anchor by choice; the one knob if the neutral forces stall above ≈ 13
+meV/Å after stage A is the replay loss weight, halved once — not the replay size. The lr 1e-3
+and 1e-4 runs restart now on this basis (the A2 runs are kept as `*_epp_mismatch`).
