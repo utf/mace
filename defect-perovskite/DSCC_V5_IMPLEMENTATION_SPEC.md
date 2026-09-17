@@ -5869,3 +5869,9 @@ and (b) P 10 / Z* 1 / α 1; expectation registered: (a) reaches ≤ 25 meV/Å at
 are the brake, stays near 47 if the MACE-Field backbone itself learns slower.
 Anchor test launched (user "Yes do it", 2026-09-17 23:40): base_v6_anch0 (GPU 5, P/Z*/α weights 0)
 and base_v6_anch1 (GPU 7, P 10 / Z* 1 / α 1), lr 1e-4, replay_v3, one epoch, otherwise the A4 recipe.
+Clarification (user question, 23:55): base v2 ran with pseudolabel_replay=False on
+`replay_mh1_omat_pbe_sel10k.xyz`, a replay set pre-labelled with MH-1's own omat_pbe outputs
+(initial pt_head error 0.00 meV/atom, 0.00 meV/Å in its log). A2–A4 run with the same flag on the
+same 9360 frames relabelled with MACE-Field's mp-dielectric outputs (initial pt_head 0.00 / 0.01).
+Both replays are therefore self-labelled anchors to the starting model; this is not a difference
+between the two recipes.
