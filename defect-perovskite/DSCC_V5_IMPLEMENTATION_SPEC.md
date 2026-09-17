@@ -5844,3 +5844,7 @@ faster without the replay response anchor); pt_head 6.45 meV/atom, 19.5 meV/Å (
 replay loss 1.9e-4 (A3: 2.7e-2), Z* 0.005 e / α 0.005 ε0 on the labelled dielectric frames. The
 energy moved 2.28 → 2.87 in one epoch (A3: 2.47): the formation-energy drift is now the open
 item. lr 1e-3 epoch 0 pending.
+A4 epoch 0, lr 1e-3 (23:05): pt_head 58.8 meV/atom, 144 meV/Å (A3: 148 / 264); Default 5.74
+meV/atom, 47.0 meV/Å, target Z* 0.029 e / α 0.019 ε0 (A3: 7.52 / 59.4). Replay damage is
+halved without the response anchor but the replay head is still far off after one epoch;
+verdict on lr 1e-3 waits for epochs 1–3 as registered.
