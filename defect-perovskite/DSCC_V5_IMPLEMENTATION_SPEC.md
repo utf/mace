@@ -5397,3 +5397,13 @@ and ε∞ = 4 at the registered smoothing (g = 0.709) with the provider's form f
 **0.467** → deviation **0.17 %** (criterion ≤ 10 %: met). Unsmoothed 0.746; the smoothed
 reference without the form factor 0.529. Variant total LO 1.042 = 0.581 + 0.461, TO 0.324.
 The LO–TO half of Decision 0 (A1) passes; the ladder half is running.
+
+**A1 variant ladder, small rungs (01:50; `ladder3_var`, tight, r_split 4.5).** 639: −0.4072 eV
+(embed only −0.3222), 959: −0.4076 — a 0.4 meV size dependence (W6 tight: −0.4331 / −0.4369,
+3.8 meV); two-point eps0_ladder 4.1. The 2159/2879 rungs are running. Registered now, before
+the fit is read: Decision 0's outcomes are PASS (ladder + LO–TO), FALLBACK_PROCEED (LO–TO within
+10 %, ladder criteria not met: the plan's unchanged fallback clause, "the deficit is in base v2's
+restoring forces and Phase 1 proceeds anyway") or FAIL (LO–TO not met); `p0_decision.py` writes
+the three states and the launcher opens Phase 1 on the first two. The LO–TO half is already met
+(0.17 %). Diagnostic to add for the report, not a gate: the far-field displacement pattern of
+the relaxed 2879-atom cells against the continuum q Z*/(ε0 r²) form, for both arms.

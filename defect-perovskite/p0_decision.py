@@ -62,7 +62,9 @@ if out["w6"] and out["var"] and lo is not None and len(w6) >= args.min_rungs and
     e_var, e_w6 = out["var"]["eps0_ladder"], out["w6"]["eps0_ladder"]
     c1 = e_var >= 8.0; c2 = e_var >= 2.0 * e_w6; c3 = out["loto"]["rel_dev"] is not None and out["loto"]["rel_dev"] <= 0.10
     out["criteria"] = {"eps0_var_ge_8": c1, "eps0_var_ge_2x_w6": c2, "loto_within_10pct": c3}
-    status = "PASS" if (c1 and c2 and c3) else "FAIL"
+    # Plan text (unchanged by A1): "if the splitting appears but the ladder fails, the deficit is
+    # in base v2's restoring forces and Phase 1 proceeds anyway" -> FALLBACK_PROCEED.
+    status = "PASS" if (c1 and c2 and c3) else ("FALLBACK_PROCEED" if c3 else "FAIL")
 out["status"] = status
 Path(args.out).expanduser().write_text(status + "\n" + json.dumps(out, indent=1) + "\n")
 print(status, json.dumps({k: out[k] for k in out if k != "status"}, default=str)[:1500])
