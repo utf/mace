@@ -5728,3 +5728,15 @@ read against its own relaxed-cell response (ε∞ 3.547; Z* 3.52 / 2.24 / 6.21).
 1.87 / 4.92) but was read against `mp-dielectric`'s values; against its own starting head the
 drift was ε∞ −10 %, Z* −11 / −16 / −8 % (still outside 10 % for Cs and Cl at lr 1e-4; at lr 5e-5
 ε∞ −8 %, Z* −9 / −14 / −5 %). The failure of gate 2 stands but is smaller than reported.
+
+**A2 data assembled (18:35; `~/runs/dscc/p1v2/`).** Replay: 9 360 of the 10 000 base v2
+selection labelled by `mp-dielectric` (640 structures skipped: elements outside the
+checkpoint's 79-element table, e.g. Np), + 16 MACE-Field Cl/Cs/Pb-combination structures (0
+duplicates by the registered fingerprint) → `replay_v2.xyz`; one 128-atom structure labelled on
+the CPU (Born derivatives overflow the 16 GB card). Neutral train (1616) and valid (154) carry
+their DFT E / F / stress plus `mp-dielectric` P / Z* / α. Estimated E0s (foundation
+`mp-dielectric` Cl −0.318 / Cs −0.234 / Pb −0.801 corrected on the training set): **Cl −1.389,
+Cs +1.402, Pb +0.835 eV** (rank 2/3 as with base v2: only E0(Cl) and E0(Cs) + E0(Pb) are
+determined), delivered as three isolated-atom frames (config_weight 1000, response weights 0)
+in `train_v2_iso.xyz`. Launch chain: lr 1e-3 → b3 GPU 5 (`base_v6_lr3`), lr 1e-4 → b3 GPU 7
+(`base_v6_lr4`), lr 1e-2 → local card (`base_v6_lr2`).

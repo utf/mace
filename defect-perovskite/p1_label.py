@@ -23,18 +23,34 @@ for p in m.parameters():
     p.requires_grad_(False)
 zt = tools.AtomicNumberTable([int(z) for z in m.atomic_numbers]); ks = mace_data.KeySpecification(info_keys={}, arrays_keys={})
 frames = read(args.inp, index=":"); t0 = time.time(); out_frames = []
+allowed = set(int(z) for z in m.atomic_numbers)
+skipped = sum(1 for a in frames if not set(int(z) for z in a.get_atomic_numbers()) <= allowed)
+frames = [a for a in frames if set(int(z) for z in a.get_atomic_numbers()) <= allowed]
+print(f"{skipped} structures with elements outside the checkpoint's table skipped; {len(frames)} to label", flush=True)
 for i, a in enumerate(frames):
     cfg = mace_data.config_from_atoms(a, key_specification=ks, head_name=args.head)
     ad = mace_data.AtomicData.from_config(cfg, z_table=zt, cutoff=float(m.r_max), heads=list(m.heads))
     b = next(iter(tg.dataloader.DataLoader([ad], batch_size=1))).to(dev).to_dict()
-    o = m(b, training=True, compute_force=True, compute_stress=True, compute_polarization=True, compute_becs=True, compute_polarizability=True)
+    try:
+        o = m(b, training=True, compute_force=True, compute_stress=True, compute_polarization=True, compute_becs=True, compute_polarizability=True)
+    except torch.OutOfMemoryError:
+        # a large structure's second derivatives do not fit the card: do this one on the CPU
+        torch.cuda.empty_cache()
+        if not hasattr(m, "_cpu_twin"):
+            import copy
+            m._cpu_twin = copy.deepcopy(m).cpu()
+        bc = {k: (v.cpu() if torch.is_tensor(v) else v) for k, v in b.items()}
+        o = m._cpu_twin(bc, training=True, compute_force=True, compute_stress=True, compute_polarization=True, compute_becs=True, compute_polarizability=True)
+        print(f"  structure {i} ({len(a)} atoms) labelled on the CPU", flush=True)
+    o = {k: (v.detach().cpu() if torch.is_tensor(v) else v) for k, v in o.items()}
+    torch.cuda.empty_cache()
     a = a.copy()
     if not args.keep_ef:
-        a.info["REF_energy"] = float(o["energy"][0]); a.arrays["REF_forces"] = o["forces"].detach().cpu().numpy().astype(np.float64)
-        a.info["REF_stress"] = o["stress"].detach().cpu().numpy().reshape(3, 3).astype(np.float64)
-    a.info["REF_polarization"] = o["polarization"].detach().cpu().numpy().reshape(3).astype(np.float64)
-    a.arrays["REF_becs"] = o["becs"].detach().cpu().numpy().reshape(len(a), 9).astype(np.float64)
-    a.info["REF_polarizability"] = o["polarizability"].detach().cpu().numpy().reshape(3, 3).astype(np.float64)
+        a.info["REF_energy"] = float(o["energy"][0]); a.arrays["REF_forces"] = o["forces"].numpy().astype(np.float64)
+        a.info["REF_stress"] = o["stress"].numpy().reshape(3, 3).astype(np.float64)
+    a.info["REF_polarization"] = o["polarization"].numpy().reshape(3).astype(np.float64)
+    a.arrays["REF_becs"] = o["becs"].numpy().reshape(len(a), 9).astype(np.float64)
+    a.info["REF_polarizability"] = o["polarizability"].numpy().reshape(3, 3).astype(np.float64)
     a.info["REF_electric_field"] = np.zeros(3)
     for k in list(a.info):
         if k.startswith("config_") and k.endswith("_weight") and k not in ("config_weight",):
