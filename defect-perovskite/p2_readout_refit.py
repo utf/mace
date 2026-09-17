@@ -22,7 +22,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--base", required=True); ap.add_argument("--out", required=True); ap.add_argument("--json", required=True)
 ap.add_argument("--train", default="/home/alex/runs/dscc/p1v2/train_v2_iso.xyz"); ap.add_argument("--valid", default="/home/alex/runs/dscc/p1v2/valid_v2.xyz")
 ap.add_argument("--r_split", type=float, default=4.5); ap.add_argument("--eps_inf", type=float, default=4.0)
-ap.add_argument("--epochs", type=int, default=5); ap.add_argument("--lr", type=float, default=1e-3); ap.add_argument("--batch_size", type=int, default=4)
+ap.add_argument("--epochs", type=int, default=5); ap.add_argument("--lr", type=float, default=1e-3); ap.add_argument("--batch_size", type=int, default=2)
 ap.add_argument("--device", default="cuda"); ap.add_argument("--seed", type=int, default=1)
 args = ap.parse_args()
 torch.manual_seed(args.seed); torch.set_default_dtype(torch.float32); dev = torch.device(args.device)
@@ -40,16 +40,17 @@ def dataset(path):
     return ads
 train, valid = dataset(args.train), dataset(args.valid)
 tl = tg.dataloader.DataLoader(train, batch_size=args.batch_size, shuffle=True, drop_last=True, generator=torch.Generator().manual_seed(args.seed))
-vl = tg.dataloader.DataLoader(valid, batch_size=args.batch_size, shuffle=False)
+vl = tg.dataloader.DataLoader(valid, batch_size=1, shuffle=False)
 loss_fn = UniversalFieldLoss(energy_weight=10, forces_weight=10, stress_weight=1, polarization_weight=10, becs_weight=1, polarizability_weight=1).to(dev)
 KW = dict(training=True, compute_force=True, compute_stress=True, compute_polarization=True, compute_becs=True, compute_polarizability=True)
 def evaluate():
+    # energies and forces only (no response derivatives): cheap, and E_PP is in the forward when on
     m.eval(); se = 0.0; sf = 0.0; nf = 0; ne = 0
     for b in vl:
-        b = b.to(dev); o = m(b.to_dict(), **KW)
+        b = b.to(dev); o = m(b.to_dict(), training=False, compute_force=True, compute_stress=False)
         n_at = (b.ptr[1:] - b.ptr[:-1]).float()
         se += float((((o["energy"] - b.energy) / n_at) ** 2).sum()); ne += int(b.num_graphs)
-        sf += float(((o["forces"] - b.forces) ** 2).sum()); nf += int(b.forces.numel())
+        sf += float(((o["forces"] - b.forces) ** 2).sum()); nf += int(b.forces.numel()); del o
     m.train(); return 1e3 * np.sqrt(se / ne), 1e3 * np.sqrt(sf / nf)
 e0, f0 = evaluate(); print(f"base alone: valid E {e0:.2f} meV/atom, F {f0:.2f} meV/A", flush=True)
 m.pp_r_split = float(args.r_split); m.pp_eps_inf = float(args.eps_inf)
@@ -64,7 +65,7 @@ t0 = time.time()
 for ep in range(args.epochs):
     for b in tl:
         b = b.to(dev); opt.zero_grad(set_to_none=True); o = m(b.to_dict(), **KW); l = loss_fn(pred=o, ref=b); l.backward()
-        torch.nn.utils.clip_grad_norm_(params, 1.0); opt.step()
+        torch.nn.utils.clip_grad_norm_(params, 1.0); opt.step(); del o, l
     e, f = evaluate(); hist.append({"epoch": ep, "E": e, "F": f}); print(f"epoch {ep}: valid E {e:.2f} meV/atom, F {f:.2f} meV/A  ({time.time()-t0:.0f}s)", flush=True)
     if f < best[0]: best = (f, ep + 1); best_state = {k: v.detach().clone() for k, v in m.state_dict().items()}
 m.load_state_dict(best_state); ef, ff = evaluate()

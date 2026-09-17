@@ -15,7 +15,7 @@ EPS_M=$(python3 -c "import json; print(round(json.load(open('$P1/P1_GATES.json')
 BASE=$P1/base.pt
 python defect-perovskite/p2_epp_mismatch.py --base $BASE --out $P1/P2_EPP.json > $P1/epp.out 2>&1 || { echo "EPP_MEASURE_FAILED $(date)" > $P2/P2_STATUS; exit 1; }
 if grep -q '"verdict": "EXCEEDS"' $P1/P2_EPP.json; then
-  python defect-perovskite/p2_readout_refit.py --base $BASE --out $P1/base_epp.pt --json $P1/P2_REFIT.json > $P1/refit.out 2>&1 || { echo "REFIT_FAILED $(date)" > $P2/P2_STATUS; exit 1; }
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python defect-perovskite/p2_readout_refit.py --base $BASE --out $P1/base_epp.pt --json $P1/P2_REFIT.json > $P1/refit.out 2>&1 || { echo "REFIT_FAILED $(date)" > $P2/P2_STATUS; exit 1; }
   grep -q '"accepted": true' $P1/P2_REFIT.json || { echo "BLOCKED $(date): E_PP mismatch exceeds tau and the readout refit was rejected" > $P2/P2_STATUS; exit 0; }
   python defect-perovskite/p1_gates.py --base $P1/base_epp.pt --out $P1/P1_GATES_epp.json --device cuda > $P1/gates_epp.out 2>&1 || { echo "GATES_EPP_FAILED $(date)" > $P2/P2_STATUS; exit 1; }
   tail -1 $P1/gates_epp.out | grep -q "ALL PASS" || { echo "BLOCKED $(date): refit base fails the gates: $(tail -1 $P1/gates_epp.out)" > $P2/P2_STATUS; exit 0; }
