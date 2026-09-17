@@ -5867,3 +5867,5 @@ conflict; an inconsistency would show as a response floor with E/F stuck. Propos
 (not launched): one epoch at lr 1e-4 on replay_v3 with (a) response weights 0 on the target frames
 and (b) P 10 / Z* 1 / α 1; expectation registered: (a) reaches ≤ 25 meV/Å at epoch 0 if the anchors
 are the brake, stays near 47 if the MACE-Field backbone itself learns slower.
+Anchor test launched (user "Yes do it", 2026-09-17 23:40): base_v6_anch0 (GPU 5, P/Z*/α weights 0)
+and base_v6_anch1 (GPU 7, P 10 / Z* 1 / α 1), lr 1e-4, replay_v3, one epoch, otherwise the A4 recipe.
