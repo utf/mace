@@ -5885,3 +5885,13 @@ ideal 2.53 ± 0.09 / vacancy 2.46 ± 0.11; isolated atoms all zeros. Z* isotropi
 ones (down to −1.63) are 4-coordinated Pb next to the vacancy with the negative component along the
 vacancy axis — consistent with the vacancy electron riding on that Pb, and uncheckable against DFT
 (accepted validation gap). No label pathology that would explain the training behaviour.
+Anchor test result (2026-09-18 00:30, epoch 0, lr 1e-4, replay_v3): arm a (P/Z*/α weights 0):
+Default 2.40 meV/atom / 22.6 meV/Å, target response drift Z* 0.103 e / α 0.293 ε0 / P 0.101
+m|e|/Å²; replay 8.5 / 24.4. Arm b (P 10 / Z* 1 / α 1): Default 2.20 / 24.6, target response held
+at Z* 0.014 e / α 0.004 ε0 / P 0.006; replay 8.7 / 24.6. Registered expectation (≤ 25 meV/Å if the
+anchors were the brake) met by both arms against 46.7 (A4, weights 1000/100/100) and 57.3 (A3).
+Verdict: the response anchors at 1000/100/100 were the brake; at 10/1/1 the forces learn at the
+base v2 pace (error ×0.34 in one epoch vs base v2's ×0.31) while the response stays within 0.4 %
+of Z* and 0.2 % of α. The energy no longer rises (2.28 → 2.20 in arm b). Replay drift is larger
+than with heavy anchors (24 vs 16–19 meV/Å) — the replay anchor is the same E/F/S pseudolabel
+spring as base v2's (17.4 meV/Å at epoch 0 there).
