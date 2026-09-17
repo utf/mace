@@ -10,7 +10,7 @@ python -c "from mace.cli.run_train import main; main()" \
   --name $NAME \
   --heads "{'Default': {'train_file': '$D/train_v2_iso.xyz', 'valid_file': '$D/valid_v2.xyz'}}" \
   --foundation_model $CKPT --foundation_head mp-dielectric \
-  --pt_train_file $D/replay_v2.xyz \
+  --pt_train_file $D/replay_v3.xyz \
   --multiheads_finetuning True --pseudolabel_replay False --keep_isolated_atoms True \
   --model MACEField --loss universal_field --error_table PerAtomFieldRMSE \
   --energy_weight 10 --forces_weight 10 --stress_weight 1 \

@@ -5819,3 +5819,21 @@ negative diagonal α (FFe3 −6.9/−0.5/−8.8) and compressed N2/N4 (5 Å³/at
 head's extrapolations, not physical response. base_v5 used the same universal_field loss with E 10 /
 F 10 (`p1_run.sh`), so its energy descent 20.8 → 4.3 was the above-δ regime, then the same stall.
 The E 10 / F 10 weights were the assistant's choice (A1 recipe), not the user's.
+
+## Plan P Phase 1 — AMENDMENT A4 (user, 2026-09-17 22:10): replay response labels only from the dielectric set
+
+Decision (user): remove from the replay set every label that did not come from the mp-dielectric
+data. Implementation: `replay_v3.xyz` = `replay_v2.xyz` with REF_polarization, REF_becs and
+REF_polarizability stripped from the 9360 base v2 replay frames (`pretrained` = True); energies,
+forces and stress (MACE-Field mp-dielectric outputs) stay. The 16 frames appended from the
+MACE-Field dielectric/ferroelectric set (Cl/Cs/Pb combinations, minus overlap) keep all labels.
+Frames without a response key get per-config response weight 0 in the loader (`config_from_atoms`
+sets property_weights to 0.0 for a missing key), so their P / Z* / α loss and gradient are exactly
+zero. Reason: the epoch-0 probe showed the replay response terms hold ~99.7 % of the backbone
+gradient budget, dominated by α on cells where the mp-dielectric head's α is an extrapolation
+(negative diagonals on metals, 40–80 on compressed N2/N4). Response anchors now act on the target
+frames (weights P 1000 / Z* 100 / α 100 unchanged) and the 16 dielectric-set frames. E 10 / F 10
+unchanged (the formation-energy drift finding stands and is not addressed by A4). Both runs
+(lr 1e-3 GPU 5, lr 1e-4 GPU 7) restart on replay_v3; the A3 runs are kept as `*_a3`. Expectation
+written before the result: initial pt_head response RMSE counts only labelled frames; the target
+force RMSE at epoch 0 should fall below the A3 value of 57 meV/Å if the anchor was the brake.
