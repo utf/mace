@@ -323,8 +323,6 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
             model.embedding_specs if hasattr(model, "embedding_specs") else None
         ),
         "apply_cutoff": model.apply_cutoff if hasattr(model, "apply_cutoff") else True,
-        "pp_r_split": float(getattr(model, "pp_r_split", 0.0)),      # MACEField + E_PP (Plan P)
-        "pp_eps_inf": float(getattr(model, "pp_eps_inf", 4.0)),
         "radial_MLP": extract_radial_MLP(model),
         "pair_repulsion": hasattr(model, "pair_repulsion_fn"),
         "distance_transform": radial_to_transform(model.radial_embedding),
@@ -392,6 +390,9 @@ def extract_config_mace_model(model: torch.nn.Module) -> Dict[str, Any]:
         # the shared latent-charge readout (D2) must survive every rebuild -- the cueq/e3nn
         # converters and remove_pt_head all reconstruct through this config
         config["les_shared_readout"] = bool(getattr(model, "les_shared_readout", False))
+    if model.__class__.__name__ == "MACEField":          # MACEField + E_PP (Plan P); other classes reject the keys
+        config["pp_r_split"] = float(getattr(model, "pp_r_split", 0.0))
+        config["pp_eps_inf"] = float(getattr(model, "pp_eps_inf", 4.0))
     return config
 
 
