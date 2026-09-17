@@ -66,3 +66,19 @@ Limit: no shell worse than base v2 by more than 3 meV/Å — not met (every shel
   a real robustness gain that stops short of base v2 (33.2) and the gate.
 - Phase 2 stays blocked on this base (`P2_STATUS = BLOCKED`).
 
+
+## Registered deviation: lr 5e-5 (`base_v5_lr5`)
+
+| | lr 1e-4 | lr 5e-5 | limit |
+|---|---|---|---|
+| neutral validation F / E | 17.94 / 3.00 | 20.69 / 3.39 | 11.2 / 1.5 |
+| replay head Z* / α RMSE | 0.036 e / 0.452 ε0 | 0.015 e / 0.184 ε0 | — |
+| ε∞ relaxed cell (checkpoint 3.55) | 2.87 (−19 %) | 2.92 (−18 %) | 10 % |
+| Z* Frobenius Cl / Cs / Pb vs 3.52 / 2.24 / 6.21 | −29 / −30 / −27 % | −26 / −28 / −25 % | 10 % |
+| charged shells excess over base v2 (total, 2–4, 4–8, 8–10, 10–12, 12+) | +8.5, +15.5, +9.0, +5.6, +5.7, +2.2 | +10.3, +18.9, +10.8, +6.7, +7.5, +3.7 | +3 |
+
+The halving halves the replay head's drift but leaves the pristine-cell response where it was
+(the drift is on the Cs/Pb/Cl chemistry the replay barely contains: 16 frames of 1000) and costs
+2.7 meV/Å on the neutral fit and 2–3 meV/Å on the charged shells. All three gates fail again.
+The registered plan has no further move for Phase 1; Phase 2 stays blocked and the base recipe
+is the user's decision.

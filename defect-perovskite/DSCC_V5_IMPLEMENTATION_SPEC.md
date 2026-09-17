@@ -5518,3 +5518,15 @@ meV/atom; charged shells total 62.0, 2–4 Å 102.6, 4–8 57.7, 8–10 55.5, 10
 fine-tune therefore took the charged total from 62.0 to 41.7 (base v2 33.2) and the far shells
 from 40–56 to 10–21 — a real gain in robustness that stops short of the gate. `base_v5_lr5`
 started 08:48 on b3 GPU 5 (19.5 GB); tail chain and monitor armed.
+
+**Registered deviation read (14:15; `base_v5_lr5`, lr 5e-5, otherwise identical; b3 GPU 5
+08:48–13:54).** Neutral head epoch 29: **3.39 meV/atom, 20.69 meV/Å** (lr 1e-4: 3.00 / 17.94).
+Replay head: E 7.1 meV/atom, F 15.5, P 0.076 m|e|/Å², Z* 0.015 e, α 0.184 ε0 (lr 1e-4: 15.1 /
+33.7 / 0.209 / 0.036 / 0.452) — the drift halves, as the clause intends. Gates: (1) fail (20.7 /
+3.39; offset +1.64); (2) fail — ε∞ 2.92 vs 3.55 (−18 %), Z* Frobenius Cl −26 %, Cs −28 %, Pb
+−25 % (the pristine-cell response drifts as much as at lr 1e-4 although the replay error
+halved: the drift is on the Cs/Pb/Cl chemistry the replay barely contains); (3) fail — charged
+shells total 43.5 (+10.3), 2–4 93.8 (+18.9), 4–8 41.2 (+10.8), 8–10 22.0 (+6.7), 10–12 16.4
+(+7.5), 12+ 11.7 (+3.7). **The registered plan has no further move for Phase 1; Phase 2 stays
+blocked; the base recipe is the user's decision.** Both machines idle after this point except
+the finished runs' files.
