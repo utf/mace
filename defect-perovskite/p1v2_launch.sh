@@ -4,6 +4,7 @@
 # b3 after the others if it does not fit). Status files only.
 W=/home/alex/src/mace/.claude/worktrees/size-extensivity; D=/home/alex/runs/dscc/p1v2
 cd $W
+[ -f $D/LAUNCH_STATUS ] && { echo "already launched: $(cat $D/LAUNCH_STATUS)"; exit 0; }   # one-shot guard
 while true; do
   [ -f $D/replay_v2.xyz ] && [ -f $D/train_v2_iso.xyz ] && [ -f $D/valid_v2.xyz ] && [ -f $D/e0s_estimated.json ] && break
   grep -q FAILED $D/LABEL_STATUS 2>/dev/null && { echo "LABEL_FAILED $(date)" > $D/LAUNCH_STATUS; exit 1; }

@@ -5740,3 +5740,13 @@ Cs +1.402, Pb +0.835 eV** (rank 2/3 as with base v2: only E0(Cl) and E0(Cs) + E0
 determined), delivered as three isolated-atom frames (config_weight 1000, response weights 0)
 in `train_v2_iso.xyz`. Launch chain: lr 1e-3 → b3 GPU 5 (`base_v6_lr3`), lr 1e-4 → b3 GPU 7
 (`base_v6_lr4`), lr 1e-2 → local card (`base_v6_lr2`).
+
+**A2 runs launched (18:32–18:36).** `base_v6_lr3` (lr 1e-3) on b3 GPU 5, `base_v6_lr4` (1e-4) on
+b3 GPU 7, `base_v6_lr2` (1e-2) on the local A4000; 75 435 gradient updates each (≈ 2 515 per
+epoch: 1 619 + 9 376 × 0.9 frames at batch 4), expected ≈ 40 min per epoch. Initial validation,
+all three identical: **Default head 2.29 meV/atom** (the estimated E0s remove the +20 meV/atom
+offset base v5 started with), **72.1 meV/Å**, stress 0.64; response errors ≈ 0 (the labels are the
+head's own). Incident: the launch chain fired twice (relaunched after the labelling fix while
+its first instance was still polling), so a duplicate of each run OOMed against the live one
+on the same card and wrote a FAILED status; the live instances are unaffected (one per card),
+their status files corrected to RUNNING, and the launcher now carries a one-shot guard.
