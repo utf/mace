@@ -5793,7 +5793,10 @@ records in ~/runs/dscc/p1v2/ckpt_probe/probe_{raw,lr3,lr4}.json). Default-head e
 the 154 neutral validation frames, split into offset + scatter by cell size (79 / 80 / 159 atoms):
 raw 2.28 = −0.10 + 2.28 (offsets −0.3 / +0.1 / −2.1); lr4 e0 2.47 = −0.63 + 2.39 (offsets +0.4 /
 −1.2 / −5.1); lr3 e0 7.52 = −3.54 + 6.64 (offsets +0.4 / −5.7 / −13.9). The rise is a
-composition-dependent offset (per-element energy constants drifting), which forces cannot see.
+per-environment offset, not a per-element constant: ideal (80-atom) and Cl-vacancy (79-atom) cells have
+near-identical composition yet drift apart (within-size scatter unchanged, 1.85/2.72 vs raw 1.89/2.79).
+As a neutral Cl-vacancy formation energy, E_vac − (79/80)·E_ideal, the drift is −0.03 eV (raw), +0.12 eV
+(lr4, one epoch), +0.49 eV (lr3). Forces cannot see it; only the energy term can.
 Loss budget with the run weights (per frame, batch of one): Default valid lr4 = forces 3.5e-3,
 energy 3.1e-5, P 1.4e-4, Z* 2.1e-4, α 3.7e-5 — the energy term is 0.8 % of the target loss (per-atom
 Huber δ = 10 meV/atom, so 2–7 meV/atom sits in the quadratic tail); replay pt_head lr4 (160-frame
@@ -5806,3 +5809,13 @@ target-frame response terms themselves reach 94 % of the Default loss (P 2.5e-2,
 meV in all three models (the foundation readout is zero on an isolated atom), so the E0/iso
 construction is not a driver. Consequence for base v5 in hindsight: its energies fell 20.8 → 4.3
 only because they started above δ (unfit E0s) and stalled once inside the quadratic tail.
+
+Gradient share (`p1v2_gradshare.py`, lr4 epoch-0 model, backbone parameters, 2-frame batches):
+target frames — P 0.21, α 0.14, Z* 0.12, E 0.016, F 0.011 (forces 2 % of the target gradient norm);
+replay frames — P 17.8, α 11.3, Z* 0.78, F 0.22, E 0.13. Epoch budget (norm × frames): target
+8.0e2 vs replay 2.6e5 → the target force gradient is ~1e-4 of the epoch budget. Replay α labels:
+tr/3 median 9.4, p90 27, max 80 (CsPbCl3 ≈ 2.5); 4507 of 9376 frames above 10; metallic cells carry
+negative diagonal α (FFe3 −6.9/−0.5/−8.8) and compressed N2/N4 (5 Å³/atom) 42–45: the mp-dielectric
+head's extrapolations, not physical response. base_v5 used the same universal_field loss with E 10 /
+F 10 (`p1_run.sh`), so its energy descent 20.8 → 4.3 was the above-δ regime, then the same stall.
+The E 10 / F 10 weights were the assistant's choice (A1 recipe), not the user's.
