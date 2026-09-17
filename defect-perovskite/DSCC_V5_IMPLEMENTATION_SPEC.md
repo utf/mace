@@ -5918,3 +5918,6 @@ per-batch skip only when a batch has no target frame (saves ≈ half instead of 
 as registered (mp-dielectric relaxed-cell response, `p0_locality.json`); response drift at 10/1/1
 is the risk it measures — arm b's 0.4 % (Z*) / 0.2 % (α) after one epoch is the comparison point.
 Run: base_v7 on b3 GPU 5; gate chain `p1v2_after.sh /home/alex/runs/dscc/p1v2/base_v7 b3`.
+A5 launched (2026-09-18 01:25): smoke epoch clean with and without head-grouped batches (replay
+table without response columns, target table with them); field suites 21 passed + 3 new. base_v7
+running on b3 GPU 5 (`p1v3_runner.sh`), gate chain armed, monitor armed. Expect epoch time ≈ 10 min.
