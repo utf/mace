@@ -5777,3 +5777,13 @@ Weights unchanged (P 1000 / Z* 100 / α 100 are anchors with zero initial gradie
 replay is the heavier anchor by choice; the one knob if the neutral forces stall above ≈ 13
 meV/Å after stage A is the replay loss weight, halved once — not the replay size. The lr 1e-3
 and 1e-4 runs restart now on this basis (the A2 runs are kept as `*_epp_mismatch`).
+
+A3 restart record (2026-09-17 21:05): both runs relaunched 20:34 (lr3 on b3 GPU 5, lr4 on GPU 7).
+Initial validation confirms label/model agreement: pt_head 0.00 meV/atom, 0.01 meV/Å, Z* 0.000,
+α 0.000 ε0 (both runs). Epoch 0 (EMA weights, 2500 steps): lr 1e-3 → pt_head 148 meV/atom, 264
+meV/Å, Z* 0.20 e, α 0.89 ε0; Default 7.5 meV/atom, 59.4 meV/Å. lr 1e-4 → pt_head 6.4 meV/atom,
+15.6 meV/Å, Z* 0.019 e, α 0.24 ε0; Default 2.47 meV/atom, 57.3 meV/Å. Reading: the replay-head
+collapse at 1e-3 reproduces without E_PP, so the mismatch was not its cause; the replay loss is
+zero at step 0 and restores only after drift, and Adam at 1e-3 moves the backbone too far within
+one epoch for it to pull back. The A2 lr4 drift (1.1 → 6.6) is also reproduced (0 → 6.4), so at
+1e-4 the mismatch contributed little. lr verdict now rests on the lr4 run's later epochs.
