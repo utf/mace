@@ -71,8 +71,11 @@ class FieldProvider(nn.Module):
         data = self.graph(positions, cell, batch, ptr, edge_index, shifts, unit_shifts, numbers)
         e_node = torch.zeros(positions.shape[0], 3, dtype=torch.float64, device=positions.device,
                              requires_grad=True)
-        out = self.model(data, training=True, compute_force=False, compute_stress=False,
-                         electric_field_node=e_node, compute_node_dipoles=True)
+        # the node-dipole derivative needs a graph even under a no_grad caller (the head's
+        # reference passes and inference wrappers): enable it here
+        with torch.enable_grad():
+            out = self.model(data, training=True, compute_force=False, compute_stress=False,
+                             electric_field_node=e_node, compute_node_dipoles=True)
         return out["node_dipoles"]
 
     def response(self, positions: torch.Tensor, cell: torch.Tensor, batch: torch.Tensor,

@@ -23,7 +23,7 @@ from dscc_embed_ladder import KEY_TOL, embed, relative, vacancy_site        # no
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--model", default="/home/alex/runs/dscc/p0/w6_s1_pol_r45.pt")
-ap.add_argument("--core", default="/home/alex/runs/dscc/p0/ladder3_var_local/core.json")
+ap.add_argument("--core", default="/home/alex/runs/dscc/p0/ladder3_var_large/core.json")
 ap.add_argument("--cell", default="/home/alex/runs/dscc/p0/pristine_relaxed_v2.json")
 ap.add_argument("--tiling", default="3,3,4"); ap.add_argument("--r_core", type=float, default=8.0)
 ap.add_argument("--device", default="cpu"); ap.add_argument("--out", required=True)
@@ -46,8 +46,7 @@ model.base = model.base.double()
 z3 = tools.AtomicNumberTable([17, 55, 82])
 a = atoms.copy(); a.info.update({"carrier_counts": np.array([0, 0, 1, 0], float), "cell_charge": 1, "config_type": "bf", "source_dir": "bf"})
 b = next(iter(tg.dataloader.DataLoader(dd.atomic_data([a], z3, model.r_cut), batch_size=1))).to(dev).to_dict()
-with torch.no_grad():
-    out = model(dict(b), compute_force=False)
+out = model(dict(b), compute_force=False)
 dq = out["dq"].detach(); e_cp_head = float(out["diagnostics"]["e_host"][0])
 print(f"head: dq sum {float(dq.sum()):.4f}, E_cP {1e3*e_cp_head:.2f} meV, {time.time()-t0:.0f}s", flush=True)
 
