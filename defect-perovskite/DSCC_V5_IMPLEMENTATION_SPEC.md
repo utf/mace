@@ -5682,3 +5682,49 @@ Born-force table rerun with the sharpened fill: ratios unchanged (0.72 → 0.97,
 absolute forces × 1.5 at 8–15 Å, E_cP −44 → −66 meV. The far-field polarisation energy at the
 ladder sizes was therefore a quarter to a half of a compact carrier's, on top of the base's
 polar dispersion (ε_ion(q) 19 → 5 by q = 0.26 Å⁻¹): both (a′) and (b) are present and measured.
+
+## Plan P Phase 1 — AMENDMENT A2 (user, 2026-09-17 17:30; registered before any run)
+
+Verbatim: (1) take the base v2 replay set and label it (energies, forces, stress, Born,
+polarisation, everything) with MACE-Field; append the MACE-Field Cl/Cs/Pb structures after
+removing any overlap. (2) Label the training, test and validation sets with the MACE-Field model
+and include these targets during training. (3) Use estimated foundation E0s and create the
+isolated atoms, as with base v2. (4) float32 for speed. (5) Try lr 1e-2, 1e-3 and 1e-4.
+
+Implementation registered: replay = `~/.cache/mace/replay_mh1_omat_pbe_sel10k.xyz` (base v2's
+fps-10 000 selection of the MH-1 omat replay, 107 Cl/Cs/Pb-combination structures + padding)
+relabelled entirely by the MACE-Field checkpoint (E, F, stress, P, Z*, α; `REF_electric_field`
+0), plus the 16 Cl/Cs/Pb-combination structures of `dielectric_ferroelectric_combined.xyz`
+(same labels, from the same head) after removing structures that duplicate a replay entry
+(same composition, cell volume within 0.1 % and sorted minimum-image distance fingerprint
+within 0.01 Å). Neutral defect frames (`dataset_e0` train and valid) keep their DFT E / F /
+stress and receive MACE-Field P / Z* / α as additional targets (charged frames are evaluation
+only and are not labelled for training). E0s: `estimate_e0s_from_foundation` with the
+foundation head on the neutral training set, delivered as three isolated-atom frames
+(`config_type IsolatedAtom`, `config_weight 1000`, response weights 0) appended to the training
+file, `--keep_isolated_atoms True`, no `--E0s` (read from the frames), as base v2. Foundation
+head: chosen by a measurement registered here — the head (`pt_head` or `mp-dielectric`) with
+the lower initial neutral-validation force error on `valid.xyz`, unless the other's response on
+the relaxed pristine cell is closer to the Phase 0 reference by more than the force difference
+warrants; the same head pseudolabels everything, and gate 2 is read against THAT head's
+response on the relaxed cell (recorded before training). Loss `universal_field`, E 10 / F 10 /
+stress 1 / P 1000 / Z* 100 / α 100 (unchanged), pseudolabel_replay off (labels precomputed),
+float32, cueq, batch 4, EMA 0.9999, clip 1.0, weight decay 0, 30 epochs, E_PP in the forward at
+r_split 4.5, ε∞ 4.0; three runs `base_v6_lr{2,3,4}` at lr 1e-2 / 1e-3 / 1e-4 (`--force_mh_ft_lr`),
+b3 GPUs 5 and 7 and the local card. Gates unchanged (1: ≤ 11.2 meV/Å, ≤ 1.5 meV/atom; 2: response
+within 10 % of the chosen head's; 3: charged shells vs base v2 + 3). Scripts: `p1_label.py`
+(writes the labels), `p1_build_data.py` (overlap, E0s, isolated atoms, assembly),
+`p1v2_run.sh`.
+
+**A2 head choice (17:45; `~/runs/dscc/p1/head_choice.json`).** Initial neutral validation:
+`pt_head` 67.0 meV/Å / 20.9 meV/atom (offset +19.8); `mp-dielectric` 72.3 / 18.6 (offset −17.1).
+Response on the relaxed pristine cell: `pt_head` ε∞ 3.18, Z* Frobenius Cl 2.83 / Cs 1.87 / Pb
+4.92; `mp-dielectric` ε∞ 3.55, 3.52 / 2.24 / 6.21 (= the Phase 0 reference; MP DFPT ε∞ 3.62).
+By the registered rule: `pt_head` is 8 % better on forces, `mp-dielectric` carries the response
+Plan P is built on (Phase 2 uses the base as its own provider) and is the one closer to DFT —
+**`mp-dielectric` is the foundation head for A2**; it pseudolabels everything, and gate 2 is
+read against its own relaxed-cell response (ε∞ 3.547; Z* 3.52 / 2.24 / 6.21).
+**Correction of record for base v5's gate 2:** that run started from `pt_head` (ε∞ 3.18, Z* 2.83 /
+1.87 / 4.92) but was read against `mp-dielectric`'s values; against its own starting head the
+drift was ε∞ −10 %, Z* −11 / −16 / −8 % (still outside 10 % for Cs and Cl at lr 1e-4; at lr 5e-5
+ε∞ −8 %, Z* −9 / −14 / −5 %). The failure of gate 2 stands but is smaller than reported.
