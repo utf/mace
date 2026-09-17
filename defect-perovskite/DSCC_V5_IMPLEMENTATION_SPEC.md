@@ -5848,3 +5848,6 @@ A4 epoch 0, lr 1e-3 (23:05): pt_head 58.8 meV/atom, 144 meV/Å (A3: 148 / 264); 
 meV/atom, 47.0 meV/Å, target Z* 0.029 e / α 0.019 ε0 (A3: 7.52 / 59.4). Replay damage is
 halved without the response anchor but the replay head is still far off after one epoch;
 verdict on lr 1e-3 waits for epochs 1–3 as registered.
+A4 runs stopped by the user at 23:10 on 2026-09-17 after epoch 0 (STATUS STOPPED_BY_USER; gate
+chains and monitor stopped; GPUs 5 and 7 free). No Phase 1 base exists; Phase 2 stays BLOCKED.
+Open recipe decisions: energy weight (formation-energy drift), lr.
