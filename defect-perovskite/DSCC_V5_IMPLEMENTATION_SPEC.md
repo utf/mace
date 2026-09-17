@@ -5944,3 +5944,11 @@ base must still be ALL PASS on `p1_gates.py` before it replaces the base; `p2_la
 now takes the P1 run dir and applies this chain. Phase 2 arms unchanged (p2_queue.sh: B / B(M) /
 A seeds 3–6 on b3 GPUs 5+7 via w3_queue; p2_local.sh: A seeds 0–2 locally); when the base carries
 no E_PP the head adds it (head_adds_pp).
+Refit remedy test (2026-09-18 00:25, base v5 base, one epoch, lr 1e-3): the code path runs end to
+end (687 s/epoch on the local card at batch 2) but one readout-only epoch at lr 1e-3 made the
+validation forces worse (17.9 → 27.2 meV/Å), and the acceptance rule as first written admitted
+the pre-refit state, which is vacuous. Corrected before any real use: lr 1e-4, only refit epochs
+are candidates, acceptance = F ≤ base-alone F + 0.2 meV/Å and E ≤ base-alone E + 0.2 meV/atom
+(E_PP absorbed with no degradation beyond noise); rejection → P2_STATUS BLOCKED for the user.
+The base v5 base gave an E_PP mismatch of 0.746 meV/Å < τ on the neutral validation, so the
+remedy is expected not to trigger for base v7.
