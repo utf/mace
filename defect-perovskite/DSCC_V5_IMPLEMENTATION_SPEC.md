@@ -5478,3 +5478,5 @@ path raises under the polarisation coupling and is registered as out of scope fo
 force/energy gates). Deliverable: 15 checkpoints with calibration records, `P2_REPORT.md` with
 the paired table, shell table, energy table and cost per frame at 79 and 159 atoms (eager;
 memory reported).
+Run-directory correction (04:58): `w3_queue.sh` places runs at `~/runs/dscc/<name>`; Phase 2 runs
+live there (`~/runs/dscc/dscc_p2{a,b,bm}_s*`), not under a `p2/` subdirectory.

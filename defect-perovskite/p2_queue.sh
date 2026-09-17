@@ -7,12 +7,12 @@ COMMON="--epochs 60 --directional 1 --regime B --base $BASE --coupling 0 --scf_f
 declare -A FOLD=([0]=0 [1]=1 [2]=2 [3]=3 [4]=0 [6]=2)
 Q=/home/alex/runs/p2_queue.txt; : > $Q
 for s in 0 1 2 3 4 6; do
-  echo "dscc_p2b_s$s|--seed $s --fold ${FOLD[$s]} $COMMON --host_coupling polarisation --field_provider base --cache_base 0 --r_split 4.5 --eps_inf 4.0 --run_dir /home/alex/runs/dscc/p2/dscc_p2b_s$s" >> $Q
+  echo "dscc_p2b_s$s|--seed $s --fold ${FOLD[$s]} $COMMON --host_coupling polarisation --field_provider base --cache_base 0 --r_split 4.5 --eps_inf 4.0" >> $Q
 done
 for s in 0 1 2; do
-  echo "dscc_p2bm_s$s|--seed $s --fold ${FOLD[$s]} $COMMON --host_coupling polarisation --field_provider base --cache_base 0 --r_split 4.5 --eps_inf $EPS_M --run_dir /home/alex/runs/dscc/p2/dscc_p2bm_s$s" >> $Q
+  echo "dscc_p2bm_s$s|--seed $s --fold ${FOLD[$s]} $COMMON --host_coupling polarisation --field_provider base --cache_base 0 --r_split 4.5 --eps_inf $EPS_M" >> $Q
 done
 for s in 3 4 6; do
-  echo "dscc_p2a_s$s|--seed $s --fold ${FOLD[$s]} $COMMON --host_coupling mulliken --cache_base 1 --run_dir /home/alex/runs/dscc/p2/dscc_p2a_s$s" >> $Q
+  echo "dscc_p2a_s$s|--seed $s --fold ${FOLD[$s]} $COMMON --host_coupling mulliken --cache_base 1" >> $Q
 done
 echo "queue: $(wc -l < $Q) lines -> $Q (b3: arms B, B(M) and A seeds 3/4/6); local: A seeds 0/1/2 via p2_local.sh"
