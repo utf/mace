@@ -26,5 +26,39 @@ response labels (its own predictions at the start) drift to Z* 0.036 e and α 0.
 
 ## Gates
 
-_Filled from `P1_GATES.json` when the chain lands (conversion by `p1_make_base.py`, checked
-exact; gates by `p1_gates.py`)._
+Base `base_v5_base.pt` (single head, Cl/Cs/Pb; conversion reproduces the multi-head model to
+1e-13). All three gates fail.
+
+| gate | value | limit | met |
+|---|---|---|---|
+| 1 neutral validation forces | 17.94 meV/Å | ≤ 11.2 | no |
+| 1 neutral validation energies | 3.00 meV/atom (offset +1.41) | ≤ 1.5 | no |
+| 2 ε∞ polycrystalline (relaxed cell) | 2.87 vs 3.55 (19 %) | 10 % | no |
+| 2 Z* Frobenius Cl / Cs / Pb | 2.51 / 1.57 / 4.52 vs 3.52 / 2.24 / 6.21 (−29 / −30 / −27 %) | 10 % | no |
+
+Gate 3 — base-alone force RMSE on the 944 charged frames by shell (meV/Å per component):
+
+| shell | base v5 | base v2 | excess |
+|---|---|---|---|
+| total | 41.7 | 33.2 | +8.5 |
+| 2-4 | 90.4 | 74.9 | +15.5 |
+| 4-8 | 39.4 | 30.4 | +9.0 |
+| 8-10 | 20.9 | 15.3 | +5.6 |
+| 10-12 | 14.6 | 8.9 | +5.7 |
+| 12+ | 10.2 | 8.0 | +2.2 |
+
+Limit: no shell worse than base v2 by more than 3 meV/Å — not met (every shell but 12+).
+
+## Reading
+
+- The response did not hold under the fine-tune (Z* −27…−30 %, ε∞ −19 %; the replay head's α
+  RMSE went 0.004 → 0.45 ε0), so the plan's one registered deviation applies: a rerun at
+  lr 5e-5 (`base_v5_lr5`, launched 08:55 on b3 GPU 5), everything else identical.
+- Gates 1 and 3 are a capacity/data statement, not a learning-rate one: the 128-channel MH-0
+  lineage backbone reaches 17.9 meV/Å where the 512-channel MH-1 base v2 reached 3.9 on the same
+  split, with the fit still falling at epoch 30, and it is 5–15 meV/Å worse than base v2 on
+  every charged shell. The lr halving is not expected to change that; what would (more epochs,
+  a replay with more Cs/Pb/Cl response frames than 16 of 1000, response weights, a larger
+  MACE-Field backbone) is a recipe decision outside the registered plan.
+- Phase 2 stays blocked on this base (`P2_STATUS = BLOCKED`).
+
