@@ -5494,3 +5494,21 @@ anything but ALL PASS. Context for the reading: base v2 (512-channel MH-1, lr 1e
 reached 3.9 meV/Å on the same split; the 128-channel MH-0-lineage checkpoint with the response
 losses in the loop reaches 17.9 — the user's A1 note that the base change makes the relative
 robustness gate the one that matters most applies here in full.
+
+**Phase 1 gates read (08:51; `P1_GATES.json`; base `base_v5_base.pt`, conversion exact).**
+Gate 1: forces **17.94** meV/Å (limit 11.2), energies **3.00** meV/atom (limit 1.5; mean offset
++1.41) — **fail**. Gate 2 (relaxed pristine cell vs the checkpoint's 0.2 values): ε∞ **2.87 vs
+3.55 (−19 %)**; Z* Frobenius Cl 2.51 vs 3.52 (−29 %), Cs 1.57 vs 2.24 (−30 %), Pb 4.52 vs 6.21
+(−27 %); trace/3 Cl −1.16 / Cs +0.89 / Pb +2.60 — **fail** (10 %). Gate 3 (charged frames, 944,
+base alone, per component): total **41.7 vs 33.2 (+8.5)**, 2–4 Å 90.4 vs 74.9 (+15.5), 4–8 39.4
+vs 30.4 (+9.0), 8–10 20.9 vs 15.3 (+5.6), 10–12 14.6 vs 8.9 (+5.7), 12+ 10.2 vs 8.0 (+2.2) —
+**fail** (+3 in any shell). `P2_STATUS = BLOCKED`; Phase 2 does not open on this base.
+
+Registered deviation applied (plan §Phase 1: "unless the response loss fails to hold, in which
+case halve the learning rate once"): the response did not hold (gate 2), so ONE rerun at lr
+5e-5, everything else identical (`base_v5_lr5`, b3 GPU 5, 30 epochs). Written before it runs:
+the halving addresses the response drift only; gates 1 and 3 (a 128-channel base at 17.9 meV/Å
+against base v2's 3.9 with the fit still falling at epoch 30; +5…+15 meV/Å on every charged
+shell) are not expected to pass from it, and the recipe beyond that (epochs, replay composition
+— 16 relevant frames of 1000 —, response weights, or a larger MACE-Field backbone) is the
+user's decision. No other Phase 1 run is opened without it.
