@@ -205,5 +205,19 @@ The n = 3 points (λ = a, b, c) are lattice-periodic patterns, not modulations, 
 e_madelung identical to W6; e_host −20.5 meV → e_cP **−40.9 meV**, e_PP +0.2 meV; FD checks 0.35
 and 0.002 meV/Å; forces 11.8 vs W6 8.4 meV/Å against the label (17.1 at 9.645 Å).
 
-_Running: LO–TO at 4.5 Å; variant tight ladder at 4.5 Å; W6 tight control rungs (639/959 done:
-−0.4331/−0.4369 eV). Decision 0 (A1 form) and Phase 1's launch follow from the status chain._
+**LO–TO at 4.5 Å** (`p0_loto_r45.json`; the nonanalytic reference now counts the ±q pair of the
+structure factor, checked numerically to 0.3 %; the 9.645 Å numbers above are restated with it:
+0.136 vs 0.154 smoothed / 0.135 with the form factor / 0.746 unsmoothed):
+
+| | LO | TO | LO − TO |
+|---|---|---|---|
+| base v2 alone | 0.581 | 0.331 | 0.250 |
+| E_PP alone | +0.461 | −0.007 | **+0.468** |
+| expected: unsmoothed / smoothed (g = 0.709) / × form factor² (0.939²) | 0.746 / 0.529 / 0.467 | 0 | 0.467 |
+
+E_PP reproduces the smoothed nonanalytic splitting to **0.17 %** (A1 criterion 10 %): the LO–TO
+half of Decision 0 passes.
+
+_Running: variant tight ladder at 4.5 Å (core −0.4072 eV; 639-atom rung −0.4072); W6 tight
+control rungs (639/959: −0.4331/−0.4369 eV). The ladder half of Decision 0 and Phase 1's launch
+follow from the status chain._

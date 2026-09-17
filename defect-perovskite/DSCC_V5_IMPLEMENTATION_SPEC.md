@@ -5390,3 +5390,10 @@ script and in the records (`p0_loto_fix2.py`); the model-side numbers are unchan
 unsmoothed — as already written in the report. Preliminary 4.5 Å LO branch: E_PP 0.461 vs
 0.467 smoothed × ff² (g = 0.709, f = 0.939), i.e. 1.3 % — within the A1 10 % criterion; the TO
 branch and the JSON follow.
+
+**A1 LO–TO at r_split 4.5 Å (01:40; `p0_loto_r45.json`, ±q-corrected).** Same mode and q:
+E_PP alone splits LO − TO by **+0.468** eV Å⁻² amu (LO +0.461, TO −0.007); expectation from Z*
+and ε∞ = 4 at the registered smoothing (g = 0.709) with the provider's form factor (0.939):
+**0.467** → deviation **0.17 %** (criterion ≤ 10 %: met). Unsmoothed 0.746; the smoothed
+reference without the form factor 0.529. Variant total LO 1.042 = 0.581 + 0.461, TO 0.324.
+The LO–TO half of Decision 0 (A1) passes; the ladder half is running.
