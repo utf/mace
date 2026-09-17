@@ -5875,3 +5875,13 @@ Clarification (user question, 23:55): base v2 ran with pseudolabel_replay=False 
 same 9360 frames relabelled with MACE-Field's mp-dielectric outputs (initial pt_head 0.00 / 0.01).
 Both replays are therefore self-labelled anchors to the starting model; this is not a difference
 between the two recipes.
+Target-set response label screen (user question, 2026-09-18 00:10; 1770 neutral frames + 3 iso):
+P |P| median 1.4e-3, max 4.5e-3 e/Å² (below the quantum ≈ 5.5e-3, so folding is safe); ΣZ* per
+cell = 0 to 3 dp on every frame (ASR exact by construction); α eigenvalues 2.04–2.86, symmetric,
+ideal 2.53 ± 0.09 / vacancy 2.46 ± 0.11; isolated atoms all zeros. Z* isotropic parts: Pb +3.40 ±
+0.19 bulk, Cs +1.13 ± 0.23, Cl −1.51 ± 0.12 with the known bond anisotropy (−4.2 along Pb–Cl,
+−0.2…−0.6 across; 28 of 84645 Cl have a lab-frame diagonal > +0.3). Vacancy signature: the
+5-coordinated Pb average +2.77 ± 0.24; 1040 of 28592 Pb (3.6 %) have a diagonal < 1.0, the extreme
+ones (down to −1.63) are 4-coordinated Pb next to the vacancy with the negative component along the
+vacancy axis — consistent with the vacancy electron riding on that Pb, and uncheckable against DFT
+(accepted validation gap). No label pathology that would explain the training behaviour.
