@@ -5851,3 +5851,19 @@ verdict on lr 1e-3 waits for epochs 1–3 as registered.
 A4 runs stopped by the user at 23:10 on 2026-09-17 after epoch 0 (STATUS STOPPED_BY_USER; gate
 chains and monitor stopped; GPUs 5 and 7 free). No Phase 1 base exists; Phase 2 stays BLOCKED.
 Open recipe decisions: energy weight (formation-energy drift), lr.
+
+Base v2 comparison (2026-09-17 23:30, from ~/runs/base_v2_prod/logs on b3): MACE-MH-1 omat_pbe
+head, E 10 / F 10, Huber 0.01, batch 8, lr 1e-4, pseudolabel replay, no response terms. Initial
+Default 1.69 meV/atom / 43.9 meV/Å → epoch 0: 0.89 / 13.8 (replay drift 5.8 meV/atom / 17.4
+meV/Å) → epoch 29: 1.16 / 10.2. Same E/F weights and the same replay drift as A3/A4, but the
+target forces fell 44 → 14 in one epoch where MACE-Field goes 72 → 57 (A3) / 47 (A4), and the
+energy fell (1.69 → 0.89) instead of drifting. Two differences remain: the response anchors on the
+target frames (P 1000 / Z* 100 / α 100; measured 95 % of the target-frame backbone gradient) and
+the starting distance of MACE-Field from the DFT forces (72 vs 44 meV/Å). The energy weight is
+therefore not the primary cause — with nothing holding the backbone, E 10 was sufficient for
+base v2. Label-consistency hypothesis (user): the target response residuals stay at Z* 0.003 e /
+α 0.0015 ε0 / P 0.002 m|e|/Å² after epoch 0 while forces lag, so the labels are held, not in
+conflict; an inconsistency would show as a response floor with E/F stuck. Proposed decisive test
+(not launched): one epoch at lr 1e-4 on replay_v3 with (a) response weights 0 on the target frames
+and (b) P 10 / Z* 1 / α 1; expectation registered: (a) reaches ≤ 25 meV/Å at epoch 0 if the anchors
+are the brake, stays near 47 if the MACE-Field backbone itself learns slower.
