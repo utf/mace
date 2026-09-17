@@ -10,6 +10,16 @@ pytest.importorskip("les")
 torch.set_default_dtype(torch.float64)
 
 
+@pytest.fixture(autouse=True)
+def _float64():
+    # test_maceles's run_train sets the default dtype to float32 process-wide when it runs
+    # first; these tests build float64 models and data.
+    prev = torch.get_default_dtype()
+    torch.set_default_dtype(torch.float64)
+    yield
+    torch.set_default_dtype(prev)
+
+
 def _model(shared):
     from mace.modules.extensions import MACELES
     torch.manual_seed(0)
