@@ -5787,3 +5787,22 @@ collapse at 1e-3 reproduces without E_PP, so the mismatch was not its cause; the
 zero at step 0 and restores only after drift, and Adam at 1e-3 moves the backbone too far within
 one epoch for it to pull back. The A2 lr4 drift (1.1 → 6.6) is also reproduced (0 → 6.4), so at
 1e-4 the mismatch contributed little. lr verdict now rests on the lr4 run's later epochs.
+
+A3 probe (2026-09-17 21:30, `p1v2_probe.py`, epoch-0 models rebuilt from the checkpoints,
+records in ~/runs/dscc/p1v2/ckpt_probe/probe_{raw,lr3,lr4}.json). Default-head energy error on
+the 154 neutral validation frames, split into offset + scatter by cell size (79 / 80 / 159 atoms):
+raw 2.28 = −0.10 + 2.28 (offsets −0.3 / +0.1 / −2.1); lr4 e0 2.47 = −0.63 + 2.39 (offsets +0.4 /
+−1.2 / −5.1); lr3 e0 7.52 = −3.54 + 6.64 (offsets +0.4 / −5.7 / −13.9). The rise is a
+composition-dependent offset (per-element energy constants drifting), which forces cannot see.
+Loss budget with the run weights (per frame, batch of one): Default valid lr4 = forces 3.5e-3,
+energy 3.1e-5, P 1.4e-4, Z* 2.1e-4, α 3.7e-5 — the energy term is 0.8 % of the target loss (per-atom
+Huber δ = 10 meV/atom, so 2–7 meV/atom sits in the quadratic tail); replay pt_head lr4 (160-frame
+subset) = α 1.05e-1, P 4.9e-2, Z* 1.4e-2, F 1.0e-3, E 4.4e-4, total 0.17 → 43× the target frame
+loss, with 5.2× more replay frames per epoch: ≈ 99 % of the gradient budget is replay response,
+62 % of it α, dominated by metallic / small cells (FFe3, N2, N4, H16MgTi7, CTc, ReTi, NbPd2: α
+error up to 3.0 ε0; subset α rms 0.385, 0.184 without the top five, median 0.063). At lr3 the
+target-frame response terms themselves reach 94 % of the Default loss (P 2.5e-2, Z* 1.7e-2, α
+2.3e-2) and the replay is at 175 meV/atom / 333 meV/Å: dead run. Isolated-atom residuals are 0.0
+meV in all three models (the foundation readout is zero on an isolated atom), so the E0/iso
+construction is not a driver. Consequence for base v5 in hindsight: its energies fell 20.8 → 4.3
+only because they started above δ (unfit E0s) and stalled once inside the quadratic tail.
