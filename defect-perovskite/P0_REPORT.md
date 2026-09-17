@@ -324,3 +324,50 @@ ionic screening at the wavelengths a 28–47 Å cell exercises is at most 60 %, 
 Å⁻¹ a quarter, of the q → 0 value. Decision 0's ladder criterion cannot be met at these sizes on
 any base with this dispersion. A quantitative ε0 needs rungs sampling q ≲ 0.05 Å⁻¹ (cells of
 order 120 Å) or a base whose polar branches are flatter — a PBE question as much as a model one.
+
+## The E_c factor: kernel or carrier (user, 2026-09-17 16:10)
+
+The Born-force ratios rose from 0.73 to 0.97 with cosine > 0.99, so the coupling delivers Z*·E_c
+with the provider's form factor — but |E_c| itself was 2.5× below Q/(ε∞ r²) at 10–12 Å, which
+periodicity cannot explain (≈ 0.9 of Coulomb expected there, ≈ 0.45 near the cell boundary).
+
+**Kernel (`p0_field_check.json`).** A unit charge at the vacancy site through `carrier_field`
+(r_g 1.0, r_split 4.5, pair width 6.52 Å) gives 0.98 / 0.97 / 0.96 / 0.94 / 0.91 / 0.85 / 0.75 /
+0.58 of the analytic smeared direct field at 4–6 / 6–8 / 8–10 / 10–12 / 12–14 / 14–17 / 17–20 /
+20–24 Å: the periodic attenuation is 6 % at 11 Å and 42 % at 22 Å. The kernel is right.
+
+**Carrier.** The head's dq at the embedded 2879-atom geometry: Σdq = 1.000, but 0.40 within 3 Å
+(the flanking Pb, +0.21 and +0.19), 0.42 within 5 Å, 0.48 within 8 Å, 0.58 within 12 Å, 0.66
+within 16 Å, participation number 12.2; the field of the actual dq is 0.39–0.61 of the
+unit-charge field by shell. Against size and smearing (`p0_localisation.json`):
+
+| geometry | Σdq within 5 Å | participation | E_cP (meV) |
+|---|---|---|---|
+| 79-atom training frame | 0.82 | 3.2 | −40.9 |
+| embedded 639 | 0.52 | 8.0 | −48.6 |
+| embedded 959 | 0.49 | 8.8 | −46.6 |
+| embedded 2159 | 0.44 | 11.3 | −45.9 |
+| embedded 2879 | 0.42 | 12.2 | −43.7 |
+| embedded 2879, σ_s × 0.5 | 0.58 | 6.3 | −60.2 |
+| embedded 2879, σ_s × 0.25 | 0.64 | 5.2 | −65.5 |
+
+**Bound state (`p0_boundstate.json`; C5 precondition Δ_c 0.20 eV, N_loc 4).** Separation of the
+vacancy level from the next empty state and the Φ = 0 hole's participation: 79-atom frame
+0.222 eV / 1.3 (pass); embedded 639 / 959 / 2159 / 2879: 0.038 / 0.047 / 0.039 / 0.043 eV and
+8.0 / 8.8 / 11.3 / 12.2 (fail). In the large cells the level sits 2.8 eV above the occupied
+manifold and 0.04 eV below a dense ladder of empty states: the head's conduction-band edge
+comes down as the supercell grows (the 79-atom cell folds it 0.2 eV up) and the vacancy level
+becomes a shallow donor-like state, so the +1 hole is band-edge-like and the σ_s = 0.05 eV fill
+smears it further. The C5 precondition, gated on 79-atom frames, does not hold at ladder sizes.
+
+**Born-force table with the sharpened fill (σ_s = 0.0125; `p0_bornforce_s0125.json`).** Ratios
+unchanged (0.72 / 0.78 / 0.83 / 0.88 / 0.92 / 0.96 / 0.97, cosine ≥ 0.99, same for all species);
+absolute Born forces × 1.50 in every shell (35 / 39 / 34 / 30 / 23 / 15 / 10 meV/Å); E_cP −66 meV.
+The coupling is verified; the residual factor is the head's carrier.
+
+**Reading.** Both explanations are present and measured: (a′) the ladder's carrier at 639–2879
+atoms was a half-localised shallow state (its far field 0.4–0.6 of a unit charge's, its
+polarisation energy a quarter to a half), a head property (bound-state depth at large N and the
+fill width), not the coupling; (b) base v2's ionic screening falls to a quarter by q = 0.26 Å⁻¹.
+A compact +1 carrier at ladder sizes needs either a deeper level in H0 (a C5 gate on large cells
+in head training) or a fill that pins the hole to the defect level.

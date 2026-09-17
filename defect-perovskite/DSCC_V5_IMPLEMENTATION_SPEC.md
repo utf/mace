@@ -5610,3 +5610,75 @@ dispersion; a quantitative ε0 needs rungs whose α(h)/L samples q ≲ 0.05 Å�
 ≈ 50 000 atoms) or a base whose polar branches are flatter (a PBE question as much as a
 model one: the phonon dispersion of the polar modes in CsPbCl3 is not known here). Phase 1's
 blocked gates are unaffected by this reading.
+
+**E_c factor, checks (user, 2026-09-17 16:10; `p0_field_check.json`).** (i) Kernel width: the
+variant's kernel has r_g = 1.0 (the W6 `KernelConfig` default in that checkpoint), r_split 4.5,
+pair width w = 6.52 Å; a UNIT charge at the vacancy site through `carrier_field` gives 0.98 /
+0.97 / 0.96 / 0.94 / 0.91 / 0.85 / 0.75 / 0.58 of the analytic smeared direct field at 4–6 / 6–8 /
+8–10 / 10–12 / 12–14 / 14–17 / 17–20 / 20–24 Å — the periodic (background + images) attenuation
+is 6 % at 11 Å and 42 % at 22 Å, as expected; **the kernel is right**. (ii) Carrier
+localisation at the embedded 2879-atom geometry: Σdq = 1.000 but **0.40 within 3 Å (the two
+flanking Pb, +0.207 and +0.192), 0.42 within 5 Å, 0.48 within 8 Å, 0.58 within 12 Å, 0.66 within
+16 Å; participation number 12.2**; the field of the actual dq is 0.39 / 0.42 / 0.45 / 0.48 / 0.51 /
+0.55 / 0.58 / 0.61 of the unit-charge field by shell. **The E_c deficit is the carrier: the W6
+head's hole is only 40 % on the flanking pair at 2879 atoms, with a third of the charge beyond
+16 Å** — (a′) is present alongside (b), and it is a head/fill property (the H0 bound state and
+the σ_s-smeared fill in a large cell), not the coupling. Next, registered before it runs:
+`p0_localisation.py` — the same statistics at the embedded 639 / 959 / 2159 / 2879 geometries
+and at a 79-atom training frame, plus the fill's σ_s sensitivity at 2879 (σ_s × 0.5, × 0.25) to
+separate smearing from a genuinely shallow bound state; then the Born-force table is rerun with
+whichever localisation the fix gives, expecting ratios near 1 and absolute forces about double
+at 8–15 Å.
+
+**Carrier localisation against size and smearing (16:25; `p0_localisation.json`; W6 s1 head, σ_s
+= 0.05 eV registered).** Σdq within 5 Å (participation number): 79-atom training frame **0.82
+(3.2)**; embedded 639 0.52 (8.0); 959 0.49 (8.8); 2159 0.44 (11.3); 2879 **0.42 (12.2)**. The two
+flanking Pb carry 0.46 + 0.31 at 79 atoms and 0.21 + 0.19 at 2879. At 2879 with σ_s × 0.5:
+0.58 (6.3), E_cP −60 meV; × 0.25: 0.64 (5.2), E_cP −66 meV (vs −44 at σ_s = 0.05). Reading: the
+head's +1 carrier is compact in the training cells and progressively delocalised in the ladder
+cells; about half of the loss is the σ_s-smeared fill mixing the bound state with the
+valence-band top, whose density grows with N (a fill-width effect), and the rest a bound state
+that is itself more extended at large N (a head property: the C5 bound-state precondition —
+separation Δ_c, N_loc — was gated on 79-atom cells only). Either way the ladder's carrier at
+639–2879 atoms was a half-localised object, its far field ≈ 0.4–0.6 of a unit charge's and its
+polarisation energy ≈ a quarter — (a′) confirmed as a head/fill effect, alongside (b). Next
+(registered): the bound-state separation and N_loc at each embedded size (the C5 precondition
+instrument, `precondition.py`), and the Born-force table rerun at σ_s = 0.0125 as the
+"localised-carrier" reference (expecting ratios near 1, absolute forces ≈ 1.5× at 8–15 Å).
+
+**Born-force table rerun with the sharpened fill (16:45; σ_s = 0.0125 eV, embedded 2879-atom
+geometry; `p0_bornforce_s0125.json`).** E_cP −65.5 meV (−43.7 at σ_s 0.05). Ratios F_born /
+Z*·E_c unchanged: 0.72 / 0.78 / 0.83 / 0.88 / 0.92 / 0.96 / 0.97 by shell, cosine 0.99–1.00, the
+same for Cs, Pb, Cl. Absolute Born forces × 1.50 in every shell (rms 35.1 / 39.3 / 34.1 / 29.8 /
+22.5 / 15.2 / 9.6 meV/Å against 23.1 / 26.1 / 22.7 / 20.0 / 15.2 / 10.3 / 6.6) — the expectation
+("roughly double" for a fully localised carrier; 1.5× for the 0.64-within-5 Å carrier the
+sharper fill gives) met. |E_c| at 10–12 Å 0.018 V/Å against 0.025 for a unit smeared charge:
+the carrier at σ_s/4 is still ≈ 0.7 of a point charge in the near field. The coupling is
+verified; the remaining factor is the head's bound state at large N (C5 study running).
+
+**Bound state against size (16:55; `p0_boundstate.json`; C5 precondition, Δ_c 0.20 eV, N_loc 4,
+σ_s 0.05).** Reference-fill separation eps[HOMO+1] − eps[HOMO] and Φ = 0 hole participation:
+79-atom neutral-vacancy training frame **0.222 eV, N_eff 1.3 — pass**; embedded 639: 0.038 eV,
+8.0; 959: 0.047, 8.8; 2159: 0.039, 11.3; 2879: 0.043, 12.2 — **fail at every ladder size**.
+The H0 spectrum around the vacancy level: at 79 atoms the level sits 1.49 eV above the next
+occupied state and 0.22 below the next empty one; at 639–2879 atoms it sits 2.77–2.85 eV above
+the occupied manifold and only 0.04 eV below a dense ladder of empty states (0.04, 0.06, 0.06,
+0.07, 0.07 …). Reading: as the supercell grows the head's conduction-band edge comes down
+(Γ-only sampling in the 79-atom cell folds it 0.2 eV up) and the vacancy level becomes a
+shallow state 0.04 eV below it, so the +1 hole — the N → N − 1 difference — is a band-edge-like
+object smeared over N_eff ≈ 8–12 sites, and the σ_s = 0.05 eV fill mixes it further with the
+states above. The C5 precondition, gated on 79-atom frames only, does not hold in the ladder
+cells: **the ladder's carrier was a shallow, half-delocalised donor state, a head property** (the
+gap regulariser anchors the 80-cell Γ-only gap, 2.40 eV, not the supercell-converged one, ≈ 2.9
+here). Whether V_Cl in CsPbCl3 is that shallow in PBE is a separate question (the literature
+puts it near the CBM); what matters for Plan P is that a compact +1 carrier at 639–2879 atoms
+requires either a deeper level in H0 (a C5 gate on large cells during head training) or a
+fill that pins the hole to the defect level.
+
+**User's plan change 1 — closed.** The E_c factor is resolved: the kernel is right (unit charge
+0.94 of the analytic smeared field at 10–12 Å); the carrier is only 0.42 e within 5 Å at 2879
+atoms (0.82 at 79) because the head's bound state is shallow at large N and the fill smears it.
+Born-force table rerun with the sharpened fill: ratios unchanged (0.72 → 0.97, cosine 0.99),
+absolute forces × 1.5 at 8–15 Å, E_cP −44 → −66 meV. The far-field polarisation energy at the
+ladder sizes was therefore a quarter to a half of a compact carrier's, on top of the base's
+polar dispersion (ε_ion(q) 19 → 5 by q = 0.26 Å⁻¹): both (a′) and (b) are present and measured.

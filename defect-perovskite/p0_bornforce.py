@@ -27,6 +27,7 @@ ap.add_argument("--core", default="/home/alex/runs/dscc/p0/ladder3_var_large/cor
 ap.add_argument("--cell", default="/home/alex/runs/dscc/p0/pristine_relaxed_v2.json")
 ap.add_argument("--tiling", default="3,3,4"); ap.add_argument("--r_core", type=float, default=8.0)
 ap.add_argument("--device", default="cpu"); ap.add_argument("--out", required=True)
+ap.add_argument("--sigma_s", type=float, default=-1.0, help="override the fill smearing (eV); <0 = the checkpoint's")
 args = ap.parse_args()
 torch.set_default_dtype(torch.float64); dev = args.device; t0 = time.time()
 doc = json.load(open(Path(args.cell).expanduser()))
@@ -43,6 +44,8 @@ N = len(atoms); print(f"embedded {tt}: N={N}, core {moved}/{inside}", flush=True
 
 model = torch.load(Path(args.model).expanduser(), weights_only=False, map_location=dev).to(dev).eval()
 model.base = model.base.double()
+if args.sigma_s > 0:
+    model.sigma_s = float(args.sigma_s); print('sigma_s override', model.sigma_s, flush=True)
 z3 = tools.AtomicNumberTable([17, 55, 82])
 a = atoms.copy(); a.info.update({"carrier_counts": np.array([0, 0, 1, 0], float), "cell_charge": 1, "config_type": "bf", "source_dir": "bf"})
 b = next(iter(tg.dataloader.DataLoader(dd.atomic_data([a], z3, model.r_cut), batch_size=1))).to(dev).to_dict()
