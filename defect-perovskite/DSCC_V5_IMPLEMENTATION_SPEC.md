@@ -5837,3 +5837,10 @@ unchanged (the formation-energy drift finding stands and is not addressed by A4)
 (lr 1e-3 GPU 5, lr 1e-4 GPU 7) restart on replay_v3; the A3 runs are kept as `*_a3`. Expectation
 written before the result: initial pt_head response RMSE counts only labelled frames; the target
 force RMSE at epoch 0 should fall below the A3 value of 57 meV/Å if the anchor was the brake.
+
+A4 epoch 0 (2026-09-17 22:55): loader confirms response labels on 16 of 9376 replay frames.
+lr 1e-4: Default 2.87 meV/atom, 46.7 meV/Å (A3: 2.47 / 57.3 — expectation met, forces fall
+faster without the replay response anchor); pt_head 6.45 meV/atom, 19.5 meV/Å (A3: 6.4 / 15.6),
+replay loss 1.9e-4 (A3: 2.7e-2), Z* 0.005 e / α 0.005 ε0 on the labelled dielectric frames. The
+energy moved 2.28 → 2.87 in one epoch (A3: 2.47): the formation-energy drift is now the open
+item. lr 1e-3 epoch 0 pending.
