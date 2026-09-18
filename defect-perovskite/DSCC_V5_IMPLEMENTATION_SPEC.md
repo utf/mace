@@ -5952,3 +5952,9 @@ are candidates, acceptance = F ≤ base-alone F + 0.2 meV/Å and E ≤ base-alon
 (E_PP absorbed with no degradation beyond noise); rejection → P2_STATUS BLOCKED for the user.
 The base v5 base gave an E_PP mismatch of 0.746 meV/Å < τ on the neutral validation, so the
 remedy is expected not to trigger for base v7.
+base_v7 training done (b3 03:32, 30 epochs, 4.6 h): final validation Default 0.73 meV/atom /
+15.19 meV/Å, Z* drift 0.013 e / α 0.005 ε0 / P 0.005 m|e|/Å²; replay 5.19 meV/atom / 23.1 meV/Å
+(replay forces rose from a low of 17.4 at epoch 5 while the target kept improving). Against gate 1
+(F ≤ 11.2 meV/Å per component, E ≤ 1.5 meV/atom) the forces are expected to FAIL (15.2) and the
+energy to pass; gates 2–3 pending from the chain. Per the standing instruction the orchestrator
+then launches the registered lr 3e-4 fallback (base_v7_lr3e4).
