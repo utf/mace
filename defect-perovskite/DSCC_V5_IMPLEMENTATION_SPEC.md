@@ -5958,3 +5958,13 @@ base_v7 training done (b3 03:32, 30 epochs, 4.6 h): final validation Default 0.7
 (F ≤ 11.2 meV/Å per component, E ≤ 1.5 meV/atom) the forces are expected to FAIL (15.2) and the
 energy to pass; gates 2–3 pending from the chain. Per the standing instruction the orchestrator
 then launches the registered lr 3e-4 fallback (base_v7_lr3e4).
+base_v7 gates (b3 03:47, `P1_GATES.json`): GATES FAILED. Gate 1: F 15.19 meV/Å (≤ 11.2 FAIL),
+E 0.73 meV/atom (≤ 1.5 pass), mean offset +0.29. Gate 2: PASS — ε∞ 3.545 vs 3.547 (0.1 %); Z*
+Frobenius Cl 3.529 / Cs 2.233 / Pb 6.230 vs 3.520 / 2.235 / 6.209 (0.1–0.3 %): the mp-dielectric
+response is retained to the tenth of a percent (base v5: −18…−30 %). Gate 3: FAIL — charged
+shells vs base v2 (threshold +3 meV/Å): total 47.4 vs 33.2 (+14.2); 2–4 Å +31.2; 4–8 +13.9;
+8–10 +6.1; 10–12 +4.1; 12+ +1.0. Reading: the light anchors solve the response problem; the
+remaining gap to base v2 is the neutral force floor (15.2 vs base v2's 10.2 on the same data) and
+its transfer to charged cells, both consistent with the MACE-Field starting point being farther
+from this DFT than MH-1. Orchestrator launched the registered fallback base_v7_lr3e4 (lr 3e-4,
+same recipe) on GPU 5 at 03:47; its gate chain is armed; Phase 2 opens only on ALL PASS.
