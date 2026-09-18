@@ -5968,3 +5968,16 @@ remaining gap to base v2 is the neutral force floor (15.2 vs base v2's 10.2 on t
 its transfer to charged cells, both consistent with the MACE-Field starting point being farther
 from this DFT than MH-1. Orchestrator launched the registered fallback base_v7_lr3e4 (lr 3e-4,
 same recipe) on GPU 5 at 03:47; its gate chain is armed; Phase 2 opens only on ALL PASS.
+base_v7_lr3e4 (fallback, lr 3e-4) done b3 08:29, gates 08:38: GATES FAILED. Gate 1: F 13.23 meV/Å
+(≤ 11.2 FAIL), E 0.88 pass. Gate 2: PASS (ε∞ 3.548 vs 3.547; Z* within 0.5 %). Gate 3: FAIL —
+charged shells vs base v2: total 46.8 (+13.6); 2–4 Å +30.0; 4–8 +13.5; 8–10 +5.2; 10–12 +2.8;
+12+ +0.2. Replay ended at 17.3 meV/atom / 72 meV/Å (base_v7: 5.2 / 23). P2_STATUS = BLOCKED
+(orchestrator, 08:39): both A5 bases fail gates 1 and 3; nothing running on b3.
+Reading for the user: the higher lr bought 2 meV/Å on the neutral validation and nothing on the
+charged shells, at three times the replay drift — lr is not the lever. Both bases retain the
+mp-dielectric response to ≤ 0.5 %. The structural gap is the MACE-Field checkpoint's transfer to
+this DFT (neutral floor 13–15 vs base v2's 10.2; charged 2–4 Å shell +30 meV/Å over base v2).
+Option to put to the user (not acted on): Phase 2 with base v2 (MH-1; the gate-3 reference itself)
+as the energy/force base and a frozen MACE-Field model as the dipole provider (`--field_provider
+PATH`, the FieldProvider path built for Plan P) — the base passes the gates by construction and
+the provider's response is the gate-2-validated one (base_v7 or the raw checkpoint).
