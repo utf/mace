@@ -673,6 +673,71 @@ class H0(nn.Module):
             H = H + float(self.gauge_shift) * eye
         return H
 
+    def bloch(self, scalars: torch.Tensor, vectors: Optional[torch.Tensor], species: torch.Tensor,
+              edge_index: torch.Tensor, edge_vector: torch.Tensor, kpts: torch.Tensor) -> torch.Tensor:
+        """Plan P Phase 2b §3: `H0(k) = sum_R H0(0, R) e^{i k . R}` of ONE periodic graph, complex
+        Hermitian `[n_k, 4N, 4N]`, from the same per-edge Slater-Koster blocks `batched` scatters
+        (each directed edge with its image shift phased by `exp(i k . d_e)`, `d_e = R_j - R_i + L`:
+        the atomic gauge, whose spectrum is the Bloch spectrum) and the same k-independent
+        on-site, directional and shift terms. At `k = 0` it is `batched`'s `H0` exactly."""
+        from mace.modules.dscc.legacy import sk_block
+        edge_vector = edge_vector.to(torch.float64)
+        n = int(species.shape[0])
+        Q_geo = None
+        base_scalars = scalars
+        V_cf = None
+        if getattr(self, "decoupled", False):
+            scalars, vectors, Q_geo, V_cf = self.geometric_inputs(species, edge_index, edge_vector, n)
+        scalars = scalars.to(torch.float64)
+        site_feats = (base_scalars.to(torch.float64)
+                      if getattr(self, "on_site_from_base", False) else scalars)
+        src, dst = edge_index[0], edge_index[1]
+        r = edge_vector.norm(dim=-1).clamp_min(1e-9)
+        direction = edge_vector / r.unsqueeze(-1)
+        screen_pre = (self.sk.screen(edge_index, edge_vector, species)
+                      if getattr(self.sk, "screen", None) is not None else None)
+        v = self.sk.integrals_fast(site_feats, species, src, dst, r, screen_pre, V_cf)
+        blocks = sk_block(direction, v)                                                  # [E, 4, 4]
+        dim = n * ORBITALS_PER_ATOM
+        o = torch.arange(ORBITALS_PER_ATOM, device=src.device)
+        rows = (src.reshape(-1, 1, 1) * ORBITALS_PER_ATOM + o.reshape(1, -1, 1)).expand(-1, ORBITALS_PER_ATOM, ORBITALS_PER_ATOM)
+        cols = (dst.reshape(-1, 1, 1) * ORBITALS_PER_ATOM + o.reshape(1, 1, -1)).expand(-1, ORBITALS_PER_ATOM, ORBITALS_PER_ATOM)
+        flat = (rows * dim + cols).reshape(-1)
+        # k-independent part: on-site levels, directional site blocks, shifts (as `batched`)
+        levels = self.sk.on_site(site_feats, species, None)
+        if getattr(self, "cf_mlp", False):
+            levels = levels + self.cf_shift(scalars, species)
+        if getattr(self, "cf_linear", False):
+            levels = levels + self.cf_linear_shift(V_cf, species)
+        diag = torch.cat([levels[:, :1], levels[:, 1:].expand(-1, 3)], dim=-1).reshape(-1)
+        D = torch.diag(diag)
+        if self.directional:
+            if vectors is None:
+                raise ValueError("the directional block needs the base's l = 1 features")
+            sb = self.directional_site_blocks(site_feats, vectors.to(torch.float64), species,
+                                              edge_index, edge_vector, Q_geo)               # [N, 4, 4]
+            nodes = torch.arange(n, device=src.device)
+            r_s = (nodes.reshape(-1, 1, 1) * ORBITALS_PER_ATOM + o.reshape(1, -1, 1)).expand(-1, ORBITALS_PER_ATOM, ORBITALS_PER_ATOM)
+            c_s = (nodes.reshape(-1, 1, 1) * ORBITALS_PER_ATOM + o.reshape(1, 1, -1)).expand(-1, ORBITALS_PER_ATOM, ORBITALS_PER_ATOM)
+            D = D + torch.zeros(dim * dim, dtype=D.dtype, device=D.device).index_put(
+                ((r_s * dim + c_s).reshape(-1),), sb.reshape(-1), accumulate=True).reshape(dim, dim)
+        if self.site_shift is not None:
+            D = D + torch.diag(self.site_shift.to(D.dtype).to(D.device).repeat_interleave(ORBITALS_PER_ATOM))
+        if self.gauge_shift:
+            D = D + float(self.gauge_shift) * torch.eye(dim, dtype=D.dtype, device=D.device)
+        D = 0.5 * (D + D.transpose(0, 1))
+        # hopping part per k: sum_e B_e exp(i k . d_e) scattered at (src, dst)
+        phase = edge_vector @ kpts.to(edge_vector.dtype).transpose(0, 1)                 # [E, n_k]
+        ph = torch.complex(torch.cos(phase), torch.sin(phase))                            # [E, n_k]
+        bc = blocks.to(torch.complex128).reshape(blocks.shape[0], -1)                     # [E, 16]
+        out = []
+        for ik in range(kpts.shape[0]):
+            vals = (bc * ph[:, ik].unsqueeze(-1)).reshape(-1)
+            Hk = torch.zeros(dim * dim, dtype=torch.complex128, device=D.device).index_put((flat,), vals, accumulate=True).reshape(dim, dim)
+            Hk = Hk + D.to(torch.complex128)
+            out.append(0.5 * (Hk + Hk.conj().transpose(0, 1)))
+        return torch.stack(out)
+
     def cf_linear_shift(self, V: torch.Tensor, species: torch.Tensor) -> torch.Tensor:
         '''O5a as specified: `d eps_i = s_Z (V_i - V_bar_Z)`, linear, no MLP, `[N, 2]` in eV.
 

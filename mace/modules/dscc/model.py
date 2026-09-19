@@ -1114,6 +1114,59 @@ class MACEDSCC(nn.Module):
             gaps.append(eps[n_up] - eps[n_up - 1])
         return torch.stack(gaps)
 
+    # ----------------------------------------------------------------- Plan P Phase 2b §3: BZ gap
+
+    @staticmethod
+    def bz_mesh(cell: torch.Tensor, n: int = 3) -> torch.Tensor:
+        """The Gamma-centred `n x n x n` mesh of one cell, Gamma first, `[n^3, 3]` (1/A)."""
+        cell = cell.view(3, 3).detach().to(torch.float64)
+        recip = 2.0 * math.pi * torch.linalg.inv(cell).transpose(0, 1)          # rows b_1..b_3
+        offs = [0] + [i for i in range(1, n) if i <= n // 2] + [-i for i in range(1, n) if i <= (n - 1) // 2]
+        pts = []
+        for i in offs:
+            for j in offs:
+                for l_ in offs:
+                    pts.append((i / n) * recip[0] + (j / n) * recip[1] + (l_ / n) * recip[2])
+        return torch.stack(pts)
+
+    def bz_bands(self, data: Dict[str, torch.Tensor], cached_features, kpts: torch.Tensor):
+        """`(E_VBM(k), E_CBM(k))` `[n_k]` each of ONE pristine graph at the majority count of
+        `H0` (the Hamiltonian W6 fills), from `H0.bloch`; differentiable through the eigenvalues."""
+        if self.decoupled:
+            scalars, vectors = self._descriptor_placeholders(int(data["positions"].shape[0]), data["positions"].device)
+        elif cached_features is None:
+            scalars, vectors = self.features(self.first_block(self._trunk_data(dict(data))))
+        else:
+            scalars, vectors = cached_features
+        species = data["node_attrs"].argmax(dim=-1)
+        positions, cell = data["positions"], data["cell"].view(-1, 3, 3)
+        sender, receiver = data["edge_index"][0], data["edge_index"][1]
+        edge_graph = data["batch"][sender]
+        shifts = torch.einsum("ei,eij->ej", data["unit_shifts"].to(positions.dtype), cell[edge_graph])
+        edge_vector = positions[receiver] - positions[sender] + shifts
+        Hk = self.h0.bloch(scalars, vectors, species, data["edge_index"], edge_vector, kpts)
+        numbers = [self.atomic_numbers[int(s_)] for s_ in species.tolist()]
+        n_up, _ = S_REF.counts(neutral_count(numbers))
+        eps = torch.linalg.eigvalsh(Hk)                                              # [n_k, 4N], real
+        return eps[:, n_up - 1], eps[:, n_up]
+
+    def bz_penalty(self, batches, features, kpts_list) -> Tuple[torch.Tensor, Dict[str, float]]:
+        """`L_BZ / w_gap = sum_cells sum_{k != Gamma} relu(E_CBM(G) - E_CBM(k))^2 + relu(E_VBM(k) - E_VBM(G))^2`
+        (the registered host is direct at Gamma). Readouts of the FIRST cell (the label cell):
+        `min_k [E_CBM(k) - E_CBM(G)]`, `max_k [E_VBM(k) - E_VBM(G)]` (eV)."""
+        total = None
+        readout: Dict[str, float] = {}
+        for i, (b, f, k) in enumerate(zip(batches, features, kpts_list)):
+            vbm, cbm = self.bz_bands(b, f, k)
+            pen = (torch.relu(cbm[0] - cbm[1:]) ** 2).sum() + (torch.relu(vbm[1:] - vbm[0]) ** 2).sum()
+            total = pen if total is None else total + pen
+            if i == 0:
+                off = cbm.shape[0] > 1
+                readout = {"bz_cbm_min_dev_eV": float((cbm[1:] - cbm[0]).min().detach()) if off else float("nan"),
+                           "bz_vbm_max_dev_eV": float((vbm[1:] - vbm[0]).max().detach()) if off else float("nan"),
+                           "gap_gamma_eV": float((cbm[0] - vbm[0]).detach())}
+        return total, readout
+
     # ----------------------------------------------------------------- forward
 
     def forward(self, data: Dict[str, torch.Tensor], training: bool = False,

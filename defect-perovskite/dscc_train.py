@@ -174,6 +174,7 @@ def main() -> None:
                       standardise_inputs=(None if args.standardise < 0 else bool(args.standardise)),
                       readout_init_scale=(None if args.readout_init_scale < 0 else args.readout_init_scale),
                       directional=bool(args.directional), regime=args.regime, gap_weight=args.gap_weight,
+                      bz_gap=bool(args.bz_gap),
                       device=args.device, eval_every=args.eval_every,
                       setup_batch_size=args.setup_batch_size, base_cache_batch_size=args.base_cache_batch_size,
                       l2_weight=args.l2_weight, lr_schedule=args.lr_schedule,

@@ -125,6 +125,10 @@ class TrainConfig:
     les_cache: str = ""               # L2: q_LES / Jacobian cache file (built once per base)
     device: str = "cuda"
     static_cell_path: str = "defect-perovskite/static_pristine_cell.json"
+    bz_gap: bool = False              # Plan P Phase 2b §3: Brillouin-zone form of the gap regulariser
+    bz_relaxed_cell_path: str = "/home/alex/runs/dscc/p0/pristine_relaxed_v2.json"
+    bz_n_thermal: int = 4             # fixed thermal pristine snapshots (first in file order)
+    bz_mesh: int = 3
 
 
 def stratum_id(meta: dd.FrameMeta) -> str:
@@ -379,6 +383,28 @@ class Trainer:
             with torch.no_grad():
                 feats = self.model.first_block(self.model._trunk_data(dict(self.static_batch)))
                 self.static_features = tuple(t.detach() for t in self.model.features(feats))
+        # Plan P Phase 2b §3: the BZ regulariser's cells -- the label pristine cell (static),
+        # the base-relaxed pristine cell and `bz_n_thermal` fixed thermal pristine snapshots
+        # (the first pristine frames in file order; indices logged) -- with geometry-only base
+        # features cached once and the Gamma-centred mesh of each cell.
+        self.bz_batches, self.bz_features, self.bz_kpts = [], [], []
+        if getattr(self.cfg, "bz_gap", False):
+            cells = [static_cell_atoms(self.cfg.static_cell_path), static_cell_atoms(self.cfg.bz_relaxed_cell_path)]
+            thermal = list(pristine_indices)[: int(self.cfg.bz_n_thermal)]
+            cells += [self.frames[i] for i in thermal]
+            logging.info("Phase 2b BZ regulariser: label cell, base-relaxed cell, thermal pristine frames %s; %dx%dx%d mesh",
+                         thermal, self.cfg.bz_mesh, self.cfg.bz_mesh, self.cfg.bz_mesh)
+            for a in cells:
+                ds_ = dd.atomic_data([a], self.z_table, self.cfg.r_cut)
+                b_ = to_device(next(iter(torch_geometric.dataloader.DataLoader(ds_, batch_size=1))), self.device)
+                self.bz_batches.append(b_)
+                if self.model.decoupled:
+                    self.bz_features.append(None)
+                else:
+                    with torch.no_grad():
+                        feats = self.model.first_block(self.model._trunk_data(dict(b_)))
+                        self.bz_features.append(tuple(t.detach() for t in self.model.features(feats)))
+                self.bz_kpts.append(self.model.bz_mesh(b_["cell"], int(self.cfg.bz_mesh)).to(self.device))
         # E_base and F_base of every charged frame (frozen base, geometry-only), cached once.
         self.base_cache: Dict[int, Tuple[torch.Tensor, torch.Tensor]] = {}
         if self.cfg.cache_base:
@@ -501,6 +527,11 @@ class Trainer:
         l_force = force_loss(out, batch, weights)
         gap = self.model.pristine_gap(self.static_batch, getattr(self, "static_features", None))
         l_gap = self.cfg.gap_weight * ((gap - self.cfg.e_gap) ** 2).sum()
+        bz_read: Dict[str, float] = {}
+        if getattr(self, "bz_batches", None):
+            l_bz, bz_read = self.model.bz_penalty(self.bz_batches, self.bz_features, self.bz_kpts)
+            l_gap = l_gap + self.cfg.gap_weight * l_bz
+            bz_read["bz_penalty"] = float(l_bz.detach())
         l_energy = l_force.new_zeros(())
         if self.cfg.energy_weight:
             resid = out["energy_uncalibrated"] - batch["energy"]
@@ -535,7 +566,7 @@ class Trainer:
         optimizer.step()
         diag = out.get("diagnostics", {})
         conv = diag.get("converged", [])
-        return {"loss": float(loss), "force": float(l_force), "gap": float(gap[0]),
+        return {"loss": float(loss), "force": float(l_force), "gap": float(gap[0]), **bz_read,
                 "l2": float(l_l2), "sat": float(l_sat), "energy": float(l_energy),
                 "unconverged": int(sum(1 for c in conv if c is False)),
                 "scf_iterations": int(sum(diag.get("iterations", []))),
@@ -791,12 +822,16 @@ class Trainer:
                 for key in ("loss", "force", "l2", "sat", "energy", "unconverged", "scf_iterations", "scf_fills", "warm"):
                     stats[key] += s[key]
                 stats["gap"] = s["gap"]; stats["n"] += 1
+                for k_ in ("bz_penalty", "bz_cbm_min_dev_eV", "bz_vbm_max_dev_eV"):
+                    if k_ in s:
+                        stats[k_] = s[k_]
             sv = sv_pre
             entry = {"epoch": epoch, "loss": stats["loss"] / max(stats["n"], 1), "force": stats["force"] / max(stats["n"], 1),
                      "l2": stats["l2"] / max(stats["n"], 1), "sat": stats["sat"] / max(stats["n"], 1),
                      "energy": stats["energy"] / max(stats["n"], 1),
                      "c_q_running": dict(self.c_q_running),
                      "lr": float(optimizer.param_groups[0]["lr"]), "gap": stats["gap"], "unconverged": stats["unconverged"], "single_valued": sv,
+                     **{k_: stats[k_] for k_ in ("bz_penalty", "bz_cbm_min_dev_eV", "bz_vbm_max_dev_eV") if k_ in stats},
                      "scf_iterations_per_batch": stats["scf_iterations"] / max(stats["n"], 1),
                      "scf_fills_per_batch": stats["scf_fills"] / max(stats["n"], 1),
                      "warm_batches": stats["warm"], "batches": stats["n"],
@@ -860,10 +895,22 @@ class Trainer:
         json.dump(final, open(self.run_dir / "held_final.json", "w"), indent=1, default=str)
         torch.save(self.model, self.run_dir / "model.pt")
         out = {"history": history, "held_final": {k: v for k, v in final.items() if k != "energies"}}
+        if getattr(self, "bz_batches", None):
+            # Phase 2b §3 readout per checkpoint on the label cell (min_k dCBM, max_k dVBM)
+            with torch.no_grad():
+                _, bz_final = self.model.bz_penalty(self.bz_batches, self.bz_features, self.bz_kpts)
+            json.dump({"final": bz_final}, open(self.run_dir / "bz_readout.json", "w"), indent=1)
+            out["bz_readout"] = {"final": bz_final}
         # The averaged model is evaluated AFTER the last-epoch reading, so the warm-start store
         # the last-epoch numbers were produced with is not overwritten before they are taken.
         if avg_sum is not None and avg_n > 0:
             saved = load_average(self.model, avg_sum, avg_n)
+            if getattr(self, "bz_batches", None):
+                with torch.no_grad():
+                    _, bz_avg = self.model.bz_penalty(self.bz_batches, self.bz_features, self.bz_kpts)
+                rec_ = json.load(open(self.run_dir / "bz_readout.json")); rec_["avg"] = bz_avg
+                json.dump(rec_, open(self.run_dir / "bz_readout.json", "w"), indent=1)
+                out["bz_readout"] = rec_
             avg = self.evaluate(self.held_idx, "held_final_avg")
             avg["saturation"] = self.saturation_report(self.held_idx)
             avg["avg_epochs"] = avg_n
