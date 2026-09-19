@@ -6122,3 +6122,8 @@ two evaluations of MH-1 with different arithmetic order; the residual 1e-5 meV/a
 is the re-instantiation of MH-1's blocks in this MACE version (its `equivariant_nonlin.mul`
 buffers), being isolated by a plain-ScaleShiftMACE control (no field layers). "Same performance"
 holds: the deviation is 5–6 orders below the base's own force error.
+Control (`--control_plain`, float64, CPU, 300 structures, mp_pbe_refit_add): a plain ScaleShiftMACE
+re-instantiated from MH-1's config with MH-1's weights equals the pickled MH-1 to 0.0 meV/atom and
+5e-12 meV/Å — the re-instantiation is exact, so the 1e-5 meV/atom float64 residual belongs to
+the MACEField forward path itself (an arithmetic-order difference of the port's energy assembly,
+5–6 orders below the base's own error). Not pursued under this plan; recorded.
