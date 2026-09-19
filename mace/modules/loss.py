@@ -899,26 +899,28 @@ class UniversalFieldLoss(torch.nn.Module):
                     0.0, device=configs_energy_weight.device
                 )
         else:
+            zero = configs_energy_weight.new_zeros(())
+            # a term whose global weight is zero (response-only training) needs no prediction
             loss_energy = torch.nn.functional.huber_loss(
                 configs_energy_weight * ref["energy"] / num_atoms,
                 configs_energy_weight * pred["energy"] / num_atoms,
                 reduction="mean",
                 delta=self.huber_delta,
-            )
+            ) if (float(self.energy_weight) != 0.0 and pred.get("energy") is not None) else zero
 
             loss_forces = conditional_huber_forces(
                 configs_forces_weight * ref["forces"],
                 configs_forces_weight * pred["forces"],
                 huber_delta=self.huber_delta,
                 ddp=ddp,
-            )
+            ) if (float(self.forces_weight) != 0.0 and pred.get("forces") is not None) else zero
 
             loss_stress = torch.nn.functional.huber_loss(
                 configs_stress_weight * ref["stress"],
                 configs_stress_weight * pred["stress"],
                 reduction="mean",
                 delta=self.huber_delta,
-            )
+            ) if (float(self.stress_weight) != 0.0 and pred.get("stress") is not None) else zero
 
             if use_polarization:
                 if self.polarization_loss_mode == "normalized_metric":

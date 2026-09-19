@@ -17,16 +17,18 @@ ap.add_argument("--model", required=True); ap.add_argument("--mh1", default="/ho
 ap.add_argument("--replay", default="/home/alex/.cache/mace/replay_mh1_omat_pbe_sel10k.xyz"); ap.add_argument("--n_replay", type=int, default=1400)
 ap.add_argument("--defect", default=str(HERE / "dataset_pbe" / "train.xyz")); ap.add_argument("--n_defect", type=int, default=600)
 ap.add_argument("--device", default="cuda"); ap.add_argument("--out", required=True); ap.add_argument("--batch", type=int, default=8)
+ap.add_argument("--dtype", default="float32", help="float32 (the plan) or float64 (round-off control: the same comparison at 1e-10)")
 args = ap.parse_args()
-torch.set_default_dtype(torch.float32); dev = args.device; t0 = time.time()
-new = torch.load(args.model, map_location=dev, weights_only=False).to(dev).float().eval()
-ref = torch.load(args.mh1, map_location=dev, weights_only=False).to(dev).float().eval()
+DT = torch.float64 if args.dtype == "float64" else torch.float32
+torch.set_default_dtype(DT); dev = args.device; t0 = time.time()
+new = torch.load(args.model, map_location=dev, weights_only=False).to(dev).to(DT).eval()
+ref = torch.load(args.mh1, map_location=dev, weights_only=False).to(dev).to(DT).eval()
 rng = np.random.default_rng(0)
 rp = read(args.replay, ":"); rp = [rp[i] for i in sorted(rng.choice(len(rp), args.n_replay, replace=False))]
 df = read(args.defect, ":"); df = [df[i] for i in sorted(rng.choice(len(df), min(args.n_defect, len(df)), replace=False))]
 frames = rp + df
 zt = tools.AtomicNumberTable([int(z) for z in ref.atomic_numbers]); ks = mace_data.KeySpecification.from_defaults()
-res = {"n_structures": len(frames), "n_replay": len(rp), "n_defect": len(df), "heads": {}}
+res = {"n_structures": len(frames), "n_replay": len(rp), "n_defect": len(df), "dtype": args.dtype, "heads": {}}
 worst = {}
 for head in list(ref.heads):
     dE = dF = dS = 0.0; resid = 0.0
@@ -44,8 +46,8 @@ for head in list(ref.heads):
 # the field-coupling residual at E = 0 on one batch: field_linear(field_feats(feats, 0)) == 0 exactly
 ads = [mace_data.AtomicData.from_config(mace_data.config_from_atoms(a, key_specification=ks, head_name=ref.heads[0]), z_table=zt, cutoff=float(ref.r_max), heads=list(ref.heads)) for a in frames[:4]]
 b = next(iter(tg.dataloader.DataLoader(ads, batch_size=4))).to(dev).to_dict()
-feats = torch.randn(b["positions"].shape[0], new.field_feats[0].irreps_in1.dim, device=dev)
-zero_field = torch.zeros(b["positions"].shape[0], 3, device=dev)
+feats = torch.randn(b["positions"].shape[0], new.field_feats[0].irreps_in1.dim, device=dev, dtype=DT)
+zero_field = torch.zeros(b["positions"].shape[0], 3, device=dev, dtype=DT)
 resid = float(new.field_linear[0](new.field_feats[0](feats, zero_field)).abs().max())
 res["field_residual_at_zero_field"] = resid
 res["pass"] = all(v["max_dE_meV_per_atom"] <= 1e-5 * 10 and v["max_dF_meV_per_A"] <= 1e-4 * 10 for v in res["heads"].values())   # float32 round-off band (10x the plan's figures is the tolerance actually applied; both reported)

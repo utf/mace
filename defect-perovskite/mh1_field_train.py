@@ -30,7 +30,7 @@ ap.add_argument("--head", default="mp_pbe_refit_add"); ap.add_argument("--ref", 
 ap.add_argument("--valid_fraction", type=float, default=0.2); ap.add_argument("--seed", type=int, default=123)
 ap.add_argument("--lr", type=float, default=1e-3); ap.add_argument("--lr_raise", type=float, default=3e-3); ap.add_argument("--ema", type=float, default=0.999)
 ap.add_argument("--w_p", type=float, default=1.0); ap.add_argument("--w_z", type=float, default=100.0); ap.add_argument("--w_a", type=float, default=100.0)
-ap.add_argument("--atoms_per_batch", type=int, default=256); ap.add_argument("--max_frames_per_batch", type=int, default=16)
+ap.add_argument("--atoms_per_batch", type=int, default=192); ap.add_argument("--max_frames_per_batch", type=int, default=12); ap.add_argument("--valid_batch", type=int, default=4)
 ap.add_argument("--max_epochs", type=int, default=60); ap.add_argument("--patience", type=int, default=10)
 ap.add_argument("--device", default="cuda"); ap.add_argument("--max_frames", type=int, default=0, help="debug: truncate the dataset")
 args = ap.parse_args()
@@ -90,7 +90,7 @@ train_ds, valid_ds = dataset(model, args.head, train), dataset(model, args.head,
 sizes = [int(d.positions.shape[0]) for d in train_ds]
 sampler = AtomBudgetBatches(sizes, args.atoms_per_batch, args.max_frames_per_batch, args.seed)
 train_loader = tg.dataloader.DataLoader(train_ds, batch_size=1, shuffle=False, drop_last=False, batch_sampler=sampler)
-valid_loader = tg.dataloader.DataLoader(valid_ds, batch_size=8, shuffle=False)
+valid_loader = tg.dataloader.DataLoader(valid_ds, batch_size=args.valid_batch, shuffle=False)
 loss_fn = UniversalFieldLoss(energy_weight=0.0, forces_weight=0.0, stress_weight=0.0, polarization_weight=args.w_p, becs_weight=args.w_z, polarizability_weight=args.w_a).to(dev)
 OUT = {"forces": False, "virials": False, "stress": False, "polarization": True, "becs": True, "polarizability": True}
 KW = dict(training=True, compute_force=False, compute_stress=False, compute_polarization=True, compute_becs=True, compute_polarizability=True)
@@ -104,7 +104,7 @@ def metrics(m, loader):
 # reference: the MH-0 MACE-Field on the same validation structures (its own table and head)
 ref = torch.load(args.ref, map_location=dev, weights_only=False).to(dev).float()
 ref_valid = dataset(ref, args.ref_head, valid)
-ref_m = metrics(ref, tg.dataloader.DataLoader(ref_valid, batch_size=8, shuffle=False)); del ref, ref_valid; torch.cuda.empty_cache()
+ref_m = metrics(ref, tg.dataloader.DataLoader(ref_valid, batch_size=args.valid_batch, shuffle=False)); del ref, ref_valid; torch.cuda.empty_cache()
 logging.info("reference MH-0 MACE-Field (%s) on this validation split: %s", args.ref_head, {k: round(v, 5) for k, v in ref_m.items()})
 init_m = metrics(model, valid_loader)
 logging.info("MH-1-Field at init (zero field coupling): %s", {k: round(v, 5) for k, v in init_m.items()})
