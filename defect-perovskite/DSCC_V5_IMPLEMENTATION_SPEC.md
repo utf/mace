@@ -6057,3 +6057,9 @@ Part B, training frames (A s0's dq and q0 at s = 1; per-component RMS force, meV
 23.6; neutral and pristine: 0 by construction (dq = 0). Energies: E_far +11.5 / −12.3 meV,
 E_near −787 / −538 meV (s = 1; A s0's learned s is 0.36). E_far is at the meV/Å level as
 expected; E_near at s = 1 is 10× E_far.
+Part A(ii) (A s0's dq at the sharpened fill σ_s × 0.25: Σdq 1.000, max 0.416, within 5 Å 0.854 —
+the control's carrier is localised in the 2879-atom cell): ratio / cosine by shell 0–4 0.29
+(+0.99); 4–6 0.38; 6–8 0.50; 8–10 0.62 (+1.00); 10–12 0.73; 12–14 0.81; 14–17 0.88; 17–20 0.95;
+20–24 0.98 (+0.99). Same picture as the unit charge: the far field is Z*·E_c beyond 10 Å; inside
+6 Å the residual (0.29–0.38) is the nonlocal Born response of the ramp region. §2 complete
+(`kernel_check_A.json`, `kernel_check_B.json`).
