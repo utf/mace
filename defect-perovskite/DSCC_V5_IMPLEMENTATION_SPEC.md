@@ -6006,3 +6006,9 @@ transfer 13.4. B s1: 23.32, 19.87, 45.4 / 22.2 / 16.5 / 12.8 / 8.3, E79 0.60, tr
 W6 on base v2 (same instrument, six-seed median): 11.6 / 10.5 / 19.3 / 11.0 / 10.0 / 9.0 / 7.1,
 E79 0.52, transfer 4.3. Cost: A 40 s/epoch (local card), B 76 s/epoch (b3). The paired reading
 waits for six seeds; the first two B seeds are 1.5–2× the control at every shell.
+Phase 2 localisation (2026-09-19 15:00, `p2_c5.py`, C5 precondition on 1191 neutral-vacancy
+frames, epoch-averaged checkpoints): A s0 pass 0.981 / sep 439 meV / N_eff 1.54; A s1 pass 0.034 /
+340 meV / 14.5; B s0 pass 0.000 / 32 meV / 34.1; B s1 pass 0.000 / 45 meV / 10.0. W6 on base v2:
+pass 0.71–0.98, sep 230–422 meV, N_eff 1.26–1.35 (s0–s3). Reading: the B head has no bound
+vacancy state on either seed (the near-field force deficit is its signature); the control is
+seed-dependent on this base. Preliminary report `P2_PRELIM_REPORT.md` written on A s0/s1, B s0/s1.
