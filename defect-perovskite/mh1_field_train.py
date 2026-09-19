@@ -30,7 +30,8 @@ ap.add_argument("--head", default="mp_pbe_refit_add"); ap.add_argument("--ref", 
 ap.add_argument("--valid_fraction", type=float, default=0.2); ap.add_argument("--seed", type=int, default=123)
 ap.add_argument("--lr", type=float, default=1e-3); ap.add_argument("--lr_raise", type=float, default=3e-3); ap.add_argument("--ema", type=float, default=0.999)
 ap.add_argument("--w_p", type=float, default=1.0); ap.add_argument("--w_z", type=float, default=100.0); ap.add_argument("--w_a", type=float, default=100.0)
-ap.add_argument("--atoms_per_batch", type=int, default=192); ap.add_argument("--max_frames_per_batch", type=int, default=12); ap.add_argument("--valid_batch", type=int, default=4)
+ap.add_argument("--atoms_per_batch", type=int, default=96); ap.add_argument("--max_frames_per_batch", type=int, default=8); ap.add_argument("--valid_batch", type=int, default=2)
+ap.add_argument("--max_atoms", type=int, default=120, help="frames above this size are excluded (alpha's nested derivatives: ~1 GB per 16 atoms on the 16 GB card); recorded")
 ap.add_argument("--max_epochs", type=int, default=60); ap.add_argument("--patience", type=int, default=10)
 ap.add_argument("--device", default="cuda"); ap.add_argument("--max_frames", type=int, default=0, help="debug: truncate the dataset")
 args = ap.parse_args()
@@ -39,8 +40,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", handle
 torch.manual_seed(args.seed); np.random.seed(args.seed); torch.set_default_dtype(torch.float32); dev = torch.device(args.device)
 
 # ------------------------------------------------------------------ data and split
-frames = read(args.data, ":")
-if args.max_frames: frames = frames[: args.max_frames]
+frames_all = read(args.data, ":")
+if args.max_frames: frames_all = frames_all[: args.max_frames]
+excluded = [i for i, a in enumerate(frames_all) if len(a) > args.max_atoms]
+frames = [a for a in frames_all if len(a) <= args.max_atoms]
+logging.info("frames %d; excluded %d above %d atoms (%d with P labels, %d with Z*/alpha labels)", len(frames), len(excluded), args.max_atoms,
+             sum(1 for i in excluded if "REF_polarization" in frames_all[i].info), sum(1 for i in excluded if "REF_becs" in frames_all[i].arrays))
 ferro = [i for i, a in enumerate(frames) if "polar_mpid" in a.info]; diel = [i for i in range(len(frames)) if i not in set(ferro)]
 rng = np.random.default_rng(args.seed)
 mats = sorted(set(frames[i].info["polar_mpid"] for i in ferro)); rng.shuffle(mats)
@@ -50,7 +55,8 @@ diel_perm = list(diel); rng.shuffle(diel_perm); n_v = int(args.valid_fraction * 
 valid += diel_perm[:n_v]
 valid_set = set(valid); train = [i for i in range(len(frames)) if i not in valid_set]
 json.dump({"seed": args.seed, "valid_fraction": args.valid_fraction, "n_train": len(train), "n_valid": len(valid), "ferro_valid_materials": sorted(valid_mats),
-           "train": train, "valid": valid, "rule": "ferroelectric by material (polar_mpid), dielectric random"}, open(run / "split.json", "w"))
+           "train": train, "valid": valid, "rule": "ferroelectric by material (polar_mpid), dielectric random", "max_atoms": args.max_atoms, "n_excluded": len(excluded),
+           "note": "indices refer to the size-filtered frame list"}, open(run / "split.json", "w"))
 logging.info("split: train %d, valid %d (ferro valid materials %d of %d; dielectric valid %d of %d)", len(train), len(valid), len(valid_mats), len(mats), n_v, len(diel))
 
 ks = mace_data.KeySpecification.from_defaults()
