@@ -6089,3 +6089,21 @@ B_0 sits between. Localisation (C5): B_s pass 0.863, separation 364 meV, N_eff 1
 — a bound state again (arm B: 0.000 / 32 meV / 34); B_0 pass 0.063, 124 meV, N_eff 3.30. BZ
 readouts (avg): B_s min_k dCBM +62 meV, max_k dVBM −11 meV; B_0 +23 / −24 (gap direct at Γ,
 no penalty would have acted). Cost: B_s 90 s/epoch, B_0 80, A 40 (local), B 75.
+
+## MACE-MH-1-Field (user plan, 2026-09-19 evening; runs on the local node in parallel with Phase 2b)
+
+§1 build (`mh1_field_build.py`): `MACEField(**extract_config_mace_model(MH-1))` — MH-1 is 6,439,878
+parameters, 6 heads, 89 elements, 512x0e+512x1o, T = 2, RealAgnosticResidualNonLinear blocks; the
+field coupling of this MACEField class is the MH-0 configuration (FullyConnectedTensorProduct
+hidden × 1o → hidden, then Linear hidden → hidden, residual subtracted, after every layer t < T:
+one injection layer for T = 2). New tensors: field_feats.0 (524,288) + field_linear.0 (524,288)
+= 1,048,576 trainable; total 7,488,454; zero-initialised; everything else frozen; float32.
+Load: missing = the field tensors only; unexpected = MH-1's `equivariant_nonlin.mul.{weight,
+output_mask}` buffers (e3nn elementwise-product buffers this MACE version's block does not
+register) — the exactness test is the arbiter. Fallback §6.1 (inject at every t < T) and §6.2
+(full hidden irreps in the tensor product) are already the configuration for T = 2 / this class.
+Data: 8446 frames = 5946 MP-Dielectric (Z*, α; E/F/S weights 0) + 2500 MP-Ferroelectric (P; Z*/α
+weights 0), 79 elements. Split (recorded deviation): the MH-0 split indices are not published
+(paper: material-level splits, details in SI); repo README recipe `--valid_fraction 0.2`, weights
+P 1 / Z* 100 / α 100 → ferroelectric by material (polar_mpid, 20 % of 212 materials), dielectric
+random 20 %, seed 123; `split.json` in the run dir. Head: mp_pbe_refit_add (MP PBE/PBE+U).
