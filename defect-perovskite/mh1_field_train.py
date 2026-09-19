@@ -34,6 +34,7 @@ ap.add_argument("--atoms_per_batch", type=int, default=48); ap.add_argument("--m
 ap.add_argument("--max_atoms", type=int, default=120, help="frames above this size are excluded (alpha's nested derivatives: ~1 GB per 16 atoms on the 16 GB card); recorded")
 ap.add_argument("--max_epochs", type=int, default=60); ap.add_argument("--patience", type=int, default=10)
 ap.add_argument("--plateau_patience", type=int, default=5); ap.add_argument("--plateau_factor", type=float, default=0.8)
+ap.add_argument("--mixed_batches", type=int, default=0, help="1: batches drawn at random under the atom budget (both subsets in every step) instead of size-sorted")
 ap.add_argument("--device", default="cuda"); ap.add_argument("--max_frames", type=int, default=0, help="debug: truncate the dataset")
 args = ap.parse_args()
 run = Path(args.run); run.mkdir(parents=True, exist_ok=True)
@@ -84,16 +85,24 @@ def dataset(model, head, indices):
 
 
 class AtomBudgetBatches:
-    """Size-sorted batches under an atom budget (alpha's nested derivatives); order reshuffled per epoch."""
-    def __init__(self, sizes, budget, max_frames, seed):
-        order = np.argsort(sizes); self.batches = []; cur = []; n = 0
-        for i in order:
-            if cur and (n + sizes[i] > budget or len(cur) >= max_frames):
-                self.batches.append(cur); cur = []; n = 0
-            cur.append(int(i)); n += sizes[i]
-        if cur: self.batches.append(cur)
+    """Batches under an atom budget (alpha's nested derivatives). Size-sorted (default: the two
+    subsets segregate because the ferroelectric frames are larger), or, with `mixed`, drawn from
+    a fresh random permutation every epoch so both subsets share most steps."""
+    def __init__(self, sizes, budget, max_frames, seed, mixed=False):
+        self.sizes, self.budget, self.max_frames, self.mixed = list(sizes), budget, max_frames, mixed
         self.rng = np.random.default_rng(seed)
+        self.batches = self._build(np.argsort(self.sizes))
+    def _build(self, order):
+        batches = []; cur = []; n = 0
+        for i in order:
+            if cur and (n + self.sizes[i] > self.budget or len(cur) >= self.max_frames):
+                batches.append(cur); cur = []; n = 0
+            cur.append(int(i)); n += self.sizes[i]
+        if cur: batches.append(cur)
+        return batches
     def __iter__(self):
+        if self.mixed:
+            self.batches = self._build(self.rng.permutation(len(self.sizes)))
         perm = self.rng.permutation(len(self.batches))
         for j in perm: yield self.batches[j]
     def __len__(self): return len(self.batches)
@@ -104,7 +113,8 @@ params = [p for p in model.parameters() if p.requires_grad]
 logging.info("trainable parameters: %d (of %d)", sum(p.numel() for p in params), sum(p.numel() for p in model.parameters()))
 train_ds, valid_ds = dataset(model, args.head, train), dataset(model, args.head, valid)
 sizes = [int(d.positions.shape[0]) for d in train_ds]
-sampler = AtomBudgetBatches(sizes, args.atoms_per_batch, args.max_frames_per_batch, args.seed)
+sampler = AtomBudgetBatches(sizes, args.atoms_per_batch, args.max_frames_per_batch, args.seed, mixed=bool(args.mixed_batches))
+logging.info("batching: %s, atom budget %d, max %d frames, %d batches", "mixed (random)" if args.mixed_batches else "size-sorted", args.atoms_per_batch, args.max_frames_per_batch, len(sampler))
 train_loader = tg.dataloader.DataLoader(train_ds, batch_size=1, shuffle=False, drop_last=False, batch_sampler=sampler)
 valid_loader = tg.dataloader.DataLoader(valid_ds, batch_size=args.valid_batch, shuffle=False)
 loss_fn = UniversalFieldLoss(energy_weight=0.0, forces_weight=0.0, stress_weight=0.0, polarization_weight=args.w_p, becs_weight=args.w_z, polarizability_weight=args.w_a).to(dev)
