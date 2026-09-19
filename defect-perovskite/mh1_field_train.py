@@ -41,7 +41,7 @@ torch.manual_seed(args.seed); np.random.seed(args.seed); torch.set_default_dtype
 
 # ------------------------------------------------------------------ data and split
 frames_all = read(args.data, ":")
-if args.max_frames: frames_all = frames_all[: args.max_frames]
+if args.max_frames: frames_all = frames_all[:: max(1, len(frames_all) // args.max_frames)][: args.max_frames]   # debug: strided, both subsets
 excluded = [i for i, a in enumerate(frames_all) if len(a) > args.max_atoms]
 frames = [a for a in frames_all if len(a) <= args.max_atoms]
 logging.info("frames %d; excluded %d above %d atoms (%d with P labels, %d with Z*/alpha labels)", len(frames), len(excluded), args.max_atoms,
@@ -104,7 +104,7 @@ KW = dict(training=True, compute_force=False, compute_stress=False, compute_pola
 
 def metrics(m, loader):
     m.eval(); _, aux = evaluate(m, loss_fn, loader, OUT, dev); m.train()
-    return {k: float(aux[k]) for k in ("rmse_polarization", "rmse_becs", "rmse_polarizability") if aux.get(k) is not None}
+    return {k: (float(aux[k]) if aux.get(k) is not None else float("nan")) for k in ("rmse_polarization", "rmse_becs", "rmse_polarizability")}
 
 
 # reference: the MH-0 MACE-Field on the same validation structures (its own table and head)
@@ -132,8 +132,10 @@ for epoch in range(args.max_epochs):
     peak = torch.cuda.max_memory_allocated() / 2 ** 30
     with ema.average_parameters():
         vm = metrics(model, valid_loader)
-    sched.step(vm["rmse_becs"])
-    improved = vm["rmse_becs"] < best["becs"] or vm["rmse_polarizability"] < best["alpha"]
+    key = vm["rmse_becs"] if vm["rmse_becs"] == vm["rmse_becs"] else vm["rmse_polarization"]
+    sched.step(key)
+    improved = vm["rmse_becs"] < best["becs"] or vm["rmse_polarizability"] < best["alpha"] or (vm["rmse_becs"] != vm["rmse_becs"] and vm["rmse_polarization"] < best.get("pol", float("inf")))
+    if vm["rmse_polarization"] < best.get("pol", float("inf")): best["pol"] = vm["rmse_polarization"]
     if improved:
         best.update(becs=min(best["becs"], vm["rmse_becs"]), alpha=min(best["alpha"], vm["rmse_polarizability"]), epoch=epoch); since = 0
         with ema.average_parameters():
