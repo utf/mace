@@ -33,6 +33,7 @@ ap.add_argument("--w_p", type=float, default=1.0); ap.add_argument("--w_z", type
 ap.add_argument("--atoms_per_batch", type=int, default=48); ap.add_argument("--max_frames_per_batch", type=int, default=8); ap.add_argument("--valid_batch", type=int, default=2)
 ap.add_argument("--max_atoms", type=int, default=120, help="frames above this size are excluded (alpha's nested derivatives: ~1 GB per 16 atoms on the 16 GB card); recorded")
 ap.add_argument("--max_epochs", type=int, default=60); ap.add_argument("--patience", type=int, default=10)
+ap.add_argument("--plateau_patience", type=int, default=5); ap.add_argument("--plateau_factor", type=float, default=0.8)
 ap.add_argument("--device", default="cuda"); ap.add_argument("--max_frames", type=int, default=0, help="debug: truncate the dataset")
 args = ap.parse_args()
 run = Path(args.run); run.mkdir(parents=True, exist_ok=True)
@@ -126,7 +127,7 @@ logging.info("MH-1-Field at init (zero field coupling): %s", {k: round(v, 5) for
 
 opt = torch.optim.Adam(params, lr=args.lr, weight_decay=0.0)
 ema = ExponentialMovingAverage(params, decay=args.ema)
-sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode="min", factor=0.8, patience=5)
+sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode="min", factor=args.plateau_factor, patience=args.plateau_patience)
 history = [{"epoch": -1, "valid": init_m, "ref": ref_m}]
 best = {"becs": float("inf"), "alpha": float("inf"), "epoch": -1}; since = 0; raised = False
 t_start = time.time()
