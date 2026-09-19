@@ -10,7 +10,10 @@ while true; do
   grep -q "GATES_DONE\|FAILED" $P1/P1_STATUS 2>/dev/null && break
   sleep 600
 done
-if ! head -1 $P1/P1_STATUS | grep -q "ALL PASS"; then echo "BLOCKED $(date): $(head -1 $P1/P1_STATUS)" > $P2/P2_STATUS; exit 0; fi
+if ! head -1 $P1/P1_STATUS | grep -q "ALL PASS"; then
+  if [ "${P2_FORCE:-0}" = "1" ]; then echo "USER OVERRIDE $(date): Phase 2 opened on $(head -1 $P1/P1_STATUS)" >> $P2/ORCH_LOG;
+  else echo "BLOCKED $(date): $(head -1 $P1/P1_STATUS)" > $P2/P2_STATUS; exit 0; fi
+fi
 EPS_M=$(python3 -c "import json; print(round(json.load(open('$P1/P1_GATES.json'))['gate2']['eps_inf_poly'], 4))")
 BASE=$P1/base.pt
 python defect-perovskite/p2_epp_mismatch.py --base $BASE --out $P1/P2_EPP.json > $P1/epp.out 2>&1 || { echo "EPP_MEASURE_FAILED $(date)" > $P2/P2_STATUS; exit 1; }

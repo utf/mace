@@ -5981,3 +5981,14 @@ Option to put to the user (not acted on): Phase 2 with base v2 (MH-1; the gate-3
 as the energy/force base and a frozen MACE-Field model as the dipole provider (`--field_provider
 PATH`, the FieldProvider path built for Plan P) — the base passes the gates by construction and
 the provider's response is the gate-2-validated one (base_v7 or the raw checkpoint).
+
+## Plan P Phase 2 — user override (2026-09-19): open on base_v7_lr3e4
+
+Decision (user): "Continue with base v7 3e-4." Phase 2 opens on `base_v7_lr3e4/base.pt` although
+gate 1 (13.2 meV/Å > 11.2) and gate 3 (charged shells +13.6 total, +30 at 2–4 Å) failed; gate 2
+passed (response within 0.5 %). Recorded as a registered deviation: the Phase 2 arms are read
+against a base that is 3 meV/Å above the neutral gate and 14 meV/Å above base v2 on charged
+cells, so arm comparisons (B vs B(M) vs A) are internally valid but absolute charged-shell numbers
+carry the base's excess. Launch = `P2_FORCE=1 p2_launch_on_gates.sh base_v7_lr3e4`: A3 entry
+measurement (E_PP mismatch, τ 1.7) first, refit only if EXCEEDS, then arms B (seeds 0–6),
+B(M) (eps_M 3.548, seeds 0–2), A (seeds 3/4/6) on b3 GPUs 5+7 via w3_queue and A seeds 0–2 locally.
