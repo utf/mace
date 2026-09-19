@@ -6081,3 +6081,11 @@ local: dscc_p2a_s{3,4,6} in series (`p2b_local.sh`). All with `--bz_gap 0 --bz_r
 `--r_c 8 --delta 2 --near_r_split 2.5`, E_PP on, no learned coefficient on E_far. Finisher
 `p2b_finish.sh` → `P2B_GATES.json`, `P2B_C5.json`, `P2B_REPORT.md`. Expected: ≈ 1.5 h per B run
 (60 × 90 s), 12 runs on two cards ≈ 9 h; A seeds ≈ 40 min each locally.
+Phase 2b first seeds (2026-09-19 17:15, seed 0 = fold 0, epoch-averaged held-out, per component):
+B_s: total 15.13, 4–12 Å 13.73, shells 25.1 / 14.6 / 12.5 / 11.4 / 8.8, E79 0.41, C_Q transfer 5.5
+meV, learned s 0.318; B_0: 19.81, 17.61, 34.8 / 19.1 / 15.9 / 11.9 / 8.4, E79 0.65, transfer 25.5.
+Against A s0 (15.31 / 13.72) and B s0 (29.66 / 25.16): B_s equals the control on the same fold;
+B_0 sits between. Localisation (C5): B_s pass 0.863, separation 364 meV, N_eff 1.87 (p90 2.60)
+— a bound state again (arm B: 0.000 / 32 meV / 34); B_0 pass 0.063, 124 meV, N_eff 3.30. BZ
+readouts (avg): B_s min_k dCBM +62 meV, max_k dVBM −11 meV; B_0 +23 / −24 (gap direct at Γ,
+no penalty would have acted). Cost: B_s 90 s/epoch, B_0 80, A 40 (local), B 75.
