@@ -6159,3 +6159,12 @@ run1 (P 1 / Z* 100 / α 100, lr 1e-3, χ labels): epoch 0: P 0.00361, Z* 0.4669,
 Z* ≈ 25 %, P nil (below its Huber delta at weight 1). Decision (user, 21:55): polarisation weight
 1000, lr 1e-2 → restarted 22:00 as run1 (the previous kept as run1_p1_lr1e-3); the epoch-5 lr
 raise is disabled (lr_raise = lr).
+run1 (P 1000 / Z* 100 / α 100, lr 1e-2): epoch 0: P 0.00299, Z* 0.6205, α 2.474; epoch 1: 0.00319 /
+0.5977 / 2.189. Per-frame gradient norms on the field weights (1-frame batches, current checkpoint):
+P term 0.17–13.7 on ferroelectric frames (clipped at 1.0 on most steps), Z* 0.02–0.04 and α
+0.08–0.34 on dielectric frames (never clipped); the size-sorted batches segregated the two subsets
+(dielectric median 14 atoms, ferroelectric 28), so each step trained one objective and the
+clipping acted on P alone, scaling Z*/α updates down through Adam's second moment. Decision
+(user, 23:10): restart with lr 3e-3 (midway), reduce-on-plateau on validation Z* (factor 0.5,
+patience 3), and mixed batches (random permutation under the same 48-atom budget) → run1;
+the lr 1e-2 run kept as run1_p1000_lr1e-2.
