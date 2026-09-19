@@ -6012,3 +6012,18 @@ frames, epoch-averaged checkpoints): A s0 pass 0.981 / sep 439 meV / N_eff 1.54;
 pass 0.71–0.98, sep 230–422 meV, N_eff 1.26–1.35 (s0–s3). Reading: the B head has no bound
 vacancy state on either seed (the near-field force deficit is its signature); the control is
 seed-dependent on this base. Preliminary report `P2_PRELIM_REPORT.md` written on A s0/s1, B s0/s1.
+
+## Plan P Phase 2b (user, 2026-09-19 15:10; plan file `PLAN_P_PHASE2B.md`, verbatim)
+
+§0 done 15:15: arms B s2/s3 killed (STATUS STOPPED_BY_PLAN_2B), B s4/s6 and B(M) s0–2 removed from
+the b3 queue; arm A seeds 0–2 keep running / finished locally. Reading of §3 ("both arms and A's
+remaining seeds"): A seeds 3/4/6 must carry the Brillouin-zone regulariser, so A s3 (2 min in)
+and A s4 (2 min in) were killed too and the queue runner stopped; they are requeued with
+`--bz_gap 1` once §3's tests pass. The control arm is therefore mixed on the regulariser
+(s0–2 without, s3/4/6 with) and the report must say so. `p2_finish.sh` and the Phase 2 monitor
+stopped (they waited for B/B(M)). Registered before any 2b run: §2 kernel-validation expectation
+(switched far-field force / Z*·E_c ratio 0 inside 6 Å, ramp 6–8, then 0.78 → 0.97 beyond 8 Å);
+§5 reading "equivalence of B_x with A is the expected outcome and sufficient"; the head used for
+§2's dq/q0 on the training frames = arm A seed 0's epoch-averaged checkpoint (the localised
+control); the four thermal pristine snapshots for §3 = the first four pristine frames of the
+training set in file order (indices registered in the trainer log at first use).
