@@ -5992,3 +5992,10 @@ cells, so arm comparisons (B vs B(M) vs A) are internally valid but absolute cha
 carry the base's excess. Launch = `P2_FORCE=1 p2_launch_on_gates.sh base_v7_lr3e4`: A3 entry
 measurement (E_PP mismatch, τ 1.7) first, refit only if EXCEEDS, then arms B (seeds 0–6),
 B(M) (eps_M 3.548, seeds 0–2), A (seeds 3/4/6) on b3 GPUs 5+7 via w3_queue and A seeds 0–2 locally.
+Phase 2 LAUNCHED (2026-09-19 12:46, `P2_STATUS`). Entry measurement on base_v7_lr3e4: E_PP force RMS
+on the 154 neutral validation frames 1.495 meV/Å (τ 1.7 → PASS; per-frame max 4.28; species
+signed means ≤ 0.08 meV/Å) — larger than the base v5 base's 0.746: the trained base's dipoles
+differ from the raw checkpoint's. No refit. Arms: b3 w3_queue (GPUs 5+7, one run per GPU) —
+dscc_p2b_s{0,1,2,3,4,6} (polarisation, eps_inf 4.0), dscc_p2bm_s{0,1,2} (eps_M 3.5484),
+dscc_p2a_s{3,4,6} (Mulliken control); local card — dscc_p2a_s{0,1,2} in series. First runs:
+dscc_p2b_s0 on GPU 5 (12:42), dscc_p2a_s0 local.
