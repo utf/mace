@@ -25,9 +25,15 @@ assert all(k.startswith("field_") for k in missing), missing
 # the unexpected keys are e3nn buffers of MH-1's gated nonlinearity (`mul.weight` of size 0 and
 # its output mask) that this MACE version's block does not register; the exactness test decides
 print("missing (new field tensors):", missing); print("unexpected (buffers, not parameters):", unexpected)
+# Initialisation (plan §1 amended, recorded): the coupling is the composition of two linear maps
+# (field_feats: hidden x 1o -> hidden, then field_linear: hidden -> hidden), so P and Z* are
+# BILINEAR in the two weight sets and the gradient of both vanishes at the all-zero point (the
+# first epoch at all-zero init moved nothing). `field_feats` keeps its e3nn default random
+# initialisation; `field_linear` starts at zero, which still makes the initial response exactly
+# zero and keeps the E = 0 residual identically zero for any weights.
 with torch.no_grad():
     for n, p in model.named_parameters():
-        if n.startswith("field_"):
+        if n.startswith("field_linear"):
             p.zero_()
 for n, p in model.named_parameters():
     p.requires_grad_(n.startswith("field_"))
@@ -40,7 +46,7 @@ rec = {"mh1": args.mh1, "mh1_params": n_mh1, "total_params": n_total, "trainable
        "field_injection_layers": len(model.field_feats), "hidden_irreps": str(cfg["hidden_irreps"]), "dtype": "float32",
        "missing_keys": missing, "unexpected_keys": unexpected}
 model.field_config = {"injection_layers": "after every interaction layer t < T (T = %d): %d layer(s)" % (model.num_interactions, len(model.field_feats)),
-                      "tensor_product": "FullyConnectedTensorProduct(hidden x 1o -> hidden) + Linear(hidden -> hidden), residual subtracted", "init": "zero", "frozen": "all MH-1 tensors"}
+                      "tensor_product": "FullyConnectedTensorProduct(hidden x 1o -> hidden) + Linear(hidden -> hidden), residual subtracted", "init": "field_feats e3nn default random, field_linear zero (bilinear coupling: all-zero is a stationary point)", "frozen": "all MH-1 tensors"}
 torch.save(model, args.out)
 json.dump(rec, open(args.json or (args.out + ".json"), "w"), indent=1)
 print(f"MH-1 params {n_mh1}; MH-1-Field total {n_total}; trainable (field) {n_train}; saved {args.out} ({time.time()-t0:.0f}s)")

@@ -6127,3 +6127,13 @@ re-instantiated from MH-1's config with MH-1's weights equals the pickled MH-1 t
 5e-12 meV/Å — the re-instantiation is exact, so the 1e-5 meV/atom float64 residual belongs to
 the MACEField forward path itself (an arithmetic-order difference of the port's energy assembly,
 5–6 orders below the base's own error). Not pursued under this plan; recorded.
+§1 amendment (recorded, 2026-09-19 18:50): the plan's "initialise the field-coupling parameters to
+zero … a valid start with a nonzero gradient" is false for this class: the coupling is the
+composition of two linear maps (field_feats then field_linear), P and Z* are bilinear in the two
+weight sets, and both gradients vanish at the all-zero point — the first full epoch (1372 s,
+0.73 s/step, 14.7 GB peak) left the validation numbers identical to the init (P 0.00369, Z* 1.334,
+α 0.337). Fix: field_feats keeps its e3nn default random initialisation, field_linear starts at
+zero (initial response exactly 0, E = 0 residual identically 0 for any weights; verified: grad
+norm 5.7e-2 on field_linear, response 0 at init). Run restarted as run1 (the stalled run kept as
+run0_zeroinit). Full-split reference (MH-0, mp-dielectric, 1679 validation frames): P 0.00177
+e/Å², Z* 0.2101 e, α 3.661 ε0 — targets 1.1× = 0.00195 / 0.231 / 4.03.
