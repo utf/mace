@@ -5999,3 +5999,10 @@ differ from the raw checkpoint's. No refit. Arms: b3 w3_queue (GPUs 5+7, one run
 dscc_p2b_s{0,1,2,3,4,6} (polarisation, eps_inf 4.0), dscc_p2bm_s{0,1,2} (eps_M 3.5484),
 dscc_p2a_s{3,4,6} (Mulliken control); local card — dscc_p2a_s{0,1,2} in series. First runs:
 dscc_p2b_s0 on GPU 5 (12:42), dscc_p2a_s0 local.
+Phase 2 first readings (2026-09-19 14:20; epoch-averaged held-out, per component meV/Å):
+A s0: total 15.31, 4–12 Å 13.72, shells 2–4 26.3 / 4–8 14.3 / 8–10 13.1 / 10–12 11.8 / 12+ 7.8,
+E79 0.61, C_Q transfer 11.0 meV. B s0: 29.66, 25.16, 57.5 / 28.1 / 20.8 / 16.3 / 11.7, E79 0.52,
+transfer 13.4. B s1: 23.32, 19.87, 45.4 / 22.2 / 16.5 / 12.8 / 8.3, E79 0.60, transfer 5.8.
+W6 on base v2 (same instrument, six-seed median): 11.6 / 10.5 / 19.3 / 11.0 / 10.0 / 9.0 / 7.1,
+E79 0.52, transfer 4.3. Cost: A 40 s/epoch (local card), B 76 s/epoch (b3). The paired reading
+waits for six seeds; the first two B seeds are 1.5–2× the control at every shell.
