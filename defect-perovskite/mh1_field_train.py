@@ -30,7 +30,7 @@ ap.add_argument("--head", default="mp_pbe_refit_add"); ap.add_argument("--ref", 
 ap.add_argument("--valid_fraction", type=float, default=0.2); ap.add_argument("--seed", type=int, default=123)
 ap.add_argument("--lr", type=float, default=1e-3); ap.add_argument("--lr_raise", type=float, default=3e-3); ap.add_argument("--ema", type=float, default=0.999)
 ap.add_argument("--w_p", type=float, default=1.0); ap.add_argument("--w_z", type=float, default=100.0); ap.add_argument("--w_a", type=float, default=100.0)
-ap.add_argument("--atoms_per_batch", type=int, default=96); ap.add_argument("--max_frames_per_batch", type=int, default=8); ap.add_argument("--valid_batch", type=int, default=2)
+ap.add_argument("--atoms_per_batch", type=int, default=48); ap.add_argument("--max_frames_per_batch", type=int, default=8); ap.add_argument("--valid_batch", type=int, default=2)
 ap.add_argument("--max_atoms", type=int, default=120, help="frames above this size are excluded (alpha's nested derivatives: ~1 GB per 16 atoms on the 16 GB card); recorded")
 ap.add_argument("--max_epochs", type=int, default=60); ap.add_argument("--patience", type=int, default=10)
 ap.add_argument("--device", default="cuda"); ap.add_argument("--max_frames", type=int, default=0, help="debug: truncate the dataset")
@@ -44,6 +44,15 @@ frames_all = read(args.data, ":")
 if args.max_frames: frames_all = frames_all[:: max(1, len(frames_all) // args.max_frames)][: args.max_frames]   # debug: strided, both subsets
 excluded = [i for i, a in enumerate(frames_all) if len(a) > args.max_atoms]
 frames = [a for a in frames_all if len(a) <= args.max_atoms]
+# Units (recorded): the combined dataset stores the polarisability as the Gaussian polarisability
+# density chi / 4 pi (MgO 0.197 -> eps_inf 3.5, Si 0.935 -> 12.7, diamond 0.446 -> 6.6), while
+# MACE-Field (fork and port alike) predicts chi = (dP/dE) / (V eps0) directly (CsPbCl3 2.55 ->
+# eps_inf 3.55). Labels are converted to chi here; the MH-0 reference is read on the same converted labels.
+FOUR_PI = 4.0 * np.pi
+for a in frames:
+    if "REF_polarizability" in a.info:
+        a.info["REF_polarizability"] = np.asarray(a.info["REF_polarizability"], dtype=float) * FOUR_PI
+logging.info("polarisability labels converted chi = 4 pi x REF_polarizability (dataset convention chi / 4 pi)")
 logging.info("frames %d; excluded %d above %d atoms (%d with P labels, %d with Z*/alpha labels)", len(frames), len(excluded), args.max_atoms,
              sum(1 for i in excluded if "REF_polarization" in frames_all[i].info), sum(1 for i in excluded if "REF_becs" in frames_all[i].arrays))
 ferro = [i for i, a in enumerate(frames) if "polar_mpid" in a.info]; diel = [i for i in range(len(frames)) if i not in set(ferro)]
@@ -128,7 +137,7 @@ for epoch in range(args.max_epochs):
         b = b.to(dev); opt.zero_grad(set_to_none=True)
         out = model(b.to_dict(), **KW); loss = loss_fn(pred=out, ref=b); loss.backward()
         torch.nn.utils.clip_grad_norm_(params, 1.0); opt.step(); ema.update()
-        tot += float(loss); n_b += 1
+        tot += float(loss); n_b += 1; del out, loss
     peak = torch.cuda.max_memory_allocated() / 2 ** 30
     with ema.average_parameters():
         vm = metrics(model, valid_loader)

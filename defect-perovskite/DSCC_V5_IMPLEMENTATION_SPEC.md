@@ -6141,3 +6141,16 @@ run1 (random/zero init) epoch 0: 1391 s, 0.74 s/step, 14.7 GB peak; validation P
 α 0.1309 (init 0.00369 / 1.334 / 0.337) — learning. Epoch 1 hit CUDA OOM (a larger batch under the
 96-atom budget on the 16 GB card); restarted 19:25 with atoms_per_batch 64 / max 6 frames (the
 OOM run kept as run1_oom_e1).
+Units finding (2026-09-19 20:30, from the user's question on the MH-0 reference α error). The
+combined dataset's `REF_polarizability` is the Gaussian polarisability density χ/4π (MgO 0.197 →
+ε∞ 3.5, Si 0.935 → 12.7, diamond 0.446 → 6.6, all matching PBE ε∞), while MACE-Field — the fork
+(extensions.py:541) and the port alike — predicts χ = (dP/dE)/(V ε0) (CsPbCl3 2.55 → ε∞ 3.55).
+Consequences: (1) the MH-0 "α RMSE 3.66" on this validation split is a unit artefact (per-frame
+pred/label ≈ 12.6 = 4π; Bi2Te3 label 2.51 vs prediction 31.8 is a near-exact χ prediction, not
+a metallic outlier — the earlier "metallic outliers" reading is withdrawn); (2) the run1 epoch-0
+α numbers (0.131) were fits to χ/4π and are discarded; (3) labels are now converted χ = 4π ×
+REF_polarizability in `mh1_field_train.py` for training and for the reference. Z* (e) and P
+(e/Å²) labels are in the model's units (MH-0 per-frame Z* RMSE median 0.07 e). Second OOM at
+epoch 1 (13.2 GB peak in epoch 0, 15.5 GB at failure: memory creep across the validation pass)
+→ atoms_per_batch 48, cache emptied after validation; restarted 20:32 (`run1_alpha_unscaled`
+kept).
