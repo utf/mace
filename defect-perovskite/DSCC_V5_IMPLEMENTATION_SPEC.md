@@ -6137,3 +6137,7 @@ zero (initial response exactly 0, E = 0 residual identically 0 for any weights; 
 norm 5.7e-2 on field_linear, response 0 at init). Run restarted as run1 (the stalled run kept as
 run0_zeroinit). Full-split reference (MH-0, mp-dielectric, 1679 validation frames): P 0.00177
 e/Å², Z* 0.2101 e, α 3.661 ε0 — targets 1.1× = 0.00195 / 0.231 / 4.03.
+run1 (random/zero init) epoch 0: 1391 s, 0.74 s/step, 14.7 GB peak; validation P 0.00363, Z* 0.4706,
+α 0.1309 (init 0.00369 / 1.334 / 0.337) — learning. Epoch 1 hit CUDA OOM (a larger batch under the
+96-atom budget on the 16 GB card); restarted 19:25 with atoms_per_batch 64 / max 6 frames (the
+OOM run kept as run1_oom_e1).
