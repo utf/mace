@@ -6107,3 +6107,18 @@ weights 0), 79 elements. Split (recorded deviation): the MH-0 split indices are 
 (paper: material-level splits, details in SI); repo README recipe `--valid_fraction 0.2`, weights
 P 1 / Z* 100 / α 100 → ferroelectric by material (polar_mpid, 20 % of 212 materials), dielectric
 random 20 %, seed 123; `split.json` in the run dir. Head: mp_pbe_refit_add (MP PBE/PBE+U).
+§2 exactness BEFORE training (`mh1_field_exact.py`; 2000 structures = 1400 MH-1 replay + 600
+CsPbCl3 defect frames; all six heads; E = 0). Field residual at E = 0: exactly 0 (structural: the
+tensor product of any weights with a zero field is zero). float32 (the plan's precision):
+max |ΔE|/atom 1.5e-3 (mp_pbe_refit_add), 1.9e-3 (omat_pbe), 2.1e-3 (oc20), 1.5e-2 (matpes),
+0.33 (spice), 9.5 meV/atom (omol); max |ΔF| 1.7e-2 … 3.6e-2 meV/Å; max |Δσ| 0.6e-3 … 2.1e-3
+meV/Å³. float64 control (300 structures): max |ΔE|/atom 1.3e-5 … 2.0e-5, max |ΔF| 0.7e-4 …
+2.2e-4 meV/Å, |Δσ| 3e-6 on every head. Reading: the float32 numbers are the round-off of the
+absolute energies (omol / spice totals are 1e4–1e5 eV, so float32 resolution is 1–10 meV; the
+PBE heads' 1e-3 meV/atom is relative 2e-6), forces at 3e-2 meV/Å are relative 1e-6; in float64
+the two models agree to 1e-5 meV/atom and 1e-4 meV/Å. The plan's figures (≤ 1e-5 meV/atom,
+≤ 1e-4 meV/Å "to float32 round-off") are met in float64 and are unattainable in float32 for any
+two evaluations of MH-1 with different arithmetic order; the residual 1e-5 meV/atom in float64
+is the re-instantiation of MH-1's blocks in this MACE version (its `equivariant_nonlin.mul`
+buffers), being isolated by a plain-ScaleShiftMACE control (no field layers). "Same performance"
+holds: the deviation is 5–6 orders below the base's own force error.
