@@ -94,7 +94,7 @@ if "A" not in args.part:
 rvec = relative(np.array(atoms.get_positions()), vac, cell); r = np.linalg.norm(rvec, axis=1)
 N = len(atoms); print(f"embedded {tt}: N={N}", flush=True)
 if "A" in args.part:
-    a = atoms.copy()
+    a = atoms.copy(); a.info.update({"carrier_counts": np.array([0, 0, 1, 0], float), "cell_charge": 1, "config_type": "kc", "source_dir": "kc"})
     b = next(iter(tg.dataloader.DataLoader(dd.atomic_data([a], z3, provider_model.r_cut), batch_size=1))).to(dev).to_dict()
     edges = head_edges(np.array(atoms.get_positions()), np.array(atoms.get_cell()), args.r_c)
     # Born tensors of the tiling counterparts (as p0_bornforce)
@@ -103,7 +103,9 @@ if "A" in args.part:
     cfg = mace_data.config_from_atoms(unit, key_specification=mace_data.KeySpecification.from_defaults(), head_name=list(prov.heads)[-1])
     ad = mace_data.AtomicData.from_config(cfg, z_table=z_all, cutoff=float(prov.r_max), heads=list(prov.heads))
     bu = next(iter(tg.dataloader.DataLoader([ad], batch_size=1))).to(dev).to_dict()
-    Zu = prov(bu, training=True, compute_force=False, compute_polarization=True, compute_becs=True)["becs"].detach().cpu().numpy().reshape(len(unit), 3, 3)
+    bdt = next(prov.parameters()).dtype
+    bu = {k: (v.to(bdt) if torch.is_tensor(v) and v.is_floating_point() else v) for k, v in bu.items()}
+    Zu = prov(bu, training=True, compute_force=False, compute_polarization=True, compute_becs=True)["becs"].detach().double().cpu().numpy().reshape(len(unit), 3, 3)
     rep = unit.repeat(tt); Zrep = np.tile(Zu, (int(np.prod(tt)), 1, 1))
     sites = [i for i, z in enumerate(rep.get_atomic_numbers()) if int(z) == 17]
     Z = np.delete(Zrep, sites[0], axis=0)
@@ -146,6 +148,7 @@ if "A" in args.part:
     dd_ = dict(b); dd_["positions"] = pos_leaf; dd_["shifts"] = shifts
     p_unit = provider_model._node_dipoles(dd_, b["node_attrs"].argmax(-1))
     (g_unit,) = torch.autograd.grad(-(p_unit * E_far_unit.detach()).sum(), pos_leaf)
+    del p_unit, pos_leaf, dd_; torch.cuda.empty_cache()
     print("Part A (i): unit Gaussian charge at the vacancy site", flush=True)
     res["A_unit_charge"] = shell_table((-g_unit).detach().cpu().numpy(), E_c_unit.cpu().numpy(), "unit")
 
@@ -153,7 +156,8 @@ if "A" in args.part:
     sig = head.sigma_s; head.sigma_s = 0.25 * sig
     bh = next(iter(tg.dataloader.DataLoader(dd.atomic_data([a], z3, head.r_cut), batch_size=1))).to(dev).to_dict()
     out_h = head(dict(bh), compute_force=False)
-    dq_head = out_h["dq"].detach(); head.sigma_s = sig
+    dq_head = out_h["dq"].detach().clone(); head.sigma_s = sig
+    del out_h, bh; import gc; gc.collect(); torch.cuda.empty_cache()
     print(f"head dq at sharpened fill: sum {float(dq_head.sum()):.3f}, max {float(dq_head.abs().max()):.3f}, within 5 A {float(dq_head[torch.tensor(r <= 5.0, device=dev)].sum()):.3f}", flush=True)
     F_far_h, E_far_h, E_c_h = far_force(b, dq_head, edges)
     print("Part A (ii): the head's dq", flush=True)
@@ -166,16 +170,21 @@ metas = [dd.frame_meta(i, a_, "CsPbCl3", pristine_atoms=80) for i, a_ in enumera
 sel = [m for m in metas if m.index < len(frames)]
 if args.max_frames: sel = sel[: args.max_frames]
 fam_acc = {}
-for m in sel:
+
+
+def one_frame(m):
     fam = ("pristine" if m.n_atoms % 80 == 0 and m.state.Q == 0 else ("charged" if m.state.Q != 0 else "neutral")) + f"_{m.n_atoms}"
     fr = frames[m.index]
+    acc = fam_acc.setdefault(fam, {"far": 0.0, "near": 0.0, "sum": 0.0, "n": 0, "e_far": [], "e_near": []})
     bh = next(iter(tg.dataloader.DataLoader(dd.atomic_data([fr], z3, head.r_cut), batch_size=1))).to(dev).to_dict()
-    o = head(dict(bh), compute_force=False)
-    dq = o["dq"].detach()
-    if "sq0" in o["diagnostics"]:
-        sq0 = torch.tensor(o["diagnostics"]["sq0"][0], device=dev) / float(head.pattern_scale())     # q0 (s = 1)
-    else:
-        sq0 = torch.zeros_like(dq)
+    with torch.no_grad():
+        o = head(dict(bh), compute_force=False)
+    if o.get("short_circuit"):
+        acc["n"] += 3 * len(fr); acc["e_far"].append(0.0); acc["e_near"].append(0.0)
+        return
+    dq = o["dq"].detach().clone()
+    sq0 = (torch.tensor(o["diagnostics"]["sq0"][0], device=dev) / float(head.pattern_scale())) if "sq0" in o["diagnostics"] else torch.zeros_like(dq)
+    del o, bh
     bp = next(iter(tg.dataloader.DataLoader(dd.atomic_data([fr], z3, provider_model.r_cut), batch_size=1))).to(dev).to_dict()
     pos = bp["positions"].detach().clone().requires_grad_(True); cell_t = bp["cell"].view(3, 3)
     shifts = torch.einsum("ei,eij->ej", bp["unit_shifts"], cell_t.expand(bp["edge_index"].shape[1], 3, 3))
@@ -187,11 +196,17 @@ for m in sel:
     e_cp = carrier_dipole_energy(pos, cell_t, dq, p, R_G, R_SPLIT, EPS, tol=provider_model.kernel.tol)
     fc, en = switched_terms(dq, p, ei, ev, R_G, R_SPLIT, EPS, args.r_c, args.delta, sq0=sq0, near_r_split=2.5)
     e_far = e_cp + fc
-    gf = torch.autograd.grad(e_far, pos, retain_graph=True)[0]; gn = torch.autograd.grad(en, pos, retain_graph=True)[0]
-    acc = fam_acc.setdefault(fam, {"far": 0.0, "near": 0.0, "sum": 0.0, "n": 0, "e_far": [], "e_near": []})
+    gf, gn = torch.autograd.grad([e_far, en], [pos, pos], allow_unused=True) if False else (torch.autograd.grad(e_far, pos, retain_graph=True)[0], torch.autograd.grad(en, pos)[0])
     acc["far"] += float((gf ** 2).sum()); acc["near"] += float((gn ** 2).sum()); acc["sum"] += float(((gf + gn) ** 2).sum()); acc["n"] += gf.numel()
     acc["e_far"].append(float(e_far)); acc["e_near"].append(float(en))
-    del p, pos
+
+
+for i_, m in enumerate(sel):
+    one_frame(m)
+    if (i_ + 1) % 25 == 0:
+        torch.cuda.empty_cache()
+    if (i_ + 1) % 200 == 0:
+        print(f"  {i_+1}/{len(sel)} frames {time.time()-t0:.0f}s", flush=True)
 res["B_training_frames"] = {}
 print("Part B: RMS force per component (meV/A) of E_far, E_near (s = 1), sum; by family", flush=True)
 for fam, acc in sorted(fam_acc.items()):

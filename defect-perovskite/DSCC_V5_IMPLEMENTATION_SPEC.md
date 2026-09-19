@@ -6042,3 +6042,18 @@ arm B's delocalised dq (s = 1): E_near −0.686 eV vs periodic −0.326 eV; A s0
 ramped direct sum of the alternating Mulliken pattern is a truncated (conditionally convergent)
 lattice sum and differs from the periodic value by 2–10×. Recorded as the plan requires; no
 change made (B_s vs B_0 decides, and the plan's "what not to do" applies). Flagged for the user.
+§2 kernel validation (2026-09-19 evening, `p2b_kernel_check.py`, JSON in ~/runs/dscc/p2b/).
+Part A(i), embedded 3×3×4 structure (2879 atoms), unit Gaussian charge at the vacancy site,
+switched far-field force / Z*·E_c by shell (ratio, cosine): 0–4 Å 0.14 (+0.96); 4–6 0.23 (+0.96);
+6–8 0.43 (+0.99); 8–10 0.61 (+1.00); 10–12 0.76 (+0.99); 12–14 0.81 (+1.00); 14–17 0.91;
+17–20 0.975; 20–24 0.994 (+0.99). Beyond 10 Å the P0 ratios are reproduced; inside 6 Å the
+residual 0.14–0.23 is not the kernel (E_far is zero there to the background) but the nonlocal
+Born response: the force on b carries Σ_a ∂p_a/∂R_b · E_far(R_a) from neighbours a at 6–10 Å
+whose E_far is not zero. Recorded against the registered expectation ("0 inside 6 Å"): the
+kernel meets it, the force does not by construction of a nonlocal Z*. Part A(ii) (head dq at the
+sharpened fill) pending on b3.
+Part B, training frames (A s0's dq and q0 at s = 1; per-component RMS force, meV/Å): charged 79
+(n = 1030): E_far 3.7, E_near 37.5, sum 37.2; charged 159 (n = 17): E_far 9.0, E_near 20.7, sum
+23.6; neutral and pristine: 0 by construction (dq = 0). Energies: E_far +11.5 / −12.3 meV,
+E_near −787 / −538 meV (s = 1; A s0's learned s is 0.36). E_far is at the meV/Å level as
+expected; E_near at s = 1 is 10× E_far.
