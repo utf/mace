@@ -6063,3 +6063,14 @@ the control's carrier is localised in the 2879-atom cell): ratio / cosine by she
 20–24 0.98 (+0.99). Same picture as the unit charge: the far field is Z*·E_c beyond 10 Å; inside
 6 Å the residual (0.29–0.38) is the nonlocal Born response of the ramp region. §2 complete
 (`kernel_check_A.json`, `kernel_check_B.json`).
+§3 cost and decision (2026-09-19 evening). Smoke (b3 GPU 7): arm A with the BZ regulariser 199
+s/epoch against ≈ 60 without. Profiled on the local card with A s0's head: 27 k × 6 cells =
+1.09 s/step forward+backward (≈ 215 s/epoch at 197 steps); the time-reversal half mesh (14 k)
+0.64 s/step; the label cell alone 0.11 s/step. The obvious speed-ups (±k pairing, one cell) reach
+2–10× only by dropping cells the plan asks for every step, and the remaining cost still doubles
+an arm B step. On the trained control (A s0) the penalty is already 4e-6 (min_k dCBM +0.9 meV,
+max_k dVBM −19 meV: the gap is direct at Γ), so the term is inactive there. Decision (user):
+"If it remains that slow and there isn't an obvious way to increase the speed significantly then
+remove the BZ regulariser for now." → removed from the loss for all Phase 2b arms and A s3/4/6
+(`--bz_gap 0`); the §3 readouts are kept per checkpoint at no training cost (`--bz_readout 1`,
+`bz_readout.json` with final and averaged values). Code stays (tests pass) for a later decision.

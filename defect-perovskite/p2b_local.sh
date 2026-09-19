@@ -9,6 +9,6 @@ for s in 3 4 6; do
   echo "START $(date)" > $R/STATUS
   python defect-perovskite/dscc_train.py --name dscc_p2a_s$s --seed $s --fold ${FOLD[$s]} --epochs 60 --directional 1 --regime B \
     --base $BASE --coupling 0 --scf_free 1 --route_b 1 --beta_b 0.0 --beta_a 0.0 --energy_weight 0.05 \
-    --base_float32 1 --setup_batch_size 4 --base_cache_batch_size 4 --gpu_memory_fraction 0 --bz_gap 1 \
+    --base_float32 1 --setup_batch_size 4 --base_cache_batch_size 4 --gpu_memory_fraction 0 --bz_gap 0 --bz_readout 1 \
     --host_coupling mulliken --cache_base 1 --run_dir $R --device cuda > $R/nohup.log 2>&1 && echo "DONE $(date)" >> $R/STATUS || echo "FAILED $(date)" >> $R/STATUS
 done

@@ -138,7 +138,8 @@ def main() -> None:
     ap.add_argument("--r_c", type=float, default=8.0, help="Phase 2b switch: S = 1 beyond r_c (A); 0 = S == 1 identity")
     ap.add_argument("--delta", type=float, default=2.0, help="Phase 2b switch: ramp width (A)")
     ap.add_argument("--near_r_split", type=float, default=2.5, help="Phase 2b B_s: direct-kernel width of the near-field Mulliken term (W6's r_split)")
-    ap.add_argument("--bz_gap", type=int, default=0, help="Phase 2b §3: add the Brillouin-zone form of the gap regulariser")
+    ap.add_argument("--bz_gap", type=int, default=0, help="Phase 2b §3: add the Brillouin-zone form of the gap regulariser to the loss")
+    ap.add_argument("--bz_readout", type=int, default=1, help="Phase 2b §3 readouts per checkpoint (min_k dCBM, max_k dVBM), no loss term")
     ap.add_argument("--on_site_from_base", type=int, default=0,
                     help="O3.D (diagnostic, not adoptable): feed the ON-SITE readout the base's "
                          "block-0 invariants while the head's own descriptor still drives the "
@@ -174,7 +175,7 @@ def main() -> None:
                       standardise_inputs=(None if args.standardise < 0 else bool(args.standardise)),
                       readout_init_scale=(None if args.readout_init_scale < 0 else args.readout_init_scale),
                       directional=bool(args.directional), regime=args.regime, gap_weight=args.gap_weight,
-                      bz_gap=bool(args.bz_gap),
+                      bz_gap=bool(args.bz_gap), bz_readout=bool(args.bz_readout),
                       device=args.device, eval_every=args.eval_every,
                       setup_batch_size=args.setup_batch_size, base_cache_batch_size=args.base_cache_batch_size,
                       l2_weight=args.l2_weight, lr_schedule=args.lr_schedule,

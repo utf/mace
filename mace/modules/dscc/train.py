@@ -125,7 +125,8 @@ class TrainConfig:
     les_cache: str = ""               # L2: q_LES / Jacobian cache file (built once per base)
     device: str = "cuda"
     static_cell_path: str = "defect-perovskite/static_pristine_cell.json"
-    bz_gap: bool = False              # Plan P Phase 2b §3: Brillouin-zone form of the gap regulariser
+    bz_gap: bool = False              # Plan P Phase 2b §3: Brillouin-zone form of the gap regulariser (in the loss)
+    bz_readout: bool = True           # the §3 readouts per checkpoint only (min_k dCBM, max_k dVBM), no loss term
     bz_relaxed_cell_path: str = "/home/alex/runs/dscc/p0/pristine_relaxed_v2.json"
     bz_n_thermal: int = 4             # fixed thermal pristine snapshots (first in file order)
     bz_mesh: int = 3
@@ -388,11 +389,12 @@ class Trainer:
         # (the first pristine frames in file order; indices logged) -- with geometry-only base
         # features cached once and the Gamma-centred mesh of each cell.
         self.bz_batches, self.bz_features, self.bz_kpts = [], [], []
-        if getattr(self.cfg, "bz_gap", False):
+        if getattr(self.cfg, "bz_gap", False) or getattr(self.cfg, "bz_readout", False):
             cells = [static_cell_atoms(self.cfg.static_cell_path), static_cell_atoms(self.cfg.bz_relaxed_cell_path)]
             thermal = list(pristine_indices)[: int(self.cfg.bz_n_thermal)]
             cells += [self.frames[i] for i in thermal]
-            logging.info("Phase 2b BZ regulariser: label cell, base-relaxed cell, thermal pristine frames %s; %dx%dx%d mesh",
+            logging.info("Phase 2b BZ %s: label cell, base-relaxed cell, thermal pristine frames %s; %dx%dx%d mesh",
+                         "regulariser (in the loss)" if self.cfg.bz_gap else "readout only (per checkpoint)",
                          thermal, self.cfg.bz_mesh, self.cfg.bz_mesh, self.cfg.bz_mesh)
             for a in cells:
                 ds_ = dd.atomic_data([a], self.z_table, self.cfg.r_cut)
@@ -528,7 +530,7 @@ class Trainer:
         gap = self.model.pristine_gap(self.static_batch, getattr(self, "static_features", None))
         l_gap = self.cfg.gap_weight * ((gap - self.cfg.e_gap) ** 2).sum()
         bz_read: Dict[str, float] = {}
-        if getattr(self, "bz_batches", None):
+        if getattr(self, "bz_batches", None) and getattr(self.cfg, "bz_gap", False):
             l_bz, bz_read = self.model.bz_penalty(self.bz_batches, self.bz_features, self.bz_kpts)
             l_gap = l_gap + self.cfg.gap_weight * l_bz
             bz_read["bz_penalty"] = float(l_bz.detach())
