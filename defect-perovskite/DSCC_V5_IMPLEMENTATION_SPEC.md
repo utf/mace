@@ -6074,3 +6074,10 @@ max_k dVBM −19 meV: the gap is direct at Γ), so the term is inactive there. D
 remove the BZ regulariser for now." → removed from the loss for all Phase 2b arms and A s3/4/6
 (`--bz_gap 0`); the §3 readouts are kept per checkpoint at no training cost (`--bz_readout 1`,
 `bz_readout.json` with final and averaged values). Code stays (tests pass) for a later decision.
+Phase 2b arms LAUNCHED (2026-09-19 evening): smoke clean without the BZ term (b3 GPU 7: a 40 s/epoch,
+bs 89, b0 90; `bz_readout.json` written per run). b3 queue `~/runs/p2b_queue.txt` (w3_queue, GPUs
+5+7): dscc_p2bs_s{0,1,2,3,4,6} and dscc_p2b0_s{0,1,2,3,4,6}, interleaved, same folds as A;
+local: dscc_p2a_s{3,4,6} in series (`p2b_local.sh`). All with `--bz_gap 0 --bz_readout 1`,
+`--r_c 8 --delta 2 --near_r_split 2.5`, E_PP on, no learned coefficient on E_far. Finisher
+`p2b_finish.sh` → `P2B_GATES.json`, `P2B_C5.json`, `P2B_REPORT.md`. Expected: ≈ 1.5 h per B run
+(60 × 90 s), 12 runs on two cards ≈ 9 h; A seeds ≈ 40 min each locally.
