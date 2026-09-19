@@ -39,7 +39,7 @@ from mace.modules.dscc.analytic import (analytic_refusal, assemble_compiled,
                                         h0_position_gradient, head_cotangent)
 from mace.modules.dscc.ewald import (COULOMB, gradient_of_contraction, madelung_self,
                                      reciprocal_matrix_planned, reciprocal_pair_gradient_planned)
-from mace.modules.dscc.polarisation import carrier_dipole_energy, dipole_dipole_energy
+from mace.modules.dscc.polarisation import carrier_dipole_energy, dipole_dipole_energy, switched_terms
 from mace.modules.dscc.kernels import (KernelConfig, gamma_lr, gamma_matrix, gamma_pair_derivative, host_potential,
                                        kernel_components, kernel_pair_gradients, gamma_lr_pair_gradient)
 from mace.modules.dscc.scf import (ScfOptions, ScfResult, continuation_solve, continuation_solve_batched,
@@ -125,7 +125,9 @@ class MACEDSCC(nn.Module):
                  delta_frac: float = DELTA_FRACTION_DEFAULT,
                  scf: Optional[ScfOptions] = None,
                  les_cross: bool = False, les_sign: float = 1.0, les_well: bool = False,
-                 host_coupling: str = "mulliken", field_provider: Optional[nn.Module] = None) -> None:
+                 host_coupling: str = "mulliken", field_provider: Optional[nn.Module] = None,
+                 near_field: str = "off", r_c: float = 8.0, delta: float = 2.0,
+                 near_r_split: float = 2.5) -> None:
         super().__init__()
         self.scf_options = scf or ScfOptions()
         self.base = base
@@ -217,6 +219,17 @@ class MACEDSCC(nn.Module):
         self.host_coupling = str(host_coupling)
         if self.host_coupling not in ("mulliken", "polarisation"):
             raise ValueError(f"host_coupling must be 'mulliken' or 'polarisation'; got {host_coupling!r}")
+        # Plan P Phase 2b: the range-separated coupling. `near_field` "off" is arm B (E_cP at all
+        # ranges); "mulliken" (arm B_s) and "none" (arm B_0) switch E_cP off inside `r_c - delta`
+        # with the quintic ramp `S` and give the near field to W6's Mulliken term (learned scale
+        # `s`, direct kernel at `near_r_split`) or to H0 alone. `r_c <= 0` is the S == 1 identity.
+        self.near_field = str(near_field)
+        if self.near_field not in ("off", "mulliken", "none"):
+            raise ValueError(f"near_field must be 'off', 'mulliken' or 'none'; got {near_field!r}")
+        if self.near_field != "off" and self.host_coupling != "polarisation":
+            raise ValueError("near_field applies to the polarisation coupling only")
+        self.r_c, self.delta, self.near_r_split = float(r_c), float(delta), float(near_r_split)
+        self._switched_diag: Dict[str, List[float]] = {}
         self.field_provider = field_provider
         # Phase 2 (plan section 0): with a MACE-Field BASE the dipoles come from the base's own
         # forward ("the same backward as the forces"): no separate provider, one pass. And if
@@ -289,6 +302,8 @@ class MACEDSCC(nn.Module):
                 "host_coupling": getattr(self, "host_coupling", "mulliken"),
                 "provider_is_base": getattr(self, "provider_is_base", False),
                 "head_adds_pp": getattr(self, "head_adds_pp", True),
+                "near_field": getattr(self, "near_field", "off"), "r_c": getattr(self, "r_c", 8.0),
+                "delta": getattr(self, "delta", 2.0), "near_r_split": getattr(self, "near_r_split", 2.5),
                 "decoupled": getattr(self, "decoupled", False),
                 "screened": getattr(self, "screened", False),
                 "correlation2": getattr(self, "correlation2", False),
@@ -315,6 +330,10 @@ class MACEDSCC(nn.Module):
         self.host_coupling = str(state.get("host_coupling", "mulliken"))   # Plan P
         self.provider_is_base = bool(state.get("provider_is_base", False))
         self.head_adds_pp = bool(state.get("head_adds_pp", True))
+        self.near_field = str(state.get("near_field", "off"))                # Plan P Phase 2b
+        self.r_c, self.delta = float(state.get("r_c", 8.0)), float(state.get("delta", 2.0))
+        self.near_r_split = float(state.get("near_r_split", 2.5))
+        self._switched_diag = {}
         self.decoupled = bool(state.get("decoupled", False))    # O3
         self.screened = bool(state.get("screened", False))      # O3.2
         self.correlation2 = bool(state.get("correlation2", False))   # O3.3
@@ -613,7 +632,8 @@ class MACEDSCC(nn.Module):
                        fills_s=None, fills_r=None,
                        q_les: Optional[torch.Tensor] = None, j_les: Optional[torch.Tensor] = None,
                        g_lr: Optional[torch.Tensor] = None, d_w: Optional[torch.Tensor] = None,
-                       p: Optional[torch.Tensor] = None):
+                       p: Optional[torch.Tensor] = None,
+                       edges: Optional[Sequence[Tuple[torch.Tensor, torch.Tensor]]] = None):
         """W6: the two SCF-free terms that sit on top of the `Phi = 0` band energy, from the
         SAME eigendecomposition the fill used.
 
@@ -667,9 +687,37 @@ class MACEDSCC(nn.Module):
                                                         tol=self.kernel.tol)
                                   for g in range(n_graphs)])
             q0, occ_cotangents, pair_grad = None, None, None
+            near = getattr(self, "near_field", "off")
+            if near != "off":
+                # Phase 2b: E_far = E_cP minus its near-field part (the direct field of each
+                # carrier site inside the ramp), plus the near field of the arm: W6's Mulliken
+                # term on the direct kernel at `near_r_split` (B_s) or nothing (B_0).
+                if edges is None:
+                    raise RuntimeError("the switched coupling needs the head's edges per graph")
+                if near == "mulliken":
+                    q0 = n0 - occ_r
+                    sq0 = self.pattern_scale() * q0
+                far_corr, e_near = [], []
+                for g in range(n_graphs):
+                    ei, ev = edges[g]
+                    fc, en = switched_terms(dq[g], p[g], ei, ev, self.kernel.r_g, self.r_split,
+                                            self.kernel.eps_inf, float(getattr(self, "r_c", 8.0)),
+                                            float(getattr(self, "delta", 2.0)),
+                                            sq0=(sq0[g] if near == "mulliken" else None),
+                                            near_r_split=float(getattr(self, "near_r_split", 2.5)))
+                    far_corr.append(fc); e_near.append(en)
+                far_corr, e_near = torch.stack(far_corr), torch.stack(e_near)
+                e_far = e_host + far_corr
+                e_host = e_far + e_near
+                self._switched_diag = {"e_far": e_far.detach().cpu().tolist(),
+                                       "e_near": e_near.detach().cpu().tolist()}
+                if near == "mulliken":       # for the §1 report of E_near against W6's periodic E_host
+                    self._switched_diag["sq0"] = [row.detach().cpu().tolist() for row in sq0]
         else:
             q0 = None if les else n0 - occ_r
             sq0 = (self.cross_scale() * q_les) if les else (self.pattern_scale() * q0)
+            if getattr(self, "export_pattern", False):        # Phase 2b §1 report: s q0 of the W6 control
+                self._switched_diag = {"sq0": [row.detach().cpu().tolist() for row in sq0]}
             with torch.set_grad_enabled(torch.is_grad_enabled() and not use_pairs):
                 if g_lr is not None:            # L2/L3: the bare kernel computed once by the caller
                     pass
@@ -1298,7 +1346,10 @@ class MACEDSCC(nn.Module):
                             H, (sol.fills[0].eps, sol.fills[0].U), counts_s, counts_r, t(n0_rows),
                             pos_b, cell, q_form, use_pairs, need_cotangents=analytic,
                             q_les=q_les_b, j_les=j_les_b, g_lr=g_lr_b, d_w=d_w_b,
-                            p=(None if p_node is None else p_node.reshape(num_graphs, n_nodes, 3)))
+                            p=(None if p_node is None else p_node.reshape(num_graphs, n_nodes, 3)),
+                            edges=([(data["edge_index"][:, edge_graph == g_] - int(ptr[g_]), edge_vector[edge_graph == g_])
+                                    for g_ in range(num_graphs)]
+                                   if getattr(self, "near_field", "off") != "off" else None))
                     if W_b is not None:                                         # L3 force pieces
                         gw = self.well_geometry_terms(W_b, sol.energy + e_host, q_les_b, g_lr_b, d_w_b, j_les_b, create)
                         if gw is not None:
@@ -1318,6 +1369,8 @@ class MACEDSCC(nn.Module):
                         diagnostics["q0_sum"] = q0.detach().sum(-1).cpu().tolist()
                     diagnostics["e_host"] = e_host.detach().cpu().tolist()
                     diagnostics["e_madelung"] = e_m.detach().cpu().tolist()
+                    if getattr(self, "near_field", "off") != "off" or getattr(self, "export_pattern", False):
+                        diagnostics.update(getattr(self, "_switched_diag", {}))
                     if q_les_b is not None:
                         diagnostics["e_cross"] = e_host.detach().cpu().tolist()
                         diagnostics["s_cross"] = float(self.cross_scale().detach())
@@ -1564,7 +1617,9 @@ class MACEDSCC(nn.Module):
                         (one(n_s[0]), one(n_s[1])), (one(n_r[0]), one(n_r[1])), n0_g,
                         positions[nodes].unsqueeze(0), cell[g].unsqueeze(0), one(state.Q), use_pairs,
                         q_les=q_les_g, j_les=j_les_g, g_lr=g_lr_g, d_w=d_w_g,
-                        p=(None if p_node is None else p_node[nodes].unsqueeze(0)))
+                        p=(None if p_node is None else p_node[nodes].unsqueeze(0)),
+                        edges=([(data["edge_index"][:, e_mask] - lo, edge_vector[e_mask])]
+                               if getattr(self, "near_field", "off") != "off" else None))
                     if W_g is not None:
                         gw = self.well_geometry_terms(W_g, sol.energy + e_host[0], q_les_g, g_lr_g, d_w_g, j_les_g, create)
                         if gw is not None:
@@ -1584,6 +1639,9 @@ class MACEDSCC(nn.Module):
                         diagnostics["s_cross"] = float(self.cross_scale().detach())
                     diagnostics.setdefault("e_host", []).append(float(e_host.detach()))
                     diagnostics.setdefault("e_madelung", []).append(float(e_m.detach()))
+                    if getattr(self, "near_field", "off") != "off" or getattr(self, "export_pattern", False):
+                        for k_, v_ in getattr(self, "_switched_diag", {}).items():
+                            diagnostics.setdefault(k_, []).extend(v_)
                 head_energy[g] = e_g
                 dq_all[nodes] = sol.dq
                 diagnostics["dq_sum"].append(float(sol.dq.sum()))

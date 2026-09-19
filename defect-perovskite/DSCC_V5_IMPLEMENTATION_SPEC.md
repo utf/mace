@@ -6027,3 +6027,18 @@ stopped (they waited for B/B(M)). Registered before any 2b run: §2 kernel-valid
 §2's dq/q0 on the training frames = arm A seed 0's epoch-averaged checkpoint (the localised
 control); the four thermal pristine snapshots for §3 = the first four pristine frames of the
 training set in file order (indices registered in the trainer log at first use).
+§1 implemented (2026-09-19 16:40): `polarisation.switch/direct_field/gamma_direct/switched_terms`;
+`MACEDSCC(near_field=off|mulliken|none, r_c, delta, near_r_split)` (extra state), the correction
+and near term inside `scf_free_terms`' polarisation branch over the head's directed edges (every
+ordered pair once, image shifts included), `e_far`/`e_near` in the diagnostics; CLI flags in
+`dscc_train.py`. Tests `tests/extensions/dscc/test_phase2b_switch.py` (7): switch C², state
+round trip, neutral null bit-exact, S ≡ 1 identity to 1e-9 (both arms), S ≡ 0 report, FD forces
+across the ramp to 1e-4, Σdq = Q, batched = per-graph, translation. On the real arm B s0
+checkpoint (`p2b_identity_check.py`, charged 79-atom training frame): S ≡ 1 identity holds to
+1e-13 eV / 1e-14 eV/Å with the base in float64 (the float32 base path has 3e-5 eV run-to-run
+noise, recorded). §1 report of E_near against W6's periodic E_host on the same dq and s q0:
+arm B's delocalised dq (s = 1): E_near −0.686 eV vs periodic −0.326 eV; A s0's localised dq
+(s = 0.36): E_near −0.363 eV vs periodic −0.031 eV. The far-field Ewald part is NOT weak: the
+ramped direct sum of the alternating Mulliken pattern is a truncated (conditionally convergent)
+lattice sum and differs from the periodic value by 2–10×. Recorded as the plan requires; no
+change made (B_s vs B_0 decides, and the plan's "what not to do" applies). Flagged for the user.

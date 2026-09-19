@@ -134,6 +134,11 @@ def main() -> None:
     ap.add_argument("--cache_base", type=int, default=1, help="E_base/F_base cached per frame (W6 default); 0 for Phase 2 arm B")
     ap.add_argument("--r_split", type=float, default=-1.0, help="Plan P: the smoothing width of E_cP and E_PP (and Gamma_LR); <0 = model default")
     ap.add_argument("--eps_inf", type=float, default=-1.0, help="Plan P: eps_inf in E_M, E_c, T_LR; <0 = kernel default (4.0)")
+    ap.add_argument("--near_field", default="off", help="Plan P Phase 2b: off (arm B) | mulliken (arm B_s) | none (arm B_0)")
+    ap.add_argument("--r_c", type=float, default=8.0, help="Phase 2b switch: S = 1 beyond r_c (A); 0 = S == 1 identity")
+    ap.add_argument("--delta", type=float, default=2.0, help="Phase 2b switch: ramp width (A)")
+    ap.add_argument("--near_r_split", type=float, default=2.5, help="Phase 2b B_s: direct-kernel width of the near-field Mulliken term (W6's r_split)")
+    ap.add_argument("--bz_gap", type=int, default=0, help="Phase 2b §3: add the Brillouin-zone form of the gap regulariser")
     ap.add_argument("--on_site_from_base", type=int, default=0,
                     help="O3.D (diagnostic, not adoptable): feed the ON-SITE readout the base's "
                          "block-0 invariants while the head's own descriptor still drives the "
@@ -192,7 +197,12 @@ def main() -> None:
     kernel_cfg = KernelConfig(regime=cfg.regime)
     if args.eps_inf > 0:
         kernel_cfg = KernelConfig(**{**asdict(kernel_cfg), "eps_inf": float(args.eps_inf)})
-    extra_model_kwargs = {"host_coupling": args.host_coupling, "field_provider": provider}
+    extra_model_kwargs = {"host_coupling": args.host_coupling, "field_provider": provider,
+                          "near_field": args.near_field, "r_c": float(args.r_c), "delta": float(args.delta),
+                          "near_r_split": float(args.near_r_split)}
+    if args.near_field != "off":
+        logging.info("Plan P Phase 2b: near_field %s, r_c %.2f, delta %.2f, near_r_split %.2f",
+                     args.near_field, args.r_c, args.delta, args.near_r_split)
     if args.r_split > 0:
         extra_model_kwargs["r_split"] = float(args.r_split)
     model = MACEDSCC(base, r_cut=cfg.r_cut, directional=cfg.directional, coupling=cfg.coupling,
