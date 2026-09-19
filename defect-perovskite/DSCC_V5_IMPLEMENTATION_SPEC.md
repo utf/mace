@@ -6154,3 +6154,8 @@ REF_polarizability in `mh1_field_train.py` for training and for the reference. Z
 epoch 1 (13.2 GB peak in epoch 0, 15.5 GB at failure: memory creep across the validation pass)
 → atoms_per_batch 48, cache emptied after validation; restarted 20:32 (`run1_alpha_unscaled`
 kept).
+run1 (P 1 / Z* 100 / α 100, lr 1e-3, χ labels): epoch 0: P 0.00361, Z* 0.4669, α 1.593; epoch 1:
+0.00353 / 0.4354 / 1.479 (29 min/epoch, 0.50 s/step, 10 GB). Loss shares at these errors: α ≈ 75 %,
+Z* ≈ 25 %, P nil (below its Huber delta at weight 1). Decision (user, 21:55): polarisation weight
+1000, lr 1e-2 → restarted 22:00 as run1 (the previous kept as run1_p1_lr1e-3); the epoch-5 lr
+raise is disabled (lr_raise = lr).
