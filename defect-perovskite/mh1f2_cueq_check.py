@@ -54,6 +54,12 @@ try:
         if k.startswith("field_"): assert torch.equal(model.state_dict()[k].to(dev), mc.state_dict()[k].to(dev)), k
     model = model.to(dev)
     loss_c, g_c, o_c = grads(mc)
+    def timeit(m):
+        torch.cuda.synchronize(); ts = []
+        for _ in range(3):
+            t1 = time.time(); grads(m); torch.cuda.synchronize(); ts.append(time.time() - t1)
+        return float(np.median(ts))
+    res["s_per_step_e3nn"] = timeit(model); res["s_per_step_cueq"] = timeit(mc)
     res["loss_cueq"] = loss_c; res["loss_rel_diff"] = abs(loss_c - loss_e) / max(abs(loss_e), 1e-30)
     res["outputs_max_abs_diff"] = {k: float((o_c[k] - o_e[k]).abs().max()) for k in o_e}
     res["field_grad"] = {n: {"max_abs_diff": float((g_c[n] - g_e[n]).abs().max()), "rel_norm_diff": float((g_c[n] - g_e[n]).norm() / max(float(g_e[n].norm()), 1e-30)), "e3nn_norm": float(g_e[n].norm())} for n in g_e}

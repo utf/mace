@@ -35,11 +35,14 @@ ap.add_argument("--data_dir", default=D); ap.add_argument("--replay_train", defa
 ap.add_argument("--lr", type=float, required=True); ap.add_argument("--ema", type=float, default=0.995); ap.add_argument("--weight_decay", type=float, default=1e-8); ap.add_argument("--clip_grad", type=float, default=10.0)
 ap.add_argument("--w_e", type=float, default=1.0); ap.add_argument("--w_f", type=float, default=100.0); ap.add_argument("--w_s", type=float, default=1.0)
 ap.add_argument("--w_p", type=float, default=100.0); ap.add_argument("--w_z", type=float, default=100.0); ap.add_argument("--w_a", type=float, default=100.0); ap.add_argument("--huber_delta", type=float, default=0.01)
-ap.add_argument("--atoms_per_batch", type=int, required=True); ap.add_argument("--max_frames_per_batch", type=int, default=64); ap.add_argument("--valid_atoms", type=int, default=64)
+ap.add_argument("--atoms_per_batch", type=int, required=True, help="atom budget of one random batch"); ap.add_argument("--max_frames_per_batch", type=int, default=64); ap.add_argument("--valid_atoms", type=int, default=64)
+ap.add_argument("--response_atoms", type=int, default=96, help="atom budget of the dielectric (Z*/alpha) sub-pass; a batch is split into a dielectric sub-pass (nested derivatives) and an E/F/P sub-pass so the nested derivatives run only where a label needs them")
+ap.add_argument("--max_atoms_response", type=int, default=96, help="dielectric frames above this size are excluded (alpha nested derivatives: 160 atoms OOM on 24 GB in float64); recorded")
 ap.add_argument("--max_epochs", type=int, default=150); ap.add_argument("--patience", type=int, default=20)
 ap.add_argument("--plateau_patience", type=int, default=5); ap.add_argument("--plateau_factor", type=float, default=0.8)
 ap.add_argument("--seed", type=int, default=123); ap.add_argument("--device", default="cuda"); ap.add_argument("--max_frames", type=int, default=0, help="debug: truncate every pool")
-ap.add_argument("--epoch_frames", type=int, default=0, help="debug: frames per epoch (0 = all)")
+ap.add_argument("--epoch_frames", type=int, default=0, help="debug: frames per epoch (0 = all)"); ap.add_argument("--debug_max_atoms", type=int, default=0, help="debug: drop frames above this size from every pool")
+ap.add_argument("--ferro_efs", type=int, default=0, help="1: train on the ferroelectric frames' E and F too; default 0 mirrors the published run (its mp-ferroelectric head saw polarisation only: log counts energy 0, forces 0)")
 args = ap.parse_args()
 
 # ------------------------------------------------------------------ DDP / setup
@@ -65,6 +68,9 @@ zt = tools.AtomicNumberTable([int(z) for z in model.atomic_numbers]); heads = li
 
 def load(path, head):
     fr = read(path, ":")
+    if head == "mp-ferroelectric" and not args.ferro_efs:
+        for a in fr: a.info["config_energy_weight"] = 0.0; a.info["config_forces_weight"] = 0.0
+    if args.debug_max_atoms: fr = [a for a in fr if len(a) <= args.debug_max_atoms]
     if args.max_frames: fr = fr[:: max(1, len(fr) // args.max_frames)][: args.max_frames]
     for a in fr: a.info["head"] = head
     return fr
@@ -76,6 +82,9 @@ def to_data(frames):
 
 pools = {"dielectric": load(f"{args.data_dir}/dielectric_train_seed123.xyz", "mp-dielectric"), "ferroelectric": load(f"{args.data_dir}/ferroelectric_train_seed123.xyz", "mp-ferroelectric")}
 valids = {"dielectric": load(f"{args.data_dir}/dielectric_valid_seed123.xyz", "mp-dielectric"), "ferroelectric": load(f"{args.data_dir}/ferroelectric_valid_seed123.xyz", "mp-ferroelectric")}
+excluded = {k: [a.info.get("material_id") for a in v if len(a) > args.max_atoms_response] for k, v in (("dielectric_train", pools["dielectric"]), ("dielectric_valid", valids["dielectric"]))}
+pools["dielectric"] = [a for a in pools["dielectric"] if len(a) <= args.max_atoms_response]; valids["dielectric"] = [a for a in valids["dielectric"] if len(a) <= args.max_atoms_response]
+log("dielectric frames above %d atoms excluded (alpha memory): %s", args.max_atoms_response, {k: len(v) for k, v in excluded.items()})
 if args.model == "B":
     pools["replay"] = load(args.replay_train, "omat_pbe"); valids["replay_holdout"] = load(args.replay_holdout, "omat_pbe")
 train_frames = [a for p in pools.values() for a in p]
@@ -89,11 +98,12 @@ def epoch_batches(epoch):
     """Random over every pool every batch, greedy fill under the atom budget; rank-disjoint shards of equal length."""
     rng = np.random.default_rng(args.seed * 1000 + epoch); perm = rng.permutation(len(train_ds))
     if args.epoch_frames: perm = perm[: args.epoch_frames]
-    batches, cur, n = [], [], 0
+    batches, cur, n, n_resp = [], [], 0, 0
     for i in perm:
-        if cur and (n + sizes[i] > args.atoms_per_batch or len(cur) >= args.max_frames_per_batch):
-            batches.append(cur); cur, n = [], 0
-        cur.append(int(i)); n += int(sizes[i])
+        is_resp = kinds[i] == 0
+        if cur and (n + sizes[i] > args.atoms_per_batch or len(cur) >= args.max_frames_per_batch or (is_resp and n_resp + sizes[i] > args.response_atoms)):
+            batches.append(cur); cur, n, n_resp = [], 0, 0
+        cur.append(int(i)); n += int(sizes[i]); n_resp += int(sizes[i]) if is_resp else 0
     if cur: batches.append(cur)
     per_rank = len(batches) // world
     return batches[rank * per_rank:(rank + 1) * per_rank]
@@ -136,11 +146,15 @@ loss_fn = UniversalFieldLoss(energy_weight=args.w_e if efs else 0.0, forces_weig
                              polarization_weight=args.w_p, becs_weight=args.w_z, polarizability_weight=args.w_a, huber_delta=args.huber_delta).to(dev)
 
 
-def forward(b, k):
-    """k: set of kinds present in the batch; derivatives only where a label needs them."""
-    resp = 0 in k or 1 in k
-    return model(b.to_dict(), training=True, compute_force=efs and (1 in k or 2 in k), compute_stress=efs and 2 in k,
-                 compute_polarization=resp, compute_becs=0 in k, compute_polarizability=0 in k)
+def passes(ids):
+    """The random batch split into a dielectric sub-pass (nested derivatives) and an E/F/P sub-pass, each with only the derivatives its labels need."""
+    d = [i for i in ids if kinds[i] == 0]; o = [i for i in ids if kinds[i] != 0]
+    out = []
+    if d: out.append((d, dict(compute_force=False, compute_stress=False, compute_polarization=True, compute_becs=True, compute_polarizability=True)))
+    if o:
+        k = set(int(kinds[i]) for i in o)
+        out.append((o, dict(compute_force=efs and (2 in k or (1 in k and bool(args.ferro_efs))), compute_stress=efs and 2 in k, compute_polarization=1 in k, compute_becs=False, compute_polarizability=False)))
+    return out
 
 
 class Acc:
@@ -150,10 +164,10 @@ class Acc:
         d = d.detach(); self.s[key] = self.s.get(key, 0.0) + float((d ** 2).sum()); self.n[key] = self.n.get(key, 0) + d.numel()
     def update(self, out, b):
         if out.get("becs") is not None and hasattr(b, "becs"):
-            w = b.becs_weight.repeat_interleave(b.ptr[1:] - b.ptr[:-1]).view(-1, 1, 1) > 0
-            if w.any(): self.add("becs", (out["becs"].view(-1, 3, 3) - b.becs.view(-1, 3, 3))[w.view(-1)])
+            w = (b.becs_weight.view(-1, 9).mean(1) > 0).repeat_interleave(b.ptr[1:] - b.ptr[:-1])   # becs_weight is [n_graphs, 3, 3]
+            if w.any(): self.add("becs", (out["becs"].view(-1, 3, 3) - b.becs.view(-1, 3, 3))[w])
         if out.get("polarizability") is not None and hasattr(b, "polarizability"):
-            w = b.polarizability_weight.view(-1) > 0
+            w = b.polarizability_weight.view(-1, 9).mean(1) > 0   # [n_graphs, 3, 3]
             if w.any(): self.add("polarizability", (out["polarizability"].view(-1, 3, 3) - b.polarizability.view(-1, 3, 3))[w])
         if out.get("polarization") is not None and hasattr(b, "polarization"):
             w = b.polarization_weight.view(-1, 3).mean(1) > 0
@@ -178,7 +192,7 @@ def evaluate(ds, kind):
     order = np.argsort([int(d.positions.shape[0]) for d in ds]); cur, n = [], 0
     def flush(cur):
         b = next(iter(tg.dataloader.DataLoader([ds[i] for i in cur], batch_size=len(cur)))).to(dev)
-        out = model(b.to_dict(), training=kind == 1, compute_force=kind != 0, compute_stress=kind == 2, compute_polarization=kind != 2, compute_becs=kind == 0, compute_polarizability=kind == 0)
+        out = model(b.to_dict(), training=kind == 1 and bool(args.ferro_efs), compute_force=kind == 2 or (kind == 1 and bool(args.ferro_efs)), compute_stress=kind == 2, compute_polarization=kind != 2, compute_becs=kind == 0, compute_polarizability=kind == 0)
         acc.update(out, b); del out
     for i in order:
         if cur and n + int(ds[i].positions.shape[0]) > args.valid_atoms: flush(cur); cur, n = [], 0
@@ -210,10 +224,12 @@ for epoch in range(args.max_epochs):
     t0 = time.time(); acc = Acc(); tot = 0.0; n_b = 0; n_at_epoch = 0
     torch.cuda.reset_peak_memory_stats(dev)
     for ids in epoch_batches(epoch):
-        b = next(iter(tg.dataloader.DataLoader([train_ds[i] for i in ids], batch_size=len(ids)))).to(dev)
-        k = set(int(x) for x in kinds[ids]); opt.zero_grad(set_to_none=True)
-        out = forward(b, k); loss = loss_fn(pred=out, ref=b); loss.backward()
-        acc.update(out, b); tot += float(loss); n_b += 1; n_at_epoch += int(b.positions.shape[0]); del out, loss
+        opt.zero_grad(set_to_none=True); n_tot = len(ids)
+        for sub, kw in passes(ids):
+            b = next(iter(tg.dataloader.DataLoader([train_ds[i] for i in sub], batch_size=len(sub)))).to(dev)
+            out = model(b.to_dict(), training=True, **kw); loss = loss_fn(pred=out, ref=b) * (len(sub) / n_tot); loss.backward()
+            acc.update(out, b); tot += float(loss); n_at_epoch += int(b.positions.shape[0]); del out, loss, b
+        n_b += 1
         if ddp:
             for p in params:
                 if p.grad is None: p.grad = torch.zeros_like(p)
