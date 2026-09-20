@@ -6241,3 +6241,16 @@ Decision (user, 2026-09-20 10:45): differential learning rates — field maps 3e
 (Adam parameter groups), replay 1000/1000/100, response P 1000 / Z* 100 / α 100, plateau on Z*
 (acts on the field group's rate via the scheduler on all groups), mixed batches. Restarted on b3
 GPU 7 as run_full; the 1e-4 uniform run kept as run_full_w1000.
+Diagnosis (user's convexity argument, 2026-09-20 11:00): the frozen-backbone fit is a linear
+least-squares problem in the second field map but UNDERDETERMINED — 1,048,576 field weights on
+MH-1's 512 channels against ≈ 735,000 scalar training labels (≈ 685k Z* components, 43k α, 6k P),
+16× worse determined than MH-0's 65,536 field weights — so it interpolates the training set
+(training loss falls, validation Z* flat from epoch 1). Options (user: "try 2 and 3 in separate
+runs"): (2) bottlenecked coupling — `MACEField(field_bottleneck=128)`: Linear 512 → 128, FCTP at
+128 channels, Linear 128 → 512; 294,912 trainable weights; E = 0 exactness holds (1e-3 meV/atom /
+8e-3 meV/Å float32 on 100 structures; residual exactly 0); field tests 11 pass; frozen training
+P 1000 / lr 3e-3 / plateau / mixed on the local card (`run_b128`, 11:05). (3) direct linear
+solve — `mh1_field_cg.py`: conjugate gradient on the normal equations for the second map (first
+map fixed random), Z* (weight 1) and folded P (weight 10) labels of the registered split, one
+training pass per iteration, validation every 3 iterations, best iterate kept (truncated Krylov
+as the regulariser); b3 GPU 5 (`run_cg`, 11:08). Unfrozen differential-lr run continues on b3 GPU 7.
