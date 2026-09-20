@@ -6223,3 +6223,11 @@ mixed batches, atom budget 48. Registered tolerance (plan §6.3): E ≤ 0.2 meV/
 deviation from MH-1 on the replay validation, logged per epoch. Launched on b3 GPU 7 at 02:52
 (`run_full`); the P-100 frozen run on b3 GPU 5 (`run_p100`) and the P-1000 frozen run locally
 (`run1`) continue.
+MH-1-Field frozen runs stopped by the user (2026-09-20 08:50) at their plateaus: run1 (P 1000, lr
+3e-3 → 3.8e-4 by plateau, 17 epochs): best Z* 0.564 / α 1.44 / P 0.0029; run_p100 (P 100, 16 epochs):
+Z* 0.453 / α 1.36 / P 0.0030 — both far from the targets 0.231 / 1.21 / 0.0020: the frozen backbone
+is the limit (plan §6.3 shortfall). Unfrozen replay run (E 10 / F 10 / S 1, 6 epochs): Z* 0.312 →
+0.357, α 1.20 (target met), P 0.0033, but replay drift 22–24 meV/atom / 115–167 meV/Å, 100× the
+registered tolerance. Decision (user): "fix the replay ft model" → restarted 08:52 on b3 GPU 7 with
+the replay weights raised to E 1000 / F 1000 / S 100 (response P 1000 / Z* 100 / α 100 unchanged,
+lr 1e-4, plateau, mixed batches); the previous kept as run_full_w10.
