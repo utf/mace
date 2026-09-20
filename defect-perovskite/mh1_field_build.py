@@ -15,11 +15,12 @@ from mace.modules.extensions import MACEField                     # noqa: E402
 ap = argparse.ArgumentParser()
 ap.add_argument("--mh1", default="/home/alex/.cache/mace/macemh1model")
 ap.add_argument("--out", required=True); ap.add_argument("--json", default=None)
+ap.add_argument("--bottleneck", type=int, default=0, help="option 2: field coupling on a b-channel projection (0 = full hidden irreps)")
 args = ap.parse_args()
 t0 = time.time()
 mh1 = torch.load(args.mh1, map_location="cpu", weights_only=False)
 cfg = extract_config_mace_model(mh1)
-model = MACEField(**cfg)
+model = MACEField(**cfg, field_bottleneck=args.bottleneck)
 missing, unexpected = model.load_state_dict(mh1.state_dict(), strict=False)
 assert all(k.startswith("field_") for k in missing), missing
 # the unexpected keys are e3nn buffers of MH-1's gated nonlinearity (`mul.weight` of size 0 and
@@ -43,7 +44,7 @@ n_mh1 = sum(p.numel() for p in mh1.parameters())
 rec = {"mh1": args.mh1, "mh1_params": n_mh1, "total_params": n_total, "trainable_field_params": n_train,
        "field_tensors": [(n, list(p.shape)) for n, p in model.named_parameters() if p.requires_grad],
        "heads": list(model.heads), "n_elements": int(model.atomic_numbers.numel()), "num_interactions": int(model.num_interactions),
-       "field_injection_layers": len(model.field_feats), "hidden_irreps": str(cfg["hidden_irreps"]), "dtype": "float32",
+       "field_injection_layers": len(model.field_feats), "hidden_irreps": str(cfg["hidden_irreps"]), "dtype": "float32", "field_bottleneck": args.bottleneck,
        "missing_keys": missing, "unexpected_keys": unexpected}
 model.field_config = {"injection_layers": "after every interaction layer t < T (T = %d): %d layer(s)" % (model.num_interactions, len(model.field_feats)),
                       "tensor_product": "FullyConnectedTensorProduct(hidden x 1o -> hidden) + Linear(hidden -> hidden), residual subtracted", "init": "field_feats e3nn default random, field_linear zero (bilinear coupling: all-zero is a stationary point)", "frozen": "all MH-1 tensors"}

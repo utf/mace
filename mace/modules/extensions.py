@@ -1796,25 +1796,36 @@ class MACEField(ScaleShiftMACE):
         # not in the stress (E_PP is -0.01 meV/atom on the training cells).
         pp_r_split = float(kwargs.pop("pp_r_split", 0.0))
         pp_eps_inf = float(kwargs.pop("pp_eps_inf", 4.0))
+        # MH-1-Field option 2: a bottlenecked coupling. With `field_bottleneck` = b > 0 the
+        # field tensor product acts on a b-channel projection of the hidden features
+        # (Linear hidden -> b, FCTP at b channels, Linear b -> hidden), so a wide backbone
+        # (512 channels) gets a coupling of MH-0's parameter count instead of 16x it.
+        field_bottleneck = int(kwargs.pop("field_bottleneck", 0))
         super().__init__(**kwargs)
         self.pp_r_split = pp_r_split
         self.pp_eps_inf = pp_eps_inf
+        self.field_bottleneck = field_bottleneck
         hidden_irreps = o3.Irreps(kwargs["hidden_irreps"])
         cueq_config = kwargs.get("cueq_config", None)
         irreps_1o = o3.Irreps("1o")
         n_field = int(self.num_interactions) - 1
+        inner_irreps = (o3.Irreps([(field_bottleneck, ir) for _, ir in hidden_irreps]) if field_bottleneck > 0 else hidden_irreps)
+        self.field_down = torch.nn.ModuleList(
+            Linear(irreps_in=hidden_irreps, irreps_out=inner_irreps, cueq_config=cueq_config)
+            for _ in range(n_field if field_bottleneck > 0 else 0)
+        )
         self.field_feats = torch.nn.ModuleList(
             FullyConnectedTensorProduct(
-                irreps_in1=hidden_irreps,
+                irreps_in1=inner_irreps,
                 irreps_in2=irreps_1o,
-                irreps_out=hidden_irreps,
+                irreps_out=inner_irreps,
                 cueq_config=cueq_config,
             )
             for _ in range(n_field)
         )
         self.field_linear = torch.nn.ModuleList(
             Linear(
-                irreps_in=hidden_irreps,
+                irreps_in=inner_irreps,
                 irreps_out=hidden_irreps,
                 cueq_config=cueq_config,
             )
@@ -2000,7 +2011,8 @@ class MACEField(ScaleShiftMACE):
                 field_input = per_atom_electric_field
                 if is_lammps:
                     field_input = field_input[: node_feats.shape[0]]
-                delta_node_feats = self.field_feats[i](node_feats, field_input)
+                field_src = self.field_down[i](node_feats) if len(getattr(self, "field_down", [])) > 0 else node_feats
+                delta_node_feats = self.field_feats[i](field_src, field_input)
                 node_feats = node_feats - self.field_linear[i](delta_node_feats)
             node_feats_list.append(node_feats)
 
