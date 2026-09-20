@@ -40,7 +40,7 @@ ap.add_argument("--response_atoms", type=int, default=96, help="atom budget of t
 ap.add_argument("--max_atoms_response", type=int, default=96, help="dielectric frames above this size are excluded (alpha nested derivatives: 160 atoms OOM on 24 GB in float64); recorded")
 ap.add_argument("--max_epochs", type=int, default=150); ap.add_argument("--patience", type=int, default=20)
 ap.add_argument("--plateau_patience", type=int, default=5); ap.add_argument("--plateau_factor", type=float, default=0.8)
-ap.add_argument("--seed", type=int, default=123); ap.add_argument("--device", default="cuda"); ap.add_argument("--max_frames", type=int, default=0, help="debug: truncate every pool")
+ap.add_argument("--cueq", type=int, default=1, help="1: cuequivariance kernels (gradient check passed to 3e-8, 2.2x faster in float64); the field layers' weights are copied across MACE's converter, which re-initialises them"); ap.add_argument("--seed", type=int, default=123); ap.add_argument("--device", default="cuda"); ap.add_argument("--max_frames", type=int, default=0, help="debug: truncate every pool")
 ap.add_argument("--epoch_frames", type=int, default=0, help="debug: frames per epoch (0 = all)"); ap.add_argument("--debug_max_atoms", type=int, default=0, help="debug: drop frames above this size from every pool")
 ap.add_argument("--ferro_efs", type=int, default=0, help="1: train on the ferroelectric frames' E and F too; default 0 mirrors the published run (its mp-ferroelectric head saw polarisation only: log counts energy 0, forces 0)")
 args = ap.parse_args()
@@ -64,6 +64,20 @@ ks.info_keys.update(energy="REF_energy", stress="REF_stress", polarization="REF_
 ks.arrays_keys.update(forces="REF_forces", becs="REF_becs")
 model = torch.load(args.init, map_location="cpu", weights_only=False).double()
 zt = tools.AtomicNumberTable([int(z) for z in model.atomic_numbers]); heads = list(model.heads)
+
+
+def to_cueq(m):
+    """MACE's e3nn -> cueq converter plus the field layers' state (the converter re-instantiates them)."""
+    from mace.cli.convert_e3nn_cueq import run as _conv
+    mc = _conv(m, device="cpu", return_model=True).double()
+    sd_e, sd_c = m.state_dict(), mc.state_dict()
+    mc.load_state_dict({k: v.reshape(sd_c[k].shape) for k, v in sd_e.items() if k.startswith("field_") and k in sd_c}, strict=False)
+    for k in sd_e:
+        if k.startswith("field_") and k not in sd_c and sd_e[k].numel() > 0 and not k.endswith("output_mask"):
+            assert float(sd_e[k].abs().max()) == 0.0, ("non-zero field tensor dropped by the converter", k)
+    for attr in ("field_config", "build_record"):
+        if hasattr(m, attr): setattr(mc, attr, getattr(m, attr))
+    return mc
 
 
 def load(path, head):
@@ -110,12 +124,10 @@ def epoch_batches(epoch):
 
 
 # ------------------------------------------------------------------ model, masks, optimiser
-model = model.to(dev).train()
 n_heads = len(heads); i_new = [heads.index("mp-dielectric"), heads.index("mp-ferroelectric")]
 masks = {}
 if args.model == "A":
-    for n, p in model.named_parameters():
-        p.requires_grad_(n.startswith("field_") or n.startswith("readouts"))
+    # masks in the e3nn layout (flat (mul_in, mul_out) per instruction, head-major blocks of the non-linear readout)
     for n, p in model.named_parameters():
         if not n.startswith("readouts"): continue
         m = torch.zeros_like(p)
@@ -129,6 +141,23 @@ if args.model == "A":
         else:
             raise RuntimeError(f"unexpected readout parameter {n}")
         masks[n] = m
+    if args.cueq:
+        # carry the masks through the converter itself: a copy of the model whose readout weights ARE the masks
+        import copy
+        probe = copy.deepcopy(model)
+        with torch.no_grad():
+            for n, p in probe.named_parameters():
+                if n in masks: p.copy_(masks[n])
+        probe_c = to_cueq(probe); masks_c = {n: (p.detach() != 0).double() for n, p in probe_c.named_parameters() if n.startswith("readouts")}
+        assert set(masks_c) == set(masks) and all(int(masks_c[n].sum()) == int(masks[n].sum()) for n in masks), "readout mask did not survive the cueq conversion"
+        masks = masks_c
+if args.cueq:
+    model = to_cueq(model); log("cueq kernels: model converted (field layers' state copied across)")
+model = model.to(dev).train()
+if args.model == "A":
+    masks = {n: m.to(dev) for n, m in masks.items()}
+    for n, p in model.named_parameters():
+        p.requires_grad_(n.startswith("field_") or n.startswith("readouts"))
     frozen_ref = {n: (p.detach().clone(), 1.0 - masks[n]) for n, p in model.named_parameters() if n in masks}
 else:
     for p in model.parameters(): p.requires_grad_(True)

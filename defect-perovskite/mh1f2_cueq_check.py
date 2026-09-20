@@ -48,10 +48,14 @@ res = {"loss_e3nn": loss_e, "n_frames": len(fr), "n_atoms": int(b.positions.shap
 try:
     from mace.cli.convert_e3nn_cueq import run as to_cueq
     mc = to_cueq(model.cpu(), device=dev, return_model=True).to(dev).double().train()
-    missing = [k for k in model.state_dict() if k.startswith("field_") and k not in mc.state_dict()]
-    assert not missing, ("field tensors not transferred by the converter", missing)
-    for k in model.state_dict():
-        if k.startswith("field_"): assert torch.equal(model.state_dict()[k].to(dev), mc.state_dict()[k].to(dev)), k
+    sd_e, sd_c = model.state_dict(), mc.state_dict()
+    # MACE's converter re-instantiates the field layers (e3nn ops, untouched by cueq) with a fresh init: copy their state across
+    res["converter_transferred_field_weights"] = all(torch.equal(sd_e[k].to(dev), sd_c[k].to(dev)) for k in sd_e if k.startswith("field_") and k in sd_c)
+    mc.load_state_dict({k: v.reshape(sd_c[k].shape) for k, v in sd_e.items() if k.startswith("field_") and k in sd_c}, strict=False)   # cueq layout [1, n]; the output comparison below decides whether the flat order agrees
+    res["converter_dropped_buffers"] = [k for k in sd_e if k.startswith("field_") and k not in sd_c]
+    for k in sd_e:
+        if k.startswith("field_") and k not in sd_c and sd_e[k].numel() > 0 and not k.endswith("output_mask"):
+            assert float(sd_e[k].abs().max()) == 0.0, ("non-zero field tensor dropped by the converter", k)
     model = model.to(dev)
     loss_c, g_c, o_c = grads(mc)
     def timeit(m):
