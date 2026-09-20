@@ -15,7 +15,7 @@ from ase.io import read
 HERE = Path(__file__).resolve().parent; sys.path.insert(0, str(HERE.parent))
 from mace import data as mace_data, tools                       # noqa: E402
 from mace.modules.loss import UniversalFieldLoss                 # noqa: E402
-from mace.modules.utils import fold_polarization                 # noqa: E402
+from mace.tools import fold_polarization                        # noqa: E402
 from mace.tools import torch_geometric as tg                     # noqa: E402
 from mace.tools.train import evaluate                            # noqa: E402
 
