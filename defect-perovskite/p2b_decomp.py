@@ -28,10 +28,12 @@ for run in map(Path, args.runs):
     rec = json.load(open(run / "run_record.json")); cfg = rec["config"]; fold_of = {int(k): v for k, v in rec["fold_of"].items()}
     held = [m.index for m in metas if m.state.Q != 0 and fold_of.get(m.index) == cfg["fold"]]
     if args.max_frames: held = held[: args.max_frames]
-    model = torch.load(run / "model.pt", weights_only=False, map_location=dev).to(dev)
     avg = run / "model_avg.pt"
-    if avg.exists():
-        model.load_state_dict(torch.load(avg, weights_only=False, map_location=dev))
+    obj = torch.load(avg if avg.exists() else run / "model.pt", weights_only=False, map_location=dev)
+    if isinstance(obj, dict):
+        model = torch.load(run / "model.pt", weights_only=False, map_location=dev).to(dev); model.load_state_dict(obj)
+    else:
+        model = obj.to(dev)
     model.eval(); model.export_pattern = True
     acc = {"far": 0.0, "near": 0.0, "sum": 0.0, "n": 0, "e_far": [], "e_near": [], "e_cp_periodic": []}
     for idx in held:
