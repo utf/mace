@@ -59,7 +59,7 @@ logging.info("CG over W = field_linear.0.weight (%d unknowns); train %d frames i
 
 
 def set_w(v):
-    with torch.no_grad(): W.copy_(v)
+    with torch.no_grad(): W.copy_(v.to(W.dtype))
 
 
 def predict(b):
@@ -78,21 +78,27 @@ def targets(b, p_pred):
 
 
 def apply_A(v, yz_pass=False):
-    """A v = w_Z J_Z^T J_Z v + w_P J_P^T J_P v + lambda v (and, with yz_pass, b = J^T y instead)."""
-    set_w(v if not yz_pass else torch.zeros_like(v))
-    acc = torch.zeros_like(W)
+    """A v = w_Z J_Z^T J_Z v + w_P J_P^T J_P v + lambda v (and, with yz_pass, b = J^T y instead).
+    The forward is evaluated at unit weight norm (Z*, P are exactly linear in W at E = 0) and
+    rescaled, so float32 never sees large weights; the accumulation is float64."""
+    scale = float(v.norm()) if not yz_pass else 1.0
+    if scale == 0.0:
+        return torch.zeros_like(v, dtype=torch.float64)
+    set_w(v / scale if not yz_pass else torch.zeros_like(v))
+    acc = torch.zeros_like(W, dtype=torch.float64)
     for b in loader:
         b = b.to(dev)
-        z, p = predict(b)                                            # linear in W: J v when W = v
+        z, p = predict(b)                                            # = J v / scale
         yz, mz, yp, mp = targets(b, p)
         if yz_pass:
             tz, tp = yz * mz, yp * mp.unsqueeze(-1)
         else:
-            tz, tp = z.detach() * mz, p.detach() * mp.unsqueeze(-1)
+            tz, tp = z.detach() * mz, p.detach() * mp.unsqueeze(-1)   # J v / scale
         s_ = args.w_z * (z * tz).sum() + args.w_p * (p * tp).sum()
-        (g,) = torch.autograd.grad(s_, W)
-        acc += g
-    return acc + (0.0 if yz_pass else args.lam * v)
+        (g,) = torch.autograd.grad(s_, W)                             # J^T (J v / scale) (or J^T y)
+        acc += g.double()
+    out = acc * (scale if not yz_pass else 1.0)                       # J^T J v
+    return out + (0.0 if yz_pass else args.lam * v.double())
 
 
 def validate(v, tag):
@@ -107,10 +113,12 @@ def validate(v, tag):
 t0 = time.time()
 zero = torch.zeros_like(W)
 bvec = apply_A(zero, yz_pass=True); logging.info("b = J^T y formed (%.0f s), |b| %.3e", time.time() - t0, float(bvec.norm()))
-x = torch.zeros_like(W); r = bvec.clone(); pdir = r.clone(); rs = float((r * r).sum())
+x = torch.zeros_like(W, dtype=torch.float64); r = bvec.clone(); pdir = r.clone(); rs = float((r * r).sum())
 best = {"becs": float("inf"), "iter": -1}; hist = [{"iter": 0, "valid": validate(x, "iter 0")}]
 for k in range(1, args.iters + 1):
-    t1 = time.time(); Ap = apply_A(pdir); alpha = rs / float((pdir * Ap).sum())
+    t1 = time.time(); Ap = apply_A(pdir); denom = float((pdir * Ap).sum())
+    if not np.isfinite(denom) or denom <= 0: logging.info("CG: curvature %.3e, stop", denom); break
+    alpha = rs / denom
     x = x + alpha * pdir; r = r - alpha * Ap; rs_new = float((r * r).sum())
     logging.info("CG iter %d: |r| %.3e alpha %.3e |x| %.3e (%.0f s)", k, rs_new ** 0.5, alpha, float(x.norm()), time.time() - t1)
     if k % args.eval_every == 0 or k == args.iters:
