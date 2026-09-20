@@ -39,6 +39,7 @@ ap.add_argument("--unfreeze", type=int, default=0, help="1: train ALL weights (p
 ap.add_argument("--replay", default="", help="MH-1 pseudolabel E/F/S replay set (xyz) mixed into training when unfreezing")
 ap.add_argument("--replay_head", default="omat_pbe"); ap.add_argument("--replay_valid_fraction", type=float, default=0.1)
 ap.add_argument("--w_e", type=float, default=10.0); ap.add_argument("--w_f", type=float, default=10.0); ap.add_argument("--w_s", type=float, default=1.0)
+ap.add_argument("--backbone_lr", type=float, default=-1.0, help="unfrozen runs: learning rate of the non-field (MH-1) weights; <0 = same as --lr")
 ap.add_argument("--device", default="cuda"); ap.add_argument("--max_frames", type=int, default=0, help="debug: truncate the dataset")
 args = ap.parse_args()
 run = Path(args.run); run.mkdir(parents=True, exist_ok=True)
@@ -163,7 +164,13 @@ logging.info("reference MH-0 MACE-Field (%s) on this validation split: %s", args
 init_m = metrics(model, valid_loader)
 logging.info("MH-1-Field at init (zero field coupling): %s", {k: round(v, 5) for k, v in init_m.items()})
 
-opt = torch.optim.Adam(params, lr=args.lr, weight_decay=0.0)
+if args.unfreeze and args.backbone_lr >= 0:
+    field_p = [p for n, p in model.named_parameters() if p.requires_grad and n.startswith("field_")]
+    back_p = [p for n, p in model.named_parameters() if p.requires_grad and not n.startswith("field_")]
+    opt = torch.optim.Adam([{"params": field_p, "lr": args.lr}, {"params": back_p, "lr": args.backbone_lr}], weight_decay=0.0)
+    logging.info("differential learning rates: field maps %.1e (%d params), backbone %.1e (%d params)", args.lr, sum(p.numel() for p in field_p), args.backbone_lr, sum(p.numel() for p in back_p))
+else:
+    opt = torch.optim.Adam(params, lr=args.lr, weight_decay=0.0)
 ema = ExponentialMovingAverage(params, decay=args.ema)
 sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode="min", factor=args.plateau_factor, patience=args.plateau_patience)
 history = [{"epoch": -1, "valid": init_m, "ref": ref_m}]
@@ -200,7 +207,7 @@ for epoch in range(args.max_epochs):
     if epoch == 5 and not raised:
         h = [e["train_loss"] for e in history[1:]]
         if len(h) >= 5 and h[-1] < 0.7 * h[-4]:
-            for g in opt.param_groups: g["lr"] = args.lr_raise
+            opt.param_groups[0]["lr"] = args.lr_raise
             raised = True; logging.info("loss still falling steadily at epoch 5: lr raised once to %.1e", args.lr_raise)
     if since >= args.patience:
         logging.info("no improvement in Z* or alpha for %d epochs: stop", args.patience); break

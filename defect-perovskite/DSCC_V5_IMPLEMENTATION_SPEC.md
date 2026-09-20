@@ -6237,3 +6237,7 @@ but still 60× the registered tolerance (0.2 / 1.0). The hundredfold weight incr
 drift by 2×: at lr 1e-4 the backbone moves ~50 meV/Å in the first epoch whatever the balance.
 Next lever (proposed, not applied): differential learning rates — field maps at 3e-3, backbone at
 1e-5 or lower — so the backbone can only refine, or replay weights 1e4.
+Decision (user, 2026-09-20 10:45): differential learning rates — field maps 3e-3, backbone 1e-5
+(Adam parameter groups), replay 1000/1000/100, response P 1000 / Z* 100 / α 100, plateau on Z*
+(acts on the field group's rate via the scheduler on all groups), mixed batches. Restarted on b3
+GPU 7 as run_full; the 1e-4 uniform run kept as run_full_w1000.
