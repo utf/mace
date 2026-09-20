@@ -6191,3 +6191,11 @@ embedded 2×2×2 (639 atoms) 0.023 eV / 20.5 (FAIL); embedded 3×3×3 (2159 atom
 no other change, six seeds (`p2b_queue_gap3.sh`, names dscc_p2bsg_s*), queued on b3 01:55.
 `p0_localisation.py` (Σdq within 5 Å) failed on this head (a no-grad path); the gate is decided by
 separation and N_eff; the Σdq readout is fixed for the report later.
+Expectation for the w_gap × 3 retrain, written before its result (2026-09-20 02:20, prompted by the
+user): NULL. The regulariser constrains the pristine static cell's Γ gap, which every run already
+holds at 2.400 eV with zero residual (BZ readouts: direct at Γ), so a tripled weight adds no
+gradient; the large-N failure is the vacancy level's position and size dependence in H0 (308 meV
+at 79 atoms → 21 meV at 2159; Σdq within 5 Å 0.57 → 0.23), which the pristine gap does not
+constrain — the Phase 0 shallow-carrier finding. The retrain runs as the registered check; the
+plan's next line after it is "stop and report"; any term acting on the defect level is excluded
+by the plan's "what not to do" and is the user's decision.
