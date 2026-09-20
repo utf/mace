@@ -6254,3 +6254,8 @@ solve — `mh1_field_cg.py`: conjugate gradient on the normal equations for the 
 map fixed random), Z* (weight 1) and folded P (weight 10) labels of the registered split, one
 training pass per iteration, validation every 3 iterations, best iterate kept (truncated Krylov
 as the regulariser); b3 GPU 5 (`run_cg`, 11:08). Unfrozen differential-lr run continues on b3 GPU 7.
+Option 2 (bottleneck 128) stopped by the user (2026-09-20 12:58) after three epochs: P 0.0031,
+Z* 0.566, α 1.62 — the same plateau as the full-width coupling (parameter count is not the
+limit). Option 3 (CG) at iteration 3: Z* 0.656, P 0.0035, α 6.99 (α outside the linear objective);
+continuing. Unfrozen differential-lr run epoch 0: Z* 0.449, α 1.57, P 0.0034, replay drift
+1.38 meV/atom / 7.4 meV/Å (7× the tolerance; 10× better than uniform lr).
