@@ -6203,3 +6203,14 @@ w_gap × 3 retrain stopped by the user (2026-09-20 02:25) before its first seed 
 emptied; b3 idle. Phase 2b closes on the registered "stop and report" line: B_s adopted for
 forces and energies; the Phase 3 entry gate (large-N localisation) fails and its remedy is
 outside the plan — the user's decision.
+Gradient / derivative audit of the MH-1-Field training (2026-09-20 02:40, run1 checkpoint in float64,
+Cl4F4 8-atom dielectric frame): batch head index 1 = mp_pbe_refit_add ✓; becs identical with and
+without compute_force (4e-15) ✓; Z* against central differences of Ω·P over R: max |diff| 5.6e-8 e
+(|Z*| 1.13) ✓; α against central differences of P over E / ε0: 5e-4 on |α| 1.9 (FD step) ✓;
+α symmetric to 4e-16, ΣZ* = 0 to 7e-16 ✓; both field maps receive gradient under the run's loss
+(field_feats |g| 0.165 at |w| 797; field_linear |g| 0.189 at |w| 326), no frozen tensor carries a
+gradient ✓. No bug found in the derivatives, labels' head, or gradient flow; on this frame the fit
+is simply far off (Z* diag pred 0.49 / 0.72 / −0.50 vs label 1.00 / 1.27 / 0.12; α tr/3 1.65 vs
+1.83). run1 (P 1000, lr 3e-3, mixed) epoch 2: P 0.00304, Z* 0.5637, α 1.732; a second run with
+P weight 100 (otherwise identical, atom budget 80 on the 24 GB card) launched on b3 GPU 5 at 02:35
+(`run_p100`, user request).
