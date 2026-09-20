@@ -6269,3 +6269,12 @@ limit is the representational reach of the frozen features for Z*, not the optim
 parameter count (the 128-bottleneck plateaued at the same 0.57 under Adam). Unfrozen
 differential-lr run at epoch 5: Z* 0.375, α 1.34, P 0.0030, replay drift 1.9 meV/atom /
 9.4 meV/Å (tolerance 0.2 / 1.0).
+
+### 2026-09-20 — MACE-MH-1-Field: closed, report delivered
+
+Training stopped on the user's instruction; `MH1_FIELD_REPORT.md` written. Delivered model `~/runs/mh1field/MACE-MH-1-Field.model`
+(run_p100 best, exact: float64 ≤ 2e-5 meV/atom; identities ΣZ* 1.4e-14, α asymmetry 3.7e-15; CsPbCl3 Cl 3.42 / Cs 1.58 (miss, −30 %) /
+Pb 6.39, ε∞ 3.57; E_PP mismatch 2.40 meV/Å EXCEEDS τ, base v7 1.49). Targets missed: Z* 0.453 / P 0.00304 / α 1.37 vs 0.231 / 0.00195 / 1.21;
+CG floor 0.368; unfrozen diff-lr 0.371 with drift 1.96 / 10.7 (tol 0.2 / 1.0). Benchmark (user request): MH-0 MACE-Field on the same replay
+hold-out is 61.6 meV/atom / 211.8 meV/Å from MH-1's labels (pt_head; mp-dielectric 85.8 / 244.7), `replay_bench_mh0.json`. Provider for
+the project stays MH-0. Plan §6.3 applies.
