@@ -35,6 +35,10 @@ ap.add_argument("--max_atoms", type=int, default=120, help="frames above this si
 ap.add_argument("--max_epochs", type=int, default=60); ap.add_argument("--patience", type=int, default=10)
 ap.add_argument("--plateau_patience", type=int, default=5); ap.add_argument("--plateau_factor", type=float, default=0.8)
 ap.add_argument("--mixed_batches", type=int, default=0, help="1: batches drawn at random under the atom budget (both subsets in every step) instead of size-sorted")
+ap.add_argument("--unfreeze", type=int, default=0, help="1: train ALL weights (plan §6.3 variant: a different model, protected by the replay)")
+ap.add_argument("--replay", default="", help="MH-1 pseudolabel E/F/S replay set (xyz) mixed into training when unfreezing")
+ap.add_argument("--replay_head", default="omat_pbe"); ap.add_argument("--replay_valid_fraction", type=float, default=0.1)
+ap.add_argument("--w_e", type=float, default=10.0); ap.add_argument("--w_f", type=float, default=10.0); ap.add_argument("--w_s", type=float, default=1.0)
 ap.add_argument("--device", default="cuda"); ap.add_argument("--max_frames", type=int, default=0, help="debug: truncate the dataset")
 args = ap.parse_args()
 run = Path(args.run); run.mkdir(parents=True, exist_ok=True)
@@ -55,6 +59,18 @@ for a in frames:
     if "REF_polarizability" in a.info:
         a.info["REF_polarizability"] = np.asarray(a.info["REF_polarizability"], dtype=float) * FOUR_PI
 logging.info("polarisability labels converted chi = 4 pi x REF_polarizability (dataset convention chi / 4 pi)")
+for a in frames:
+    a.info["_head"] = args.head
+replay_train, replay_valid = [], []
+if args.replay:
+    rp = [a for a in read(args.replay, ":") if len(a) <= args.max_atoms]
+    for a in rp:
+        a.info["_head"] = args.replay_head
+        for k in ("config_polarization_weight", "config_becs_weight", "config_polarizability_weight"):
+            a.info[k] = 0.0
+    rr = np.random.default_rng(args.seed + 1); perm = rr.permutation(len(rp)); n_rv = int(args.replay_valid_fraction * len(rp))
+    replay_valid = [rp[i] for i in perm[:n_rv]]; replay_train = [rp[i] for i in perm[n_rv:]]
+    logging.info("replay: %d frames (%s head, E/F/S pseudolabels), %d train / %d valid", len(rp), args.replay_head, len(replay_train), len(replay_valid))
 logging.info("frames %d; excluded %d above %d atoms (%d with P labels, %d with Z*/alpha labels)", len(frames), len(excluded), args.max_atoms,
              sum(1 for i in excluded if "REF_polarization" in frames_all[i].info), sum(1 for i in excluded if "REF_becs" in frames_all[i].arrays))
 ferro = [i for i, a in enumerate(frames) if "polar_mpid" in a.info]; diel = [i for i in range(len(frames)) if i not in set(ferro)]
@@ -75,11 +91,12 @@ ks.info_keys.update(energy="REF_energy", stress="REF_stress", polarization="REF_
 ks.arrays_keys.update(forces="REF_forces", becs="REF_becs")
 
 
-def dataset(model, head, indices):
+def dataset(model, head, indices, atoms_list=None):
     zt = tools.AtomicNumberTable([int(z) for z in model.atomic_numbers])
     out = []
-    for i in indices:
-        cfg = mace_data.config_from_atoms(frames[i], key_specification=ks, head_name=head)
+    items = atoms_list if atoms_list is not None else [frames[i] for i in indices]
+    for a in items:
+        cfg = mace_data.config_from_atoms(a, key_specification=ks, head_name=a.info.get("_head", head))
         out.append(mace_data.AtomicData.from_config(cfg, z_table=zt, cutoff=float(model.r_max), heads=list(model.heads)))
     return out
 
@@ -109,22 +126,35 @@ class AtomBudgetBatches:
 
 
 model = torch.load(args.init, map_location=dev, weights_only=False).to(dev).float()
+if args.unfreeze:
+    for p_ in model.parameters(): p_.requires_grad_(True)
 params = [p for p in model.parameters() if p.requires_grad]
-logging.info("trainable parameters: %d (of %d)", sum(p.numel() for p in params), sum(p.numel() for p in model.parameters()))
+logging.info("trainable parameters: %d (of %d)%s", sum(p.numel() for p in params), sum(p.numel() for p in model.parameters()), " -- ALL weights (unfrozen)" if args.unfreeze else "")
 train_ds, valid_ds = dataset(model, args.head, train), dataset(model, args.head, valid)
+if replay_train:
+    train_ds = train_ds + dataset(model, args.replay_head, None, atoms_list=replay_train)
+replay_valid_ds = dataset(model, args.replay_head, None, atoms_list=replay_valid) if replay_valid else None
 sizes = [int(d.positions.shape[0]) for d in train_ds]
 sampler = AtomBudgetBatches(sizes, args.atoms_per_batch, args.max_frames_per_batch, args.seed, mixed=bool(args.mixed_batches))
 logging.info("batching: %s, atom budget %d, max %d frames, %d batches", "mixed (random)" if args.mixed_batches else "size-sorted", args.atoms_per_batch, args.max_frames_per_batch, len(sampler))
 train_loader = tg.dataloader.DataLoader(train_ds, batch_size=1, shuffle=False, drop_last=False, batch_sampler=sampler)
 valid_loader = tg.dataloader.DataLoader(valid_ds, batch_size=args.valid_batch, shuffle=False)
-loss_fn = UniversalFieldLoss(energy_weight=0.0, forces_weight=0.0, stress_weight=0.0, polarization_weight=args.w_p, becs_weight=args.w_z, polarizability_weight=args.w_a).to(dev)
-OUT = {"forces": False, "virials": False, "stress": False, "polarization": True, "becs": True, "polarizability": True}
-KW = dict(training=True, compute_force=False, compute_stress=False, compute_polarization=True, compute_becs=True, compute_polarizability=True)
+efs = bool(args.replay)
+loss_fn = UniversalFieldLoss(energy_weight=(args.w_e if efs else 0.0), forces_weight=(args.w_f if efs else 0.0), stress_weight=(args.w_s if efs else 0.0),
+                             polarization_weight=args.w_p, becs_weight=args.w_z, polarizability_weight=args.w_a).to(dev)
+OUT = {"forces": efs, "virials": False, "stress": efs, "polarization": True, "becs": True, "polarizability": True}
+KW = dict(training=True, compute_force=efs, compute_stress=efs, compute_polarization=True, compute_becs=True, compute_polarizability=True)
 
 
 def metrics(m, loader):
     m.eval(); _, aux = evaluate(m, loss_fn, loader, OUT, dev); m.train()
     return {k: (float(aux[k]) if aux.get(k) is not None else float("nan")) for k in ("rmse_polarization", "rmse_becs", "rmse_polarizability")}
+
+
+def replay_metrics(m):
+    if replay_valid_ds is None: return {}
+    m.eval(); _, aux = evaluate(m, loss_fn, tg.dataloader.DataLoader(replay_valid_ds, batch_size=args.valid_batch, shuffle=False), OUT, dev); m.train()
+    return {"replay_rmse_e_meV_atom": 1e3 * float(aux["rmse_e_per_atom"]), "replay_rmse_f_meV_A": 1e3 * float(aux["rmse_f"])}
 
 
 # reference: the MH-0 MACE-Field on the same validation structures (its own table and head)
@@ -151,7 +181,8 @@ for epoch in range(args.max_epochs):
         tot += float(loss); n_b += 1; del out, loss
     peak = torch.cuda.max_memory_allocated() / 2 ** 30
     with ema.average_parameters():
-        vm = metrics(model, valid_loader)
+        vm = metrics(model, valid_loader); rm = replay_metrics(model)
+    vm.update(rm)
     key = vm["rmse_becs"] if vm["rmse_becs"] == vm["rmse_becs"] else vm["rmse_polarization"]
     sched.step(key)
     improved = vm["rmse_becs"] < best["becs"] or vm["rmse_polarizability"] < best["alpha"] or (vm["rmse_becs"] != vm["rmse_becs"] and vm["rmse_polarization"] < best.get("pol", float("inf")))
@@ -165,8 +196,9 @@ for epoch in range(args.max_epochs):
         since += 1
     entry = {"epoch": epoch, "train_loss": tot / max(n_b, 1), "valid": vm, "lr": opt.param_groups[0]["lr"], "s_per_epoch": time.time() - t0, "s_per_step": (time.time() - t0) / max(n_b, 1), "peak_mem_GB": peak, "best_epoch": best["epoch"]}
     history.append(entry); json.dump(history, open(run / "history.json", "w"), indent=1)
-    logging.info("epoch %d loss %.4e valid P %.5f Z* %.5f alpha %.5f (ref %.5f / %.5f / %.5f) lr %.1e %.0fs (%.2f s/step, %.1f GB)",
-                 epoch, entry["train_loss"], vm["rmse_polarization"], vm["rmse_becs"], vm["rmse_polarizability"], ref_m["rmse_polarization"], ref_m["rmse_becs"], ref_m["rmse_polarizability"], entry["lr"], entry["s_per_epoch"], entry["s_per_step"], peak)
+    logging.info("epoch %d loss %.4e valid P %.5f Z* %.5f alpha %.5f (ref %.5f / %.5f / %.5f) lr %.1e %.0fs (%.2f s/step, %.1f GB)%s",
+                 epoch, entry["train_loss"], vm["rmse_polarization"], vm["rmse_becs"], vm["rmse_polarizability"], ref_m["rmse_polarization"], ref_m["rmse_becs"], ref_m["rmse_polarizability"], entry["lr"], entry["s_per_epoch"], entry["s_per_step"], peak,
+                 (" replay E %.3f meV/atom F %.3f meV/A (tolerance 0.2 / 1.0)" % (rm["replay_rmse_e_meV_atom"], rm["replay_rmse_f_meV_A"])) if rm else "")
     if epoch == 5 and not raised:
         h = [e["train_loss"] for e in history[1:]]
         if len(h) >= 5 and h[-1] < 0.7 * h[-4]:
