@@ -6214,3 +6214,12 @@ is simply far off (Z* diag pred 0.49 / 0.72 / −0.50 vs label 1.00 / 1.27 / 0.1
 1.83). run1 (P 1000, lr 3e-3, mixed) epoch 2: P 0.00304, Z* 0.5637, α 1.732; a second run with
 P weight 100 (otherwise identical, atom budget 80 on the 24 GB card) launched on b3 GPU 5 at 02:35
 (`run_p100`, user request).
+Unfrozen variant (user, 2026-09-20 02:50; plan §6.3's "different model"): all 7.49 M weights train,
+protected by the MH-1 pseudolabel replay (`replay_mh1_omat_pbe_sel10k.xyz`, 10,000 frames, omat_pbe
+head, E/F/S labels = MH-1's own outputs; 8 frames above 120 atoms excluded; 10 % held as replay
+validation) mixed into the response training: E 10 / F 10 / S 1 on the replay, P 1000 / Z* 100 /
+α 100 on the dielectric data; lr 1e-4 flat + plateau (0.5, patience 3), EMA 0.999, clip 1.0,
+mixed batches, atom budget 48. Registered tolerance (plan §6.3): E ≤ 0.2 meV/atom and F ≤ 1 meV/Å
+deviation from MH-1 on the replay validation, logged per epoch. Launched on b3 GPU 7 at 02:52
+(`run_full`); the P-100 frozen run on b3 GPU 5 (`run_p100`) and the P-1000 frozen run locally
+(`run1`) continue.
