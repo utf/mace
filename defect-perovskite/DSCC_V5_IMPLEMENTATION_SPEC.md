@@ -6199,3 +6199,7 @@ at 79 atoms → 21 meV at 2159; Σdq within 5 Å 0.57 → 0.23), which the prist
 constrain — the Phase 0 shallow-carrier finding. The retrain runs as the registered check; the
 plan's next line after it is "stop and report"; any term acting on the defect level is excluded
 by the plan's "what not to do" and is the user's decision.
+w_gap × 3 retrain stopped by the user (2026-09-20 02:25) before its first seed finished; queue
+emptied; b3 idle. Phase 2b closes on the registered "stop and report" line: B_s adopted for
+forces and energies; the Phase 3 entry gate (large-N localisation) fails and its remedy is
+outside the plan — the user's decision.
