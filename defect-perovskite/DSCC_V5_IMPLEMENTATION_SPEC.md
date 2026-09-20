@@ -6168,3 +6168,18 @@ clipping acted on P alone, scaling Z*/α updates down through Adam's second mome
 (user, 23:10): restart with lr 3e-3 (midway), reduce-on-plateau on validation Z* (factor 0.5,
 patience 3), and mixed batches (random permutation under the same 48-atom budget) → run1;
 the lr 1e-2 run kept as run1_p1000_lr1e-2.
+
+Phase 2b RESULT (2026-09-20 01:07, `P2B_GATES.json`, `P2B_C5.json`, `P2B_REPORT.md`; six paired
+seeds per arm, epoch-averaged held-out, per component meV/Å). Medians: A 15.42 / 4–12 Å 13.79;
+B_s 15.96 / 14.42; B_0 21.25 / 18.71. Paired TOST (τ 1.7): B_s vs A equivalent on total (mean d
+−0.16, CI [−1.43, +1.11]) and 4–12 Å (−0.27, [−1.29, +0.75]); B_0 vs A inferior on both (−7.19,
+−6.04); B_0 vs B_s inferior on both. §5 decision: **B_s adopted** (equivalence, the registered
+expected outcome); B_0 not within τ of B_s → the Mulliken near-field term stays. Gate 2: B_s
+passes on 5 of 6 seeds (fails s3: C_Q transfer), A on 1 of 6, B_0 on 1 of 6; B_s 79-atom energy
+median 0.45 meV/atom, C_Q transfer 4.5 meV. Localisation (C5, medians): A pass 0.98 / 457 meV /
+N_eff 1.56 (s1 the outlier at 0.03 / 14.5); B_s 0.89 / 346 meV / 1.67 (s3 weakest 0.51 / 204 / 2.2);
+B_0 0.07 / 115 meV / 4.6 (no bound state). BZ readouts (avg, min_k dCBM): B_s +0.04 … +0.08 eV,
+B_0 +0.006 … +0.13 — gaps direct at Γ throughout. Cost: A 41, B_s 82.5, B_0 84 s/epoch.
+Pending for P2B_REPORT.md: large-N localisation on the embedded 3×3×3 structure (adopted arm's
+seed-median checkpoint; gate for Phase 3 entry), E_near/E_far decomposition on held-out charged
+frames, §2 tables, decision statements.
