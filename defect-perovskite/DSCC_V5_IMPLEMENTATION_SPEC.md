@@ -6231,3 +6231,9 @@ is the limit (plan §6.3 shortfall). Unfrozen replay run (E 10 / F 10 / S 1, 6 e
 registered tolerance. Decision (user): "fix the replay ft model" → restarted 08:52 on b3 GPU 7 with
 the replay weights raised to E 1000 / F 1000 / S 100 (response P 1000 / Z* 100 / α 100 unchanged,
 lr 1e-4, plateau, mixed batches); the previous kept as run_full_w10.
+Unfrozen run, replay weights 1000/1000/100 (2026-09-20 10:11, epoch 0, 69 min): P 0.00339, Z* 0.4707,
+α 1.778; replay drift E 12.6 meV/atom, F 55.7 meV/Å — halved from the 10/10/1 run (26.7 / 118)
+but still 60× the registered tolerance (0.2 / 1.0). The hundredfold weight increase moved the
+drift by 2×: at lr 1e-4 the backbone moves ~50 meV/Å in the first epoch whatever the balance.
+Next lever (proposed, not applied): differential learning rates — field maps at 3e-3, backbone at
+1e-5 or lower — so the backbone can only refine, or replay weights 1e4.
