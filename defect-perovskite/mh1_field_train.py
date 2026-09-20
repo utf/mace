@@ -59,9 +59,7 @@ for a in frames:
     if "REF_polarizability" in a.info:
         a.info["REF_polarizability"] = np.asarray(a.info["REF_polarizability"], dtype=float) * FOUR_PI
 logging.info("polarisability labels converted chi = 4 pi x REF_polarizability (dataset convention chi / 4 pi)")
-for a in frames:
-    a.info["_head"] = args.head
-replay_train, replay_valid = [], []
+replay_train, replay_valid = [], []      # dielectric/ferroelectric frames carry no `_head`: the model's head argument applies (the reference uses its own)
 if args.replay:
     rp = [a for a in read(args.replay, ":") if len(a) <= args.max_atoms]
     for a in rp:
