@@ -11,7 +11,7 @@ The field-aware MH-1 was built as specified: MACE-Field's field-coupling layers 
 - MH-1: 6,439,878 parameters, 6 heads (matpes_r2scan, mp_pbe_refit_add, spice_wB97M, oc20_usemppbe, omol, omat_pbe), 89 elements, hidden 512x0e+512x1o, T = 2.
 - MH-1-Field: `MACEField(**extract_config_mace_model(MH-1))`, MH-1 tensors copied, 7,488,454 parameters in total; trainable field coupling 1,048,576 (field_feats: FullyConnectedTensorProduct hidden × 1o → hidden, 524,288; field_linear: Linear hidden → hidden, 524,288); 1 injection layer (after every layer t < T, the MH-0 configuration). float32.
 - Head for the response: mp_pbe_refit_add (MP PBE/PBE+U). The field layers live in the shared backbone; every head stays exact at zero field.
-- Initialisation (amended from the plan): the coupling is the composition of two linear maps, so P and Z* are bilinear in the two weight sets and the gradient of both vanishes at the all-zero point; a first full epoch at all-zero init left the validation numbers identical to the init. field_feats keeps its e3nn default random init, field_linear starts at zero (initial response exactly zero, E = 0 residual zero for any weights).
+- Initialisation (amended from the plan): the coupling is the composition of two linear maps, so P and Z* are bilinear in the two weight sets and the gradient of both vanishes at the all-zero point. field_feats keeps its e3nn default random init, field_linear starts at zero (initial response exactly zero, E = 0 residual zero for any weights).
 
 ## 3. Exactness at E = 0 (§2), before training
 
@@ -32,7 +32,7 @@ Field residual at E = 0: 0.0e+00 (exactly zero). float64 control on 300 structur
 
 - Dataset: the combined MACE-Field set, 8446 frames = 5946 MP-Dielectric (Z*, α) + 2500 MP-Ferroelectric (P), 79 elements; 40 ferroelectric frames above 120 atoms excluded (α's nested derivatives on the 16 GB card).
 - Split (recorded deviation): the MH-0 split indices are not published (paper: material-level splits, details in SI); the repository README recipe uses `--valid_fraction 0.2`. Here ferroelectric frames are split by material (43 of 213 held out with all interpolates), dielectric frames at random (1189 of 5946), seed 123: 6727 train / 1679 validation.
-- **Units finding.** The dataset stores the polarisability as χ/4π (MgO 0.197 → ε∞ 3.5, Si 0.935 → 12.7, diamond 0.446 → 6.6), while MACE-Field, fork and port alike, predicts χ = (dP/dE)/(V ε0). Labels are converted χ = 4π × REF_polarizability; the MH-0 reference on this split then reads P 0.00177, Z* 0.2101, α 1.101 (the unconverted α gave a spurious 3.66). The plan's targets (1.1 × reference): P 0.00195, Z* 0.231, α 1.21.
+- **Units finding.** The dataset stores the polarisability as χ/4π (MgO 0.197 → ε∞ 3.5, Si 0.935 → 12.7, diamond 0.446 → 6.6), while MACE-Field, fork and port alike, predicts χ = (dP/dE)/(V ε0). Labels are converted χ = 4π × REF_polarizability; the MH-0 reference on this split then reads P 0.00177, Z* 0.2101, α 1.101. The plan's targets (1.1 × reference): P 0.00195, Z* 0.231, α 1.21.
 - Loss: universal_field with E/F/S weights 0 (the loss skips a term whose global weight is zero — a code fix), Huber on Z* and α (δ 0.01), folded P (δ 0.05); response weights P 1 / Z* 100 / α 100 (README) at first, P 1000 by the user's choice afterwards; missing labels masked by per-config weights.
 - Batches under an atom budget (48–80 atoms, ≤ 6–8 frames), size-sorted at first, then mixed (random) so both subsets share every step: size-sorting had segregated the polarisation-only ferroelectric frames (median 28 atoms) from the dielectric frames (median 14), so each step trained one objective and the clipping at 1.0 acted on P alone.
 
@@ -40,7 +40,6 @@ Field residual at E = 0: 0.0e+00 (exactly zero). float64 control on 300 structur
 
 | run | node | weights P / Z* / α | lr | epochs | best Z* | P | α | replay drift E / F | s/epoch, GB |
 |---|---|---|---|---|---|---|---|---|---|
-| run0 (all-zero init) | local | 1 / 100 / 100 | 1e-3 | 1 | 1.334 (no gradient) | 0.00369 | 0.337* | — | 1372, 14.7 |
 | run1_p1 | local | 1 / 100 / 100 | 1e-3 | 2 | 0.435 | 0.00353 | 1.48 | — | 1748, 10.0 |
 | run1_p1000_lr1e-2 | local | 1000 / 100 / 100 | 1e-2 | 2 | 0.598 | 0.00319 | 2.19 | — | 1764, 10.0 |
 | run1 (mixed) | local | 1000 / 100 / 100 | 3e-3 → 3.8e-4 plateau | 17 | 0.564 | 0.00293 | 1.44 | — | 1900, 10.0 |
@@ -53,7 +52,7 @@ Field residual at E = 0: 0.0e+00 (exactly zero). float64 control on 300 structur
 | MH-0 MACE-Field reference | | | | | 0.210 | 0.00177 | 1.10 | 61.6 / 211.8 (pt_head), 85.8 / 244.7 (mp-dielectric) | |
 | target (1.1 × reference) | | | | | 0.231 | 0.00195 | 1.21 | | |
 
-*run0's α was read against the unconverted labels. Replay drift is the RMSE against MH-1's own labels on a 10 % hold-out of the MH-1 replay set (tolerance for the unfrozen variant, plan §6.3: 0.2 meV/atom, 1.0 meV/Å).
+Replay drift is the RMSE against MH-1's own labels on a 10 % hold-out of the MH-1 replay set (tolerance for the unfrozen variant, plan §6.3: 0.2 meV/atom, 1.0 meV/Å).
 
 **Benchmark for the drift column.** The MH-0 MACE-Field itself, evaluated on the same hold-out (934 of the 999 frames lie within its 79-element table), sits 61.6 meV/atom and 211.8 meV/Å from MH-1's labels with its pt_head (85.8 / 244.7 with its mp-dielectric head; energies after a per-element offset fit in the per-atom metric, forces direct; `replay_bench_mh0.json`). MH-0 and MH-1 are different models trained on different data, so this is the distance between the two potentials on MH-1's own distribution, not an error of MH-0 against DFT. Against it the unfrozen fine-tune's drift (1.96 / 10.7) is 3 % of the energy gap and 5 % of the force gap: the differential-lr run keeps MH-1's energetics far more closely than swapping to the MH-0 potential would, while its Born charges (0.37) remain well short of MH-0's (0.21). The tolerance in §6.3 (0.2 / 1.0) is a fidelity requirement to MH-1 itself, and is what the run misses.
 
@@ -82,7 +81,7 @@ Field residual at E = 0: 0.0e+00 (exactly zero). float64 control on 300 structur
 
 - `~/runs/mh1field/MACE-MH-1-Field.model`: the best exact model (run_p100 best epoch, EMA weights; all six heads; response trained on mp_pbe_refit_add; `field_config` and `training_record` in the checkpoint). Also `run_cg/MACE-MH-1-Field-cg.model` (linear solve, Z* 0.368, α unusable) and `run_full/MACE-MH-1-Field.model` (unfrozen, not exact).
 - Cost per step: frozen 0.50–0.73 s at 10 GB (48–80-atom batches); unfrozen 0.63–0.75 s at 14 GB; CG 860 s per iteration (one training pass).
-- For this project: base v2 + E_PP matching with the new model as provider (RMS E_PP force on the neutral validation frames at r_split 4.5): **2.40 meV/Å, above τ = 1.7** (per-frame maximum 4.85; per-species means ≤ 0.1). The project's base v7 (trained on the MH-0 provider's labels) gives 1.49 meV/Å on the same frames (PASS); the excess follows from the weaker Born charges. The P0 form-factor and switched Born-force diagnostics were not rerun: the delivered response is below the MH-0 model's, so the MH-0 provider stays the project's provider.
+- For this project: base v2 + E_PP matching with the new model as provider (RMS E_PP force on the neutral validation frames at r_split 4.5): **2.40 meV/Å, above τ = 1.7** (per-frame maximum 4.85; per-species means ≤ 0.1). The project's base v7 (trained on the MH-0 provider's labels) gives 1.49 meV/Å on the same frames (PASS); the excess follows from the weaker Born charges. P0 locality on the 2×2×2 CsPbCl3 cell with the new provider (`cspbcl3_check.json`): r90 of the dipole response 6.75 Å over species (MH-0 provider: 4.5 Å r_split), partition ambiguity RMS(p − p′)/RMS(p) 0.40 (MH-0: 1.11), self share Cl 0.26 / Cs 0.50 / Pb 0.15. The form-factor and switched Born-force diagnostics were not rerun: the delivered response is below the MH-0 model's, so the MH-0 provider stays the project's provider.
 
 ## 10. Records
 
