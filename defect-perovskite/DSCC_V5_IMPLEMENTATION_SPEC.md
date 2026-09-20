@@ -6183,3 +6183,11 @@ B_0 +0.006 … +0.13 — gaps direct at Γ throughout. Cost: A 41, B_s 82.5, B_0
 Pending for P2B_REPORT.md: large-N localisation on the embedded 3×3×3 structure (adopted arm's
 seed-median checkpoint; gate for Phase 3 entry), E_near/E_far decomposition on held-out charged
 frames, §2 tables, decision statements.
+§5 large-N localisation (2026-09-20 01:50, `p0_boundstate.py`, B_s seed-median checkpoint = seed 1
+averaged weights, registered fill): training 79-atom frame separation 0.308 eV / N_eff 1.6 (pass);
+embedded 2×2×2 (639 atoms) 0.023 eV / 20.5 (FAIL); embedded 3×3×3 (2159 atoms) 0.021 eV / 38.2
+(FAIL against ≥ 0.15 eV and ≤ 4). The bound state collapses with cell size as W6's did in Phase 0
+(the shallow-carrier finding). Registered remedy applied once: B_s retrained with w_gap × 3 = 3.0,
+no other change, six seeds (`p2b_queue_gap3.sh`, names dscc_p2bsg_s*), queued on b3 01:55.
+`p0_localisation.py` (Σdq within 5 Å) failed on this head (a no-grad path); the gate is decided by
+separation and N_eff; the Σdq readout is fixed for the report later.
