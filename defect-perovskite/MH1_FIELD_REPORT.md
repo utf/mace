@@ -1,6 +1,6 @@
 # MACE-MH-1-Field: two models in parallel — report
 
-*Plan: "MACE-MH-1-Field: two models in parallel" (user, 2026-09-20). Units: Z* e, α = ε∞ − I (dimensionless, the released files' convention), P e/Å² (folded; also μC/cm²), E meV/atom, F meV/Å, σ meV/Å³. Status: §1 inventory complete; §2 reference in progress; construction and probes in progress; nothing trained yet.*
+*Plan: "MACE-MH-1-Field: two models in parallel" (user, 2026-09-20). Units: Z* e, α = ε∞ − I (dimensionless, the released files' convention), P e/Å² (folded; also μC/cm²), E meV/atom, F meV/Å, σ meV/Å³. Status: §1–§3 complete; targets registered; Model A training (local), Model B queued on b3.*
 
 ## 1. Inventory (§1)
 
@@ -64,7 +64,28 @@ No test set exists under this recipe; the from-scratch test files are reported a
 - **Model B E/F/σ (§6):** evaluated against the replay hold-out's labels, which are MH-1's. Provisional line (to be confirmed by the user): B's RMSE against MH-1 on the hold-out ≤ 5 % (E, F) / 10 % (σ) of MH-1's own validation error on OMAT-PBE DFT, which is not published in the release notes or the preprint text; until it is, the drift is reported as is and the criterion is marked not evaluable.
 - **Scheduler:** ReduceLROnPlateau on validation Z*, factor 0.8, patience 5 (the script's patience 50 never fires under early-stop 20). Early stop: patience 20 on validation Z*; cap 150 epochs.
 
-## 2. Reference (§2) — pending
+## 2. Reference (§2)
+
+1.0.2 checkpoint, float64, seed-123 validation sets of the full released files (`ref_valid_1.0.2_f64.json`); all-component RMSE, P folded with the loss's `fold_polarization`; diag/off-diag with the paper's `scalar_metrics`.
+
+| set | head | Z* (e) | α (ε∞ − I) | P folded (e/Å²) | P (μC/cm²) |
+|---|---|---|---|---|---|
+| dielectric valid (527) | mp-dielectric | **0.2524** (diag 0.307, off 0.220) | **2.489** (diag 4.29, off 0.27) | | |
+| dielectric valid | pt_head | 0.2863 | 2.660 | | |
+| ferroelectric valid (250) | mp-ferroelectric | | | **0.00182** | 2.92 |
+| ferroelectric valid | pt_head | | | 0.00227 | 3.64 |
+| dielectric train (4747) | mp-dielectric | 0.2630 (diag 0.381, off 0.176) | 2.704 (diag 4.65, off 0.38) | | |
+| ferroelectric train (2250) | mp-ferroelectric | | | TRAIN_P | |
+| dielectric test, from-scratch split (527) | mp-dielectric | 0.4685 (diag 0.713, off 0.274) | 6.350 (diag 10.96, off 0.67) | | |
+| ferroelectric test, from-scratch split (253) | mp-ferroelectric | | | 0.00169 | 2.71 |
+
+**Targets (registered in the tracker before any Model A/B validation was read): validation Z* < 0.2524, α < 2.489, P < 0.00182, dedicated heads, same sets, float64.** The train figures explain the earlier 0.21: 1.0.2's validation on the released frames it trained on is not lower than on the regenerated validation split (0.263 vs 0.252), because the released file is not the run's own file (§1.3) and its errors are outlier-dominated (α diag RMSE 4.3 against a median absolute residual well below 1). The from-scratch test files are worse for 1.0.2 (Z* 0.47, α 6.35) although 1.0.2 trained on most of those frames: that split concentrates the large-|Z*| outliers.
+
+Paper's own workflow (`plot_foundation.py`, pt_head, float32 + cueq, `ref/parity_pt_head/tables/foundation_metrics.csv`), 1.0.2 on the from-scratch valid+test: Z* diag 0.659 / off 0.282; α diag 8.31 / off 0.776; P unfolded 15.1 μC/cm²; replay (10 000-frame subset, MH-1 labels) E 67.3 meV/atom, F 194 meV/Å. Against the repo checkpoint's committed table (0.655 / 0.324; 8.18 / 0.895; 14.85; 65.4 / 192): same model family, slightly different checkpoint (§1.3).
+
+Replay hold-out (1000 frames, MH-1 labels): 1.0.2 (pt_head, 983 frames in its table) E 59.3 meV/atom, F 192.7 meV/Å, σ 13.3 meV/Å³; MH-1 by construction 0. 1.0.2's energies/forces on the ferroelectric frames against the file's labels: 202 meV/atom, 622 meV/Å (validation) — those labels were never trained on by the published run, which is why the ferroelectric head here is trained on P alone.
+
+Polarisability convention (§2 check): in the released full file `REF_polarizability` = `REF_epsilon_static` − I to 4e-15 on every validation frame (MgO mp-1265 2.21 → ε∞ 3.21; Si mp-149 12.0 → 13.0; diamond mp-66 4.83 → 5.83), which is exactly MACE-Field's output (dP/dE)/(V ε0); no conversion. ΣZ* residual per frame: median 4e-5 e, max 0.28 e (valid). The 1.0.2 release asset xyz instead stores χ/4π (MgO 0.197) and is not used.
 ## 3. Construction and checks (§3)
 
 - **Build** (`mh1f2_build.py`): `MACEField(**extract_config_mace_model(MH-1))` with the head list extended by `mp-dielectric` and `mp-ferroelectric` (indices 6, 7); MH-1's six heads keep their indices and tensors; the new heads are copies of `omat_pbe` (E0 row, scale/shift, linear-readout column, 16-channel block of the non-linear readout; the widened `linear_2` is rescaled by √(8/6) for e3nn's 1/√fan_in path normalisation). Field layers: MACEField defaults = the Foundation script's (one injection after layer 0: FullyConnectedTensorProduct 512×0e+512×1o ⊗ 1o → hidden, Linear hidden → hidden, residual subtracted), `field_linear` zero, `field_feats` e3nn default (seed 0). float64. 7 506 310 parameters (MH-1 6 439 878 + field 1 048 576 + 17 856 new-head readout entries). Build check on 12 frames: heads 0–5 vs MH-1 max 7e-12 meV/atom, heads 6/7 vs omat_pbe 3e-14, field residual at E = 0 exactly 0.

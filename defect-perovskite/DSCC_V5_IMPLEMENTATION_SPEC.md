@@ -6278,3 +6278,22 @@ Pb 6.39, ε∞ 3.57; E_PP mismatch 2.40 meV/Å EXCEEDS τ, base v7 1.49). Target
 CG floor 0.368; unfrozen diff-lr 0.371 with drift 1.96 / 10.7 (tol 0.2 / 1.0). Benchmark (user request): MH-0 MACE-Field on the same replay
 hold-out is 61.6 meV/atom / 211.8 meV/Å from MH-1's labels (pt_head; mp-dielectric 85.8 / 244.7), `replay_bench_mh0.json`. Provider for
 the project stays MH-0. Plan §6.3 applies.
+
+### 2026-09-20 — MACE-MH-1-Field two-model plan: §2 reference registered (before any A/B validation is read)
+
+1.0.2 checkpoint (= the project's provider), float64, `mh1f2_ref_eval.py`, seed-123 validation sets of the full released files
+(dielectric 527 frames, ferroelectric 250), all-component RMSE, P folded:
+
+| head | Z* (e) | α (ε∞−I) | P folded (e/Å²) |
+|---|---|---|---|
+| mp-dielectric / mp-ferroelectric (dedicated) — **targets** | **0.2524** (diag 0.3068, off 0.2203) | **2.4889** (diag 4.294, off 0.272) | **0.00182** (2.92 μC/cm²) |
+| pt_head | 0.2863 | 2.6603 | 0.00227 |
+
+Extras: from-scratch test files (dedicated heads) Z* 0.4685 / α 6.350 / P 0.00169; replay hold-out (pt_head, 983 of 1000 frames in
+1.0.2's 79-element table) vs MH-1 labels E 59.3 meV/atom, F 192.7 meV/Å, σ 13.3 meV/Å³; 1.0.2's ferroelectric E/F vs the file's
+labels 202 meV/atom / 622 meV/Å (never trained on: recorded reason for training the ferroelectric head on P only, as the published log).
+Target for Models A and B: validation Z* < 0.2524, α < 2.489, P < 0.00182 (dedicated heads, same sets, float64). No test set under
+the recipe; the from-scratch test files are reported as extras. Model B E/F/σ: reported as drift from MH-1 on the 1000-frame hold-out;
+§6's DFT criterion not evaluable (asset labels are MH-1's). Scheduler: plateau 0.8 / patience 5 on validation Z*; early stop 20; cap 150.
+Exactness at E = 0 (init, float64): pass (≤ 9e-10 meV/atom). cueq: gradient check pass (3e-8), used. Model A launched 22:31 local
+(cueq, budget 96 / dielectric 64, lr 1e-3); Model B launches on b3 GPUs 5+7 (DDP, budget 160 / 96, lr 3e-4) when GPU 7 frees.
