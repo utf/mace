@@ -116,11 +116,11 @@ Large-N readout on the embedded structures, B_s seed-median checkpoint (seed 1, 
 
 | structure | separation eV | N_eff | Σdq within 3/5/8/12/16 Å | gate |
 |---|---|---|---|---|
-| train 79 (+1) (N = 79, σ_s 0.05) | see below | 5.8 | 0.54 / 0.57 / 0.84 / 1.00 / 1.00 | |
-| embedded 2,2,2 (N = 639, σ_s 0.05) | see below | 20.5 | 0.30 / 0.32 / 0.42 / 0.60 / 0.82 | |
-| embedded 3,3,3 (N = 2159, σ_s 0.05) | see below | 38.2 | 0.22 / 0.23 / 0.30 / 0.39 / 0.52 | |
-| embedded 3,3,3 sigma x1.0 (N = 2159, σ_s 0.05) | see below | 38.2 | 0.22 / 0.23 / 0.30 / 0.39 / 0.52 | |
-| embedded 3,3,3 sigma x0.25 (N = 2159, σ_s 0.0125) | see below | 41.6 | 0.21 / 0.22 / 0.28 / 0.37 / 0.49 | |
+| train 79 (+1) (N = 79, σ_s 0.05) | 0.308 | 5.8 | 0.54 / 0.57 / 0.84 / 1.00 / 1.00 | separation pass, N_eff fail (5.8 vs 1.6 in the C5 read: the participation here counts the full fill, C5 the hole) |
+| embedded 2,2,2 (N = 639, σ_s 0.05) | 0.023 | 20.5 | 0.30 / 0.32 / 0.42 / 0.60 / 0.82 | FAIL |
+| embedded 3,3,3 (N = 2159, σ_s 0.05) | 0.021 | 38.2 | 0.22 / 0.23 / 0.30 / 0.39 / 0.52 | FAIL |
+| embedded 3,3,3 sigma x1.0 (N = 2159, σ_s 0.05) | 0.021 | 38.2 | 0.22 / 0.23 / 0.30 / 0.39 / 0.52 | FAIL |
+| embedded 3,3,3 sigma x0.25 (N = 2159, σ_s 0.0125) | — | 41.6 | 0.21 / 0.22 / 0.28 / 0.37 / 0.49 | FAIL |
 
 Bound state (p0_boundstate.py): training 79-atom frame separation 0.308 eV, N_eff 1.6 (pass); embedded 2×2×2 (639 atoms) 0.023 eV, N_eff 20.5 (FAIL); embedded 3×3×3 (2159 atoms) 0.021 eV, N_eff 38.2 (FAIL). Σdq within 5 Å: 0.565 (79 atoms), 0.316 (639), 0.234 (2159); the sharpened fill (σ_s × 0.25) does not recover it (0.222). **The Phase 3 entry gate fails**: the bound state B_s holds at 79 atoms collapses with cell size, as W6's did in Phase 0. Registered remedy applied once: B_s retrained with w_gap × 3 (`dscc_p2bsg_s*`, six seeds, running); this report is updated with its result.
 
