@@ -817,9 +817,12 @@ class MACEDSCC(nn.Module):
         in the dict as a tensor differentiable in the positions (L2's `q_LES`)."""
         dtype = self.base_dtype()
         fwd = type(self.base).forward
-        if dtype == torch.float64:
-            return fwd(self.base, data, **kwargs)
-        out = fwd(self.base, self._cast_floats(data, dtype), **kwargs)
+        # The node dipoles are a derivative with respect to the field leaf: they need autograd
+        # even when the caller runs under no_grad (a diagnostic evaluating the charged head).
+        with torch.set_grad_enabled(torch.is_grad_enabled() or bool(kwargs.get("compute_node_dipoles", False))):
+            if dtype == torch.float64:
+                return fwd(self.base, data, **kwargs)
+            out = fwd(self.base, self._cast_floats(data, dtype), **kwargs)
         return {k: (v.to(torch.float64) if torch.is_tensor(v) and v.is_floating_point() else v)
                 for k, v in out.items()}
 
