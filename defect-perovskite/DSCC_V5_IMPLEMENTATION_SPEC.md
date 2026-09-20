@@ -6259,3 +6259,13 @@ Z* 0.566, α 1.62 — the same plateau as the full-width coupling (parameter cou
 limit). Option 3 (CG) at iteration 3: Z* 0.656, P 0.0035, α 6.99 (α outside the linear objective);
 continuing. Unfrozen differential-lr run epoch 0: Z* 0.449, α 1.57, P 0.0034, replay drift
 1.38 meV/atom / 7.4 meV/Å (7× the tolerance; 10× better than uniform lr).
+Option 3 result (2026-09-20 18:17, `run_cg`, 24 CG iterations, 6.6 h on b3 GPU 5): validation Z*
+1.334 → 0.656 (3) → 0.521 (6) → 0.467 (9) → 0.435 (12) → 0.408 (15) → 0.392 (18) → 0.383 (21) →
+0.368 (24); residual 4.9e4 → 6.1e2; P 0.0034 (weight 10 in the objective, flat); α 9.0 (outside
+the objective; drifts out). Best iterate = 24, saved `run_cg/MACE-MH-1-Field-cg.model`. Reading:
+the exact linear solve of the frozen-backbone problem reaches Z* ≈ 0.37 with the gain per three
+iterations down to 0.01 — below Adam's frozen plateau (0.45) but far from the 0.231 target: the
+limit is the representational reach of the frozen features for Z*, not the optimiser or the
+parameter count (the 128-bottleneck plateaued at the same 0.57 under Adam). Unfrozen
+differential-lr run at epoch 5: Z* 0.375, α 1.34, P 0.0030, replay drift 1.9 meV/atom /
+9.4 meV/Å (tolerance 0.2 / 1.0).
