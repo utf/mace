@@ -40,7 +40,7 @@ ap.add_argument("--response_atoms", type=int, default=96, help="atom budget of t
 ap.add_argument("--max_atoms_response", type=int, default=96, help="dielectric frames above this size are excluded (alpha nested derivatives: 160 atoms OOM on 24 GB in float64); recorded")
 ap.add_argument("--max_epochs", type=int, default=150); ap.add_argument("--patience", type=int, default=20)
 ap.add_argument("--plateau_patience", type=int, default=5); ap.add_argument("--plateau_factor", type=float, default=0.8)
-ap.add_argument("--cueq", type=int, default=1, help="1: cuequivariance kernels (gradient check passed to 3e-8, 2.2x faster in float64); the field layers' weights are copied across MACE's converter, which re-initialises them"); ap.add_argument("--seed", type=int, default=123); ap.add_argument("--device", default="cuda"); ap.add_argument("--max_frames", type=int, default=0, help="debug: truncate every pool")
+ap.add_argument("--ddp_backend", default="gloo", help="gloo: NCCL cannot initialise on b3 (NVML fails on the two dead devices); gloo all_reduce of the 7.5M float64 grads costs ~0.1 s per step"); ap.add_argument("--cueq", type=int, default=1, help="1: cuequivariance kernels (gradient check passed to 3e-8, 2.2x faster in float64); the field layers' weights are copied across MACE's converter, which re-initialises them"); ap.add_argument("--seed", type=int, default=123); ap.add_argument("--device", default="cuda"); ap.add_argument("--max_frames", type=int, default=0, help="debug: truncate every pool")
 ap.add_argument("--epoch_frames", type=int, default=0, help="debug: frames per epoch (0 = all)"); ap.add_argument("--debug_max_atoms", type=int, default=0, help="debug: drop frames above this size from every pool")
 ap.add_argument("--ferro_efs", type=int, default=0, help="1: train on the ferroelectric frames' E and F too; default 0 mirrors the published run (its mp-ferroelectric head saw polarisation only: log counts energy 0, forces 0)")
 args = ap.parse_args()
@@ -49,7 +49,7 @@ args = ap.parse_args()
 ddp = "WORLD_SIZE" in os.environ and int(os.environ["WORLD_SIZE"]) > 1
 rank, world = (int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])) if ddp else (0, 1)
 if ddp:
-    torch.distributed.init_process_group("nccl"); torch.cuda.set_device(int(os.environ["LOCAL_RANK"])); dev = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
+    torch.distributed.init_process_group(args.ddp_backend); torch.cuda.set_device(int(os.environ["LOCAL_RANK"])); dev = torch.device("cuda", int(os.environ["LOCAL_RANK"]))
 else:
     dev = torch.device(args.device)
 run = Path(args.run); run.mkdir(parents=True, exist_ok=True)
@@ -271,7 +271,7 @@ for epoch in range(args.max_epochs):
                 if n in masks and p.grad is not None: p.grad.add_(p.detach() * masks[n], alpha=args.weight_decay)
         opt.step(); ema.update()
     peak = torch.cuda.max_memory_allocated(dev) / 2 ** 30; t_train = time.time() - t0
-    key = torch.zeros(2, device=dev)
+    key = torch.zeros(2)                         # CPU tensor: broadcast works on every backend
     if rank == 0:
         vm = validate(); key[0] = vm["dielectric"]["becs"]
         if key[0] < best: best = float(key[0]); best_epoch = epoch; since = 0
