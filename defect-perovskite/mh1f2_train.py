@@ -260,9 +260,14 @@ for epoch in range(args.max_epochs):
             acc.update(out, b); tot += float(loss); n_at_epoch += int(b.positions.shape[0]); del out, loss, b
         n_b += 1
         if ddp:
+            # gloo: one flat CPU buffer per step (CUDA tensors abort in gloo on this node); ~60 MB of float64
             for p in params:
                 if p.grad is None: p.grad = torch.zeros_like(p)
-                torch.distributed.all_reduce(p.grad, op=torch.distributed.ReduceOp.AVG)
+            flat = torch.cat([p.grad.reshape(-1) for p in params]).cpu()
+            torch.distributed.all_reduce(flat, op=torch.distributed.ReduceOp.SUM); flat.div_(world)
+            off = 0
+            for p in params:
+                n_el = p.numel(); p.grad.copy_(flat[off:off + n_el].view_as(p.grad).to(dev)); off += n_el
         for n, p in named:
             if n in masks and p.grad is not None: p.grad.mul_(masks[n])
         if args.clip_grad: torch.nn.utils.clip_grad_norm_(params, args.clip_grad)
