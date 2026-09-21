@@ -6297,3 +6297,17 @@ the recipe; the from-scratch test files are reported as extras. Model B E/F/σ: 
 §6's DFT criterion not evaluable (asset labels are MH-1's). Scheduler: plateau 0.8 / patience 5 on validation Z*; early stop 20; cap 150.
 Exactness at E = 0 (init, float64): pass (≤ 9e-10 meV/atom). cueq: gradient check pass (3e-8), used. Model A launched 22:31 local
 (cueq, budget 96 / dielectric 64, lr 1e-3); Model B launches on b3 GPUs 5+7 (DDP, budget 160 / 96, lr 3e-4) when GPU 7 frees.
+
+### 2026-09-21 — MACE-MH-1-Field: the authors' archive (mace-field-omat-mh-0.zip) and the exact-validation comparison
+
+Archive (~/src/mace-field-omat-mh-0): the run's own data (dielectric_corrected_asr.xyz 5501, ferroelectric.xyz 2500, subselected replay 10 000 with
+176 Yb frames; MH-1 pseudolabels), log, train.txt (epochs 0–360), checkpoints epoch 260 (= 1.0.2 release, byte-identical) and 308 (= repo
+model), final model, script (P 1000 / F 100 / Z* 100 / α 100 / E 1, cap 1000, patience 50, batch 1 × 4 GPUs, float32, lr 1e-4, EMA 0.99999,
+cartesian-Huber folded P). The 1000-index file = MACE's seed-123 split of the archive's replay (verified). Exact validation sets regenerated
+(~/runs/mh1f2/data_mh0: 550 / 250 / 1000). My float64 metrics reproduce the log: 1.0.2 Z* 0.2294 (log 0.2300), α 0.990 (0.991), P 0.00328 (0.0033).
+Exact-validation table (dedicated heads): 1.0.2 0.2294 / 0.990 / 0.00328; epoch-308 0.2190 / 0.999 / 0.00325; Model A (best, ep 38) 0.3869 /
+1.041 / 0.00298 (replay drift 0); Model B (ep 23) dielectric Z* 2.21 (median 0.15, one frame CuErO8W2 at 51.6 e), replay drift 375 meV/atom
+(non-Yb 58; the 14 Yb frames 3135 — Yb is absent from the released replay subset and released dielectric file used for A/B; the archive's
+subset has 176 Yb frames). 1.0.2 drift vs MH-1 labels 53.8 / 193.7 (vs its own base mace-mh-0, log: 41 / 135). Released dielectric file
+(5274, ASR max 0.28) is dirtier than the archive's (5501, ASR max 0.05): α RMSE 2.49 vs 0.99 for the same 1.0.2 model. Model A stopped by
+the user at epoch 39; B running (ep 25, Z* 0.297 on the released split). Decision on rerunning with the archive's data: the user's.

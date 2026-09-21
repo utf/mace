@@ -31,8 +31,11 @@ ap.add_argument("--model", required=True); ap.add_argument("--replay_head", defa
 ap.add_argument("--replay_holdout", default="/home/alex/runs/mh1f2/data/replay_holdout_dft.xyz")
 ap.add_argument("--datasets", default="dielectric_train,dielectric_valid,ferroelectric_train,ferroelectric_valid,dielectric_test_fromscratch,ferroelectric_test_fromscratch"); ap.add_argument("--heads", default="dedicated,replay")
 ap.add_argument("--device", default="cuda"); ap.add_argument("--dtype", default="float64"); ap.add_argument("--atoms_per_batch", type=int, default=64)
-ap.add_argument("--max_atoms", type=int, default=100000)
+ap.add_argument("--max_atoms", type=int, default=100000); ap.add_argument("--data_dir", default="", help="override the seed-123 split directory (e.g. the exact published run's data_mh0)")
 args = ap.parse_args()
+if args.data_dir:
+    for k in list(DATASETS):
+        if "fromscratch" not in k: DATASETS[k] = DATASETS[k].replace(D, args.data_dir)
 DT = torch.float64 if args.dtype == "float64" else torch.float32
 torch.set_default_dtype(DT); dev = args.device; t0 = time.time()
 m = torch.load(args.model, map_location=dev, weights_only=False).to(dev).to(DT).eval()
