@@ -6311,3 +6311,13 @@ Exact-validation table (dedicated heads): 1.0.2 0.2294 / 0.990 / 0.00328; epoch-
 subset has 176 Yb frames). 1.0.2 drift vs MH-1 labels 53.8 / 193.7 (vs its own base mace-mh-0, log: 41 / 135). Released dielectric file
 (5274, ASR max 0.28) is dirtier than the archive's (5501, ASR max 0.05): α RMSE 2.49 vs 0.99 for the same 1.0.2 model. Model A stopped by
 the user at epoch 39; B running (ep 25, Z* 0.297 on the released split). Decision on rerunning with the archive's data: the user's.
+
+### 2026-09-23 — A2 / B2 status and the A2B continuation (user's instruction)
+
+Runs on the archive data (exact seed-123 sets; targets 1.0.2: Z* 0.2294 / α 0.990 / P 0.00328). B2 at lr 3e-4 was unstable (validation Z*
+0.30–2.9 from epoch 6, training spikes) → restarted by the user at lr 1e-4 (record kept as B2_lr3e-4): epoch 60, best Z* 0.2428 (epoch 51),
+α 0.97, P 0.0034, replay drift 29 meV/atom / 97 meV/Å / 4.7 meV/Å³, scheduler at 5.1e-5, nine epochs without improvement. A2 (local): epoch 95,
+Z* 0.3668 / α 0.954 / P 0.00397, still improving ~0.001 per epoch. User (13:30): continue A2's current model with all weights unfrozen at a low
+learning rate → A2B on b3 GPU 7 from A2's best checkpoint at launch time (epoch 95; file `A2_best_epoch83.model` = `A2_best_epoch95.model`,
+the name was written before the copy was checked), lr 3e-5 (my choice of "low": a third of B2's), archive replay included as for Model B,
+fresh Adam/EMA, all other settings as B2. A2 keeps running locally.
