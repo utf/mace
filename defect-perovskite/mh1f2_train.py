@@ -40,7 +40,7 @@ ap.add_argument("--response_atoms", type=int, default=96, help="atom budget of t
 ap.add_argument("--max_atoms_response", type=int, default=96, help="dielectric frames above this size are excluded (alpha nested derivatives: 160 atoms OOM on 24 GB in float64); recorded")
 ap.add_argument("--max_epochs", type=int, default=150); ap.add_argument("--patience", type=int, default=20)
 ap.add_argument("--plateau_patience", type=int, default=5); ap.add_argument("--plateau_factor", type=float, default=0.8)
-ap.add_argument("--ddp_backend", default="gloo", help="gloo: NCCL cannot initialise on b3 (NVML fails on the two dead devices); gloo all_reduce of the 7.5M float64 grads costs ~0.1 s per step"); ap.add_argument("--cueq", type=int, default=1, help="1: cuequivariance kernels (gradient check passed to 3e-8, 2.2x faster in float64); the field layers' weights are copied across MACE's converter, which re-initialises them"); ap.add_argument("--seed", type=int, default=123); ap.add_argument("--device", default="cuda"); ap.add_argument("--max_frames", type=int, default=0, help="debug: truncate every pool")
+ap.add_argument("--init_is_cueq", type=int, default=0, help="1: --init is already a cueq model (e.g. a saved A/B checkpoint): skip the conversion"); ap.add_argument("--ddp_backend", default="gloo", help="gloo: NCCL cannot initialise on b3 (NVML fails on the two dead devices); gloo all_reduce of the 7.5M float64 grads costs ~0.1 s per step"); ap.add_argument("--cueq", type=int, default=1, help="1: cuequivariance kernels (gradient check passed to 3e-8, 2.2x faster in float64); the field layers' weights are copied across MACE's converter, which re-initialises them"); ap.add_argument("--seed", type=int, default=123); ap.add_argument("--device", default="cuda"); ap.add_argument("--max_frames", type=int, default=0, help="debug: truncate every pool")
 ap.add_argument("--epoch_frames", type=int, default=0, help="debug: frames per epoch (0 = all)"); ap.add_argument("--debug_max_atoms", type=int, default=0, help="debug: drop frames above this size from every pool")
 ap.add_argument("--ferro_efs", type=int, default=0, help="1: train on the ferroelectric frames' E and F too; default 0 mirrors the published run (its mp-ferroelectric head saw polarisation only: log counts energy 0, forces 0)")
 args = ap.parse_args()
@@ -141,7 +141,7 @@ if args.model == "A":
         else:
             raise RuntimeError(f"unexpected readout parameter {n}")
         masks[n] = m
-    if args.cueq:
+    if args.cueq and not args.init_is_cueq:
         # carry the masks through the converter itself: a copy of the model whose readout weights ARE the masks
         import copy
         probe = copy.deepcopy(model)
@@ -151,8 +151,10 @@ if args.model == "A":
         probe_c = to_cueq(probe); masks_c = {n: (p.detach() != 0).double() for n, p in probe_c.named_parameters() if n.startswith("readouts")}
         assert set(masks_c) == set(masks) and all(int(masks_c[n].sum()) == int(masks[n].sum()) for n in masks), "readout mask did not survive the cueq conversion"
         masks = masks_c
-if args.cueq:
+if args.cueq and not args.init_is_cueq:
     model = to_cueq(model); log("cueq kernels: model converted (field layers' state copied across)")
+elif args.init_is_cueq:
+    log("init model is already a cueq model: no conversion")
 model = model.to(dev).train()
 if args.model == "A":
     masks = {n: m.to(dev) for n, m in masks.items()}
