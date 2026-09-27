@@ -6356,3 +6356,8 @@ Head choice for base v8 (`~/runs/dscc/p1v8/head_choice.json`, A2B, float64): ini
 mp_pbe_refit_add no response. By the A2 rule: omat_pbe has the lower force error (by a factor 2), but only mp-dielectric carries the response
 the base exists to provide (the other two are 65–99 % off), and the energy offset is absorbed by the estimated E0s → **mp-dielectric**,
 as for base v7. Gate 2 is read against its own relaxed-cell values. Chain launched with HEAD=mp-dielectric.
+Base v8 early epochs (user question, 2026-09-27 16:40): replay drift 33 meV/atom / 244 meV/Å at epoch 0 (v7_lr3e4: 21.9 / 63.5; base v2: 5.8 /
+17.4), Default 2.56 / 27.5. Checked: the 205-argument configurations of base_v7_lr3e4 and base_v8 differ only in checkpoint and data files;
+A2B labels carry no outliers (max |Z*| component 4.52 e, ASR 1e-7, α ≤ 3.0; 0.11 e RMS from the MH-0 labels, α +0.25). The drift is the
+512-channel backbone at lr 3e-4. User: "Train a 1e-4 at the same time" → `base_v8_lr1e4` (identical otherwise) launched on b3 GPU 7,
+`chain_lr1e4_b3.sh`; both are compared against base_v7_lr3e4 and base v2 at the end.
