@@ -6350,3 +6350,9 @@ Z* Frobenius within 10 % of the provider head's relaxed-cell values; 3: charged 
 the comparison = base_v7_lr3e4: F 13.23 / E 0.88 (gate 1 fail); gate 2 pass (ε∞ 3.548, Z* within 0.5 %); gate 3 fail (total 46.8,
 2–4 Å 104.9, 4–8 43.9, 8–10 20.5 = +13.6 / +30.0 / +13.5 / +5.2 over base v2); replay drift 17.3 meV/atom / 72 meV/Å; E_PP mismatch
 1.49 meV/Å (pass). "Better" = lower on gate 1 and gate 3 with gate 2 held. Chain `~/runs/dscc/p1v8/chain_b3.sh HEAD` (b3 GPU 5).
+Head choice for base v8 (`~/runs/dscc/p1v8/head_choice.json`, A2B, float64): initial neutral validation F / E-offset — omat_pbe 40.9 meV/Å /
++30 meV/atom; mp-dielectric 83.6 / −624; mp_pbe_refit_add 239 / +2912. Relaxed-cell response vs the Phase 0 reference (ε∞ 3.547; Z*
+3.520 / 2.235 / 6.209): omat_pbe ε∞ 1.69, Z* 65–70 % low; mp-dielectric ε∞ 3.66 (+3 %), Z* 3.45 / 2.17 / 5.89 (−2 / −3 / −5 %);
+mp_pbe_refit_add no response. By the A2 rule: omat_pbe has the lower force error (by a factor 2), but only mp-dielectric carries the response
+the base exists to provide (the other two are 65–99 % off), and the energy offset is absorbed by the estimated E0s → **mp-dielectric**,
+as for base v7. Gate 2 is read against its own relaxed-cell values. Chain launched with HEAD=mp-dielectric.
