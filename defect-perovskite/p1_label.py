@@ -16,6 +16,7 @@ ap.add_argument("--ckpt", default="/home/alex/src/macefield/MACEField-ASE-MD/MAC
 ap.add_argument("--head", required=True); ap.add_argument("--in", dest="inp", required=True); ap.add_argument("--out", required=True)
 ap.add_argument("--keep_ef", action="store_true", help="keep the file's REF_energy/forces/stress; add the response only")
 ap.add_argument("--device", default="cuda"); ap.add_argument("--dtype", default="float64")
+ap.add_argument("--efs_only", action="store_true", help="label E/F/stress only (replay sets): no response derivatives, no response keys")
 args = ap.parse_args()
 torch.set_default_dtype(torch.float64 if args.dtype == "float64" else torch.float32); dev = args.device
 m = torch.load(args.ckpt, map_location=dev, weights_only=False); m = (m.double() if args.dtype == "float64" else m.float()).to(dev).eval()
@@ -31,8 +32,9 @@ for i, a in enumerate(frames):
     cfg = mace_data.config_from_atoms(a, key_specification=ks, head_name=args.head)
     ad = mace_data.AtomicData.from_config(cfg, z_table=zt, cutoff=float(m.r_max), heads=list(m.heads))
     b = next(iter(tg.dataloader.DataLoader([ad], batch_size=1))).to(dev).to_dict()
+    resp = not args.efs_only
     try:
-        o = m(b, training=True, compute_force=True, compute_stress=True, compute_polarization=True, compute_becs=True, compute_polarizability=True)
+        o = m(b, training=True, compute_force=True, compute_stress=True, compute_polarization=resp, compute_becs=resp, compute_polarizability=resp)
     except torch.OutOfMemoryError:
         # a large structure's second derivatives do not fit the card: do this one on the CPU
         torch.cuda.empty_cache()
@@ -48,9 +50,13 @@ for i, a in enumerate(frames):
     if not args.keep_ef:
         a.info["REF_energy"] = float(o["energy"][0]); a.arrays["REF_forces"] = o["forces"].numpy().astype(np.float64)
         a.info["REF_stress"] = o["stress"].numpy().reshape(3, 3).astype(np.float64)
-    a.info["REF_polarization"] = o["polarization"].numpy().reshape(3).astype(np.float64)
-    a.arrays["REF_becs"] = o["becs"].numpy().reshape(len(a), 9).astype(np.float64)
-    a.info["REF_polarizability"] = o["polarizability"].numpy().reshape(3, 3).astype(np.float64)
+    if resp:
+        a.info["REF_polarization"] = o["polarization"].numpy().reshape(3).astype(np.float64)
+        a.arrays["REF_becs"] = o["becs"].numpy().reshape(len(a), 9).astype(np.float64)
+        a.info["REF_polarizability"] = o["polarizability"].numpy().reshape(3, 3).astype(np.float64)
+    else:
+        for k in ("REF_polarization", "REF_polarizability"): a.info.pop(k, None)
+        a.arrays.pop("REF_becs", None)
     a.info["REF_electric_field"] = np.zeros(3)
     for k in list(a.info):
         if k.startswith("config_") and k.endswith("_weight") and k not in ("config_weight",):

@@ -6321,3 +6321,32 @@ Z* 0.3668 / α 0.954 / P 0.00397, still improving ~0.001 per epoch. User (13:30)
 learning rate → A2B on b3 GPU 7 from A2's best checkpoint at launch time (epoch 95; file `A2_best_epoch83.model` = `A2_best_epoch95.model`,
 the name was written before the copy was checked), lr 3e-5 (my choice of "low": a third of B2's), archive replay included as for Model B,
 fresh Adam/EMA, all other settings as B2. A2 keeps running locally.
+
+### 2026-09-27 — MACE-MH-1-Field two-model plan: all runs complete; final checks
+
+Exact validation sets (archive data, seed 123), dedicated heads, float64. Targets 1.0.2: Z* 0.2294 / α 0.990 / P 0.00328.
+A2 (energy-exact, 150 epochs = cap, best 149): Z* 0.3471 / α 0.952 / P 0.00391; drift 0; frozen entries bit-identical; zero-field predictions
+in cueq form 3.9e-5 meV/atom / 1.6e-4 meV/Å from MH-1 (plan thresholds 1e-4 / 1e-3: pass; e3nn-form re-check pending at the time of writing).
+B2 (all weights, lr 1e-4, early stop 72, best 51): 0.2428 / 0.995 / 0.00359; drift 29.8 / 97.5 / 4.8. A2B (A2 epoch-95 checkpoint, all weights,
+lr 3e-5, 150 = cap, best 148): 0.2387 / 0.889 / 0.00361; drift 11.7 / 41.5 / 2.1. Identities: all three ≤ 9e-15. CsPbCl3 |Z*| Cl/Cs/Pb (targets
+3.52/2.24/6.21 ±10 %), ε∞ (3.55): A2 3.37/1.75/5.65, 3.55 (Cs −22 %: miss); B2 3.47/2.09/5.77, 3.54 (pass); A2B 3.45/2.17/5.89, 3.66 (pass).
+Target "beat 1.0.2 on Z*, P, α": not met by any model (α beaten by A2 and A2B). §6 criterion not evaluable (no DFT in the replay asset).
+Deliverables `~/runs/mh1f2/deliver/MACE-MH-1-Field-{A2,B2,A2B}.model` (e3nn) + `*_cueq.model`; report `MH1_FIELD_REPORT.md` §4–§5.
+Provider decision for the project: the user's (A2 for untouched MH-1 energies; A2B otherwise).
+
+### 2026-09-27 — Base v8 (user's instruction): relabel the perovskite set with A2B, fine-tune, compare with the old base
+
+Recipe = base v7 / A5 (`p1v8_run.sh` is `p1v3_run.sh` with the checkpoint, data directory and foundation head as variables): foundation
+A2B (`~/runs/mh1f2/deliver/MACE-MH-1-Field-A2B.model`, e3nn form), head chosen by the A2 rule (`p1v8_head_choice.py`: lower initial
+neutral-validation force error among omat_pbe / mp-dielectric / mp_pbe_refit_add unless another head's relaxed-cell response is closer to
+the Phase 0 reference by more than the force difference warrants; recorded before labelling); neutral train/valid keep DFT E/F/S and get
+the head's P/Z*/α (`p1_label.py --keep_ef`); replay = the same 9360 base v2 frames with the head's E/F/S (`--efs_only`), no response
+labels; E0s estimated from the head + three isolated atoms (`p1v8_build.py`); E 10 / F 10 / S 1 / P 10 / Z* 1 / α 1, lr 3e-4 (the
+accepted base's), EMA 0.9999, clip 1.0, batch 4, 30 epochs, float32 + cueq, head-grouped batches, no E_PP. After: `p1_make_base.py`
+(prune to Cl/Cs/Pb), `p1_gates.py` with the provider head's own relaxed-cell response as the gate-2 reference (`p0_locality_A2B.json`),
+`p2_epp_mismatch.py` (τ 1.7).
+Registered before the result: gates unchanged (1: F ≤ 11.2 meV/Å, E ≤ 1.5 meV/atom on the 154 neutral validation frames; 2: ε∞ and
+Z* Frobenius within 10 % of the provider head's relaxed-cell values; 3: charged shells not worse than base v2 + 3 meV/Å). Old base for
+the comparison = base_v7_lr3e4: F 13.23 / E 0.88 (gate 1 fail); gate 2 pass (ε∞ 3.548, Z* within 0.5 %); gate 3 fail (total 46.8,
+2–4 Å 104.9, 4–8 43.9, 8–10 20.5 = +13.6 / +30.0 / +13.5 / +5.2 over base v2); replay drift 17.3 meV/atom / 72 meV/Å; E_PP mismatch
+1.49 meV/Å (pass). "Better" = lower on gate 1 and gate 3 with gate 2 held. Chain `~/runs/dscc/p1v8/chain_b3.sh HEAD` (b3 GPU 5).

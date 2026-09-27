@@ -1,6 +1,6 @@
 # MACE-MH-1-Field: two models in parallel — report
 
-*Plan: "MACE-MH-1-Field: two models in parallel" (user, 2026-09-20). Units: Z* e, α = ε∞ − I (dimensionless, the released files' convention), P e/Å² (folded; also μC/cm²), E meV/atom, F meV/Å, σ meV/Å³. Status: §1–§3 complete; targets registered; Model A training (local), Model B queued on b3.*
+*Plan: "MACE-MH-1-Field: two models in parallel" (user, 2026-09-20). Units: Z* e, α = ε∞ − I (dimensionless, the released files' convention), P e/Å² (folded; also μC/cm²), E meV/atom, F meV/Å, σ meV/Å³. Status: all runs complete (2026-09-27); final checks and deliverables in §5.*
 
 ## 1. Inventory (§1)
 
@@ -75,7 +75,7 @@ No test set exists under this recipe; the from-scratch test files are reported a
 | ferroelectric valid (250) | mp-ferroelectric | | | **0.00182** | 2.92 |
 | ferroelectric valid | pt_head | | | 0.00227 | 3.64 |
 | dielectric train (4747) | mp-dielectric | 0.2630 (diag 0.381, off 0.176) | 2.704 (diag 4.65, off 0.38) | | |
-| ferroelectric train (2250) | mp-ferroelectric | | | TRAIN_P | |
+| ferroelectric train (2250) | mp-ferroelectric | | | 0.00206 | 3.29 |
 | dielectric test, from-scratch split (527) | mp-dielectric | 0.4685 (diag 0.713, off 0.274) | 6.350 (diag 10.96, off 0.67) | | |
 | ferroelectric test, from-scratch split (253) | mp-ferroelectric | | | 0.00169 | 2.71 |
 
@@ -95,5 +95,65 @@ Polarisability convention (§2 check): in the released full file `REF_polarizabi
 - **Labels used** (mirroring the published run's log: mp-ferroelectric head "energy: 0, forces: 0, polarization: 2500"; mp-dielectric "becs, polarizability", released file's E/F/S weights 0): dielectric frames → Z*, α; ferroelectric frames → P only; replay (Model B) → E, F, σ. Flag `--ferro_efs 1` would add the ferroelectric E and F.
 - **Trainer** (`mh1f2_train.py`): random batches across every pool every batch under an atom budget (never size-sorted); universal_field loss (Huber δ 0.01; P normalized_metric, scale 1); weights E 1 / F 100 / σ 1 / P 100 / Z* 100 / α 100 (A: E/F/σ 0); Adam + AMSGrad, EMA 0.995, weight decay 1e-8, clip 10; ReduceLROnPlateau on validation Z* (0.8, patience 5); early stop patience 20 on validation Z*; cap 150 epochs; Model A gradients masked to the field maps and the two new heads' readout slices (masks carried through the cueq converter; weight decay applied by hand to masked-in entries; frozen entries asserted bit-identical at the end — debug run: YES); Model B all weights, DDP by manual gradient all-reduce (torchrun, rank-disjoint shards, validation on rank 0, metric broadcast).
 
-## 4. Training (§4–§6) — in progress
-## 5. Deliverables (§7) — pending
+## 4. Training (§4–§6)
+
+### 4.1 Runs
+
+All runs: float64, cueq, the two-pass random batching (§3), universal_field loss with E 1 / F 100 / σ 1 / P 100 / Z* 100 / α 100 (A: E/F/σ 0), Adam + AMSGrad, EMA 0.995, weight decay 1e-8, clip 10, ReduceLROnPlateau (0.8, patience 5) on validation Z*, early stop 20, cap 150. Validation = the run's own sets (all-component RMSE, P folded). Reference on the same sets: 1.0.2 Z* 0.2294 / α 0.990 / P 0.00328.
+
+| run | data | trainable | lr | epochs (best) | best valid Z* | α | P (e/Å²) | replay drift E / F / σ (meV/atom, meV/Å, meV/Å³) | s/step, GB | hours |
+|---|---|---|---|---|---|---|---|---|---|---|
+| A (first) | released files, no Yb | field maps + new-head readouts | 1e-3 | 39, stopped by the user (38) | 0.430¹ | 2.417¹ | 0.0034¹ | 0 | 0.64, 10.2 | 16 |
+| B (first) | released files, no Yb | all | 3e-4 | 27, stopped by the user (26) | 0.292¹ | 1.923¹ | 0.0029¹ | 65 / 132 / 9.7 | 0.97, 12.5 | 13 |
+| A2 | archive, exact split | field maps + new-head readouts | 1e-3 | 150 = cap (149) | **0.3471** | 0.952 | 0.00391 | **0** (frozen entries bit-identical) | 0.68, 9.0 | 69.5 |
+| B2 (lr 3e-4) | archive | all | 3e-4 | 19, restarted by the user (18) | 0.275 | 1.003 | 0.00382 | 64 / 128 / 7.6 | 0.97, 12.4 | 9.4 |
+| B2 | archive | all | 1e-4 → 3.3e-5 (scheduler) | 72, early stop (51) | **0.2428** | 0.995 | 0.00359 | 30 / 98 / 4.8 | 0.97, 12.8 | 36 |
+| A2B (user's addition) | archive | all, from A2's epoch-95 checkpoint | 3e-5 | 150 = cap (148) | **0.2387** | 0.889 | 0.00361 | 11.7 / 41.5 / 2.1 | 0.97, 14.1 | 74 |
+
+¹ on the released validation split (527 / 250 frames), not comparable to the other rows; on the exact sets the first A gives 0.387 / 1.041 / 0.00298 and the first B 2.21 (median 0.15) / 1.007 / 0.00261 with 375 meV/atom of replay drift, 3 eV/atom on the 14 ytterbium frames (§1.3: no Yb in the released files).
+
+### 4.2 What happened
+
+- **A2** improved monotonically to the cap (0.55 → 0.347 in Z*), still gaining ~0.0005 per epoch at the end; α reached the target at epoch 13 and ended 4 % below it; P stalled at 0.0039–0.0042 from epoch 5. The frozen MH-1 entries are bit-identical to the start (assert at the end of the run) and the zero-field exactness test after training is in §5.
+- **B2 at 3e-4** was unstable: from epoch 6 the validation Z* swung between 0.30 and 2.9 while the training-set Z* spiked (0.65, 0.53), the same single-frame blow-ups seen in the first B run (CuErO8W2 at 51.6 e); α and P were unaffected. Restarted at 1e-4 by the user.
+- **B2 at 1e-4** descended smoothly to 0.2775 at epoch 20, then plateaued at 0.25–0.28 while the training-set Z* kept falling to 0.20: overfitting, not convergence. The scheduler cut the rate three times (8e-5, 6.4e-5, 5.1e-5, 3.3e-5); the best, 0.2428, came at epoch 51 and the early stop fired at 72. The replay drift was flat at 29–35 meV/atom and 91–100 meV/Å from epoch 3 onward (the published model's own drift from mace-mh-0 was 41 / 135 by its log). Training-set spikes recurred every few epochs (epochs 44, 53–56) without reaching the validation.
+- **A2B** (A2's checkpoint, all weights, 3e-5): four epochs recovered what A2 gained in its last 40; Z* then fell steadily (0.319 at epoch 9, 0.280 at 39, 0.263 at 70, 0.247 at 116) to 0.2387 at epoch 148, still improving ~0.0003 per epoch at the cap, with no instability at any point. The replay drift rose slowly and roughly in proportion to the Z* gain, 3.7 / 10 at epoch 0 to 11.7 / 41.5 at the end, a third of B2's at a better Z*. P moved from 0.0040 to 0.0036.
+
+### 4.3 Against the targets (exact validation sets)
+
+| model | Z* (target < 0.2294) | α (< 0.990) | P (< 0.00328) | replay drift E / F / σ |
+|---|---|---|---|---|
+| 1.0.2 (epoch 260) | 0.2294 | 0.990 | 0.00328 | 54 / 194 / 9.4 vs MH-1 labels (41 / 135 vs its base) |
+| A2 | 0.347 — miss | 0.952 — **pass** | 0.00391 — miss | 0 |
+| B2 | 0.243 — miss by 0.013 | 0.995 — miss by 0.005 | 0.00359 — miss | 30 / 98 / 4.8 |
+| A2B | 0.239 — miss by 0.009 | 0.889 — **pass** | 0.00361 — miss | 11.7 / 41.5 / 2.1 |
+
+No model beats 1.0.2 on Z* or P; A2 and A2B beat it on α. On P every run, including the published one, sits near 0.0033–0.0040 e/Å²: the polarisation of these distortion paths is not what limits any of them relative to each other. The §6 criterion (E/F/σ within 5 %/10 % of MH-1's error against DFT on the replay hold-out) cannot be evaluated: the replay labels are MH-1's own predictions, so MH-1's error is zero; the drift column is the substitute, reported as is.
+
+## 5. Checks and deliverables (§7)
+
+### 5.1 Checks on the final models (float64)
+
+| check | A2 | B2 | A2B | reference |
+|---|---|---|---|---|
+| exactness at E = 0 after training, six MH-1 heads, 2000 structures | parameters bit-identical (asserted); predictions in the cueq form max 3.9e-5 meV/atom, 1.6e-4 meV/Å, 1.6e-5 meV/Å³ (plan: ≤ 1e-4, ≤ 1e-3 → **pass**); e3nn form: E3NN_EXACT | not exact by design (drift 30 / 98) | not exact by design (drift 11.7 / 41.5) | init: 9e-10 / 7e-11 |
+| identities on 100 validation frames | ΣZ* 7e-15, α asymmetry 1e-15 | 8e-15, 1e-15 | 9e-15, 1e-15 | pass ≤ 1e-10 |
+| CsPbCl3 (base-v2-relaxed cell) |Z*| Cl / Cs / Pb vs MP DFPT 3.52 / 2.24 / 6.21 (±10 %) | 3.37 / **1.75 (−22 %)** / 5.65 | 3.47 / 2.09 / 5.77 — pass | 3.45 / 2.17 / 5.89 — pass | 1.0.2: 3.42 / 1.58 / 6.39 (first report) |
+| CsPbCl3 ε∞ vs 3.55 | 3.55 | 3.54 | 3.66 | |
+| replay hold-out (1000 frames, MH-1 labels) E / F / σ | 0 / 0 / 0 | 29.8 / 97.5 / 4.8 | 11.7 / 41.5 / 2.1 | 1.0.2: 53.8 / 193.7 / 9.4 |
+| from-scratch dielectric test (528; extra) Z* / α | 0.552 / 5.94 | 0.493 / 6.23 | 0.548 / 6.05 | 1.0.2: 0.469 / 6.35 |
+| from-scratch ferroelectric test (253; extra) P | 0.00276 | 0.00204 | 0.00190 | 1.0.2: 0.00169 |
+| cost per step (float64 + cueq) | 0.68 s, 9.0 GB (A4000) | 0.97 s, 12.8 GB (RTX 6000) | 0.97 s, 14.1 GB | |
+
+The dielectric heads' energies and forces on the ferroelectric frames (E 230–690 meV/atom in the table above's source files) are not trained quantities for any of these models nor for 1.0.2 (205 meV/atom) and are not reported as errors.
+
+### 5.2 Deliverables
+
+`~/runs/mh1f2/deliver/`: `MACE-MH-1-Field-A2.model` (Model A: energy-exact; all eight heads; the six MH-1 heads bit-identical), `MACE-MH-1-Field-B2.model` (the plan's Model B, all weights, lr 1e-4), `MACE-MH-1-Field-A2B.model` (A2 continued with all weights at lr 3e-5, the user's addition), each as a plain e3nn model (loads without cuequivariance; conversion checked against the cueq original on a batch, `conversion_check` in the checkpoint) and as the trained cueq pickle (`*_cueq.model`). Each carries `field_config`, `build_record` and `training_record` (arguments, epoch, validation, split file). Data: `~/runs/mh1f2/data_mh0/` (exact splits, `*_split.json`). Records: `~/runs/mh1f2/{A2,b3/B2,b3/B2_lr3e-4,b3/A2B}/history.json`, `final/` (this section's checks), `ref/` (§2).
+
+### 5.3 Selection (§7)
+
+- **Where MH-1's energies must be untouched: A2** (Z* 0.347, α 0.953, P 0.0039; zero drift; CsPbCl3 Cs charge 22 % low).
+- **Otherwise: A2B** has the lowest validation Z* (0.2387) of the unfrozen models, α 0.889, P 0.0036, passes the CsPbCl3 check, and drifts 11.7 meV/atom / 41.5 meV/Å from MH-1 on the replay hold-out, against B2's 0.2428 and 30 / 98. The §6 pass criterion is not evaluable (no DFT labels in the replay asset); the drift is reported in its place, and whether 11.7 / 41.5 is acceptable is a judgement the plan leaves to the user.
+- **Against the plan's target (beat 1.0.2 on Z*, P and α):** not met by any model. Z* 0.239 vs 0.229 (A2B), P 0.0036 vs 0.0033; α is beaten by A2 and A2B. On the run's own data, 1.0.2 reached its Z* after 360 epochs of batch-1 training on a 128-channel model; A2B was still improving at the 150-epoch cap.
+- **Project diagnostics with the chosen provider** (P0 form factor, switched Born force, base v2 + E_PP matching): not run; the provider decision is the user's.
