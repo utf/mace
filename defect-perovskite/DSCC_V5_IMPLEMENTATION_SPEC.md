@@ -6361,3 +6361,10 @@ Base v8 early epochs (user question, 2026-09-27 16:40): replay drift 33 meV/atom
 A2B labels carry no outliers (max |Z*| component 4.52 e, ASR 1e-7, α ≤ 3.0; 0.11 e RMS from the MH-0 labels, α +0.25). The drift is the
 512-channel backbone at lr 3e-4. User: "Train a 1e-4 at the same time" → `base_v8_lr1e4` (identical otherwise) launched on b3 GPU 7,
 `chain_lr1e4_b3.sh`; both are compared against base_v7_lr3e4 and base v2 at the end.
+Base v8 (A2B provider, lr 3e-4) done 2026-09-27 21:38 (b3 clock), `~/runs/dscc/p1v8/base_v8/P1_GATES.json`, `COMPARE_3e4.md`: gate 1 F 12.79 meV/Å
+(≤ 11.2 FAIL; v7_lr3e4 13.23; base v2 10.23), E 0.54 (pass); gate 2 PASS, response retained to 0.1–0.2 % (ε∞ 3.678 vs 3.661; Z* 3.452 / 2.170
+/ 5.899 vs 3.450 / 2.167 / 5.892); gate 3 PASS: charged shells total 34.6 (+1.4 over base v2; v7 +13.6), 2–4 Å 76.8 (+1.9; v7 +30.0), 4–8 32.3
+(+1.9), 8–10 16.3 (+1.0), 10–12 10.4 (+1.5), 12+ 7.9 (−0.1). E_PP mismatch 2.09 meV/Å (τ 1.7 EXCEEDS; v7 1.49; registered remedy = readout-only
+refit, p2_readout_refit.py, not run). Final replay drift 14.9 meV/atom / 143 meV/Å (v7 17.3 / 72; base v2 4.1 / 17). Reading: the A2B-derived
+base transfers to the charged cells like base v2 (the MH-1 lineage) where the MH-0-derived base did not, keeps the provider response, and is
+0.4 meV/Å short of gate 1; the replay head drifts more. lr 1e-4 twin still training (epoch ~17 of 30).
