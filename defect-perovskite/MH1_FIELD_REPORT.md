@@ -1,6 +1,6 @@
 # MACE-MH-1-Field: two models in parallel — report
 
-*Plan: "MACE-MH-1-Field: two models in parallel" (user, 2026-09-20). Units: Z* e, α = ε∞ − I (dimensionless, the released files' convention), P e/Å² (folded; also μC/cm²), E meV/atom, F meV/Å, σ meV/Å³. Status: all runs complete (2026-09-27); final checks and deliverables in §5.*
+*Plan: "MACE-MH-1-Field: two models in parallel" (user, 2026-09-20). Units: Z* e, α = ε∞ − I (dimensionless, the released files' convention), P e/Å² (folded; also μC/cm²), E meV/atom, F meV/Å, σ meV/Å³. Status: complete (2026-09-27). A follow-up (base v8 = the perovskite base fine-tuned from A2B) is running and is reported in the tracker, not here.*
 
 ## 1. Inventory (§1)
 
@@ -136,7 +136,7 @@ No model beats 1.0.2 on Z* or P; A2 and A2B beat it on α. On P every run, inclu
 
 | check | A2 | B2 | A2B | reference |
 |---|---|---|---|---|
-| exactness at E = 0 after training, six MH-1 heads, 2000 structures | parameters bit-identical (asserted); predictions in the cueq form max 3.9e-5 meV/atom, 1.6e-4 meV/Å, 1.6e-5 meV/Å³ (plan: ≤ 1e-4, ≤ 1e-3 → **pass**); e3nn form: E3NN_EXACT | not exact by design (drift 30 / 98) | not exact by design (drift 11.7 / 41.5) | init: 9e-10 / 7e-11 |
+| exactness at E = 0 after training, six MH-1 heads, 2000 structures | parameters bit-identical (asserted: every MH-1 tensor and every frozen readout entry equals the init); zero-field predictions of the trained file max 3.9e-5 meV/atom, 1.6e-4 meV/Å (cueq form and its e3nn conversion alike), traced to the symmetric-contraction constant tables that MACE's e3nn↔cueq converters regenerate with ~1e-8 differences; with MH-1's own tables restored in the delivered file: **2.6e-6–4.9e-6 meV/atom, 3.6e-5–5.3e-5 meV/Å, 1.9e-6 meV/Å³** over the six heads (plan: ≤ 1e-4, ≤ 1e-3 → **pass**; init was 1e-9). Field residual at E = 0: exactly 0. | not exact by design (drift 30 / 98) | not exact by design (drift 11.7 / 41.5) | init: 9e-10 / 7e-11 |
 | identities on 100 validation frames | ΣZ* 7e-15, α asymmetry 1e-15 | 8e-15, 1e-15 | 9e-15, 1e-15 | pass ≤ 1e-10 |
 | CsPbCl3 (base-v2-relaxed cell) |Z*| Cl / Cs / Pb vs MP DFPT 3.52 / 2.24 / 6.21 (±10 %) | 3.37 / **1.75 (−22 %)** / 5.65 | 3.47 / 2.09 / 5.77 — pass | 3.45 / 2.17 / 5.89 — pass | 1.0.2: 3.42 / 1.58 / 6.39 (first report) |
 | CsPbCl3 ε∞ vs 3.55 | 3.55 | 3.54 | 3.66 | |
