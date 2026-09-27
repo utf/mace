@@ -6368,3 +6368,9 @@ Base v8 (A2B provider, lr 3e-4) done 2026-09-27 21:38 (b3 clock), `~/runs/dscc/p
 refit, p2_readout_refit.py, not run). Final replay drift 14.9 meV/atom / 143 meV/Å (v7 17.3 / 72; base v2 4.1 / 17). Reading: the A2B-derived
 base transfers to the charged cells like base v2 (the MH-1 lineage) where the MH-0-derived base did not, keeps the provider response, and is
 0.4 meV/Å short of gate 1; the replay head drifts more. lr 1e-4 twin still training (epoch ~17 of 30).
+Base v8 lr 1e-4 done 2026-09-27 22:16 (`~/runs/dscc/p1v8/base_v8_lr1e4/`; full table `~/runs/dscc/p1v8/COMPARE.md`): gate 1 F 14.01 (FAIL), E 0.78;
+gate 2 PASS (0.1 %); gate 3 PASS, total 33.3 (+0.1 over base v2), 2–4 Å 77.0 (+2.1), 4–8 29.8 (−0.6); E_PP 2.23 EXCEEDS; replay drift 5.3 / 37.9.
+Summary of the comparison: both A2B-derived bases pass gates 2 and 3 (charged-cell transfer at base v2's level; the MH-0-derived base was
++13.6 meV/Å), neither passes gate 1 (12.79 at 3e-4, 14.01 at 1e-4 vs 11.2; base v2 10.23), both exceed τ on the E_PP mismatch (2.1–2.2 vs
+1.49 for v7; remedy on record: readout-only refit). lr trades neutral forces (3e-4 better by 1.2 meV/Å) against replay drift (1e-4: 5.3 / 38
+vs 14.9 / 143). Nothing running; provider/base choice is the user's.
