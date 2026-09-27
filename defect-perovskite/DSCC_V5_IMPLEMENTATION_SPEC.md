@@ -6374,3 +6374,6 @@ Summary of the comparison: both A2B-derived bases pass gates 2 and 3 (charged-ce
 +13.6 meV/Å), neither passes gate 1 (12.79 at 3e-4, 14.01 at 1e-4 vs 11.2; base v2 10.23), both exceed τ on the E_PP mismatch (2.1–2.2 vs
 1.49 for v7; remedy on record: readout-only refit). lr trades neutral forces (3e-4 better by 1.2 meV/Å) against replay drift (1e-4: 5.3 / 38
 vs 14.9 / 143). Nothing running; provider/base choice is the user's.
+Both base-v8 runs were still improving at the 30-epoch cap (F 0.08–0.1 meV/Å per epoch, no plateau). User (2026-09-27 22:40): extend →
+`resume_b3.sh`: `--restart_latest --max_num_epochs 60` from the epoch-29 checkpoints (optimiser/EMA state continued), same recipe; the
+30-epoch artefacts kept in `<run>/ep30/`; gates and E_PP rerun at the end. base_v8 on GPU 5, base_v8_lr1e4 on GPU 7.
