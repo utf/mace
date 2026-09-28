@@ -6377,3 +6377,8 @@ vs 14.9 / 143). Nothing running; provider/base choice is the user's.
 Both base-v8 runs were still improving at the 30-epoch cap (F 0.08–0.1 meV/Å per epoch, no plateau). User (2026-09-27 22:40): extend →
 `resume_b3.sh`: `--restart_latest --max_num_epochs 60` from the epoch-29 checkpoints (optimiser/EMA state continued), same recipe; the
 30-epoch artefacts kept in `<run>/ep30/`; gates and E_PP rerun at the end. base_v8 on GPU 5, base_v8_lr1e4 on GPU 7.
+Base v8 resumes done 2026-09-28 05:12 (`COMPARE_60.md`; 30-epoch artefacts in `<run>/ep30/`). 60 epochs: lr 3e-4 F 11.56 / E 0.84 (gate 1 FAIL by
+0.36), gate 2 pass (≤ 0.1 %), gate 3 FAIL: 2–4 Å 78.9 (+4.0 over base v2; was +1.9 at 30 epochs), 4–8 +3.0, total +2.3; E_PP 2.07; replay
+drift 15.4 / 158. lr 1e-4: F 12.39 / E 0.48, gate 3 FAIL: 2–4 Å 78.7 (+3.8; was +2.1), total +0.9; E_PP 2.23; drift 6.0 / 49. Reading: the
+extra 30 epochs bought 1.2–1.6 meV/Å on the neutral validation and cost 2 meV/Å in the charged 2–4 Å shell for both rates — the neutral set
+is being fitted at the expense of transfer. The 30-epoch models are the ones that pass gates 2 and 3. Nothing running.
