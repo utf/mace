@@ -6427,3 +6427,12 @@ is the user's. b3 and the local card idle.
 4.5, ε∞ 4.0) in the B arms, the control A carries none — the plan's own Phase 2 composition and the v7 configuration. My morning clause (no head-added E_PP on an
 unmatched base) is waived by the user; the refit base `base_epp.pt` is kept as a record only. Launch: `p2v8_queue.sh` (B_s ×6 then B_0 ×6 on b3 GPUs 5/7 via
 w3_queue), `p2v8_local.sh` (A ×6, local card), `p2v8_finish.sh` → `P2B_V8_REPORT.md`. ε∞ for B_x(M) after the decision = 3.6746 (base alone, gate 2).
+**Phase 2b on base v8 — interim reading, A ×6 and B_s ×6 complete (2026-09-28 19:05; `~/runs/dscc/p2v8/P2V8_GATES_interim.json`, `P2B_V8_interim.md`;
+B_0 ×6 running on b3).** Epoch-averaged held-out forces per component (meV/Å), medians over seeds: A 15.80 total / 14.45 (4–12 Å) / 25.99 (2–4); B_s 15.56 / 13.95 /
+26.96. Per seed (A, B_s): s0 15.19, 15.13; s1 16.63, 16.94; s2 15.31, 15.41; s3 25.99, 17.74; s4 15.75, 15.71; s6 15.86, 15.11. Paired TOST B_s vs A: total mean d +1.45,
+90 % CI [−1.31, +4.20] → inconclusive; 4–12 Å +1.59 [−0.93, +4.12] → inconclusive; 10–12 Å and 12+ superior (B_s). The width comes from one pair: the control's seed 3
+(fold 3) sits at 25.99 (2–4 Å 42.7) against 16.54 on v7 — the other five pairs differ by ≤ 1.0 meV/Å. Energies (gate 2): A fails the 79-atom energy on all six seeds
+(0.78–1.01 meV/atom > 0.6; C_Q transfer 2.7–22.8 meV); B_s passes all six (0.39–0.55; transfer 0.6–9.1). v7 on the same folds: A 15.31/18.82/15.34/16.54/14.40/15.50, B_s
+15.13/16.03/15.89/17.31/15.70/16.81 — B_s on v8 is within ±0.9 of v7 on four seeds and better by 1.7 on s6; the base change does not move the head's charged forces.
+Cost: A 67 s/epoch (local), B_s 128.5 (b3). C5 localisation read on the twelve checkpoints launched on the local card (`P2V8_C5_interim.json`). Verdict waits for B_0
+(finisher) — the adoption decision on the plan's two metrics is inconclusive at six pairs as they stand.
