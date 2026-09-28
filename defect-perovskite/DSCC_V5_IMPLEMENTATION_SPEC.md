@@ -6423,3 +6423,7 @@ Attribution (diagnostic, no training: the pre-refit base with pp_r_split 4.5 and
 at +2.1 before either. By the registered rule (a gate lost → stop and report) the arms are NOT launched; the decision between (i) the refit base under a gate-3
 override of 0.9 meV/Å in one shell, (ii) the base alone with the head adding E_PP (mismatch 2.23 > τ, as the A3 remedy did not hold gate 3), and (iii) stopping,
 is the user's. b3 and the local card idle.
+**Decision (user, 2026-09-28 ~11:00): option (ii).** Phase 2b arms open on the base alone (`base_v8_lr1e4/ep30/base.pt`, pp_r_split 0); the head adds E_PP (r_split
+4.5, ε∞ 4.0) in the B arms, the control A carries none — the plan's own Phase 2 composition and the v7 configuration. My morning clause (no head-added E_PP on an
+unmatched base) is waived by the user; the refit base `base_epp.pt` is kept as a record only. Launch: `p2v8_queue.sh` (B_s ×6 then B_0 ×6 on b3 GPUs 5/7 via
+w3_queue), `p2v8_local.sh` (A ×6, local card), `p2v8_finish.sh` → `P2B_V8_REPORT.md`. ε∞ for B_x(M) after the decision = 3.6746 (base alone, gate 2).
