@@ -6412,3 +6412,14 @@ bound state present for A and B_s; large-N undecided (the base changed; on v7 it
 **Cost.** Unknown for this base (base.pt 65 MB vs v7's 13.5 MB; the B arms recompute the base under create_graph each step): one-epoch smoke of a / bs / b0 on b3 GPU 7
 with the pre-refit base while the refit runs on GPU 5; the local card smokes A. Report `defect-perovskite/P2B_V8_REPORT.md`, JSON under `~/runs/dscc/p2v8/`;
 `P2B_REPORT.md` stays the v7 record.
+**Phase 2 entry on base v8 — RESULT (2026-09-28 10:46; `~/runs/dscc/p1v8/base_v8_lr1e4/ep30/{P2_REFIT.json,P1_GATES_epp.json,P1_GATES_pp_norefit.json}`).**
+Smoke (one epoch each, pre-refit base): b3 GPU 7 B_s 132 s/epoch, B_0 128, peak 14.6 GB; A 59 s (b3) / 67 s (local card, peak 6.4 GB) — v7 was 90 / 84 / 40. Twelve
+B runs on two cards ≈ 13 h; six A seeds locally ≈ 7 h. Readout refit (never run before; 8720 trainable parameters, 23 min/epoch): base alone valid E 0.78 / F 14.01;
+with E_PP before refit 0.90 / 13.92; epochs 0–4: 13.78, 13.71, 13.72, 13.64, 13.62 meV/Å (E 0.68 → 0.51); best epoch 5 → ACCEPTED (13.62 ≤ 14.21, 0.51 ≤ 0.98).
+Gates on the refit base (`base_epp.pt`, pp_r_split 4.5): gate 1 F 13.62 / E 0.51 (better than base alone; still > 11.2); gate 2 PASS (ε∞ 3.670 vs 3.661; Z* within
+0.15 %); **gate 3 FAIL**: total 34.5 (+1.3), 2–4 Å 78.8 (+3.9 over base v2's 74.9; allowance +3.0), 4–8 31.1 (+0.7), 8–10 16.7 (+1.4), 10–12 11.4 (+2.5), 12+ 8.9 (+0.9).
+Attribution (diagnostic, no training: the pre-refit base with pp_r_split 4.5 and readouts untouched, `base_pp_norefit.pt`): gate 1 13.92 / 0.90; gate 3 PASS, 2–4 Å
+77.7 (+2.8), total 34.0 (+0.8). So E_PP's own force on the charged frames costs 0.7 meV/Å in the 2–4 Å shell and the readout refit a further 1.1; the shell was already
+at +2.1 before either. By the registered rule (a gate lost → stop and report) the arms are NOT launched; the decision between (i) the refit base under a gate-3
+override of 0.9 meV/Å in one shell, (ii) the base alone with the head adding E_PP (mismatch 2.23 > τ, as the A3 remedy did not hold gate 3), and (iii) stopping,
+is the user's. b3 and the local card idle.
