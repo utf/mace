@@ -6455,3 +6455,9 @@ rate and length as base v8; my statement to the user that v2 used 1 / 100 was wr
 foundation head (v2: MH-1 omat_pbe, ≈ 13 meV/Å after one epoch; v8: A2B mp-dielectric, 83.6 meV/Å at epoch 0), the response terms in the target loss (gradient-share
 record of 2026-09-17: P 0.21 / α 0.14 / Z* 0.12 against F 0.011 on the target frames), batch 8 vs 4, and the replay (MH-1's fps-selected 10 k vs 9360 base-v2 frames
 relabelled by the provider).
+**Corrected step 2 (user, 2026-09-28 22:00: "Lets try this"; registered before launch).** `base_v8_w01`: identical to `base_v8` at lr 3e-4 / 60 epochs (A2B provider,
+mp-dielectric head, same data, E 10 / F 10 / S 1, EMA 0.9999, clip 1.0, batch 4, float32 + cueq, head-grouped batches, no E_PP) with ONE change: response weights
+P 1 / Z* 0.1 / α 0.1 (was 10 / 1 / 1). Reason on record: the target-frame gradient share is dominated by the response terms (P 0.21 / α 0.14 / Z* 0.12 vs F 0.011) while the
+response is held to 0.1 % against gate 2's 10 % allowance in all four base v8 runs. Comparator = base_v8 at 60 epochs (F 11.56 / E 0.84; gate 3 2–4 Å 78.9). Prediction:
+gate 1 passes (F ≤ 11.2) with gate 2 still within 10 %; gate 3 read as recorded (the floor test decides whether it matters for the head). Launcher
+`~/runs/dscc/p2v8/base_v8_w01_b3.sh` (b3 GPU 5, starts when the Phase 2b queue has cleared the card); outputs `~/runs/dscc/p1v8/base_v8_w01/`.
