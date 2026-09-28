@@ -6468,3 +6468,5 @@ effect is larger — the head model lands 0.3 above the base's neutral error, at
 model's charged-frame error is set by the base's neutral (ordinary) force error, not by the base's own charged-frame error; gate 3 (base-alone charged shells) is not
 what the head's forces respond to. The 60-epoch lr 3e-4 base v8 is the strongest base available now (head 11.9 on fold 0); `base_v8_w01` (response weights /10) tests
 whether the neutral error can be brought below gate 1 (11.2) with the response held. C5 localisation on this checkpoint launched (local card).
+C5 on the floor-test checkpoint (`~/runs/dscc/p2v8/C5_floor_test.json`): pass 0.968, separation p50 357 meV, N_eff p50 1.36 (p90 1.67) — a bound carrier at 79 atoms,
+at W6-on-v2's level (0.71–0.98 / 230–422 / 1.3). The control on the 60-epoch base has both the forces and the bound state; B_s on that base is untested.
