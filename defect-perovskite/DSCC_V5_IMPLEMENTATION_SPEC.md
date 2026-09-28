@@ -6436,3 +6436,12 @@ B_0 ×6 running on b3).** Epoch-averaged held-out forces per component (meV/Å),
 15.13/16.03/15.89/17.31/15.70/16.81 — B_s on v8 is within ±0.9 of v7 on four seeds and better by 1.7 on s6; the base change does not move the head's charged forces.
 Cost: A 67 s/epoch (local), B_s 128.5 (b3). C5 localisation read on the twelve checkpoints launched on the local card (`P2V8_C5_interim.json`). Verdict waits for B_0
 (finisher) — the adoption decision on the plan's two metrics is inconclusive at six pairs as they stand.
+**Phase 2b on base v8 — interim C5 localisation (2026-09-28 19:40; `~/runs/dscc/p2v8/P2V8_C5_interim.json`, 1191 neutral-vacancy frames, averaged checkpoints;
+pass fraction / separation p50 / N_eff p50).** A: s0 0.955 / 323 meV / 1.36; s1 0.232 / 128 / 2.83; s2 0.369 / 189 / 1.32; s3 0.000 / 37 / 16.1; s4 0.849 / 271 / 1.29;
+s6 0.791 / 256 / 1.31. B_s: s0 0.021 / 71 / 2.23; s1 0.008 / 60 / 2.55; s2 0.120 / 86 / 2.35; s3 0.148 / 108 / 2.84; s4 0.007 / 68 / 2.41; s6 0.048 / 75 / 2.91.
+v7 medians for comparison: A 0.98 / 457 / 1.56, B_s 0.89 / 346 / 1.67, B_0 0.07 / 115 / 4.6. Reading: the control's seed-3 force outlier (25.99 meV/Å) is a head with no
+bound state (N_eff 16), as v7's A s1 was; and on base v8 every B_s seed holds only a shallow carrier at 79 atoms (60–108 meV, N_eff 2.2–2.9, pass ≤ 0.15) where
+on v7 it held 346 meV. The base change moved the head's bound state, not its forces: with a base that already carries the charged-frame forces (gate 3 at base v2's
+level) the head is less driven to bind the carrier — the shallow-carrier finding in a new form. Consequence for the Phase 3 entry gate (large-N separation ≥ 0.15 eV):
+B_s on v8 is below it already at 79 atoms; the large-N read on the seed-median checkpoint runs after B_0 as registered, and the registered remedy (w_gap × 3 once, NULL
+expected) is unchanged. No action taken; B_0 continues.
