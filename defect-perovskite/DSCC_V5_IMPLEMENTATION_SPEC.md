@@ -6461,3 +6461,10 @@ P 1 / Z* 0.1 / α 0.1 (was 10 / 1 / 1). Reason on record: the target-frame gradi
 response is held to 0.1 % against gate 2's 10 % allowance in all four base v8 runs. Comparator = base_v8 at 60 epochs (F 11.56 / E 0.84; gate 3 2–4 Å 78.9). Prediction:
 gate 1 passes (F ≤ 11.2) with gate 2 still within 10 %; gate 3 read as recorded (the floor test decides whether it matters for the head). Launcher
 `~/runs/dscc/p2v8/base_v8_w01_b3.sh` (b3 GPU 5, starts when the Phase 2b queue has cleared the card); outputs `~/runs/dscc/p1v8/base_v8_w01/`.
+**Floor test RESULT (2026-09-28 22:04; `~/runs/dscc/dscc_p2v8x_a60_s0/held_final_avg.json`).** Control arm A, seed 0 / fold 0, on the 60-epoch lr 3e-4 base v8
+(neutral F 11.56; gate 3 lost at 2–4 Å 78.9): held-out total **11.90**, 4–12 Å 10.97, shells 2–4 18.9 / 4–8 11.3 / 8–10 10.5 / 10–12 10.0 / 12+ 6.9, 79-atom E 0.66,
+C_Q transfer 1.2 meV. Same seed on the 30-epoch lr 1e-4 base (neutral 14.01): 15.19 / 14.05 / 23.8. Prediction was 13.0 ± 0.7: the direction is confirmed and the
+effect is larger — the head model lands 0.3 above the base's neutral error, at W6-on-base-v2's level (six-seed median 11.6, 2–4 Å 19.3). Reading of record: the head
+model's charged-frame error is set by the base's neutral (ordinary) force error, not by the base's own charged-frame error; gate 3 (base-alone charged shells) is not
+what the head's forces respond to. The 60-epoch lr 3e-4 base v8 is the strongest base available now (head 11.9 on fold 0); `base_v8_w01` (response weights /10) tests
+whether the neutral error can be brought below gate 1 (11.2) with the response held. C5 localisation on this checkpoint launched (local card).
