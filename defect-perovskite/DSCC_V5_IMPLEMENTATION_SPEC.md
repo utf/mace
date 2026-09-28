@@ -6382,3 +6382,33 @@ Base v8 resumes done 2026-09-28 05:12 (`COMPARE_60.md`; 30-epoch artefacts in `<
 drift 15.4 / 158. lr 1e-4: F 12.39 / E 0.48, gate 3 FAIL: 2–4 Å 78.7 (+3.8; was +2.1), total +0.9; E_PP 2.23; drift 6.0 / 49. Reading: the
 extra 30 epochs bought 1.2–1.6 meV/Å on the neutral validation and cost 2 meV/Å in the charged 2–4 Å shell for both rates — the neutral set
 is being fitted at the expense of transfer. The 30-epoch models are the ones that pass gates 2 and 3. Nothing running.
+
+## Plan P Phase 2 / 2b on base v8 — REGISTRATION (2026-09-28 morning, written before any Phase 2 result on base v8 is opened)
+
+User (2026-09-28): "use the previous 30 epoch base v8 lr 1e-4 model and continue with the rest of the plan." Base of record: `~/runs/dscc/p1v8/base_v8_lr1e4/ep30/base.pt` (A2B provider, mp-dielectric head, lr 1e-4, 30 epochs). Its gates: 1 FAIL (F 14.01
+meV/Å > 11.2; E 0.78), 2 PASS (ε∞ 3.6746 vs 3.661; Z* within 0.1 %), 3 PASS (charged shells +0.1 total, +2.1 at 2–4 Å over base v2). Phase 2 opens on it as a
+registered deviation of the same kind as the 2026-09-19 override (gate 1 above threshold by 2.8 meV/Å), so the arms are internally valid and absolute
+charged-shell numbers carry the base's excess (now ≈ base v2's level, unlike v7's +13.6).
+**Phase 2 entry (A3).** E_PP mismatch on the 154 neutral validation frames already read: 2.23 meV/Å (τ 1.7, EXCEEDS; `ep30/P2_EPP.json`). Registered remedy
+applied: readout-only refit (`p2_readout_refit.py`, E_PP on at r_split 4.5 / ε∞ 4.0, energy readouts only, 5 epochs, lr 1e-4, batch 2) on the target frames alone
+— base v8's own files `~/runs/dscc/p1v8/train_v8_iso.xyz` / `valid_v8.xyz` (A2B response labels; the script's p1v2 defaults carry MH-0 labels and are NOT used).
+Acceptance (registered with the script): validation F with E_PP ≤ base-alone F + 0.2 meV/Å and E ≤ base-alone E + 0.2 meV/atom (best-force refit epoch; pre-refit
+state not a candidate). The refit base (`ep30/base_epp.pt`) is adopted only if accepted AND `p1_gates.py --p0 p0_locality_A2B.json` on it gives gate 2 pass, gate 3 pass,
+and gate 1 F not worse than the base-alone value + 0.2 (gate 1 is already under override). Rejection, or a gate lost → stop and report (no fallback to a head-added E_PP
+on an unmatched base). Recorded consequence: with E_PP inside the base, the control arm A also carries E_PP (cached with the base), so A(v8) differs in composition from
+A(v7); every Phase 2b reading is within-base (arm vs arm on the same base), as the plan reads it.
+**Phase 2b arms on base v8** (plan file unchanged; names carry a `v8` tag so the v7 records are untouched): `dscc_p2v8a_s*` (A, Mulliken control, `--cache_base 1`),
+`dscc_p2v8bs_s*` (B_s: polarisation, near field Mulliken, r_c 8, Δ 2, near_r_split 2.5), `dscc_p2v8b0_s*` (B_0: near field none); seeds 0 1 2 3 4 6 with folds
+0 1 2 3 0 2; W6 schedule (60 epochs, lr 2e-3 cosine, batch 4, w_E 0.05); `--bz_gap 0 --bz_readout 1` on every run (the v8 control is uniform on the regulariser,
+unlike v7's mixed s0–2 / s3–6); E_PP supplied by the base (the head must report `head_adds_pp = False`, r_split equal to the base's). B_x(M): three seeds of the adopted
+arm with ε∞ = the adopted base's own gate-2 polycrystalline value (3.6746 for base alone; re-read from the refit base's gate file if that is adopted) — not v7's 3.548.
+Queue order: all six B_s before any B_0 (the adoption decision reads early); A seeds on the local card in series after a smoke test there.
+**Gates (plan §5, unchanged).** Paired TOST at τ 1.7 on held-out charged forces, total and 4–12 Å: B_x adopted over A on superiority or equivalence; B_0 over B_s if
+within τ on both; both inferior → r_c 10 (ramp 8–10) B_s rerun once. Energies: C_Q transfer 79→159 within 10 meV; 79-atom energy ≤ 0.6 meV/atom. Localisation: 79-atom C5
+per checkpoint; large-N on the adopted arm's seed-median checkpoint (`p0_boundstate.py`, embedded 2×2×2 and 3×3×3): separation ≥ 0.15 eV, N_eff ≤ 4, Σdq within 5 Å
+≥ 0.8 → Phase 3 entry; failure → w_gap × 3 once (its v7 expectation, NULL, stands and is re-read here).
+**Expected readings, written now.** B_s equivalent to A on both force metrics (the far field is invisible at 79/159 atoms); B_0 inferior to both (as on v7); 79-atom C5
+bound state present for A and B_s; large-N undecided (the base changed; on v7 it failed at 639 and 2159 atoms).
+**Cost.** Unknown for this base (base.pt 65 MB vs v7's 13.5 MB; the B arms recompute the base under create_graph each step): one-epoch smoke of a / bs / b0 on b3 GPU 7
+with the pre-refit base while the refit runs on GPU 5; the local card smokes A. Report `defect-perovskite/P2B_V8_REPORT.md`, JSON under `~/runs/dscc/p2v8/`;
+`P2B_REPORT.md` stays the v7 record.

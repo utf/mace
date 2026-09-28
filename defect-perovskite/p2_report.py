@@ -50,11 +50,11 @@ def s_per_epoch(run):
 
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--runs", nargs="+", required=True); ap.add_argument("--out", required=True); ap.add_argument("--md", default=None)
+ap.add_argument("--runs", nargs="+", required=True); ap.add_argument("--out", required=True); ap.add_argument("--md", default=None); ap.add_argument("--base_label", default="base_v7_lr3e4 (user override of the Phase 1 gates)")
 args = ap.parse_args()
 arms = {}; cost = {}
 for run in map(Path, args.runs):
-    m = re.match(r"dscc_p2(?P<arm>a|b|bm|bs|b0|bsm|b0m)_s(?P<seed>\d+)$", run.name)
+    m = re.match(r"dscc_p2(?:v\d+)?(?P<arm>a|b|bm|bs|b0|bsm|b0m)_s(?P<seed>\d+)$", run.name)
     if m is None or not (run / "held_final.json").exists():
         continue
     arm, seed = m["arm"], int(m["seed"])
@@ -116,7 +116,7 @@ else:
     g = rep["gate1"].get("b")
     rep["verdict"] = ("B ADOPTED" if (g and g["adopted"]) else ("B NOT ADOPTED" if g else "INCOMPLETE"))
 json.dump(rep, open(args.out, "w"), indent=1, default=str)
-lines = [f"# Plan P Phase 2 report ({datetime.now():%Y-%m-%d %H:%M})", "", f"Runs read: {rep['n_runs']}; estimator per run in the JSON. Base: base_v7_lr3e4 (user override of the Phase 1 gates). Units: forces per component meV/Å, energies meV/atom; τ = {TAU}.", "",
+lines = [f"# Plan P Phase 2 report ({datetime.now():%Y-%m-%d %H:%M})", "", f"Runs read: {rep['n_runs']}; estimator per run in the JSON. Base: {args.base_label}. Units: forces per component meV/Å, energies meV/atom; τ = {TAU}.", "",
          "## Medians over seeds", "", "| arm | total | 4–12 Å | 2–4 | 4–8 | 8–10 | 10–12 | 12+ | 79-atom E | C_Q transfer meV |", "|---|---|---|---|---|---|---|---|---|---|"]
 NAMES = {"a": "A (Mulliken)", "b": "B (E_cP + E_PP)", "bm": "B(M)", "bs": "B_s (near Mulliken + far dipoles)", "b0": "B_0 (H0 near + far dipoles)", "bsm": "B_s(M)", "b0m": "B_0(M)"}
 for a in ("a", "b", "bm", "bs", "b0", "bsm", "b0m"):
