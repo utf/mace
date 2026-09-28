@@ -6445,3 +6445,13 @@ on v7 it held 346 meV. The base change moved the head's bound state, not its for
 level) the head is less driven to bind the carrier — the shallow-carrier finding in a new form. Consequence for the Phase 3 entry gate (large-N separation ≥ 0.15 eV):
 B_s on v8 is below it already at 79 atoms; the large-N read on the seed-median checkpoint runs after B_0 as registered, and the registered remedy (w_gap × 3 once, NULL
 expected) is unchanged. No action taken; B_0 continues.
+**Floor test (user, 2026-09-28 21:30: "I like plans 1 and 2. Do them"; registered before the result).** Hypothesis: the head removes only the charge-induced part of
+the base's error; the head model's charged-frame force error sits ≈ 1.5 meV/Å above the base's neutral validation error (v2 10.2 → 11.6; v7 13.2 → 15.4; v8 14.0 →
+15.6–15.8), independent of the base's own charged-frame error (v7 105 and v8 77 at 2–4 Å both → 27 with the head). Test: control arm A, seed 0 / fold 0, W6 schedule,
+on the 60-epoch lr 3e-4 base v8 (`~/runs/dscc/p1v8/base_v8/base.pt`: neutral F 11.56, gate 3 lost at 2–4 Å 78.9), run name `dscc_p2v8x_a60_s0`, local card.
+Prediction: held-out total ≈ 13.0 ± 0.7 (floor 11.56 + 1.5) against 15.19 for A s0 on the 30-epoch base; if it stays near 15, the floor reading is wrong.
+Correction of record: base v2's recipe (`~/runs/w1_run.sh`) is energy 10 / forces 10, lr 1e-4, EMA 0.9999, float32, batch 8, cueq, 30 epochs — the same weights,
+rate and length as base v8; my statement to the user that v2 used 1 / 100 was wrong (a superseded W1 registration paragraph). The recipe differences that remain:
+foundation head (v2: MH-1 omat_pbe, ≈ 13 meV/Å after one epoch; v8: A2B mp-dielectric, 83.6 meV/Å at epoch 0), the response terms in the target loss (gradient-share
+record of 2026-09-17: P 0.21 / α 0.14 / Z* 0.12 against F 0.011 on the target frames), batch 8 vs 4, and the replay (MH-1's fps-selected 10 k vs 9360 base-v2 frames
+relabelled by the provider).
