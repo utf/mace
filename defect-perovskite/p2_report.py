@@ -54,7 +54,7 @@ ap.add_argument("--runs", nargs="+", required=True); ap.add_argument("--out", re
 args = ap.parse_args()
 arms = {}; cost = {}
 for run in map(Path, args.runs):
-    m = re.match(r"dscc_p2(?:v\d+)?(?P<arm>a|b|bm|bs|b0|bsm|b0m)_s(?P<seed>\d+)$", run.name)
+    m = re.match(r"dscc_p2(?:v[0-9a-z]+?)?(?P<arm>a|b|bm|bs|b0|bsm|b0m)_s(?P<seed>\d+)$", run.name)
     if m is None or not (run / "held_final.json").exists():
         continue
     arm, seed = m["arm"], int(m["seed"])

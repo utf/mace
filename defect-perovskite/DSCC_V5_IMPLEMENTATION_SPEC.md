@@ -6487,3 +6487,10 @@ Comparator base_v8 at 60 epochs: 11.56 / 0.84, gate 3 +2.3 / +4.0. Reading: the 
 meV/Å in the near shells, consistent with the floor test's finding that neutral fit and base-alone charged transfer trade against each other while the head's forces follow
 the neutral error. Floor check on w01 (same diagnostic as the registered floor test: control arm A, seed 0 / fold 0, `dscc_p2v8x_aw01_s0`, local card) launched;
 prediction: held-out total ≈ 11.3 (floor 10.99 + 0.3). Full arms on w01 await the user's decision.
+**Phase 2b on base_v8_w01 (user, 2026-09-29 13:20: "Run it"; registered before launch).** Base `~/runs/dscc/p1v8/base_v8_w01/base.pt` (gates 1 and 2 pass; gate 3 failed
+by 1.6 at 2–4 Å — registered deviation, shown by the floor test not to govern the head's forces). Composition as the user's option (ii): base alone, the head adds E_PP in the
+B arms. Arms A / B_s / B_0, seeds 0 1 2 3 4 6, folds 0 1 2 3 0 2, W6 schedule, `--bz_gap 0 --bz_readout 1`, names `dscc_p2v8w{a,bs,b0}_s*`; B_s ×6 then B_0 ×6 on b3
+GPUs 5/7; A on the local card (seed 0 = the running floor check `dscc_p2v8x_aw01_s0`, identical command, copied under the arm name when done; seeds 1 2 3 4 6 after it).
+Gates, thresholds and the reading rules unchanged from the 2026-09-28 registration; report `P2B_V8W_REPORT.md`, JSON under `~/runs/dscc/p2v8w/`. Expected (written now):
+A ≈ 11.3 on the floor reading; B_s equivalent to A; B_s passes the energy gate where A does not (as on both earlier bases); B_s bound state undetermined (346 meV on v7,
+73 meV on the 30-epoch v8); B_0 undetermined (inferior by 5 on v7, level on the 30-epoch v8).
