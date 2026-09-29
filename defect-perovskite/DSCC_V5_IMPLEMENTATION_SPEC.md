@@ -6501,3 +6501,5 @@ A s3 on the 30-epoch v8 (26.0), now on seed 0; the C5 read on this checkpoint is
 base neutral error when the head binds the carrier) is not contradicted by a seed that fails to bind, but the registered prediction did not allow for that failure and
 is recorded as missed. The control's localisation is seed-dependent on every base since v7; on base v2 it was not (W6 s0–s3 pass 0.71–0.98). This run is seed 0 of the
 w01 control arm (copied as `dscc_p2v8wa_s0`); the paired reading carries it as such.
+C5 on the w01 floor-check checkpoint (`~/runs/dscc/p2v8w/C5_floor_check_w01.json`): pass 0.078, separation p50 367 meV, N_eff p50 11.6 (p90 18.4) — the level is
+separated but the hole is spread over ≈ 12 atoms: an unbound control, as read from the shell profile. Confirmed.
