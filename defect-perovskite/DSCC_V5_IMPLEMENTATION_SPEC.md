@@ -6503,3 +6503,7 @@ is recorded as missed. The control's localisation is seed-dependent on every bas
 w01 control arm (copied as `dscc_p2v8wa_s0`); the paired reading carries it as such.
 C5 on the w01 floor-check checkpoint (`~/runs/dscc/p2v8w/C5_floor_check_w01.json`): pass 0.078, separation p50 367 meV, N_eff p50 11.6 (p90 18.4) — the level is
 separated but the hole is spread over ≈ 12 atoms: an unbound control, as read from the shell profile. Confirmed.
+Phase 2b on w01, first seeds (2026-09-29 16:40): A s1 16.19 (2–4 Å 29.8, E79 0.69); B_s s0 **13.72** (2–4 23.8 / 4–8 13.2 / 8–10 10.9 / 10–12 9.9 / 12+ 8.1, E79 0.54,
+C_Q transfer 7.0, learned s 0.376) against 15.13 on both v7 and the 30-epoch v8 for the same seed; its control partner on fold 0 is the unbound 23.71. C5 on B_s s0
+(`~/runs/dscc/p2v8w/C5_bs_s0.json`): pass 0.275, separation p50 165 meV, N_eff p50 1.45 (p90 1.75) — a compact hole (N_eff at W6-on-v2's level) with a separation
+between the v7 (346) and 30-epoch-v8 (71) values.
