@@ -6494,3 +6494,10 @@ GPUs 5/7; A on the local card (seed 0 = the running floor check `dscc_p2v8x_aw01
 Gates, thresholds and the reading rules unchanged from the 2026-09-28 registration; report `P2B_V8W_REPORT.md`, JSON under `~/runs/dscc/p2v8w/`. Expected (written now):
 A ≈ 11.3 on the floor reading; B_s equivalent to A; B_s passes the energy gate where A does not (as on both earlier bases); B_s bound state undetermined (346 meV on v7,
 73 meV on the 30-epoch v8); B_0 undetermined (inferior by 5 on v7, level on the 30-epoch v8).
+**Floor check on w01 — RESULT (2026-09-29 14:26; `~/runs/dscc/dscc_p2v8x_aw01_s0/held_final_avg.json`): prediction FAILED.** Control arm A, seed 0 / fold 0, on
+base_v8_w01 (neutral 10.99): held-out total **23.71**, 4–12 Å 20.10, shells 2–4 45.8 / 4–8 22.9 / 8–10 15.7 / 10–12 11.7 / 12+ 7.7, 79-atom E 1.25, C_Q transfer 26 meV
+(predicted ≈ 11.3). The shell profile (2–4 Å at 46, far shells at the floor) is that of a control head with no bound carrier — the same failure as A s1 on v7 (18.8) and
+A s3 on the 30-epoch v8 (26.0), now on seed 0; the C5 read on this checkpoint is running to confirm. What this does and does not say: the floor reading (head error ≈
+base neutral error when the head binds the carrier) is not contradicted by a seed that fails to bind, but the registered prediction did not allow for that failure and
+is recorded as missed. The control's localisation is seed-dependent on every base since v7; on base v2 it was not (W6 s0–s3 pass 0.71–0.98). This run is seed 0 of the
+w01 control arm (copied as `dscc_p2v8wa_s0`); the paired reading carries it as such.
