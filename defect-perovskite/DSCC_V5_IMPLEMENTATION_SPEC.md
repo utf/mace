@@ -6507,3 +6507,12 @@ Phase 2b on w01, first seeds (2026-09-29 16:40): A s1 16.19 (2–4 Å 29.8, E79 
 C_Q transfer 7.0, learned s 0.376) against 15.13 on both v7 and the 30-epoch v8 for the same seed; its control partner on fold 0 is the unbound 23.71. C5 on B_s s0
 (`~/runs/dscc/p2v8w/C5_bs_s0.json`): pass 0.275, separation p50 165 meV, N_eff p50 1.45 (p90 1.75) — a compact hole (N_eff at W6-on-v2's level) with a separation
 between the v7 (346) and 30-epoch-v8 (71) values.
+Phase 2b on w01 — control instability (2026-09-29 18:10). A s2 on w01: 35.72 (2–4 Å 80.4 ≈ base alone 79.5): the head did nothing on that fold. Trajectories (held RMS
+eV/Å per component × 1000/√3 → meV/Å; dEp95; sat) at epochs 19 / 29 / 39 / 59: a60 control (stable) 14.0 / 12.8 / 12.4 / 12.0, dEp95 0.2 throughout, sat ≤ 3e-9.
+w01 controls: s0 14.0 / 13.6 / 32.3 / 23.2, dEp95 0.11 → 0.23 → 0.89 → 1.02, sat 2e-8 → 2e-6; s1 13.3 / 14.6 / 17.3 / 15.5, dEp95 0.08 → 1.22; s2 13.9 / 57.5 / 33.0 / 41.5,
+dEp95 0.21 → 0.87 → 1.15, sat up to 5e-6. w01 B_s: s0 17.8 / 25.4 / 15.0 / 13.6, dEp95 0.10–0.15, sat ≤ 4e-10; s1 18.3 / 15.9 / 14.8 / 14.0, dEp95 ≤ 0.29 — stable.
+Reading: on w01 the Mulliken control reaches its best (13.6–14.0 meV/Å, no better than on the 60-epoch original base) by epoch 19–29 and then destabilises — the energy
+correction's 95th percentile jumps to ≈ 1 eV and the bounded readouts saturate 100–1000× more — while the polarisation arm on the same base and folds stays stable
+(dEp95 ≤ 0.3, sat ≤ 1e-9). The epoch-averaged checkpoints mix the unstable late epochs. Not seen on the 60-epoch original base (a60) or on the 30-epoch base (A s0
+dEp95 0.66 at the end, held flat). Recorded; the arms run to completion as registered. Feature standardisation statistics are the same on both bases (|mu|/sd median
+14.5–14.8 / 22.4 / 13.0–14.5, no dead channels), so the base's block-0 feature scale is not the difference.
