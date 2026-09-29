@@ -6526,3 +6526,7 @@ Phase 2b on w01 — control arm complete (2026-09-29 21:40). A per seed (total /
 control's variance); 4–12 Å +5.05 [−0.41, +10.50] → inconclusive; 12+ equivalent. Energy gate: B_s 5/6 (s6 fails on C_Q transfer), A 1/6 (s6 only). Against the earlier
 bases B_s is 1.2–1.7 meV/Å better on every seed (v7 15.96, 30-epoch v8 15.56 medians). The adoption rule cannot resolve on this control; the B_0 comparison and the
 finisher's report follow; the large-N read on B_s's seed-median checkpoint is the Phase 3 gate if B_s is the chosen arm.
+C5 on the six w01 B_s checkpoints (`~/runs/dscc/p2v8w/C5_bs_interim.json`; pass / sep p50 / N_eff p50): s0 0.275 / 165 / 1.45; s1 0.003 / 98 / 1.44; s2 0.150 / 145 / 1.41;
+s3 0.078 / 148 / 1.60; s4 0.065 / 115 / 1.49; s6 0.024 / 73 / 1.85. Medians 0.07 / 130 meV / 1.47. Reading: a compact hole on every seed (N_eff 1.4–1.9, the base-v2
+head's level) but a shallow level (73–165 meV; the C5 precondition asks 200 meV, the Phase 3 large-N gate 150 meV) — v7's B_s held 346 meV. Same picture as on the
+30-epoch base v8 (73 meV) with the hole now compact. The Phase 3 entry read (large-N) is expected to fail on separation.
