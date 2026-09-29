@@ -6520,3 +6520,9 @@ Phase 2b on w01 — control arm complete (2026-09-29 21:40). A per seed (total /
 80.4 / 1.18 (no); s3 24.13 / 46.8 / 1.00 (no); s4 13.40 / 23.1 / 0.54 (yes); s6 11.18 / 17.8 / 0.59 (yes). C5 (pass / sep p50 / N_eff p50): s0 0.078 / 367 / 11.6; s1 0.390 /
 320 / 3.75; s2 0.043 / 191 / 13.9; s3 0.575 / 222 / 1.56; s4 0.424 / 191 / 2.43; s6 0.922 / 305 / 1.44. B_s on w01 so far (s0–s3): 13.72 / 13.90 / 13.88 / 13.03, all stable, E79
 0.50–0.54. Reading: where the control stays stable its error is at the floor (11.2–13.4) with a bound carrier; the four unstable seeds end delocalised (N_eff 3.8–13.9).
+**Phase 2b on w01 — interim reading, A ×6 and B_s ×6 (2026-09-29 22:00; `~/runs/dscc/p2v8w/P2V8W_GATES_interim.json`; B_0 running).** Medians: A 19.95 total / 17.11
+(4–12 Å) / 37.8 (2–4) / E79 0.85 / C_Q transfer 23.2; B_s 13.89 / 12.42 / 24.0 / 0.52 / 5.6. B_s per seed 13.72 / 13.90 / 13.88 / 13.03 / 13.95 / 14.37 — all six stable, spread
+1.3 meV/Å; A per seed 23.71 / 16.19 / 35.72 / 24.13 / 13.40 / 11.18 (four unstable). Paired TOST B_s vs A: total +6.91, 90 % CI [−0.71, +14.53] → inconclusive (the
+control's variance); 4–12 Å +5.05 [−0.41, +10.50] → inconclusive; 12+ equivalent. Energy gate: B_s 5/6 (s6 fails on C_Q transfer), A 1/6 (s6 only). Against the earlier
+bases B_s is 1.2–1.7 meV/Å better on every seed (v7 15.96, 30-epoch v8 15.56 medians). The adoption rule cannot resolve on this control; the B_0 comparison and the
+finisher's report follow; the large-N read on B_s's seed-median checkpoint is the Phase 3 gate if B_s is the chosen arm.
