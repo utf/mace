@@ -6470,3 +6470,12 @@ what the head's forces respond to. The 60-epoch lr 3e-4 base v8 is the strongest
 whether the neutral error can be brought below gate 1 (11.2) with the response held. C5 localisation on this checkpoint launched (local card).
 C5 on the floor-test checkpoint (`~/runs/dscc/p2v8/C5_floor_test.json`): pass 0.968, separation p50 357 meV, N_eff p50 1.36 (p90 1.67) — a bound carrier at 79 atoms,
 at W6-on-v2's level (0.71–0.98 / 230–422 / 1.3). The control on the 60-epoch base has both the forces and the bound state; B_s on that base is untested.
+**Phase 2b on base v8 (30-epoch lr 1e-4) — RESULT (2026-09-29 01:46; `defect-perovskite/P2B_V8_REPORT.md`, `~/runs/dscc/p2v8/{P2V8_GATES.json,P2V8_C5.json}`).**
+Medians (total / 4–12 Å / 2–4 / 79-atom E / C_Q transfer): A 15.80 / 14.45 / 25.99 / 0.87 / 8.6; B_s 15.56 / 13.95 / 26.96 / 0.44 / 5.1; B_0 15.64 / 14.25 / 25.93 / 0.86 / 7.8.
+Paired TOST (τ 1.7): B_s vs A inconclusive on total (+1.45, CI [−1.31, +4.20]) and 4–12 Å (+1.59 [−0.93, +4.12]), superior at 10–12 and 12+; B_0 vs A inconclusive on all;
+B_0 vs B_s inconclusive on all (−0.67 [−2.63, +1.28] total). Verdict by the plan's §5 rule: no arm adopted (neither superior nor equivalent; neither inferior, so the r_c 10 fallback
+is not triggered). Energies: B_s passes gate 2 on 6/6 seeds; A and B_0 fail on 6/6 (79-atom E 0.78–1.01 / 0.7–1.0). C5 localisation medians (pass / sep / N_eff): A 0.58 / 222
+meV / 1.34 (s3 no bound state); B_s 0.03 / 73 / 2.5; B_0 0.09 / 108 / 1.9. Large-N read not run (no adopted arm). Reading: on this base the three arms are level on forces at
+≈ 15.6–15.8, 1.6 above the base's neutral error of 14.0 — the floor established by the floor test (A on the 60-epoch base: 11.90, bound state 357 meV). The v7 differences
+(B_0 inferior by 5; B_s bound at 346 meV) do not reproduce; the base's neutral accuracy, not the coupling, decides the outcome here. Cost: A 67, B_s 128.5, B_0 126 s/epoch.
+Open (user): rerun the arms on the 60-epoch lr 3e-4 base (or on w01 when it finishes; w01 epoch 0/1 neutral F 22.6 / 19.2 vs 27.5 for the original weights).
