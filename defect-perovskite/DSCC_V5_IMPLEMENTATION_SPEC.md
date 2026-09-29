@@ -6479,3 +6479,11 @@ meV / 1.34 (s3 no bound state); B_s 0.03 / 73 / 2.5; B_0 0.09 / 108 / 1.9. Large
 ≈ 15.6–15.8, 1.6 above the base's neutral error of 14.0 — the floor established by the floor test (A on the 60-epoch base: 11.90, bound state 357 meV). The v7 differences
 (B_0 inferior by 5; B_s bound at 346 meV) do not reproduce; the base's neutral accuracy, not the coupling, decides the outcome here. Cost: A 67, B_s 128.5, B_0 126 s/epoch.
 Open (user): rerun the arms on the 60-epoch lr 3e-4 base (or on w01 when it finishes; w01 epoch 0/1 neutral F 22.6 / 19.2 vs 27.5 for the original weights).
+**base_v8_w01 RESULT (2026-09-29 13:01; `~/runs/dscc/p1v8/base_v8_w01/`).** Neutral validation by epoch (0 / 1 / 9 / 19 / 29 / 39): 22.6 / 19.2 / 12.9 / 12.2 / 11.7 / 11.0
+(original weights: 27.5 at epoch 0, 12.8 at 29, 11.6 at 59). Final: **gate 1 PASS** (F 10.99 ≤ 11.2; E 1.13 ≤ 1.5) — the first base v8 to pass it; **gate 2 PASS** (ε∞ 3.667
+vs 3.661; Z* within 0.2 %: the response held with weights /10); gate 3 FAIL: total 36.3 (+3.1), 2–4 Å 79.5 (+4.6), 4–8 34.7 (+4.3), 8–10 +1.4, 10–12 +0.4, 12+ −1.0.
+E_PP mismatch 2.11 (exceeds τ; the user's option (ii) applies: base alone, head adds E_PP). Replay drift 16.7 meV/atom / 145 meV/Å (base_v8 3e-4: 15.4 / 158).
+Comparator base_v8 at 60 epochs: 11.56 / 0.84, gate 3 +2.3 / +4.0. Reading: the prediction held (gate 1 passes, gate 2 within 10 %); gate 3 moved by a further 0.6–1.3
+meV/Å in the near shells, consistent with the floor test's finding that neutral fit and base-alone charged transfer trade against each other while the head's forces follow
+the neutral error. Floor check on w01 (same diagnostic as the registered floor test: control arm A, seed 0 / fold 0, `dscc_p2v8x_aw01_s0`, local card) launched;
+prediction: held-out total ≈ 11.3 (floor 10.99 + 0.3). Full arms on w01 await the user's decision.
