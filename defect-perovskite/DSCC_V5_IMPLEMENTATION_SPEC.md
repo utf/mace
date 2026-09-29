@@ -6516,3 +6516,7 @@ correction's 95th percentile jumps to ≈ 1 eV and the bounded readouts saturate
 (dEp95 ≤ 0.3, sat ≤ 1e-9). The epoch-averaged checkpoints mix the unstable late epochs. Not seen on the 60-epoch original base (a60) or on the 30-epoch base (A s0
 dEp95 0.66 at the end, held flat). Recorded; the arms run to completion as registered. Feature standardisation statistics are the same on both bases (|mu|/sd median
 14.5–14.8 / 22.4 / 13.0–14.5, no dead channels), so the base's block-0 feature scale is not the difference.
+Phase 2b on w01 — control arm complete (2026-09-29 21:40). A per seed (total / 2–4 Å / E79; stable?): s0 23.71 / 45.8 / 1.25 (no); s1 16.19 / 29.8 / 0.69 (no); s2 35.72 /
+80.4 / 1.18 (no); s3 24.13 / 46.8 / 1.00 (no); s4 13.40 / 23.1 / 0.54 (yes); s6 11.18 / 17.8 / 0.59 (yes). C5 (pass / sep p50 / N_eff p50): s0 0.078 / 367 / 11.6; s1 0.390 /
+320 / 3.75; s2 0.043 / 191 / 13.9; s3 0.575 / 222 / 1.56; s4 0.424 / 191 / 2.43; s6 0.922 / 305 / 1.44. B_s on w01 so far (s0–s3): 13.72 / 13.90 / 13.88 / 13.03, all stable, E79
+0.50–0.54. Reading: where the control stays stable its error is at the floor (11.2–13.4) with a bound carrier; the four unstable seeds end delocalised (N_eff 3.8–13.9).
