@@ -6530,3 +6530,18 @@ C5 on the six w01 B_s checkpoints (`~/runs/dscc/p2v8w/C5_bs_interim.json`; pass 
 s3 0.078 / 148 / 1.60; s4 0.065 / 115 / 1.49; s6 0.024 / 73 / 1.85. Medians 0.07 / 130 meV / 1.47. Reading: a compact hole on every seed (N_eff 1.4–1.9, the base-v2
 head's level) but a shallow level (73–165 meV; the C5 precondition asks 200 meV, the Phase 3 large-N gate 150 meV) — v7's B_s held 346 meV. Same picture as on the
 30-epoch base v8 (73 meV) with the hole now compact. The Phase 3 entry read (large-N) is expected to fail on separation.
+**Phase 2b on base_v8_w01 — RESULT (2026-09-30 04:15; `defect-perovskite/P2B_V8W_REPORT.md`, `~/runs/dscc/p2v8w/{P2V8W_GATES.json,P2V8W_C5.json}`).**
+Medians (total / 4–12 Å / 2–4 / E79 / C_Q transfer): A 19.95 / 17.11 / 37.8 / 0.85 / 23.2; B_s 13.89 / 12.42 / 24.0 / 0.52 / 5.6; B_0 19.56 / 16.96 / 36.4 / 0.93 / 22.1.
+Per seed: A 23.71 / 16.19 / 35.72 / 24.13 / 13.40 / 11.18; B_s 13.72 / 13.90 / 13.88 / 13.03 / 13.95 / 14.37; B_0 15.72 / 21.18 / 20.06 / 19.07 / 20.14 / 17.71.
+Paired TOST (τ 1.7): B_s vs A +6.91 [−0.71, +14.53] total, +5.05 [−0.41, +10.50] 4–12 Å → inconclusive (the control's four unstable seeds); B_0 vs A inconclusive;
+**B_0 vs B_s: inferior on total (−5.17 [−6.84, −3.50]), 4–12 Å (−4.07), 2–4, 4–8, 8–10; equivalent at 10–12 and 12+** — the one conclusive comparison. Verdict by the §5
+rule: no arm adopted over A (neither superior nor equivalent; neither inferior → no r_c fallback); between the B arms, B_s. Energy gate: B_s 5/6 (s6 C_Q transfer 13.4),
+A 1/6, B_0 0/6. C5 (pass / sep p50 / N_eff p50, medians): A 0.41 / 264 meV / 3.1 (two stable seeds bound: 1.44, 2.43; four unbound 3.8–13.9); B_s 0.07 / 130 / 1.47
+(compact on every seed, shallow on every seed); B_0 0.29 / 135 / 1.63 (s2 unbound, N_eff 38.6; s6 bound 286 meV). Cost: A 67, B_s 127, B_0 126.5 s/epoch.
+Reading of record: on the first base v8 that passes gates 1 and 2, the polarisation arm B_s is the only arm that trains stably on all six seeds and it reaches 13.0–14.4
+meV/Å, 1.2–1.7 better than on either earlier base and 2.3 above W6-on-v2 (11.6); the Mulliken control destabilises late in training on four of six seeds (its two stable
+seeds sit at 11.2–13.4, at the floor); B_0 without the near-field term is inferior to B_s by 5 (as on v7). The adoption test against A cannot resolve because the control
+is not a stable reference on this base. B_s's bound state is compact (N_eff 1.4–1.9) but shallow (73–165 meV, median 130 < the 150 meV large-N threshold).
+Large-N read (plan §5, Phase 3 entry gate) on B_s's seed-median checkpoint — seed 2 (13.88; the lower of the middle pair), averaged weights — launched on b3 GPU 7
+(`~/runs/dscc/p2v8w/run_largeN_b3.sh`, `p0_boundstate.py` and `p0_localisation.py`, embedded 2×2×2 and 3×3×3); expectation written now: separation below 0.15 eV at
+639 and 2159 atoms (it is 145 meV at 79). Recorded as a readout; the remedy (w_gap × 3 once) and Phase 3 entry are the user's decision.
