@@ -6545,3 +6545,11 @@ is not a stable reference on this base. B_s's bound state is compact (N_eff 1.4�
 Large-N read (plan §5, Phase 3 entry gate) on B_s's seed-median checkpoint — seed 2 (13.88; the lower of the middle pair), averaged weights — launched on b3 GPU 7
 (`~/runs/dscc/p2v8w/run_largeN_b3.sh`, `p0_boundstate.py` and `p0_localisation.py`, embedded 2×2×2 and 3×3×3); expectation written now: separation below 0.15 eV at
 639 and 2159 atoms (it is 145 meV at 79). Recorded as a readout; the remedy (w_gap × 3 once) and Phase 3 entry are the user's decision.
+**Large-N read on B_s (w01) seed 2 — RESULT (2026-09-30 04:52; `~/runs/dscc/p2v8w/boundstate_bs_s2.json`): Phase 3 entry gate FAIL, as expected.** `p0_boundstate.py`,
+averaged weights, registered fill (σ_s 0.05): training 79-atom (+1) frame separation 0.126 eV / N_eff 1.4; embedded 2×2×2 (639 atoms) 0.015 eV / 23.3; embedded 3×3×3
+(2159 atoms) 0.010 eV / 57.3 — against ≥ 0.15 eV and ≤ 4. v7's B_s on the same read: 0.308 / 1.6, 0.023 / 20.5, 0.021 / 38.2. The level is shallower at 79 atoms than on v7
+(126 vs 308 meV) and collapses with cell size in the same way. Σdq within 5 Å (`p0_localisation.py`): 0.473 (79), 0.294 (639); the 2159-atom evaluation ran out of memory on
+the 24 GB card with this base (65 MB, 512 channels; the v7 base fitted) — not rerun, the gate being decided by separation and N_eff as on v7. Standing on the record:
+the registered remedy is the single w_gap × 3 retrain (expectation NULL: every checkpoint's BZ readout has the pristine gap direct at Γ with zero residual, so the term
+adds no gradient — the failure is the vacancy level's depth and size dependence in H0, which the pristine-gap regulariser does not constrain). Nothing running; b3 and
+the local card idle. Decisions (user): adoption of B_s despite the unresolved control; w_gap × 3; Phase 3 entry / the plan's "stop and report".
