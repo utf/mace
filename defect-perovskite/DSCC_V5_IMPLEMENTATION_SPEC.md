@@ -6758,3 +6758,21 @@ saturation (Pb shift p95 0.20–0.30 eV; flank |tanh| mean 0.45–0.59): Stage-2
 the plan as written: neither B_s (0.016 / 87.5 / 0.11 in the label tiling) nor B_w passes large-N → outcome (c), unless the thresholds are re-read; the evidence for that
 reading (cell size, Pb–Pb bridge, 159-atom frames) is §1.3 of `P2C_REPORT.md` and the decision is the user's. Written to `P2C_REPORT.md` §1.2. Seed 6's epoch-30 spike is
 under investigation (replay running; entry above).
+
+**2026-10-12 00:10 — Spike investigation II: the replay's reading (facts; the fix follows in the next entry).** Replay `dscc_p2cx_bw2_s6_replay` (seed 6, fold 2, same
+command, per-step record, checkpoints 28–31) reproduced the spike at epoch 30 (loss 3.9e-3 against the original's 1.6e-3; CUDA scatter adds are not bit-deterministic, the
+runs drift from epoch 26). Record `~/runs/dscc/p2c/replay_s6/`, reader `p2c_spike_replay.py`, summary `~/runs/dscc/p2c/spike_replay_s6.json`.
+(1) **The gap term oscillates with period 2 throughout training.** From epoch 3 to 29 the sign of (gap − 2.40) alternates on 80–92 % of consecutive steps (lag-1
+autocorrelation −0.9 to −0.98) with a step-to-step growth ratio of 1.0 ± 0.1 and amplitude 1–2 × 10⁻⁴ eV: the gap mode sits at Adam's stability limit (loop gain ≈ 2),
+self-tuned there because a growing oscillation feeds its own gradient into Adam's second moment and lowers the step. (2) **Trigger: a level crossing at the static cell's
+CBM.** The CBM is a single level 0.003 eV below an exactly degenerate doublet; in epoch 30 steps 61–65 the split closes 0.0025 → 0.0015 → 0.0009 → 0.0001 → 0 and the
+doublet becomes the band edge. The eigenvalue gradient then belongs to a different eigenvector; in Adam's per-parameter frame that direction has a smaller second
+moment, so the same gradient produces a larger step: the growth ratio jumps from 1.1 to 3.4 (gap error −0.0055, +0.019, −0.037, +0.089, −0.107, +0.52 eV in six steps;
+pre-clip gradient norm 0.08 → 24, clipped at step 71). (3) **Carrier: the hopping readout** (0.92–0.99 of the gradient norm at every step of the event; its parameters moved
+by 93 % of their norm in epoch 30 against 2.6 % in epoch 29; on-site readout 60 % against 2.4 %). eps0 moved 0.02 eV (not the carrier); s_near 0.454 → 0.390. The whole
+static spectrum shifted rigidly by −0.45 eV with the gap held at 2.400 and the degeneracy gone (CBM −7.79 / −7.72 / −7.67). (4) **Damage:** 46 excursion steps with
+per-graph force error 48 against 16 meV/Å before; 30 for the rest of the epoch, 32 in epoch 31; on the +1 frames the Cl s on-site shift moved coherently by +0.2 eV and
+N_eff went 6.0 → 11.3 → 7.5 (the readout table's 5.7 → 6.7 at epoch 30 is this event). The loop gain after the event is below the limit (alternation 0.20) because the
+second moment of the hopping readout is now large: the optimiser "fixed" it by itself at the force fit's expense. (5) The first arm's run-away (seed 2, epoch 20) and the
+B_0 / B_s gap spikes share the signature; in those the readout bound was the amplifier, here the sp-splitting bound held (Pb shift p95 0.40 → 0.40) and the hopping
+readout carried it instead.
