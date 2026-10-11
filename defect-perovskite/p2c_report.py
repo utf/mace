@@ -45,6 +45,12 @@ def load(run):
     rec["history"] = [{"epoch": h["epoch"], "held": (h.get("held") or {}).get("force_rmse"), "dEp95": h.get("on_site_shift_eV_p95"), "sat": h.get("sat"),
                        "s_near": (h.get("level_readout") or {}).get("s_near"), "level": h.get("level_readout"), "time": h.get("time")} for h in hist]
     rec["seed"] = int(re.search(r"_s(\d+)$", run.name).group(1))
+    # the learned scale at the last epoch, from the log line (B_s: s; B_w: s_near from the level readout)
+    log = run / "train.log"
+    rec["s_final"] = None
+    if log.exists():
+        m = re.findall(r" epoch \d+ loss .* s ([0-9.]+) held", log.read_text())
+        rec["s_final"] = float(m[-1]) if m else None
     return rec
 
 
@@ -76,7 +82,7 @@ L = ["### Step 1: arm B_w against B_s (same seeds; held-out forces, per-componen
 for arm, runs, name in (("bs", bs, "B_s"), ("bw", bw, "B_w")):
     for s in sorted(runs):
         r = runs[s]
-        sval = rep["s_near_final"].get(s) if arm == "bw" else None
+        sval = rep["s_near_final"].get(s) if arm == "bw" else r.get("s_final")
         L.append(f"| {name} | {s} | {f(r['force_rmse'])} | {f(r['4-12'])} | " + " | ".join(f(r[k], 1) for k in SHELLS) + f" | {f(r['e79_meV_atom'])} | {f(r['cq_transfer_meV'], 1)} | {'pass' if r['gate2'] else 'FAIL'} | {f(sval, 3)} |")
 L += ["", f"Paired mean difference B_w − B_s (n = {len(seeds)}, point estimate): total {f(m_tot)} (per seed {[round(x, 2) for x in rep['paired']['force_rmse']['per_seed']]}), "
       f"4–12 Å {f(m_far)} (per seed {[round(x, 2) for x in rep['paired']['4-12']['per_seed']]}); τ = {TAU}. **{rep['force_gate']['reading']}.**", ""]

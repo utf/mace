@@ -6654,3 +6654,5 @@ the level readout 22 s per epoch (256 held-out 79-atom +1 frames and the 639-ato
 After one epoch at lr 2e-3: s_near 0.411 → 0.131, +1 frames separation p50 0.068 eV / N_eff 7.7 / pass 0.07, structure (b) 0.010 / 105 / 0.07 (an untrained head; recorded as the
 cost measurement only). Cost accepted; the three seeds are queued on b3 GPUs 5 and 7 (by UUID GPU-ab7dd6b6 / GPU-66ce2688 — the index table re-verified after b3's 2026-10-05
 reboot; the Step 0 and large-N reads of 2026-09-30 / 10-11 had run on GPU 1 under a wrong UUID note, corrected in memory and reported to the user).
+Note of record: `reference_charges_batched(..., spectrum=)` (the deferred-base path's reuse of H0's CPU spectrum for q0 in B_w) is exercised by neither the tests nor the
+production arm (B_w is not decoupled, so the base is not deferred); untested and unused as of 2026-10-11.
