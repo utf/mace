@@ -1199,6 +1199,8 @@ class MACEDSCC(nn.Module):
             eps = torch.linalg.eigvalsh(H)
             # Spin-independent H: the gap at the majority count (the larger fill).
             gaps.append(eps[n_up] - eps[n_up - 1])
+            # diagnostic (spike investigation II): the three levels either side of the gap, detached
+            self._gap_edges = (eps[max(n_up - 3, 0):n_up].detach().cpu().tolist(), eps[n_up:n_up + 3].detach().cpu().tolist())
         return torch.stack(gaps)
 
     # ----------------------------------------------------------------- Plan P Phase 2b §3: BZ gap

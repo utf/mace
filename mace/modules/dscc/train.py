@@ -137,6 +137,12 @@ class TrainConfig:
     # `model.filled_hamiltonians` (H0, or H0 - diag(W) for arm B_w).
     level_readout: bool = False
     embed_readout_path: str = ""
+    # Spike investigation II (2026-10-11): a per-step record (loss by term, the static gap and its edge
+    # levels, the pre-clip gradient norm total and by parameter group, the batch's frames), checkpoints
+    # at chosen epochs, and an early stop -- a deterministic replay of a run around its spike.
+    step_log: bool = False
+    save_epochs: tuple = ()
+    stop_after_epoch: Optional[int] = None
 
 
 def stratum_id(meta: dd.FrameMeta) -> str:
@@ -586,12 +592,34 @@ class Trainer:
         l_sat = self.cfg.sat_weight * sum(bar.values()) if bar else l_force.new_zeros(())
         loss = self.cfg.force_weight * l_force + l_gap + l_l2 + l_sat + l_energy
         loss.backward()
-        params = [p for p in self.model.parameters() if p.requires_grad]
-        torch.nn.utils.clip_grad_norm_(params, self.cfg.grad_clip)
+        named = [(n, p) for n, p in self.model.named_parameters() if p.requires_grad]
+        params = [p for _, p in named]
+        groups: Dict[str, float] = {}
+        if getattr(self.cfg, "step_log", False):
+            def group_of(n):
+                if "s_near_raw" in n: return "s_near"
+                if ".sk.site" in n: return "on_site_readout"
+                if ".sk.hop" in n: return "hopping_readout"
+                if n.startswith("h0."): return "h0_other"
+                return "scales_other"
+            for n, p in named:
+                if p.grad is not None:
+                    groups[group_of(n)] = groups.get(group_of(n), 0.0) + float((p.grad.detach() ** 2).sum())
+            groups = {k: v ** 0.5 for k, v in groups.items()}
+        total_norm = torch.nn.utils.clip_grad_norm_(params, self.cfg.grad_clip)
         optimizer.step()
         diag = out.get("diagnostics", {})
         conv = diag.get("converged", [])
+        per_graph_err = None
+        if getattr(self.cfg, "step_log", False):
+            d2 = ((out["forces"].detach() - batch["forces"]) ** 2).sum(-1)
+            ng = int(batch["ptr"].numel() - 1)
+            sums = torch.zeros(ng, dtype=d2.dtype, device=d2.device).index_add(0, batch["batch"], d2)
+            cnt = torch.bincount(batch["batch"], minlength=ng).to(d2.dtype)
+            per_graph_err = (1000.0 * torch.sqrt(sums / cnt / 3.0)).cpu().tolist()     # per-component meV/A
         return {"loss": float(loss), "force": float(l_force), "gap": float(gap[0]), **bz_read,
+                "l_gap": float(l_gap), "grad_norm": float(total_norm), "grad_groups": groups,
+                "gap_edges": getattr(self.model, "_gap_edges", None), "frames": list(frame_indices), "force_err_per_graph": per_graph_err,
                 "l2": float(l_l2), "sat": float(l_sat), "energy": float(l_energy),
                 "unconverged": int(sum(1 for c in conv if c is False)),
                 "scf_iterations": int(sum(diag.get("iterations", []))),
@@ -892,6 +920,14 @@ class Trainer:
                 batch = to_device(torch_geometric.dataloader.Batch.from_data_list([ds[j] for j in local_batch]), self.device)
                 frame_indices = [self.train_idx[j] for j in local_batch]
                 s = self.step(batch, frame_indices, optimizer)
+                if getattr(cfg, "step_log", False):
+                    rec_ = {"epoch": epoch, "step": stats["n"], "loss": s["loss"], "force": s["force"], "l_gap": s["l_gap"], "energy": s["energy"], "sat": s["sat"],
+                            "gap": s["gap"], "gap_edges": s["gap_edges"], "grad_norm": s["grad_norm"], "grad_groups": s["grad_groups"],
+                            "frames": s["frames"], "force_err_per_graph": s["force_err_per_graph"],
+                            "s_near": (float(self.model.near_scale()) if getattr(self.model, "near_field", "off") == "potential" else None),
+                            "lr": float(optimizer.param_groups[0]["lr"])}
+                    with open(self.run_dir / "steps.jsonl", "a") as fh:
+                        fh.write(json.dumps(rec_) + "\n")
                 for key in ("loss", "force", "l2", "sat", "energy", "unconverged", "scf_iterations", "scf_fills", "warm"):
                     stats[key] += s[key]
                 stats["gap"] = s["gap"]; stats["n"] += 1
@@ -965,6 +1001,11 @@ class Trainer:
                 logging.info("epoch %d level readout%s", epoch, level_note)
             json.dump(history, open(self.run_dir / "history.json", "w"), indent=1, default=str)
             torch.save(self.model, self.run_dir / "model.pt")
+            if epoch in set(int(x) for x in (getattr(cfg, "save_epochs", ()) or ())):
+                torch.save(self.model, self.run_dir / f"model_ep{epoch}.pt")
+            if getattr(cfg, "stop_after_epoch", None) is not None and epoch >= int(cfg.stop_after_epoch):
+                logging.info("stopping after epoch %d as requested (replay); no final evaluation", epoch)
+                return {"history": history, "held_final": {}, "stopped_after_epoch": epoch}
             if scheduler is not None:
                 scheduler.step()          # per epoch, AFTER the epoch it applied to is logged
             if avg_window and epoch >= cfg.epochs - avg_window:

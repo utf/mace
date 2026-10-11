@@ -139,6 +139,9 @@ def main() -> None:
     ap.add_argument("--s_init", type=float, default=None, help="Phase 2c B_w: initial s_near (B_s's trained s for the same seed); default 1")
     ap.add_argument("--level_readout", type=int, default=0, help="Phase 2c: per-epoch separation / N_eff readouts on the held-out 79-atom +1 frames (readout only)")
     ap.add_argument("--embed_readout", default="", help="Phase 2c: json {positions, cell, numbers, vacancy} of the embedded structure read per epoch (readout only)")
+    ap.add_argument("--step_log", type=int, default=0, help="per-step record (steps.jsonl): loss by term, static gap and edges, pre-clip gradient norm by group, frames")
+    ap.add_argument("--save_epochs", type=int, nargs="*", default=[], help="save model_ep{N}.pt at these epochs")
+    ap.add_argument("--stop_after_epoch", type=int, default=None, help="stop after this epoch (replay around a spike); the schedule is unchanged")
     ap.add_argument("--r_c", type=float, default=8.0, help="Phase 2b switch: S = 1 beyond r_c (A); 0 = S == 1 identity")
     ap.add_argument("--delta", type=float, default=2.0, help="Phase 2b switch: ramp width (A)")
     ap.add_argument("--near_r_split", type=float, default=2.5, help="Phase 2b B_s: direct-kernel width of the near-field Mulliken term (W6's r_split)")
@@ -181,6 +184,7 @@ def main() -> None:
                       directional=bool(args.directional), regime=args.regime, gap_weight=args.gap_weight,
                       bz_gap=bool(args.bz_gap), bz_readout=bool(args.bz_readout),
                       level_readout=bool(args.level_readout), embed_readout_path=args.embed_readout,
+                      step_log=bool(args.step_log), save_epochs=tuple(args.save_epochs), stop_after_epoch=args.stop_after_epoch,
                       device=args.device, eval_every=args.eval_every,
                       setup_batch_size=args.setup_batch_size, base_cache_batch_size=args.base_cache_batch_size,
                       l2_weight=args.l2_weight, lr_schedule=args.lr_schedule,

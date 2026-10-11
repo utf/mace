@@ -6723,3 +6723,21 @@ N_eff 3–4 is the saturated-readout well.
 at matched bridge length (5.4–6.2 Å) the 159-atom frames read N_eff 5.4–6.2 against 4.0–4.8 at 79 atoms — the tail beyond 8 Å (≈ a quarter of the hole) that the 79-atom cell
 has no lattice for (27 atoms at 8–12 Å and 1 beyond, against 139 / 442 at 639). The first arm's N_eff (2.5–2.9, 85–89 % on the two flanking Pb) does not depend on the bridge
 length or the cell: a readout at its rail cannot respond. Entered in `P2C_REPORT.md` §1.3 for the user's decision on the large-N thresholds.
+**Spike investigation II registered (2026-10-11 22:40; rerun seed 6's epoch 30, loss 190× its median).** Finding before any new run: the spike is in the Γ-GAP TERM, not the force
+term — epoch 30: loss 1.58e-3 of which the gap term 1.55e-3, force 1.7e-5 (median 5e-6), energy 1.5e-6; the same composition holds for rerun seed 0's epoch 36 (3.3e-5 of 3.9e-5)
+and for the FIRST arm's seed 2 epoch 20 (5.9e-4 of 6.4e-4, where the gap term read H0), so it is not the H0 − W routing. The epoch-end gap is 2.4000 in every case: the static
+cell's gap left 2.40 during the epoch and was pulled back. Registered plan: (i) a census of every w01 arm's loss spikes by term; (ii) the static cell's band-edge degeneracy at Γ on
+the trained models; (iii) a deterministic replay of rerun seed 6 (same seed, command and data order; the first-arm smoke reproduced seed 2's epoch 0 to all printed digits) with a
+per-step record (loss by term, the static gap, the pre-clip gradient norm total and by parameter group, s_near, the batch's frame indices, the per-frame force error) and checkpoints
+at epochs 28–31, stopped after epoch 32 — on b3 GPU 7, run name `dscc_p2cx_bw2_s6_replay`; the schedule is the registered one (epochs 60) so the learning rate matches. Expectation:
+undetermined between (a) a gap-term gradient at a near-degenerate band edge of the static cell kicking the parameters and (b) a force-term kick on one batch that the gap term
+then corrects over many steps; the per-step record separates them (which term's gradient is large first, and whether the gap excursion is one step or thirty).
+**Spike census RESULT (2026-10-11 22:50; every w01 arm's history, epochs with loss > 3× the run's median after epoch 2, the share of the Γ-gap term).** The large spikes are gap-term
+spikes in every arm, with or without W: B_0 s1 ep 11 2182× (gap share 0.99), s4 ep 16 631× (0.99), s6 ep 10 156× (0.94), s3 ep 13 43× (0.96), s0 ep 11 64× (0.93); B_s s6 ep 6 55×
+(0.83); first B_w s2 ep 20 76× (0.92); rerun B_w s6 ep 30 190× (0.99), s0 ep 36 7× (0.83). In each the epoch-end gap is back at 2.40 and **the on-site shift p95 jumps in the same
+epoch**: B_0 s1 0.19 → 1.06 → 1.36 eV; B_0 s4 0.28 → 0.86; B_s s6 0.12 → 0.99 (its 0.5 eV final shift dates from there); first B_w s2 0.24 → 0.48 (then the run-away). The static
+cell's band edges on the trained models: CBM side three levels within 0.04 eV (rerun) or exactly degenerate (first arm), VBM side 0.1 eV below. Hypothesis of record, to be
+tested by the replay: the gap term's gradient changes direction when near-degenerate edge levels of the static cell swap; the on-site readout's species bias, whose gradient is
+otherwise near zero (held by the gap term, invisible to the forces), has a near-zero Adam second moment and takes maximal normalised steps once a gradient appears, moving by
+~1 eV within an epoch; the gap term then diverges and pulls it back to 2.40 at a displaced bias. The force fit takes the damage (rerun s6: 16.2 → 19.9). Replay launched 22:52:
+`dscc_p2cx_bw2_s6_replay` on b3 GPU 7 (UUID GPU-66ce2688), checkpoints at epochs 28–31, per-step record, stop after epoch 32.
