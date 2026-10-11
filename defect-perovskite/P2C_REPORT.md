@@ -315,3 +315,54 @@ for the rerun against 29.6–29.9 for the first arm and 23.8–24.1 for B_s, and
 against 13–20 for the first arm. Whether the physical hole is three atoms or six cannot be read from these labels without DFT levels on a larger cell. The
 registered thresholds (N_eff ≤ 4, Σdq(< 5 Å) ≥ 0.8) were written before any of this was known; the first arm meets the compactness part of them only through the
 saturated readout, and the rerun's bound state sits at about twice their extent. The decision on the thresholds is the user's.
+
+### 1.4 Why seed 6 spiked at epoch 30, and the fix (spike investigation II, 2026-10-12)
+
+**Method.** Seed 6 of the rerun was replayed with the same seed, fold and command, recording every optimiser step (loss by term, the static-cell gap and the
+three levels either side of it, the pre-clip gradient norm by parameter group, the frames in the batch and their force errors) and saving the model at the end of
+epochs 28–31 (`dscc_p2cx_bw2_s6_replay`; reader `p2c_spike_replay.py`; record `~/runs/dscc/p2c/replay_s6/`). CUDA scatter-adds are not bit-deterministic, so the
+replay drifts from the original after epoch 26, but the spike reproduced at epoch 30 (loss 3.9e-3 against 1.6e-3 originally; 99 % the Γ-gap term in both).
+
+**What the record shows.**
+
+1. *The gap term oscillates with period 2 throughout training.* From epoch 3 to epoch 29 the sign of (gap − 2.40) changes on 80–92 % of consecutive steps, with a
+   lag-1 autocorrelation of −0.9 to −0.98 and a step-to-step amplitude ratio of 1.0 ± 0.1. The amplitude is 1–2 × 10⁻⁴ eV, far below anything the epoch logs show.
+   A ratio of 1.0 held for 27 epochs is the signature of a mode sitting at the optimiser's stability limit (loop gain ≈ 2). My reading of why it stays there, offered
+   as interpretation: when the oscillation grows, its own gradient enters Adam's second moment and shrinks the step; when it decays, the second moment relaxes and the
+   step grows back. The term is therefore permanently one perturbation away from diverging.
+2. *The trigger was a level crossing at the static cell's conduction-band edge.* In this model the CBM is a single level 0.003 eV below an exactly degenerate pair.
+   Over steps 61–65 of epoch 30 the split closed 0.0025 → 0.0015 → 0.0009 → 0.0001 → 0 and the pair became the band edge. The gap's gradient then belongs to a
+   different eigenvector, and in Adam's per-parameter frame that direction had a smaller second moment, so the same gradient produced a larger step: the amplitude
+   ratio went from 1.1 to 3.4, and the gap error ran −0.006, +0.019, −0.037, +0.089, −0.107, +0.52 eV in six steps (pre-clip gradient norm 0.08 → 24; clipping at 10
+   first engaged at the last of these).
+3. *The hopping readout carried it.* It held 92–99 % of the gradient norm at every step of the event and its parameters moved by 93 % of their norm within the epoch
+   (2.6 % in a normal epoch); the on-site readout moved 60 % (2.4 % normally). The species baselines eps0 moved 0.02 eV and s_near 0.454 → 0.390. The whole
+   static-cell spectrum shifted rigidly by −0.45 eV with the gap back at 2.400 and the degeneracy gone.
+4. *The damage is what the rerun's seed 6 numbers show.* During the 46 excursion steps the per-graph force error was 48 meV/Å against 16 before; 30 for the rest of
+   the epoch and 32 in the next. On the +1 frames the Cl s on-site shift moved coherently by +0.2 eV and N_eff went 6.0 → 11.3 → 7.5: the hole partly delocalised and
+   did not fully return (the readout table's jump from 5.7 to 6.7 at epoch 30 is this event). After the event the period-2 statistic drops to 0.2: the optimiser had
+   stabilised the mode itself by inflating the hopping readout's second moment, at the cost of the force fit.
+5. The same gap-term signature with an on-site jump in the same epoch is in the B_0 and B_s spikes and in the first B_w arm's run-away (seed 2, epoch 20). In those
+   the unbounded or wide on-site readout was the amplifier; with the sp-splitting bound in place the hopping readout took the role.
+
+**The fix (registered 00:25, before the third run opened): a tolerance band on the existing Γ-gap term.**
+
+    L_gap = w · max(|E_gap,model − 2.40| − b, 0)²,   b = k_B · 300 K = 0.0259 eV
+
+Inside the band the term has no gradient, so there is nothing to oscillate. An excursion δ beyond the edge is corrected by one step of about (G − 1)δ, which lands
+inside the silent zone; δ is set by the force term's drift per step (1e-5 to 1e-4 eV) and the band is 0.052 eV wide, so even the post-crossing gain of 4.4 cannot
+carry the gap across it. The band is the thermal energy at the application temperature: the gap is held to within k_BT rather than to 1e-4 eV. It is not a new loss
+term, b = 0 is the previous form exactly, and nothing else changes (target, weight, Δ rule, the H0 − W reading, E_far, E_PP, r_c, r_split, ε∞). Flag `--gap_band`,
+helper `gap_loss`, test `test_gap_loss_tolerance_band`; the full dscc suite (386 tests) passed before launch. Rejected alternatives: lowering the gap weight
+(stabilises too, but depends on learning rate, base and schedule); a smoothed band edge (removes the trigger but leaves the marginal oscillation), kept as the
+registered fallback should a bw3 seed still spike.
+
+**Pass criteria written before the results:** no epoch in any seed with loss above 10× that seed's median; alternation fraction near 0.5 and lag-1 autocorrelation
+near 0 in every epoch after epoch 3 (the direct test of the mechanism); the static-cell gap inside [2.374, 2.426] eV at every epoch end; forces, energy gate, large-N
+and saturation read exactly as for the rerun.
+
+### 1.5 Third run (the rerun's settings plus the gap tolerance band)
+
+(to follow: three-way per-seed table B_s / rerun / third run, the period-2 statistic per seed, the gap's resting value, energy gate, large-N on the seed median,
+saturation, N_eff)
+
