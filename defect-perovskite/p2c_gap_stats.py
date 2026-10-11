@@ -4,8 +4,10 @@ gap, the loss, and the largest l_gap. Usage: python p2c_gap_stats.py steps.jsonl
 import json, sys, numpy as np
 from collections import defaultdict
 every = 5
-paths = [a for a in sys.argv[1:] if not a.startswith("--")]
-if "--every" in sys.argv: every = int(sys.argv[sys.argv.index("--every") + 1])
+args = sys.argv[1:]
+if "--every" in args:
+    i = args.index("--every"); every = int(args[i + 1]); del args[i:i + 2]
+paths = args
 for p in paths:
     rows = [json.loads(l) for l in open(p)]
     by = defaultdict(list)
