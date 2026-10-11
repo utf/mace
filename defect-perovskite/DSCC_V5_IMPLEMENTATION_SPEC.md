@@ -6580,3 +6580,10 @@ absolute CBM as written; whether H0 carries an absolute energy reference between
 compensation cloud of opposite sign to the hole, so its participation (8.2 on this frame in the earlier read) and the reference-fill hole's N_eff (1.4) describe different
 objects; if confirmed, the large-N gate's N_eff ≤ 4 and Σdq(< 5 Å) ≥ 0.8 measure different distributions, to be flagged before Step 1's gate is read. Script
 `defect-perovskite/p2c_step0.py` (stages 0.1–0.4, JSON per stage, status file), b3 GPU 7, CPU fallback for the relaxations on out-of-memory.
+Step 0 launched 2026-10-11 12:25 (b3 GPU 7, `~/runs/dscc/p2c/{w01_bs_s2,v7_bs_s1}/`). Local smoke of the eigenvalue path on w01 B_s s2 (recorded before the full run):
+0.1 anchor — the 80-atom label cell gives VBM −9.928 / CBM −7.528 / gap **2.4002 eV** (the registered 2.400 reproduced); the 80-atom relaxed cell VBM −10.107 / CBM
+−7.468 / gap 2.638 (CBM +0.06 eV above the label cell's, VBM 0.18 below). Two facts about 0.4 from the smoke: (i) in this model class (SCF-free, Φ = 0) the +1
+forward's dq IS the reference-fill hole — identical distributions on the first +1 frame (sum 1.000, all positive, no compensation cloud; N_eff 8.25 both) — so the
+"N_eff 1.4 with Σdq(< 5 Å) 0.47" the plan cites were measured on two different frames: N_eff 1.4 on the first NEUTRAL-vacancy 79-atom frame (`p0_boundstate.py`),
+Σdq 0.47 on the first +1 frame (`p0_localisation.py`); the earlier expectation of opposite-sign parts is withdrawn before the full read. (ii) On that +1 frame the hole
+is spread (0.455 within 3 Å, 0.305 at 5–8 Å, 0.222 at 8–12 Å): 0.3 will show whether that follows the Pb–Pb distance across the vacancy.
