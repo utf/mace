@@ -45,15 +45,8 @@ def top_levels(atoms, k=6):
     """eps around the reference HOMO from the head's H0 (eV, relative to the HOMO)."""
     data = batch_of(atoms)
     with torch.no_grad():
-        out = model.base_forward(model._trunk_data(dict(data)), training=False, compute_force=False)
-        scalars, vectors = model.features(out["node_feats"]); species = data["node_attrs"].argmax(dim=-1)
-        positions, cell = data["positions"], data["cell"].view(-1, 3, 3)
-        sender, receiver = data["edge_index"][0], data["edge_index"][1]
-        shifts = torch.einsum("ei,eij->ej", data["unit_shifts"].to(positions.dtype), cell[data["batch"][sender]])
-        edge_vector = positions[receiver] - positions[sender] + shifts
-        H = model.h0(scalars, vectors, species, data["edge_index"], edge_vector)
+        H, numbers = model.filled_hamiltonians(data)[0]          # Phase 2c: H0, or H0 - diag(W) for arm B_w
         eps = torch.linalg.eigvalsh(H)
-    numbers = [model.atomic_numbers[int(x)] for x in species.tolist()]
     n_up, _ = S_REF.counts(neutral_count(numbers)); homo = n_up - 1
     return (eps[homo - k:homo + k + 1] - eps[homo]).tolist(), data
 

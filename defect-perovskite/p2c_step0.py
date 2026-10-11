@@ -90,16 +90,8 @@ def batch_of(atoms, counts=(0, 0, 0, 0), charge=0, device=None):
 def head_H(atoms):
     """The head's H0 on a neutral-labelled structure (the boundstate path), and the batch."""
     data = batch_of(atoms)
-    with torch.no_grad():
-        out = model.base_forward(model._trunk_data(dict(data)), training=False, compute_force=False)
-        scalars, vectors = model.features(out["node_feats"]); species = data["node_attrs"].argmax(dim=-1)
-        positions, cell = data["positions"], data["cell"].view(-1, 3, 3)
-        sender = data["edge_index"][0]
-        shifts = torch.einsum("ei,eij->ej", data["unit_shifts"].to(positions.dtype), cell[data["batch"][sender]])
-        edge_vector = positions[data["edge_index"][1]] - positions[sender] + shifts
-        H = model.h0(scalars, vectors, species, data["edge_index"], edge_vector)
-    numbers = [int(model.atomic_numbers[int(x)]) for x in species.tolist()]
-    return H, numbers, data
+    H, numbers = model.filled_hamiltonians(data)[0]              # Phase 2c: H0, or H0 - diag(W) for arm B_w
+    return H, [int(z) for z in numbers], data
 
 
 def band_edges(atoms):

@@ -39,7 +39,8 @@ from mace.modules.dscc.analytic import (analytic_refusal, assemble_compiled,
                                         h0_position_gradient, head_cotangent)
 from mace.modules.dscc.ewald import (COULOMB, gradient_of_contraction, madelung_self,
                                      reciprocal_matrix_planned, reciprocal_pair_gradient_planned)
-from mace.modules.dscc.polarisation import carrier_dipole_energy, dipole_dipole_energy, switched_terms
+from mace.modules.dscc.polarisation import (carrier_dipole_energy, dipole_dipole_energy, near_field_potential,
+                                            switched_terms)
 from mace.modules.dscc.kernels import (KernelConfig, gamma_lr, gamma_matrix, gamma_pair_derivative, host_potential,
                                        kernel_components, kernel_pair_gradients, gamma_lr_pair_gradient)
 from mace.modules.dscc.scf import (ScfOptions, ScfResult, continuation_solve, continuation_solve_batched,
@@ -127,7 +128,7 @@ class MACEDSCC(nn.Module):
                  les_cross: bool = False, les_sign: float = 1.0, les_well: bool = False,
                  host_coupling: str = "mulliken", field_provider: Optional[nn.Module] = None,
                  near_field: str = "off", r_c: float = 8.0, delta: float = 2.0,
-                 near_r_split: float = 2.5) -> None:
+                 near_r_split: float = 2.5, s_init: Optional[float] = None) -> None:
         super().__init__()
         self.scf_options = scf or ScfOptions()
         self.base = base
@@ -224,12 +225,22 @@ class MACEDSCC(nn.Module):
         # with the quintic ramp `S` and give the near field to W6's Mulliken term (learned scale
         # `s`, direct kernel at `near_r_split`) or to H0 alone. `r_c <= 0` is the S == 1 identity.
         self.near_field = str(near_field)
-        if self.near_field not in ("off", "mulliken", "none"):
-            raise ValueError(f"near_field must be 'off', 'mulliken' or 'none'; got {near_field!r}")
+        if self.near_field not in ("off", "mulliken", "none", "potential"):
+            raise ValueError(f"near_field must be 'off', 'mulliken', 'none' or 'potential'; got {near_field!r}")
         if self.near_field != "off" and self.host_coupling != "polarisation":
             raise ValueError("near_field applies to the polarisation coupling only")
         self.r_c, self.delta, self.near_r_split = float(r_c), float(delta), float(near_r_split)
         self._switched_diag: Dict[str, List[float]] = {}
+        # Plan P Phase 2c, arm B_w ("potential"): B_s's near-field energy is removed and the same
+        # potential `W_i = sum_j (1 - S) s q0_j gamma_2.5(r_ij)` (q0 the reference fill of the
+        # UNSHIFTED H0, attached) goes on the diagonal of H0; both fillings are taken from
+        # `H0 - diag(W)`. One learned scale `s_near = s_max tanh(.)`, sign free, initialised at
+        # `s_init` (B_s's trained value for the same seed; 1 when not given). E_far and E_PP as B_s.
+        s_near0 = 1.0 if s_init is None else float(s_init)
+        if not abs(s_near0) < self.s_max:
+            raise ValueError(f"s_init must lie inside (-{self.s_max}, {self.s_max}); got {s_init}")
+        self.s_near_init = s_near0
+        self.s_near_raw = nn.Parameter(torch.atanh(torch.tensor(s_near0 / self.s_max, dtype=torch.float64)))
         self.field_provider = field_provider
         # Phase 2 (plan section 0): with a MACE-Field BASE the dipoles come from the base's own
         # forward ("the same backward as the forces"): no separate provider, one pass. And if
@@ -304,6 +315,7 @@ class MACEDSCC(nn.Module):
                 "head_adds_pp": getattr(self, "head_adds_pp", True),
                 "near_field": getattr(self, "near_field", "off"), "r_c": getattr(self, "r_c", 8.0),
                 "delta": getattr(self, "delta", 2.0), "near_r_split": getattr(self, "near_r_split", 2.5),
+                "s_near_init": getattr(self, "s_near_init", 1.0),
                 "decoupled": getattr(self, "decoupled", False),
                 "screened": getattr(self, "screened", False),
                 "correlation2": getattr(self, "correlation2", False),
@@ -333,6 +345,7 @@ class MACEDSCC(nn.Module):
         self.near_field = str(state.get("near_field", "off"))                # Plan P Phase 2b
         self.r_c, self.delta = float(state.get("r_c", 8.0)), float(state.get("delta", 2.0))
         self.near_r_split = float(state.get("near_r_split", 2.5))
+        self.s_near_init = float(state.get("s_near_init", 1.0))
         self._switched_diag = {}
         self.decoupled = bool(state.get("decoupled", False))    # O3
         self.screened = bool(state.get("screened", False))      # O3.2
@@ -499,6 +512,53 @@ class MACEDSCC(nn.Module):
         """L2: `s_c = s_max tanh(s_cross_raw)` in `[-s_max, s_max]`, `1/sqrt(eps_inf)` at init."""
         return self.s_max * torch.tanh(self.s_cross_raw)
 
+    def near_scale(self) -> torch.Tensor:
+        """Phase 2c arm B_w: `s_near = s_max tanh(s_near_raw)` in `(-s_max, s_max)`, `s_init` at init."""
+        return self.s_max * torch.tanh(self.s_near_raw)
+
+    def near_field_terms(self, H: torch.Tensor, n0: torch.Tensor, counts_r, edges, spectrum=None):
+        """Phase 2c arm B_w, batched `H0 [B, 4n, 4n]`: `q0` = the reference fill of the UNSHIFTED
+        `H0` (attached through the divided-difference backward, as route B'), `W [B, N]` from
+        `near_field_potential` over the head's edges, and `H0' = H0 - diag(W x 1_4)`. Returns
+        `(H0', W, q0)`. `spectrum` is H0's when the caller already has it (the deferred-base path);
+        H0' must then be diagonalised afresh by the fill."""
+        q0 = self.reference_charges_batched(H, n0, counts_r[0], counts_r[1], spectrum=spectrum)
+        sq0 = self.near_scale() * q0
+        W = torch.stack([near_field_potential(sq0[g], ei, ev, self.kernel.r_g, self.kernel.eps_inf,
+                                              float(self.r_c), float(self.delta), float(self.near_r_split))
+                         for g, (ei, ev) in enumerate(edges)])
+        gauge = getattr(self, "_w_gauge", 0.0)           # test hook: a constant shift of the potential
+        if gauge:
+            W = W + float(gauge)
+        return H - torch.diag_embed(W.repeat_interleave(4, dim=-1)), W, q0
+
+    @torch.no_grad()
+    def filled_hamiltonians(self, data: Dict[str, torch.Tensor]) -> List[Tuple[torch.Tensor, List[int]]]:
+        """THE instrument every level readout uses (precondition, bound-state, large-N, the
+        trainer's per-epoch readouts): the Hamiltonian the fills are actually taken from, per
+        graph, with the atomic numbers -- `H0` for every arm up to B_s, `H0 - diag(W)` for B_w.
+        A readout that builds `H0` itself reports the wrong object for B_w."""
+        out = self.base_forward(self._trunk_data(dict(data)), training=False, compute_force=False)
+        scalars, vectors = self.features(out["node_feats"])
+        species = data["node_attrs"].argmax(dim=-1)
+        edge_vector = self.head_edge_vectors(data)
+        edge_graph = data["batch"][data["edge_index"][0]]
+        ptr = data["ptr"]
+        result = []
+        for g in range(int(ptr.numel() - 1)):
+            lo, hi = int(ptr[g]), int(ptr[g + 1])
+            e_mask = edge_graph == g
+            ei, ev = data["edge_index"][:, e_mask] - lo, edge_vector[e_mask]
+            H = self.h0(scalars[lo:hi], vectors[lo:hi], species[lo:hi], ei, ev)
+            numbers = [self.atomic_numbers[int(x)] for x in species[lo:hi].tolist()]
+            if getattr(self, "near_field", "off") == "potential":
+                n0 = torch.tensor([[float(N0[z]) for z in numbers]], dtype=H.dtype, device=H.device)
+                r_up, r_dn = State(0, 0, 0).counts(neutral_count(numbers))
+                one = lambda v: torch.tensor([float(v)], dtype=H.dtype, device=H.device)  # noqa: E731
+                H = self.near_field_terms(H.unsqueeze(0), n0, (one(r_up), one(r_dn)), [(ei, ev)])[0][0]
+            result.append((H, numbers))
+        return result
+
     def well_scale(self) -> torch.Tensor:
         """L3: `s_W = s_max sigmoid(s_well_raw)` in `[0, s_max]`, `S_WELL_INIT` at init."""
         return self.s_max * torch.sigmoid(self.s_well_raw)
@@ -591,10 +651,14 @@ class MACEDSCC(nn.Module):
         return q.detach(), torch.stack(rows).detach()
 
     def reference_charges_batched(self, H: torch.Tensor, n0: torch.Tensor, n_up: torch.Tensor,
-                                  n_dn: torch.Tensor) -> torch.Tensor:
-        """`reference_charges` for `H [B, 4n, 4n]` with per-graph `n0 [B, N]` and counts."""
-        with torch.no_grad():
-            spectrum = eigh_for(H, getattr(self.scf_options, 'eigh_device', 'auto'))
+                                  n_dn: torch.Tensor, spectrum=None) -> torch.Tensor:
+        """`reference_charges` for `H [B, 4n, 4n]` with per-graph `n0 [B, N]` and counts
+        (`spectrum`: H's own eigendecomposition when the caller already has it)."""
+        if spectrum is None:
+            with torch.no_grad():
+                spectrum = eigh_for(H, getattr(self.scf_options, 'eigh_device', 'auto'))
+        else:
+            spectrum = tuple(s.detach() for s in spectrum)
         if not torch.is_grad_enabled():
             return n0 - self._occupied_from_spectrum(spectrum, n_up, n_dn)     # v5 W2: no density matrix
         return n0 - site_occupation(H, spectrum, n_up, n_dn, self.sigma_s)      # v5 W2 item 6: one contraction
@@ -633,7 +697,8 @@ class MACEDSCC(nn.Module):
                        q_les: Optional[torch.Tensor] = None, j_les: Optional[torch.Tensor] = None,
                        g_lr: Optional[torch.Tensor] = None, d_w: Optional[torch.Tensor] = None,
                        p: Optional[torch.Tensor] = None,
-                       edges: Optional[Sequence[Tuple[torch.Tensor, torch.Tensor]]] = None):
+                       edges: Optional[Sequence[Tuple[torch.Tensor, torch.Tensor]]] = None,
+                       w_near: Optional[torch.Tensor] = None, q0_fixed: Optional[torch.Tensor] = None):
         """W6: the two SCF-free terms that sit on top of the `Phi = 0` band energy, from the
         SAME eigendecomposition the fill used.
 
@@ -697,6 +762,13 @@ class MACEDSCC(nn.Module):
                 if near == "mulliken":
                     q0 = n0 - occ_r
                     sq0 = self.pattern_scale() * q0
+                elif near == "potential":
+                    # Phase 2c B_w: `H` here is H0' = H0 - diag(W); the near field is in the band
+                    # term, E_near is gone (as B_0), and `q0` is the UNSHIFTED H0's reference fill
+                    # the caller formed W from (`n0 - occ_r` of H0' would be a different object).
+                    if w_near is None or q0_fixed is None:
+                        raise RuntimeError("near_field 'potential' needs W and the unshifted q0 from the caller")
+                    q0 = q0_fixed
                 far_corr, e_near = [], []
                 for g in range(n_graphs):
                     ei, ev = edges[g]
@@ -713,6 +785,10 @@ class MACEDSCC(nn.Module):
                                        "e_near": e_near.detach().cpu().tolist()}
                 if near == "mulliken":       # for the §1 report of E_near against W6's periodic E_host
                     self._switched_diag["sq0"] = [row.detach().cpu().tolist() for row in sq0]
+                if near == "potential":      # Phase 2c: the first-order band response sum_c dq_c W_c (= B_s's E_near form)
+                    self._switched_diag["e_near_first_order"] = (dq * w_near).sum(-1).detach().cpu().tolist()
+                    self._switched_diag["w_near_p95_eV"] = w_near.detach().abs().quantile(0.95, dim=-1).cpu().tolist()
+                    self._switched_diag["w_near_min_eV"] = w_near.detach().min(dim=-1).values.cpu().tolist()
         else:
             q0 = None if les else n0 - occ_r
             sq0 = (self.cross_scale() * q_les) if les else (self.pattern_scale() * q0)
@@ -1388,6 +1464,13 @@ class MACEDSCC(nn.Module):
                         H, W_b = self.well_terms(H, g_lr_b, q_les_b)
                         if spectrum is not None:
                             raise RuntimeError("les_well: the deferred-base spectrum was taken on H0, not H0'")
+                edges_b = ([(data["edge_index"][:, edge_graph == g_] - int(ptr[g_]), edge_vector[edge_graph == g_])
+                            for g_ in range(num_graphs)]
+                           if getattr(self, "near_field", "off") != "off" else None)
+                W_near_b = q0_near_b = None
+                if getattr(self, "near_field", "off") == "potential":          # Phase 2c B_w: H0' = H0 - diag(W)
+                    H, W_near_b, q0_near_b = self.near_field_terms(H, t(n0_rows), counts_r, edges_b, spectrum=spectrum)
+                    spectrum = None             # H0's spectrum served q0; H0' is diagonalised by the fill
                 with torch.set_grad_enabled(torch.is_grad_enabled() and not analytic):
                     sol = two_fillings(H, counts_s, counts_r, self.sigma_s, spectrum=spectrum)
                 head_energy = sol.energy
@@ -1403,9 +1486,9 @@ class MACEDSCC(nn.Module):
                             pos_b, cell, q_form, use_pairs, need_cotangents=analytic,
                             q_les=q_les_b, j_les=j_les_b, g_lr=g_lr_b, d_w=d_w_b,
                             p=(None if p_node is None else p_node.reshape(num_graphs, n_nodes, 3)),
-                            edges=([(data["edge_index"][:, edge_graph == g_] - int(ptr[g_]), edge_vector[edge_graph == g_])
-                                    for g_ in range(num_graphs)]
-                                   if getattr(self, "near_field", "off") != "off" else None))
+                            edges=edges_b, w_near=W_near_b, q0_fixed=q0_near_b)
+                    if W_near_b is not None:
+                        diagnostics["s_near"] = float(self.near_scale().detach())
                     if W_b is not None:                                         # L3 force pieces
                         gw = self.well_geometry_terms(W_b, sol.energy + e_host, q_les_b, g_lr_b, d_w_b, j_les_b, create)
                         if gw is not None:
@@ -1661,21 +1744,27 @@ class MACEDSCC(nn.Module):
                     if getattr(self, "les_well", False):
                         H1, W_g = self.well_terms(H.unsqueeze(0), g_lr_g, q_les_g)
                         H = H1[0]
+                one = lambda v: torch.tensor([float(v)], dtype=torch.float64, device=device)  # noqa: E731
+                n0_g = torch.tensor([[float(N0[z]) for z in numbers]], dtype=torch.float64, device=device)
+                W_near_g = q0_near_g = None
+                if getattr(self, "near_field", "off") == "potential":          # Phase 2c B_w at B = 1
+                    H1, W_near_g, q0_near_g = self.near_field_terms(H.unsqueeze(0), n0_g, (one(n_r[0]), one(n_r[1])), [(ei, ev)])
+                    H = H1[0]
                 sol = two_fillings(H, n_s, n_r, self.sigma_s)
                 e_g = sol.energy
                 dP_sym_g = 0.5 * (sol.dP + sol.dP.transpose(0, 1))
                 cotangent_terms.append((H, dP_sym_g))
                 if self.scf_free:                                   # W6, at B = 1
-                    one = lambda v: torch.tensor([float(v)], dtype=torch.float64, device=device)  # noqa: E731
-                    n0_g = torch.tensor([[float(N0[z]) for z in numbers]], dtype=torch.float64, device=device)
                     e_host, e_m, pg, _, q0, _ = self.scf_free_terms(
                         H.unsqueeze(0), (sol.fills[0].eps.unsqueeze(0), sol.fills[0].U.unsqueeze(0)),
                         (one(n_s[0]), one(n_s[1])), (one(n_r[0]), one(n_r[1])), n0_g,
                         positions[nodes].unsqueeze(0), cell[g].unsqueeze(0), one(state.Q), use_pairs,
                         q_les=q_les_g, j_les=j_les_g, g_lr=g_lr_g, d_w=d_w_g,
                         p=(None if p_node is None else p_node[nodes].unsqueeze(0)),
-                        edges=([(data["edge_index"][:, e_mask] - lo, edge_vector[e_mask])]
-                               if getattr(self, "near_field", "off") != "off" else None))
+                        edges=([(ei, ev)] if getattr(self, "near_field", "off") != "off" else None),
+                        w_near=W_near_g, q0_fixed=q0_near_g)
+                    if W_near_g is not None:
+                        diagnostics["s_near"] = float(self.near_scale().detach())
                     if W_g is not None:
                         gw = self.well_geometry_terms(W_g, sol.energy + e_host[0], q_les_g, g_lr_g, d_w_g, j_les_g, create)
                         if gw is not None:

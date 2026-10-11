@@ -6614,3 +6614,30 @@ criterion NOT met. 0.2 (639 atoms; separation / N_eff / Σdq(< 5 Å) / Pb–Pb):
 p50 0.029 eV, N_eff p50 7.2, pass 0.00 in every Pb–Pb bin, corr(separation, Pb–Pb) −0.20. 0.4: hole = +1 forward dq (sum 1.000, no negative part), N_eff 6.0; within 3 Å
 0.536, 5–8 Å 0.273, 8–12 Å 0.165. Both checkpoints give the same Decision 0: **candidate (1) not confirmed; candidate (2) stands alone; Step 1 (arm B_w) proceeds and
 blocks Phase 3.** The §0 tables are in `defect-perovskite/P2C_REPORT.md`.
+**Phase 2c Step 1 REGISTRATION — arm B_w (2026-10-11 13:30, written before any B_w number is read).**
+(i) Implementation (`mace/modules/dscc/model.py`, `polarisation.py`): `near_field = "potential"`. Per forward: `q0` = reference fill of the UNSHIFTED H0 (attached, the route-B′
+divided-difference backward); `W_i = Σ_j (1 − S(r_ij)) s_near q0_j γ_2.5(r_ij) + s_near q0_i γ_2.5(0)` over the head's directed edges, the same switch, kernel and self term as
+B_s's E_near (`near_field_potential`; not centred); `H0′ = H0 − diag(W ⊗ 1_4)`; both fillings from H0′ (a second eigendecomposition; on the deferred-base path H0's CPU spectrum
+serves q0 only); E_near = 0 (as B_0); E_far from dq(H0′) with the B_s switch; E_PP, E_M, C_Q unchanged. Forces through the existing (H0′, dP) cotangent (W and q0 attached) plus
+(E_far, 1). One learned scale `s_near = s_max tanh(raw)`, sign free, initialised at `--s_init`. Diagnostics per graph: `e_near_first_order = Σ_c dq_c W_c`, `w_near_p95_eV`, `s_near`.
+(ii) Tests `tests/extensions/dscc/test_phase2c_potential.py` (9, all pass on the toy cell): Σ_c dq_c W_c ≡ switched_terms' e_near to 1e-12; neutral null = base + E_PP bit-exact;
+s = 0 ≡ B_0 to 1e-9 (energy, forces, dq); ∂ΔF_band/∂s by central difference = Σ dq W / s to 1e-6 relative; central-difference forces 1e-4 eV/Å on the charged toy frame; Σdq = Q;
+gauge: W + a leaves dq, E_far and forces unchanged and moves ΔF_band and the total energy by exactly +aQ (the plan's "−aQ" is the same statement for an on-site shift of +a);
+batched = per-graph (and translation invariance); the instrument test below.
+(iii) THE INSTRUMENT: `MACEDSCC.filled_hamiltonians(data)` returns the Hamiltonian the model fills (H0 for every arm up to B_s, bit-exact against `h0`; H0 − diag(W) for B_w,
+whose one-hole fill equals the forward's dq to 1e-9). `bound_state_precondition`, `p0_boundstate.py`, `p2c_step0.py` and the trainer's new readouts all read through it; B_s/B_0
+readouts are unchanged. A readout that rebuilds H0 itself reports the wrong object for B_w and is not admissible.
+(iv) Training: seeds 0, 2, 6 → folds 0, 2, 2 (registered map); W6 schedule; base `base_v8_w01`; B_s's command with `--near_field potential --s_init {0.376, 0.411, 0.555}` (B_s w01's
+epoch-59 s for the same seed) `--level_readout 1 --embed_readout ~/runs/dscc/p2c/embed_b_label_w01.json`. Run names `dscc_p2cwbw_s{0,2,6}` on b3 GPUs 5/7.
+(v) Per-epoch readouts (readout only, never a loss): held-out F; separation / N_eff / C5 pass fraction of the hole on the held fold's 79-atom +1 frames (all of them); separation /
+N_eff / Σdq(< 5 Å) on the fixed 639-atom label-tiled structure (b) of Step 0 (w01 B_s s2's re-relaxed core; `embed_b_label_w01.json`, vacancy = ideal label-tiling site; the same
+structure for every seed and epoch); s_near; dEp95; readout saturation. Cost measured in a one-epoch smoke (`dscc_p2cx_bw_smoke`, seed 2) on b3 before the seeds; if the 639-atom
+readout does not fit beside training it is skipped with a warning and read offline per checkpoint instead.
+(vi) Gates (plan §1): forces, paired per seed against B_s w01 s0 / s2 / s6 (held-out total 13.72 / 13.88 / 14.37 meV/Å per-component RMS; 4–12 Å pooled from the records), n = 3 point
+estimate, kept if within +τ (1.7) or better on either; fails if worse by more than τ on both. +1-geometry separation per seed reported, not gated. Large-N on the seed-median B_w
+checkpoint (`model_avg.pt`) in the label tiling: structure (b)'s protocol (core re-relaxed by that checkpoint, far field fixed, R_core 8 Å, fmax 0.002), thresholds separation ≥ 0.15 eV,
+N_eff ≤ 4, Σdq(< 5 Å) ≥ 0.8; B_s's own label-tiling read (0.016 / 87.5 / 0.112) stands beside it. Pass opens Phase 3.
+(vii) Pre-training readout (not a gate, not an arm): B_s w01 seed 2's trained H0 with `near_field` switched to "potential" at s_near = 0 (must reproduce the B_s instrument: 0.026 eV /
+9.2 on the 928 +1 frames, 0.016 / 87.5 on structure (b)), +0.411 and −0.411 (B_s's s and its negative): separation and N_eff on the same two sets. Expectation: UNDETERMINED — the
+sign of W on the hole's sites decides, and it has not been computed. Purpose: whether the host potential at B_s's scale moves the +1-geometry level at all, before 60 epochs × 3 seeds.
+(viii) Expectation for the arm: undetermined. After 0.3 the quantity that decides Phase 3 is the +1-geometry separation; the neutral-vacancy C5 remains reported.

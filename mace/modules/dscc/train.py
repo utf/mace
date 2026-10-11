@@ -29,6 +29,7 @@ from mace import tools
 from mace.modules.dscc import data as dd
 from mace.modules.dscc.admission import collective_coordinate
 from mace.modules.dscc.model import MACEDSCC
+from mace.modules.dscc.precondition import PreconditionConfig, frame_record, hole_distribution
 from mace.modules.dscc.scf import root_rule
 from mace.modules.dscc.species import state_from_carrier_counts
 from mace.tools import torch_geometric
@@ -130,6 +131,12 @@ class TrainConfig:
     bz_relaxed_cell_path: str = "/home/alex/runs/dscc/p0/pristine_relaxed_v2.json"
     bz_n_thermal: int = 4             # fixed thermal pristine snapshots (first in file order)
     bz_mesh: int = 3
+    # Plan P Phase 2c Step 1: per-epoch level readouts (never a loss) -- separation and N_eff of the
+    # hole on the held-out fold's 79-atom +1 frames, and separation / N_eff / sum dq(< 5 A) on one
+    # embedded structure (`embed_readout_path`: positions, cell, numbers, vacancy), all read from
+    # `model.filled_hamiltonians` (H0, or H0 - diag(W) for arm B_w).
+    level_readout: bool = False
+    embed_readout_path: str = ""
 
 
 def stratum_id(meta: dd.FrameMeta) -> str:
@@ -407,6 +414,22 @@ class Trainer:
                         feats = self.model.first_block(self.model._trunk_data(dict(b_)))
                         self.bz_features.append(tuple(t.detach() for t in self.model.features(feats)))
                 self.bz_kpts.append(self.model.bz_mesh(b_["cell"], int(self.cfg.bz_mesh)).to(self.device))
+        # Plan P Phase 2c: the level readouts' frames and structure.
+        self.level_idx: List[int] = []
+        self.embed_batch = None
+        if getattr(self.cfg, "level_readout", False):
+            self.level_idx = [i for i in self.held_idx if len(self.frames[i]) == 79]
+            logging.info("Phase 2c level readout: %d held-out 79-atom +1 frames per epoch%s", len(self.level_idx),
+                         "" if not self.cfg.embed_readout_path else f"; embedded structure {self.cfg.embed_readout_path}")
+            if self.cfg.embed_readout_path:
+                from ase import Atoms
+                rec = json.load(open(Path(self.cfg.embed_readout_path).expanduser()))
+                a = Atoms(numbers=rec["numbers"], positions=rec["positions"], cell=rec["cell"], pbc=True)
+                a.info.update({"carrier_counts": np.zeros(4), "cell_charge": 0, "config_type": "embed", "source_dir": "embed"})
+                ds_ = dd.atomic_data([a], self.z_table, self.cfg.r_cut)
+                self.embed_batch = to_device(next(iter(torch_geometric.dataloader.DataLoader(ds_, batch_size=1))), self.device)
+                self.embed_vacancy = torch.tensor(rec["vacancy"], dtype=torch.float64, device=self.device)
+                self.embed_label = rec.get("label", "embed")
         # E_base and F_base of every charged frame (frozen base, geometry-only), cached once.
         self.base_cache: Dict[int, Tuple[torch.Tensor, torch.Tensor]] = {}
         if self.cfg.cache_base:
@@ -576,6 +599,54 @@ class Trainer:
                 "warm": int(bool(diag.get("warm_started", False)))}
 
     @torch.no_grad()
+    def level_readout(self) -> Dict[str, object]:
+        """Plan P Phase 2c Step 1, per epoch and per final checkpoint, READOUT ONLY: separation,
+        N_eff and the C5 pass fraction of the hole on the held-out fold's 79-atom +1 frames, and
+        separation / N_eff / sum dq within 5 A of the vacancy on the embedded structure, both from
+        `model.filled_hamiltonians` (the Hamiltonian the model fills). `s_near` for arm B_w."""
+        self.model.eval()
+        t0 = time.time()
+        cfg_p = PreconditionConfig()
+        out: Dict[str, object] = {}
+        if self.level_idx:
+            recs = []
+            loader = torch_geometric.dataloader.DataLoader(self._dataset(self.level_idx), batch_size=self.cfg.batch_size)
+            for b in loader:
+                batch = to_device(b, self.device)
+                for H, numbers in self.model.filled_hamiltonians(batch):
+                    recs.append(frame_record(H, numbers, cfg_p, self.model.sigma_s))
+            sep = np.array([r.separation for r in recs]); neff = np.array([r.n_eff for r in recs])
+            out["plus1_held79"] = {"n": len(recs), "separation_p10": float(np.percentile(sep, 10)),
+                                   "separation_p50": float(np.median(sep)), "separation_p90": float(np.percentile(sep, 90)),
+                                   "n_eff_p10": float(np.percentile(neff, 10)), "n_eff_p50": float(np.median(neff)),
+                                   "n_eff_p90": float(np.percentile(neff, 90)),
+                                   "pass_fraction": float(np.mean([r.passed for r in recs]))}
+        if self.embed_batch is not None:
+            rec = None
+            for attempt in range(2):
+                try:
+                    H, numbers = self.model.filled_hamiltonians(self.embed_batch)[0]
+                    separation, dq = hole_distribution(H, numbers, self.model.sigma_s)
+                    pos = self.embed_batch["positions"]; cell = self.embed_batch["cell"].view(3, 3)
+                    d = pos - self.embed_vacancy
+                    d = d - torch.round(d @ torch.linalg.inv(cell)) @ cell
+                    r = d.norm(dim=-1)
+                    rec = {"label": self.embed_label, "n_atoms": len(numbers), "separation": separation,
+                           "n_eff": float(1.0 / (dq ** 2).sum()), "dq_sum": float(dq.sum()),
+                           "dq_within": {str(R): float(dq[r <= R].sum()) for R in (3, 5, 8, 12)}}
+                    del H, dq
+                    break
+                except torch.OutOfMemoryError as ex:
+                    logging.warning("level readout: embedded structure out of memory (%s); %s", str(ex)[:80],
+                                    "retrying after emptying the cache" if attempt == 0 else "skipped this epoch")
+                    torch.cuda.empty_cache()
+            out["embed"] = rec
+            torch.cuda.empty_cache()
+        if getattr(self.model, "near_field", "off") == "potential":
+            out["s_near"] = float(self.model.near_scale())
+        out["seconds"] = time.time() - t0
+        return out
+
     def saturation_report(self, indices: Sequence[int], n_frames: int = 8) -> Dict[str, object]:
         """A1's bounds report: the fraction of `|tanh| > 0.95` per term and species over a
         sample of held-out frames, plus the section 2.10 readout of `tanh(e_Z(h_i))` (and
@@ -872,6 +943,15 @@ class Trainer:
             entry["sv_init_diagnostic"] = epoch == 0
             if (epoch + 1) % cfg.eval_every == 0 or epoch == cfg.epochs - 1:
                 entry["held"] = {k: v for k, v in self.evaluate(self.held_idx, "held").items() if k != "energies"}
+            level_note = ""
+            if getattr(cfg, "level_readout", False):
+                lr_ = self.level_readout()
+                entry["level_readout"] = lr_
+                p1, em = lr_.get("plus1_held79"), lr_.get("embed")
+                level_note = (("" if not p1 else " sep79 %.3f neff79 %.1f pass79 %.2f" % (p1["separation_p50"], p1["n_eff_p50"], p1["pass_fraction"]))
+                              + ("" if not em else " embed %.3f/%.1f/%.2f" % (em["separation"], em["n_eff"], em["dq_within"]["5"]))
+                              + ("" if "s_near" not in lr_ else " s_near %.3f" % lr_["s_near"])
+                              + " (%.0fs)" % lr_["seconds"])
             history.append(entry)
             cf_note = ("" if entry.get("cf_shift_eV_p95") is None
                        else " cfp95 %.3f floor %.3f" % (entry["cf_shift_eV_p95"],
@@ -881,6 +961,8 @@ class Trainer:
                          entry["on_site_shift_eV_p95"] or 0.0, entry["gap"], entry["unconverged"], sv,
                          entry["scf_iterations_per_batch"], entry["scf_fills_per_batch"], entry["warm_batches"], entry["batches"],
                          entry["lambda_dir"], entry["s"], entry.get("held", {}).get("force_rmse"), entry["time"])
+            if level_note:
+                logging.info("epoch %d level readout%s", epoch, level_note)
             json.dump(history, open(self.run_dir / "history.json", "w"), indent=1, default=str)
             torch.save(self.model, self.run_dir / "model.pt")
             if scheduler is not None:
@@ -891,6 +973,8 @@ class Trainer:
                 logging.warning("single-valuedness failing fraction %.3f exceeds the ceiling %.3f", sv["fraction"], cfg.single_valued_ceiling)
         final = self.evaluate(self.held_idx, "held_final")
         final["saturation"] = self.saturation_report(self.held_idx)      # A1 bounds report
+        if getattr(cfg, "level_readout", False):
+            final["level_readout"] = self.level_readout()
         # v4.5: "failure fails the arm" -- the run-level flag the report reads.
         final["sv_ceiling_exceeded_epochs"] = list(self.sv_ceiling_exceeded_epochs)
         final["arm_failed_single_valuedness"] = bool(self.sv_ceiling_exceeded_epochs)
@@ -916,6 +1000,8 @@ class Trainer:
             avg = self.evaluate(self.held_idx, "held_final_avg")
             avg["saturation"] = self.saturation_report(self.held_idx)
             avg["avg_epochs"] = avg_n
+            if getattr(cfg, "level_readout", False):
+                avg["level_readout"] = self.level_readout()
             json.dump(avg, open(self.run_dir / "held_final_avg.json", "w"), indent=1, default=str)
             torch.save(self.model, self.run_dir / "model_avg.pt")
             out["held_final_avg"] = {k: v for k, v in avg.items() if k != "energies"}

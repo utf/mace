@@ -230,3 +230,27 @@ def switched_terms(dq: torch.Tensor, p: torch.Tensor, edge_index: torch.Tensor, 
     if keep.any():
         e_near = e_near + (dq[c_k] * w_k * sq0[a_k] * gamma_direct(r[keep], w_near, eps_inf)).sum()
     return e_far_corr, e_near
+
+
+def near_field_potential(sq0: torch.Tensor, edge_index: torch.Tensor, edge_vector: torch.Tensor,
+                         r_g: float, eps_inf: float, r_c: float, delta: float,
+                         near_r_split: float = 2.5) -> torch.Tensor:
+    """Plan P Phase 2c, arm B_w, one graph: the near-field host potential on every atom,
+
+      W_c = sum_a (1 - S(r_ac)) (s q0)_a gamma_2.5(r_ac) + (s q0)_c gamma_2.5(0) (1 - S(0)),
+
+    over the SAME directed edges, switch and direct kernel as `switched_terms`' `e_near`, so that
+    `sum_c dq_c W_c` equals the e_near B_s would have carried as an energy, term by term: the
+    first-order band response to `W` is the removed energy and nothing is counted twice. Not
+    centred -- `W` is a direct sum inside `r_c` with no free constant (L3's periodic well drops
+    k = 0 and must be centred; this one must not be, or ΔF_band shifts by a Q)."""
+    c_idx, a_idx = edge_index[0], edge_index[1]
+    r = edge_vector.norm(dim=-1)
+    one_minus_s = 1.0 - switch(r, r_c, delta)
+    w_near = pair_width_cp(r_g, near_r_split)
+    self_weight = 1.0 - float(switch(torch.zeros(1, dtype=sq0.dtype, device=sq0.device), r_c, delta)[0])
+    W = sq0 * (gamma_direct_self(w_near, eps_inf) * self_weight)
+    keep = one_minus_s > 0.0
+    if keep.any():
+        W = W.index_add(0, c_idx[keep], one_minus_s[keep] * sq0[a_idx[keep]] * gamma_direct(r[keep], w_near, eps_inf))
+    return W

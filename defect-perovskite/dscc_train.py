@@ -134,7 +134,10 @@ def main() -> None:
     ap.add_argument("--cache_base", type=int, default=1, help="E_base/F_base cached per frame (W6 default); 0 for Phase 2 arm B")
     ap.add_argument("--r_split", type=float, default=-1.0, help="Plan P: the smoothing width of E_cP and E_PP (and Gamma_LR); <0 = model default")
     ap.add_argument("--eps_inf", type=float, default=-1.0, help="Plan P: eps_inf in E_M, E_c, T_LR; <0 = kernel default (4.0)")
-    ap.add_argument("--near_field", default="off", help="Plan P Phase 2b: off (arm B) | mulliken (arm B_s) | none (arm B_0)")
+    ap.add_argument("--near_field", default="off", help="Plan P Phase 2b: off (arm B) | mulliken (arm B_s) | none (arm B_0) | potential (Phase 2c arm B_w: W in H0)")
+    ap.add_argument("--s_init", type=float, default=None, help="Phase 2c B_w: initial s_near (B_s's trained s for the same seed); default 1")
+    ap.add_argument("--level_readout", type=int, default=0, help="Phase 2c: per-epoch separation / N_eff readouts on the held-out 79-atom +1 frames (readout only)")
+    ap.add_argument("--embed_readout", default="", help="Phase 2c: json {positions, cell, numbers, vacancy} of the embedded structure read per epoch (readout only)")
     ap.add_argument("--r_c", type=float, default=8.0, help="Phase 2b switch: S = 1 beyond r_c (A); 0 = S == 1 identity")
     ap.add_argument("--delta", type=float, default=2.0, help="Phase 2b switch: ramp width (A)")
     ap.add_argument("--near_r_split", type=float, default=2.5, help="Phase 2b B_s: direct-kernel width of the near-field Mulliken term (W6's r_split)")
@@ -176,6 +179,7 @@ def main() -> None:
                       readout_init_scale=(None if args.readout_init_scale < 0 else args.readout_init_scale),
                       directional=bool(args.directional), regime=args.regime, gap_weight=args.gap_weight,
                       bz_gap=bool(args.bz_gap), bz_readout=bool(args.bz_readout),
+                      level_readout=bool(args.level_readout), embed_readout_path=args.embed_readout,
                       device=args.device, eval_every=args.eval_every,
                       setup_batch_size=args.setup_batch_size, base_cache_batch_size=args.base_cache_batch_size,
                       l2_weight=args.l2_weight, lr_schedule=args.lr_schedule,
@@ -205,6 +209,10 @@ def main() -> None:
     if args.near_field != "off":
         logging.info("Plan P Phase 2b: near_field %s, r_c %.2f, delta %.2f, near_r_split %.2f",
                      args.near_field, args.r_c, args.delta, args.near_r_split)
+    if args.near_field == "potential":
+        extra_model_kwargs["s_init"] = args.s_init
+        logging.info("Plan P Phase 2c arm B_w: H0' = H0 - diag(W), W the near-field host potential of the unshifted "
+                     "reference fill; E_near removed; s_near init %s (sign free, |s| < s_max)", args.s_init)
     if args.r_split > 0:
         extra_model_kwargs["r_split"] = float(args.r_split)
     model = MACEDSCC(base, r_cut=cfg.r_cut, directional=cfg.directional, coupling=cfg.coupling,
