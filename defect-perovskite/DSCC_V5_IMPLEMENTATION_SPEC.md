@@ -6710,3 +6710,11 @@ core re-relaxed by that checkpoint, 133 steps, fmax 0.0012, dE −0.344 eV): sep
 separation p50 0.134 eV (p90 0.225, max 0.347), N_eff p50 2.6, C5 pass 0.20, corr(separation, Pb–Pb) +0.02. Outcome under the plan's §2: neither (a) nor (b) — B_s does not pass
 in the label tiling and B_w passes two of three thresholds — and B_w's binding is the saturated-readout solution the investigation identified, so this arm is RECORDED, NOT ADOPTED;
 the rerun with the s–p half-width and the gap on H0 − W (`dscc_p2cwbw2_s*`) is the arm Step 1 is decided on.
+**Readout (user's question, 2026-10-11 21:10; `p2c_ladder0k.py`, `~/runs/dscc/p2c/ladder0k.json`): the same 0 K core (Step 0 structure (b)) in the perfect label lattice at 79
+and 639 atoms, and the instrument on the 17 charged 159-atom TRAINING frames.** The 159-atom data cell (16.0 × 22.5 × 15.7 Å) is not a tiling of the 80-atom label cell, so the
+0 K ladder has no 159-atom point. N_eff (79 at 0 K → 159 thermal frames → 639 at 0 K): B_s s2 9.2 → 10.3 → 87.5; first B_w s2 3.5 → 3.8 → 3.8, s6 2.8 → 2.8 → 2.9; rerun B_w s0
+4.7 → 6.0 → 6.1, s2 5.4 → 6.9 → 7.4. Σdq(< 5 Å) at 79 / 639: B_s 0.44 / 0.11; rerun s0 0.69 / 0.61, s2 0.65 / 0.56; on the two flanking Pb: rerun 0.63 / 0.56 and 0.58 / 0.50.
+The thermal 79-atom median equals the 0 K 79-atom value for every model (B_s 8.3 vs 9.2; rerun 4.2 vs 4.7, 5.1 vs 5.4): thermal disorder is not what localises the hole in the
+training cells. Reading: B_s's hole grows with the cell (a band state capped by the cell); the rerun's N_eff rises from 79 to 159 atoms and then stops (6.0 → 6.1; 6.9 → 7.4)
+— a bound state of six to seven atoms with half the charge on the two flanking Pb — which does not reach the registered N_eff ≤ 4 / Σdq ≥ 0.8; the first arm's size-independent
+N_eff 3–4 is the saturated-readout well.
