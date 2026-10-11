@@ -6553,3 +6553,18 @@ the 24 GB card with this base (65 MB, 512 channels; the v7 base fitted) — not 
 the registered remedy is the single w_gap × 3 retrain (expectation NULL: every checkpoint's BZ readout has the pristine gap direct at Γ with zero residual, so the term
 adds no gradient — the failure is the vacancy level's depth and size dependence in H0, which the pristine-gap regulariser does not constrain). Nothing running; b3 and
 the local card idle. Decisions (user): adoption of B_s despite the unresolved control; w_gap × 3; Phase 3 entry / the plan's "stop and report".
+
+## Plan P Phase 2c — the carrier level's depth at large N: REGISTRATION (2026-10-11, user's plan verbatim in `defect-perovskite/PLAN_P_PHASE2C.md`; written before any Step 0 result is opened)
+
+Plan received 2026-10-11 and copied verbatim. Base `base_v8_w01`. Step 0 (no training): on B_s (w01) seed 2 (averaged weights) and the base-v7 B_s seed median (seed 1):
+0.1 dense head eigenvalues (VBM, CBM, gap) on the pristine 2×2×2 tilings of the label cell and of the base-relaxed cell (640 atoms; 3×3×3 if memory allows); 0.2 separation,
+N_eff and Σdq(< 5 Å) for the +1 core embedded at 639 atoms in (a) the relaxed tiling and (b) the label tiling with the core re-relaxed there under a fixed far field (R_core
+8 Å, the frozen-core-ladder protocol); 0.3 separation and N_eff on the 79-atom +1 training frames against the Pb–Pb distance across the vacancy, the relaxed core's value
+marked; 0.4 sign-resolved dq by shell on one 79-atom +1 frame. **Decision 0 thresholds (verbatim):** candidate (1) confirmed if 0.1 shows the relaxed tiling's CBM ≥ 0.1 eV
+below the label tiling's, or 0.2 shows the separation in the label tiling ≥ 3× that in the relaxed tiling. Step 1: arm B_w (near-field host potential W_i on the diagonal of
+H0, one learned s initialised at B_s's value, E_far and E_PP unchanged), tests as listed, three seeds (0, 2, 6), W6 schedule; gates: forces within +τ of B_s or better on total
+or 4–12 Å (n = 3, point estimate); large-N in the label tiling ≥ 0.15 eV / N_eff ≤ 4 / Σdq(< 5 Å) ≥ 0.8 opens Phase 3. Not permitted: the k-mesh regulariser, any loss on
+localisation, a state-pinned fill, new Γ-gap cells, a fourth arm, changes to E_far / E_PP / r_c / r_split / ε∞. Report `P2C_REPORT.md`.
+Expectations written before Step 0 is read: the relaxed cell (tilt 156°) is 0.25 Å rms from the label cell (167°) and outside the training distribution, so a band-edge shift
+between the two tilings of order 0.1 eV is plausible; the 79-atom separation (0.126 eV for w01 B_s s2 at the training geometry) bounds what the label tiling can show unless
+the core relaxation deepens it; 0.4 is expected to show cancelling positive and negative dq (N_eff counts |dq| weight, Σdq(< 5 Å) the signed sum).
