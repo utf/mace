@@ -6792,3 +6792,17 @@ fraction of (gap − 2.40) near 0.5 and lag-1 autocorrelation near 0 in every ep
 [2.374, 2.426] eV at every epoch end, resting value reported per seed; (4) forces, energy gate (C_Q transfer ≤ 10 meV, 79-atom energy ≤ 0.6 meV/atom), large-N on the
 seed median (0.15 eV / N_eff ≤ 4 / Σdq(< 5 Å) ≥ 0.8, label tiling) and the Stage-2 saturation check read exactly as for bw2; B_s rows unchanged. Report: `P2C_REPORT.md`
 §1.4 (mechanism and fix), §1.5 (third run, three-way table B_s / bw2 / bw3).
+
+**2026-10-12 01:25 — The tolerance band is not the fix: the band edge delivers a kick (evidence from the bw3 step records).** Inside the band the design holds:
+l_gap = 0 for a thousand steps, no period-2 oscillation (alternation 0.00, lag-1 autocorrelation +1.0: the gap drifts smoothly under the force term). But the force term
+moves the static-cell gap faster than estimated (seed 6: 2.378 → 2.420 → 2.353 eV over steps 162–177 of epoch 5, ~0.01 eV/step, no level crossing), and when the gap
+first leaves the band (δ = 0.021 eV) the restoring step is a hammer blow: 2.353 → 2.482 → 2.293 → 2.508 (a kick of 0.13 eV for an excursion of 0.02; gain ≈ 7), then
+a period-2 oscillation of ±0.1 eV across the whole band for ~25 steps, decaying as Adam's second moment catches up; per-graph force error 20–30 → 45–60 meV/Å during
+it; epoch loss 1.9e-4 (12× the median: pass criterion 1 fails for seed 6). Seed 2 did the same at epoch 8 (l_gap max 9e-3, epoch loss 15× median); seed 0 has not
+yet reached an edge. Mechanism: with the gap gradient exactly zero for a thousand steps, Adam's second moment for the gap direction decays to the force-only level; the
+first gap gradient (norm 0.56 against 3e-4 for the force term) then meets a near-zero denominator and every one of the ~71k hopping-readout parameters takes a
+near-maximal step in the same direction — the "fresh gradient on an empty second moment" response, which the plain square had avoided by keeping the gradient always
+present (its self-tuned marginal state was the price). The band therefore trades a marginal oscillation for an intermittent kick, and is withdrawn (kept in the code
+at default 0 for the record). The reading of the replay stands: the hard gap's gradient is discontinuous at a crossing of near-degenerate edge levels, and that
+discontinuity was the trigger; the registered fallback — a smooth band edge — addresses exactly that and keeps the gap gradient continuous and always present, so
+Adam's statistics stay informed. Decision and launch follow in the next entry.
