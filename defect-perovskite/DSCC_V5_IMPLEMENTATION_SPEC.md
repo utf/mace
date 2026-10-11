@@ -6656,3 +6656,35 @@ cost measurement only). Cost accepted; the three seeds are queued on b3 GPUs 5 a
 reboot; the Step 0 and large-N reads of 2026-09-30 / 10-11 had run on GPU 1 under a wrong UUID note, corrected in memory and reported to the user).
 Note of record: `reference_charges_batched(..., spectrum=)` (the deferred-base path's reuse of H0's CPU spectrum for q0 in B_w) is exercised by neither the tests nor the
 production arm (B_w is not decoupled, so the base is not deferred); untested and unused as of 2026-10-11.
+**Phase 2c Step 1, two flags registered before the finisher reads (2026-10-11 16:20).** (i) The Stage-2 no-systematic-saturation rule (O3 precedent: "a bound binding on
+the sites has no gradient there, so the trained head is not at an optimum") applies to B_w: on the averaged checkpoints of seeds 0 and 2 the on-site readout at the flanking Pb sits
+at |tanh| 0.84 / 0.92 mean (max 0.96 / 0.97) against B_s's 0.05 / 0.02, the Pb on-site shift p95 is 2.26 / 2.60 eV (max 2.96 / 2.97, the bound) against B_s's 0.15 / 0.12, and the
+saturated fraction of Pb on-site channels is 4.7 % on both seeds. On seed 2 the Pb shift went 0.72 → 1.62 → 2.22 eV over epochs 17–20, the epoch of the loss spike, while s_near fell.
+The plan's gates do not include the rule; it is recorded here and put to the user; the finisher's force and large-N reads are unaffected. (ii) Defect of these runs, mine: the Γ-gap
+regulariser reads H0 for B_w, where the documented rule (Route B, L3) is "the Hamiltonian actually filled at dq = 0", H0 − W. At the final s_near (0.04 / 0.08) the filled gap
+differs from H0's by 0.04 / 0.08 eV; at s_near 0.411 it would be 0.39 eV. Any rerun routes the gap through H0 − W first. (iii) Investigation registered (no training, local card,
+finished checkpoints): λ-scaling of the trained Pb on-site bound on the B_w averaged models (λ 1 / 0.75 / 0.5 / 0.25 / 0, and λ = 0 with s_near restored to its init) read on the
+held-out forces and the level instruments; the per-frame two-site hole structure on the 928 +1 frames (dq on the two flanking Pb, their level splitting, the signed readout shift,
+the frontier separation) for B_w and B_s; a scoped pre-clip gradient study by parameter group on ~60 training frames. Expectation written now: if forces improve as λ falls, the
+readout ran past its optimum and the force deficit is attributable to the excursion; if they worsen, the deep well is load-bearing. Undetermined.
+**Spike investigation RESULT (2026-10-11 17:05; `p2c_spike_diag.py`, seed 2 averaged checkpoints, 256 held 79-atom +1 frames of fold 2, local card; `~/runs/dscc/p2c/spike_diag_s2.json`).**
+A, λ-scaling of the Pb on-site bound (Δ = 2.97 eV, uniform over species and channels, `delta_from_baselines(eps0, 0.40)`): B_w F total / 2–4 / 4–12 / flank at λ = 1: 16.27 /
+30.2 / 13.96 / 41.0; λ 0.75: 16.21 / 30.8 / 13.79 / 40.6 (+1 frames N_eff 2.8, pass 0.21); λ 0.5: 16.74; λ 0.25: 18.14; λ 0: 39.75 (hole delocalised, N_eff 16); λ 0 with s_near
+restored to 0.411: 41.79 (639-atom hole re-compacts, N_eff 4.3 / Σdq 0.73, forces stay collapsed). B_s control: λ 1: 14.12; λ 0.5: 14.92; λ 0: 17.70. Reading: the deep well is
+nearly flat in the force loss (halving it costs 0.5 against 0.8 for halving B_s's small corrections) while B_w's Pb on-site term as a whole is load-bearing (λ = 0 costs 23.5
+against B_s's 3.6): the head has moved into a regime where the hoppings are co-adapted to a large Pb on-site term everywhere. The premise "worse because of the spikes" is
+therefore only partly right: the deficit is the basin, the spikes mark the entry into it.
+B, the hole at the flanking Pb on all 1019 charged 79-atom frames: B_w — on-site readout shift at the flanking Pb p channel −2.97 eV (p10/p90 −3.00 / −2.95; |tanh| 0.965 mean,
+> 0.9 on 99.5 % of frames), s channel +2.58 eV; bulk Pb median p −0.63, s −0.11 eV; N_eff 3.4, Σdq on the two flanking Pb 0.74, frontier separation 0.081, one-sided hole
+(|dq₁ − dq₂| > 0.3) on 19 % of frames. B_s — flanking Pb p −0.04, s −0.10 eV, |tanh| 0.012, no frame above 0.9; bulk Pb ±0.05 eV; N_eff 9.2, Σdq flank 0.41, separation 0.026.
+**The bound state B_w shows at the +1 geometries is manufactured by a saturated ±3 eV on-site distortion at the two flanking Pb — both channels at their rail, no gradient
+left.** The Stage-2 rule (registered above) applies in full.
+C, pre-clip force-loss gradient norm per frame on 60 training frames (final models): B_w p50 0.044, p90 0.084, max 0.17; B_s 0.022 / 0.042 / 0.064; nothing within two orders of
+the clip (10); shares split between the hopping and on-site readouts on both; no correlation with the frontier separation on B_w (+0.05). The finished model sits in a quiet
+basin; the transient of epochs 17–22 (Pb on-site p95 0.72 → 2.22 eV on seed 2) is not visible from its endpoint, so the fill-curvature hypothesis is neither confirmed nor
+excluded by this study. Mechanism of record: W(q0) at s_init 0.41 seeds a compact hole on the flanking Pb from epoch 0 (the pre-training readout); the force loss near the
+vacancy then depends on the on-site levels of those two atoms, the bounded readout runs to its rails there (the barrier knee at pre-activation 2.0 only binds beyond |tanh|
+0.96), the hole level crosses other levels on the way (the loss spike), s_near becomes redundant and decays (0.41 → 0.08), the rest of the head co-adapts. B_s never enters
+the regime because its hole is spread over ~9 atoms. Candidate remedies, none implemented, for the user: (1) initialise B_w from the trained B_s head (`--init_state`, the
+registered L2 → L3 precedent) so W is tested on a converged small-correction head; (2) the on-site bound Δ at the scale the record justifies (B_s/W6 use ≤ 0.3 eV of 2.97; A1.1
+expected "several hundred meV"), an existing registered parameter, not a loss; (3) the Γ-gap on H0 − W. Seed 6 runs on under the registered settings; the finisher reads as registered.
