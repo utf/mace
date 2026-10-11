@@ -6587,3 +6587,23 @@ forward's dq IS the reference-fill hole — identical distributions on the first
 "N_eff 1.4 with Σdq(< 5 Å) 0.47" the plan cites were measured on two different frames: N_eff 1.4 on the first NEUTRAL-vacancy 79-atom frame (`p0_boundstate.py`),
 Σdq 0.47 on the first +1 frame (`p0_localisation.py`); the earlier expectation of opposite-sign parts is withdrawn before the full read. (ii) On that +1 frame the hole
 is spread (0.455 within 3 Å, 0.305 at 5–8 Å, 0.222 at 8–12 Å): 0.3 will show whether that follows the Pb–Pb distance across the vacancy.
+**Step 0 RESULT on the decisive checkpoint, B_s (w01) seed 2 (2026-10-11 12:27; `~/runs/dscc/p2c/w01_bs_s2/step0.json`).**
+0.1 (dense H0 eigenvalues, absolute eV): label cell 1×1×1 / 2×2×2 / 3×3×3 VBM −9.928, CBM −7.528, gap 2.4002 at every tiling (dim 320 / 2560 / 8640); relaxed cell VBM
+−10.107, CBM −7.468, gap 2.638 at every tiling. No folding effect; the relaxed tiling's CBM is 0.06 eV ABOVE the label's (criterion: ≥ 0.1 eV below → NOT met). H0's
+absolute scale differs between the geometries by less than the gap change (VBM −0.18, CBM +0.06); recorded, not corrected.
+0.2 (639 atoms; separation / N_eff(hole) / Σdq(< 5 Å) / Pb–Pb across the vacancy): (a) relaxed tiling, existing core: 0.015 eV / 23.3 / 0.294 / 5.76 Å; (b) label tiling,
+core re-relaxed by this checkpoint (109 BFGS steps, converged at fmax 0.0018, dE −0.371 eV, core rms displacement 0.22 Å, 4.6 min on GPU 7): 0.016 eV / 87.5 / 0.112 /
+5.84 Å; (a′) relaxed tiling, core re-relaxed (48 steps, dE −0.036 eV, rms 0.034 Å): 0.009 eV / 40.4 / 0.212 / 5.91 Å. Criterion (separation in the label tiling ≥ 3× the
+relaxed tiling's) → NOT met (0.016 vs 0.015). **Decision 0: candidate (1), the tiling geometry, is not confirmed; candidate (2) stands alone.** E_near −0.096 / −0.244 /
+−0.131 eV, E_far −0.009 / −0.003 / −0.008 eV for (a) / (b) / (a′).
+0.3 (928 charged 79-atom training frames, 10 without a flanking pair; Pb–Pb 4.93–6.80 Å): separation p10 / p50 / p90 0.011 / 0.026 / 0.052 eV (max 0.122), N_eff 6.2 /
+9.2 / 13.1; pass fraction 0.00 in every Pb–Pb bin; corr(separation, Pb–Pb) −0.17. Comparison read on the 1057 NEUTRAL-vacancy 79-atom frames (same checkpoint, local card,
+`w01_bs_s2_neutral03/`; Pb–Pb 3.68–5.98 Å): separation 0.064 / 0.146 / 0.212 eV, N_eff 1.27 / 1.40 / 1.73, pass rising from 0.00 at Pb–Pb < 4.25 Å to 0.33–0.44 above
+5.0 Å; corr(separation, Pb–Pb) +0.66. At the SAME Pb–Pb (5.25–5.75 Å) the neutral frames give 0.18 eV / N_eff 1.5 and the charged frames 0.028 eV / N_eff 9–10.
+**Reading of record:** the head's bound state exists at the neutral-vacancy geometries and is absent at the charged (+1) geometries — the frames the forces are fitted on
+and the geometry every embedded core has. The C5 precondition (neutral-vacancy frames) and the training-frame force fit therefore see different objects: at the +1
+geometry the hole is spread over ≈ 9 atoms with a 0.03 eV separation. The Pb–Pb distance is not the discriminating coordinate (overlapping ranges give opposite answers);
+the rest of the +1 relaxation is. The large-N failure follows: the embedded cores are +1 geometries.
+0.4 (first +1 79-atom frame, Pb–Pb from the flank pair): the reference-fill hole and the +1 forward's dq are the same distribution (sum 1.000, no negative part; N_eff
+8.25): within 3 Å 0.455, 3–5 Å 0.018, 5–8 Å 0.305, 8–12 Å 0.222. The plan's "N_eff 1.4 with Σdq(< 5 Å) 0.47" came from two frames (neutral-vacancy vs +1); on one
+frame the two instruments agree.

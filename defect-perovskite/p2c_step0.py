@@ -45,6 +45,7 @@ ap.add_argument("--stages", nargs="+", default=["0.1", "0.2", "0.3", "0.4"])
 ap.add_argument("--tilings_01", nargs="+", default=["1,1,1", "2,2,2", "3,3,3"])
 ap.add_argument("--r_core", type=float, default=8.0); ap.add_argument("--fmax", type=float, default=0.002); ap.add_argument("--steps", type=int, default=400)
 ap.add_argument("--device", default="cuda")
+ap.add_argument("--charge_03", type=int, default=1, help="cell_charge of the 79-atom frames read in 0.3 (1 = the plan; 0 = the neutral-vacancy frames for comparison)")
 args = ap.parse_args()
 torch.set_default_dtype(torch.float64)
 OUT = Path(args.out_dir).expanduser(); OUT.mkdir(parents=True, exist_ok=True)
@@ -234,7 +235,7 @@ if "0.2" in args.stages:
 # ---------------------------------------------------------------- 0.3 separation / N_eff vs Pb-Pb on the +1 79-atom frames
 if "0.3" in args.stages:
     status("stage 0.3 start")
-    frames = [a for a in read(args.frames, index=":") if int(a.info.get("cell_charge", 0)) == 1 and len(a) == 79]
+    frames = [a for a in read(args.frames, index=":") if int(a.info.get("cell_charge", 0)) == args.charge_03 and len(a) == 79]
     rows = []; n_none = 0
     for i, a in enumerate(frames):
         pbpb, _ = pb_pb_across_vacancy(a)
@@ -256,7 +257,7 @@ if "0.3" in args.stages:
             core_pbpb[row["label"]] = row.get("pb_pb_across_vacancy_A")
     except Exception:
         pass
-    results["0.3"] = {"n_frames": len(frames), "n_without_flank_pair": n_none, "pearson_sep_vs_pbpb": float(np.corrcoef(d, s)[0, 1]), "pearson_neff_vs_pbpb": float(np.corrcoef(d, n)[0, 1]),
+    results["0.3"] = {"cell_charge": args.charge_03, "n_frames": len(frames), "n_without_flank_pair": n_none, "pearson_sep_vs_pbpb": float(np.corrcoef(d, s)[0, 1]), "pearson_neff_vs_pbpb": float(np.corrcoef(d, n)[0, 1]),
                       "pb_pb_range": [float(d.min()), float(d.max())], "binned": binned, "core_pb_pb": core_pbpb, "frames": rows}
     save(); status(f"0.3 done: {len(frames)} frames ({n_none} without a flanking pair); Pb-Pb {d.min():.2f}-{d.max():.2f} A; corr(sep, Pb-Pb) {results['0.3']['pearson_sep_vs_pbpb']:+.3f}, corr(N_eff, Pb-Pb) {results['0.3']['pearson_neff_vs_pbpb']:+.3f}")
     for b in binned:
