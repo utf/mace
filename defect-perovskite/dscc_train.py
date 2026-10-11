@@ -53,6 +53,7 @@ def main() -> None:
                     help="W6: SCF-free model (E_host + E_M, no solve); implies route_b, forbids coupling")
     ap.add_argument("--regime", default="B")
     ap.add_argument("--gap_weight", type=float, default=1.0)
+    ap.add_argument("--gap_sigma", type=float, default=0.0, help="smooth band edges of the Gamma-gap term (eV): Boltzmann-weighted means of the levels nearest each edge; 0 = hard gap")
     ap.add_argument("--gap_band", type=float, default=0.0, help="tolerance half-width b (eV) of the Gamma-gap term: gap_weight * max(|gap - E_gap| - b, 0)^2; 0 = plain square")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--base", default="/home/alex/runs/aprime_prod/aprime_prod_base.pt",
@@ -182,7 +183,7 @@ def main() -> None:
                       les_well=bool(args.les_well),
                       standardise_inputs=(None if args.standardise < 0 else bool(args.standardise)),
                       readout_init_scale=(None if args.readout_init_scale < 0 else args.readout_init_scale),
-                      directional=bool(args.directional), regime=args.regime, gap_weight=args.gap_weight, gap_band=args.gap_band,
+                      directional=bool(args.directional), regime=args.regime, gap_weight=args.gap_weight, gap_band=args.gap_band, gap_sigma=args.gap_sigma,
                       bz_gap=bool(args.bz_gap), bz_readout=bool(args.bz_readout),
                       level_readout=bool(args.level_readout), embed_readout_path=args.embed_readout,
                       step_log=bool(args.step_log), save_epochs=tuple(args.save_epochs), stop_after_epoch=args.stop_after_epoch,
@@ -236,7 +237,7 @@ def main() -> None:
                      eta=args.eta, beta_b=args.beta_b, beta_a=args.beta_a,
                      delta_frac=args.delta_frac, delta_rule=args.delta_rule,
                      scf=ScfOptions(n_max=args.n_max)).to(args.device)
-    logging.info("Gamma-gap term: weight %.3g eV^-2, tolerance band +-%.4f eV (0 = plain square)", args.gap_weight, args.gap_band)
+    logging.info("Gamma-gap term: weight %.3g eV^-2, tolerance band +-%.4f eV (0 = plain square), smooth band edges sigma %.4f eV (0 = hard gap)", args.gap_weight, args.gap_band, args.gap_sigma)
     logging.info("on-site half-width rule %s (frac %.3f): Delta per species %s eV", args.delta_rule, args.delta_frac,
                  {int(z): round(float(model.h0.sk.delta[i, 0]), 3) for i, z in enumerate(model.atomic_numbers)})
     logging.info("A1.1: standardisation %s, readout final scale %.3f",

@@ -6806,3 +6806,22 @@ present (its self-tuned marginal state was the price). The band therefore trades
 at default 0 for the record). The reading of the replay stands: the hard gap's gradient is discontinuous at a crossing of near-degenerate edge levels, and that
 discontinuity was the trigger; the registered fallback — a smooth band edge — addresses exactly that and keeps the gap gradient continuous and always present, so
 Adam's statistics stay informed. Decision and launch follow in the next entry.
+
+**2026-10-12 01:50 — Fix of record: smooth band edges of the Γ-gap term (registered before the fourth run opens).** `gap = e_c − e_v` with
+`e_v = Σ softmax(ε_occ/σ) ε_occ`, `e_c = Σ softmax(−ε_vir/σ) ε_vir`, **σ = k_B · 300 K = 0.0259 eV** (`smooth_gap` in model.py; model attribute `gap_sigma`, set
+by `TrainConfig.gap_sigma`, flag `--gap_sigma`; σ = 0 is the hard gap bit-exact; test `test_smooth_gap_continuous_across_a_crossing`: hard-gap derivative jumps
+1 → 0 across a crossing with a degenerate pair, the smooth one changes by < 0.1 and equals 1/3 at the degenerate point; |smooth − hard| ≤ σ ln 3 at degeneracy;
+isolated edges unchanged to e^{−d/σ}). Plain square, **no band** (`gap_band` 0). Why this and not the band: the trigger of record is the discontinuity of the hard
+gap's gradient when near-degenerate edge levels cross (the replay), and the band's failure showed the general rule — a gap gradient arriving in a direction whose Adam
+second moment is empty is amplified (the crossing emptied it for the doublet's eigenvector; the band emptied it for the whole gap direction). The smooth edge removes
+the trigger (a continuous blend of the near-edge eigenvectors) and keeps the gradient always present so Adam's statistics stay informed. Consequence, registered: the
+regulariser holds the smoothed gap at 2.40; the hard gap rests a few meV below (the VBM mean sits slightly below the top level, the CBM mean slightly above the
+bottom one); both are reported per seed; the difference is below the label's precision. The period-2 marginal state of the plain square (alternation 0.8–0.9,
+amplitude ~1e-4 eV) is expected to return and is accepted.
+**Fourth run bw4** = `dscc_p2cwbw4_s{0,2,6}` (the bw2 command plus `--gap_sigma 0.0259 --step_log 1`), b3 GPUs 4/5/7, `p2cw4_queue.sh`, `p2cw4_finish.sh`,
+`p2cw4_assemble.sh` (status `~/runs/dscc/p2c/P2C4_STATUS`). bw3 (the band) stopped at epochs 10/9/8 after the edge kicks; its step records are kept in
+`~/runs/dscc/p2c/bw3_steps/`. **Pass criteria, restated now (criterion 2 of 00:25 was the band's test and is void):** (1) no epoch in any seed with loss above 10×
+that seed's median over epochs ≥ 2; (2) on the step record after epoch 2: no step with l_gap > 1e-3 and the maximum per-step |gap − 2.40| below 0.01 eV (replay: 24
+steps, 0.52 eV; band runs: 9 and 6 steps, 0.11 eV); (3) the hard gap at every epoch end within 2.40 ± 0.01, smooth and hard reported per seed; (4) forces, energy
+gate, large-N on the seed median and the saturation check exactly as for bw2. If a bw4 seed still shows a gap-term spike, no third fix tonight: the runs finish and the
+spike profile is reported; the next lever (the gap weight) is the user's decision.

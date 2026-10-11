@@ -83,6 +83,21 @@ def block0_layout(base: nn.Module) -> Tuple[int, int, int]:
     return n_s, n_v, irreps.dim
 
 
+def smooth_gap(eps: torch.Tensor, n_up: int, sigma: float = 0.0) -> torch.Tensor:
+    """`E_gap` from the sorted eigenvalues `eps` filled to `n_up`. `sigma = 0`: the hard gap
+    `eps[n_up] - eps[n_up - 1]`. `sigma > 0` (eV): the band edges are the Boltzmann-weighted means
+    `e_v = sum softmax(eps_occ / sigma) eps_occ`, `e_c = sum softmax(-eps_vir / sigma) eps_vir`, so the
+    gap and its gradient are continuous when near-edge levels cross or are degenerate (an exactly
+    degenerate edge gives its common value exactly; a level `d` away from the edge enters with weight
+    `~exp(-d / sigma)`). Far levels have vanishing weight, so all levels are used."""
+    if sigma <= 0.0:
+        return eps[n_up] - eps[n_up - 1]
+    occ, vir = eps[:n_up], eps[n_up:]
+    e_v = (torch.softmax(occ / sigma, dim=0) * occ).sum()
+    e_c = (torch.softmax(-vir / sigma, dim=0) * vir).sum()
+    return e_c - e_v
+
+
 class MACEDSCC(nn.Module):
     """The D-SCC head on a frozen base. Registered numbers travel in `extra_state`."""
 
@@ -1197,8 +1212,12 @@ class MACEDSCC(nn.Module):
                 H = H - torch.diag(W.repeat_interleave(4))
             n_up, n_dn = S_REF.counts(neutral_count(numbers))
             eps = torch.linalg.eigvalsh(H)
-            # Spin-independent H: the gap at the majority count (the larger fill).
-            gaps.append(eps[n_up] - eps[n_up - 1])
+            # Spin-independent H: the gap at the majority count (the larger fill). With `gap_sigma` > 0 the
+            # band edges are the Boltzmann-weighted means of the levels nearest each edge (spike
+            # investigation II, 2026-10-12): the hard gap's gradient is discontinuous where near-degenerate
+            # edge levels cross, which was the trigger of the gap-term spikes; the smooth edge's gradient is
+            # a continuous blend of the near-edge eigenvectors. sigma = 0 is the hard gap, bit-exact.
+            gaps.append(smooth_gap(eps, n_up, float(getattr(self, "gap_sigma", 0.0) or 0.0)))
             # diagnostic (spike investigation II): the three levels either side of the gap, detached
             self._gap_edges = (eps[max(n_up - 3, 0):n_up].detach().cpu().tolist(), eps[n_up:n_up + 3].detach().cpu().tolist())
         return torch.stack(gaps)

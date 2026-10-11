@@ -229,3 +229,30 @@ def test_gap_loss_tolerance_band():
         h = 1e-6; num = (float(gap_loss(torch.tensor([e_gap + d + h]), e_gap, w, b)) - float(gap_loss(torch.tensor([e_gap + d - h]), e_gap, w, b))) / (2 * h)
         assert float(g.grad) == pytest.approx(2 * w * (abs(d) - b) * math.copysign(1, d), rel=1e-9)
         assert float(g.grad) == pytest.approx(num, rel=1e-5)
+
+
+def test_smooth_gap_continuous_across_a_crossing():
+    """Spike investigation II: sigma = 0 is the hard gap; with sigma > 0 the gap's derivative is continuous
+    where a single level crosses a degenerate pair at the band edge (the hard gap's is not), and the
+    smooth gap is within sigma ln 3 of the hard gap at the degenerate point."""
+    from mace.modules.dscc.model import smooth_gap
+    sigma = 0.0259
+    def levels(a):
+        return torch.sort(torch.stack([torch.tensor(-10.0, dtype=torch.float64), torch.tensor(-9.9, dtype=torch.float64),
+                                       torch.tensor(-9.5, dtype=torch.float64), a, torch.tensor(-7.0, dtype=torch.float64),
+                                       torch.tensor(-7.0, dtype=torch.float64)]))[0]
+    for a0 in (-7.3, -7.02, -6.9):
+        a = torch.tensor(a0, dtype=torch.float64)
+        assert float(smooth_gap(levels(a), 3, 0.0)) == pytest.approx(min(a0, -7.0) + 9.5)
+    def dgap(a0, sig):
+        a = torch.tensor(a0, dtype=torch.float64, requires_grad=True); g = smooth_gap(levels(a), 3, sig); g.backward(); return float(a.grad)
+    # hard gap: derivative jumps from 1 (a is the edge) to 0 (the pair is the edge)
+    assert dgap(-7.001, 0.0) == pytest.approx(1.0) and dgap(-6.999, 0.0) == pytest.approx(0.0)
+    # smooth gap: the derivative changes by O(1e-3 / sigma) across the same step, and equals 1/3 at the degenerate point
+    d_minus, d_plus = dgap(-7.001, sigma), dgap(-6.999, sigma)
+    assert abs(d_minus - d_plus) < 0.1 and abs(d_minus - 1 / 3) < 0.05
+    a = torch.tensor(-7.0, dtype=torch.float64)
+    assert 0.0 <= float(smooth_gap(levels(a), 3, sigma)) - float(smooth_gap(levels(a), 3, 0.0)) <= sigma * math.log(3) + 1e-9
+    # an isolated edge far from other levels: smooth equals hard to exp(-d/sigma)
+    far = torch.tensor([-10.0, -9.9, -9.0, -6.0, -5.0, -4.0], dtype=torch.float64)
+    assert float(smooth_gap(far, 3, sigma)) == pytest.approx(3.0, abs=1e-9)

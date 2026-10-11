@@ -56,6 +56,7 @@ class TrainConfig:
     r_cut: float = 10.0
     force_weight: float = 1.0
     gap_weight: float = 1.0           # L_gap = gap_weight (E_gap_model - E_gap)^2, eV^-2
+    gap_sigma: float = 0.0            # smooth band edges of the Gamma-gap term (eV; Boltzmann-weighted edge levels); 0 = hard gap
     gap_band: float = 0.0             # tolerance band b (eV): L_gap = gap_weight max(|E_gap_model - E_gap| - b, 0)^2; 0 = the plain square
     # v5 amendment A1: the weak L2 on the tanh outputs that replaces the pristine centre as
     # the thing keeping corrections near the element default. `L_l2 = l2_weight * sum_terms
@@ -395,6 +396,8 @@ class Trainer:
                          self.feature_stats["n_frames"], self.feature_stats["atoms_per_species"],
                          {k: round(v, 1) for k, v in self.feature_stats["median_abs_mean_over_sd"].items()},
                          self.feature_stats["dead_channels"])
+        # Spike investigation II: smooth band edges for the gap regulariser (an attribute, saved with the model).
+        self.model.gap_sigma = float(self.cfg.gap_sigma)
         static = dd.atomic_data([static_cell_atoms(self.cfg.static_cell_path)], self.z_table, self.cfg.r_cut)
         self.static_batch = to_device(next(iter(torch_geometric.dataloader.DataLoader(static, batch_size=1))), self.device)
         # The static cell never moves: its base features are geometry-only, cached once.
