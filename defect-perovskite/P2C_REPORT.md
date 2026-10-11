@@ -183,7 +183,89 @@ recorded, not adopted. Energy gate fails on every seed.
 
 ### 1.2 Rerun (half-width 0.1 × the element's own s–p splitting: Pb 0.72, Cs 0.16, Cl 1.29 eV; gap term on H0 − W)
 
-(to follow)
+Same seeds, folds, schedule and s_init as the first run; the two changes are the on-site half-width rule (`delta_rule="sp_splitting"`, frac 0.1) and the gap
+regulariser reading the Hamiltonian the model fills (H0 − W). Runs `dscc_p2cwbw2_s{0,2,6}` on b3 GPUs 4/5/7, 2026-10-11 13:14–22:00. B_s rows are the Phase 2b w01 models.
+
+#### Forces and energies: B_w against B_s (same seeds; held-out forces, per-component meV/Å; `model_avg.pt`)
+
+| arm | seed | total | 4–12 Å | 2–4 | 4–8 | 8–10 | 10–12 | 12+ | 79-atom E (meV/atom) | C_Q transfer (meV) | energy gate | s (B_s) / s_near (B_w) final |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| B_s | 0 | 13.72 | 12.24 | 23.8 | 13.2 | 10.9 | 9.9 | 8.1 | 0.54 | 7.0 | pass | 0.376 |
+| B_s | 2 | 13.88 | 12.40 | 24.1 | 13.3 | 11.2 | 9.8 | 7.8 | 0.50 | 4.2 | pass | 0.411 |
+| B_s | 6 | 14.37 | 12.94 | 24.8 | 13.8 | 11.9 | 9.9 | 6.5 | 0.46 | 13.4 | FAIL | 0.555 |
+| B_w | 0 | 13.54 | 12.23 | 22.7 | 12.8 | 11.4 | 10.8 | 8.1 | 0.61 | 6.5 | FAIL | 0.263 |
+| B_w | 2 | 13.12 | 11.81 | 22.3 | 12.5 | 10.8 | 10.1 | 7.7 | 0.49 | 6.9 | pass | 0.292 |
+| B_w | 6 | 16.90 | 15.11 | 29.6 | 16.2 | 13.7 | 12.3 | 8.7 | 0.72 | 3.4 | FAIL | 0.417 |
+
+Paired mean difference B_w − B_s (n = 3, point estimate): total 0.53 (per seed [-0.18, -0.76, 2.52]), 4–12 Å 0.52 (per seed [-0.01, -0.59, 2.17]); τ = 1.7. **B_w kept (within +tau or better on total, 4-12 A).**
+
+#### Level readouts (B_w; separation eV / N_eff / pass on the held fold's 79-atom +1 frames; separation / N_eff / Σdq(< 5 Å) on the 639-atom label-tiled structure (b))
+
+| seed | epoch | held F | s_near | dEp95 | +1 frames sep p50 / N_eff p50 / pass | embed sep / N_eff / Σdq(<5 Å) |
+|---|---|---|---|---|---|---|
+| 0 | 0 | — | 0.362 | 0.028 | 0.033 / 13.2 / 0.00 | 0.008 / 97.7 / 0.05 |
+| 0 | 5 | — | 0.353 | 0.135 | 0.060 / 5.8 / 0.00 | 0.024 / 10.6 / 0.44 |
+| 0 | 10 | — | 0.343 | 0.123 | 0.061 / 5.4 / 0.00 | 0.028 / 9.1 / 0.49 |
+| 0 | 20 | — | 0.319 | 0.178 | 0.055 / 5.1 / 0.00 | 0.023 / 7.5 / 0.55 |
+| 0 | 30 | — | 0.293 | 0.171 | 0.060 / 4.9 / 0.00 | 0.023 / 7.0 / 0.57 |
+| 0 | 40 | — | 0.272 | 0.223 | 0.056 / 4.9 / 0.00 | 0.027 / 6.7 / 0.58 |
+| 0 | 50 | — | 0.266 | 0.229 | 0.051 / 4.7 / 0.00 | 0.023 / 6.3 / 0.60 |
+| 0 | 59 | 13.58 | 0.261 | 0.232 | 0.051 / 4.7 / 0.00 | 0.022 / 5.8 / 0.63 |
+| 0 | avg | 13.54 | 0.263 | — | 0.052 / 4.7 / 0.00 | 0.022 / 6.1 / 0.61 |
+| 2 | 0 | — | 0.391 | 0.026 | 0.035 / 13.0 / 0.00 | 0.013 / 98.1 / 0.05 |
+| 2 | 5 | — | 0.383 | 0.231 | 0.083 / 5.5 / 0.05 | 0.020 / 13.0 / 0.38 |
+| 2 | 10 | — | 0.375 | 0.138 | 0.068 / 5.5 / 0.00 | 0.027 / 9.9 / 0.46 |
+| 2 | 20 | — | 0.353 | 0.191 | 0.064 / 5.3 / 0.00 | 0.031 / 8.3 / 0.52 |
+| 2 | 30 | — | 0.330 | 0.169 | 0.059 / 5.5 / 0.00 | 0.029 / 8.2 / 0.52 |
+| 2 | 40 | — | 0.310 | 0.178 | 0.053 / 5.5 / 0.00 | 0.029 / 7.6 / 0.55 |
+| 2 | 50 | — | 0.295 | 0.178 | 0.051 / 5.6 / 0.00 | 0.021 / 7.5 / 0.55 |
+| 2 | 59 | 13.14 | 0.288 | 0.183 | 0.050 / 5.6 / 0.00 | 0.019 / 7.3 / 0.56 |
+| 2 | avg | 13.12 | 0.292 | — | 0.050 / 5.6 / 0.00 | 0.020 / 7.4 / 0.55 |
+| 6 | 0 | — | 0.533 | 0.035 | 0.037 / 11.9 / 0.00 | 0.004 / 69.7 / 0.06 |
+| 6 | 5 | — | 0.522 | 0.123 | 0.069 / 5.9 / 0.02 | 0.036 / 9.5 / 0.46 |
+| 6 | 10 | — | 0.511 | 0.161 | 0.074 / 5.4 / 0.01 | 0.042 / 8.3 / 0.51 |
+| 6 | 20 | — | 0.481 | 0.204 | 0.064 / 5.7 / 0.00 | 0.039 / 8.4 / 0.51 |
+| 6 | 30 | — | 0.428 | 0.166 | 0.058 / 6.7 / 0.00 | 0.019 / 12.4 / 0.38 |
+| 6 | 40 | — | 0.423 | 0.181 | 0.048 / 6.4 / 0.00 | 0.022 / 9.9 / 0.47 |
+| 6 | 50 | — | 0.418 | 0.179 | 0.047 / 7.2 / 0.00 | 0.023 / 10.1 / 0.46 |
+| 6 | 59 | 16.85 | 0.415 | 0.187 | 0.049 / 6.6 / 0.00 | 0.023 / 9.7 / 0.48 |
+| 6 | avg | 16.90 | 0.417 | — | 0.048 / 6.8 / 0.00 | 0.024 / 9.7 / 0.47 |
+
+Cost, median s/epoch: B_w {0: 158.40092384815216, 2: 159.88571393489838, 6: 152.64598274230957}, B_s {}.
+
+**Force gate: kept.** Paired mean B_w − B_s is +0.53 meV/Å total and +0.52 on 4–12 Å (τ = 1.7). Seeds 0 and 2 are better than B_s on every shell except 10–12 Å;
+seed 6 is worse by 2.5 (its loss spiked at epoch 30, see below, and its held force error went from 16.2 to 19.9 in that epoch and did not fully recover). The 2–4 Å shell,
+where the first run lost most (26–30 vs 24), is now 22.3–22.7 against B_s's 23.8–24.8.
+
+**Energy gate (C_Q transfer ≤ 10 meV and 79-atom energy RMSE after C_Q ≤ 0.6 meV/atom):** seed 2 passes; seed 0 fails by 0.01 meV/atom (0.61); seed 6 fails (0.72).
+B_s itself fails on seed 6 (C_Q transfer 13.4). The transfer term is better than B_s on every seed (3.4–6.9 vs 4.2–13.4).
+
+**Large-N on the seed-median checkpoint (seed 0; `p2c_step0.py --stages 0.2 0.3`, local GPU, 22:16–22:31):**
+
+| structure (639 atoms) | separation (eV) | N_eff | Σdq(< 3 / 5 / 8 / 12 Å) | Pb–Pb across the vacancy (Å) |
+|---|---|---|---|---|
+| (b) label tiling, core re-relaxed by this checkpoint | 0.020 | 6.5 | 0.54 / 0.59 / 0.76 / 0.91 | 5.84 |
+| (a) relaxed tiling, existing core | 0.025 | 5.9 | 0.57 / 0.63 / 0.78 / 0.92 | 5.76 |
+| (a′) relaxed tiling, core re-relaxed | 0.027 | 6.6 | — / 0.59 / 0.75 / 0.90 | 5.90 |
+
+Fails all three thresholds (0.15 eV, N_eff ≤ 4, Σdq(< 5 Å) ≥ 0.8). The per-epoch readout on the same label-tiled structure without re-relaxation gave 0.022 / 6.1 / 0.61,
+so the relaxation changes little. On the 79-atom +1 training frames (0.3): separation p50 0.052 eV, N_eff p50 4.7 (seed 0), 5.6 (seed 2), 6.6–6.8 (seed 6); no
+correlation with the Pb–Pb distance across the vacancy (r = −0.03 / +0.02 over 928 frames). The hole this arm produces is the same size at 79 and 639 atoms
+(4.7 → 6.1, 5.6 → 7.4, 6.8 → 9.7 from the 79-atom frames to the 639-atom cell); B_s's goes 9 → 88.
+
+**Saturation (Stage-2 rule): none.** On the +1 frames the Pb on-site shift p95 is 0.20–0.30 eV against the 0.72 eV bound; at the two flanking Pb the mean |tanh| is
+0.45–0.59 (max 0.85–0.95 on single frames). The first run sat at |tanh| 0.97 on every frame. s_near ends at 0.263 / 0.292 / 0.417 (from 0.376 / 0.411 / 0.555); the
+first run's collapsed to 0.04–0.08. The compaction here is W's, not the readout's.
+
+**Spikes.** Seed 6's loss at epoch 30 was 190× its median; 99 % of that step's loss was the Γ-gap term (force part 1.7e-5, ordinary). Seed 0 had a 7× gap-term spike at
+epoch 36. The same signature (gap term, on-site shift p95 jumping in the same epoch) is in every arm trained on the w01 base: B_0 seeds 1/4/6, B_s seed 6, the first B_w
+seed 2. The replay of seed 6 with the per-step record (`dscc_p2cx_bw2_s6_replay`) is under way; its reading goes in §1.4.
+
+**Reading against the plan's outcomes.** The force and transfer numbers favour the rerun over B_s on two seeds of three. The large-N gate as written fails: the
+separation is 0.02 eV against 0.15, and N_eff is 6.5 against 4. §1.3 gives the evidence that bears on whether those thresholds describe this defect: the rerun's N_eff
+converges with cell size (unlike B_s), the 159-atom training frames have longer and more spread Pb–Pb bridges than the 79-atom frames, and the rerun's N_eff follows
+the bridge length in those frames (r ≈ +0.9), so a looser hole at 159–639 atoms is consistent with the geometry rather than with a failure to bind. The thresholds
+were written before the data; changing them is the user's decision, and it is to be made from §1.3, not from this arm's numbers.
 
 ### 1.3 What the hole's size depends on: cell size and the Pb–Pb bridge (readouts of 2026-10-11)
 

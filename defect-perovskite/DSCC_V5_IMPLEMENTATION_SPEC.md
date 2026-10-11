@@ -6741,3 +6741,20 @@ tested by the replay: the gap term's gradient changes direction when near-degene
 otherwise near zero (held by the gap term, invisible to the forces), has a near-zero Adam second moment and takes maximal normalised steps once a gradient appears, moving by
 ~1 eV within an epoch; the gap term then diverges and pulls it back to 2.40 at a displaced bias. The force fit takes the damage (rerun s6: 16.2 → 19.9). Replay launched 22:52:
 `dscc_p2cx_bw2_s6_replay` on b3 GPU 7 (UUID GPU-66ce2688), checkpoints at epochs 28–31, per-step record, stop after epoch 32.
+Addendum (22:58, before `steps.jsonl` is opened). (i) The first arm's run-away began in a gap-term spike epoch (seed 2, epoch 20, gap share 0.92): the gap event is the plausible
+trigger and the readout bound was the fix for the amplification, not for the trigger; the two fixes are complementary. (ii) In rerun seed 6 the unsigned p95 |shift| did not move
+through the 190× spike (0.19 → 0.17 → 0.19), so either the readout moved coherently per species (invisible to an unsigned p95) or an unbounded parameter carried it; the
+checkpoints at 28–31 are read for the per-group parameter change and the SIGNED species-mean on-site shift on the static cell. (iii) Expectation map, written now: if the l_gap
+profile across epoch 30 is one step → a parameter jump (Adam on a near-zero second moment: remedy Adam's ε / a per-group ε); if ~30 steps of 0.1 eV with the CBM-side levels
+reordering just before → the degenerate-edge trigger (remedy: a smooth definition of the gap at the edge); if the per-graph force errors rise while the gap is pulled back → the
+gap term's own restoring step does the force damage (remedy: the gap-to-force gradient balance; a 0.07 eV gap deviation already equals the whole force loss). None is a new loss.
+
+**2026-10-11 22:45 — Phase 2c Step 1, rerun arm B_w (Δ = 0.1 × s–p splitting; gap on H0 − W): result of record.** Runs `dscc_p2cwbw2_s{0,2,6}`, `model_avg.pt`.
+Forces (per-component meV/Å, total / 4–12 Å): 13.54/12.23, 13.12/11.81, 16.90/15.11 against B_s 13.72/12.24, 13.88/12.40, 14.37/12.94. Paired mean +0.53 total,
++0.52 on 4–12 Å (τ 1.7): **force gate kept**. Energy gate: s2 pass; s0 fail by 0.01 meV/atom (0.61); s6 fail (0.72); C_Q transfer 6.5/6.9/3.4 meV (B_s 7.0/4.2/13.4).
+Large-N on the seed median (seed 0), label tiling, core re-relaxed (local card, 22:16–22:31, `~/runs/dscc/p2c/bw2_s0/step0.json`): separation 0.020 eV, N_eff 6.5,
+Σdq(< 5 Å) 0.59 — **fails all three thresholds**; relaxed tiling 0.025 / 5.9 / 0.63. N_eff on the 79-atom +1 frames 4.7 / 5.6 / 6.8; 639 atoms 6.1 / 7.4 / 9.7. No
+saturation (Pb shift p95 0.20–0.30 eV; flank |tanh| mean 0.45–0.59): Stage-2 rule not engaged. s_near final 0.263 / 0.292 / 0.417. Cost 153–160 s/epoch. Outcome under
+the plan as written: neither B_s (0.016 / 87.5 / 0.11 in the label tiling) nor B_w passes large-N → outcome (c), unless the thresholds are re-read; the evidence for that
+reading (cell size, Pb–Pb bridge, 159-atom frames) is §1.3 of `P2C_REPORT.md` and the decision is the user's. Written to `P2C_REPORT.md` §1.2. Seed 6's epoch-30 spike is
+under investigation (replay running; entry above).
