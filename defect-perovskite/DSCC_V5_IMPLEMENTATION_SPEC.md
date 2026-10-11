@@ -6700,3 +6700,13 @@ s2 / s6 at +τ, n = 3; large-N in the label tiling on the seed-median checkpoint
 cards), one run per card (a run holds 14.6 GB of 24 GB; two per card do not fit at the registered batch size 4). Expectation written now: the saturated ±3 eV flanking-Pb solution
 is no longer representable (Pb width 0.72 eV); whether B_w then keeps W's compaction (s_near staying away from zero) with forces within τ of B_s is undetermined; the
 instability's return at epochs 17–25 under the new width would say the mechanism is not the readout bound alone.
+**Phase 2c Step 1 RESULT, first B_w arm (`dscc_p2cwbw_s{0,2,6}`, Δ 3.08 eV, gap on H0; 2026-10-11 19:12; `~/runs/dscc/p2c/P2C_GATES.json`, `step1.md`, `bw_s6/step0.json`).**
+Forces (averaged models, per-component meV/Å): B_w 15.18 / 16.00 / 15.75 against B_s 13.72 / 13.88 / 14.37 on seeds 0 / 2 / 6; paired mean B_w − B_s total +1.65 (per seed +1.46,
++2.12, +1.38), 4–12 Å +1.13 (+1.36, +1.37, +0.67); τ 1.7 → the registered force gate KEEPS B_w (total by 0.05). 2–4 Å 26.1 / 29.9 / 29.6 against 23.8 / 24.1 / 24.8. Energy gate
+FAILS on every B_w seed (79-atom E 0.60 / 0.84 / 0.78 meV/atom; C_Q transfer 6.9 / 13.1 / 20.4 meV; B_s fails on seed 6 only, transfer 13.4). s_near final 0.040 / 0.083 / 0.064.
+Stage-2 saturation flag (registered 16:20) applies to all three: flanking-Pb on-site readout at its ±3 eV rails. Seed-median checkpoint: seed 6 (15.75). Large-N (label tiling,
+core re-relaxed by that checkpoint, 133 steps, fmax 0.0012, dE −0.344 eV): separation 0.114 eV / N_eff 3.11 / Σdq(< 5 Å) 0.838 → **FAIL on the separation (≥ 0.15), pass on N_eff
+(≤ 4) and Σdq (≥ 0.8)**; relaxed tiling (a) 0.146 / 2.88 / 0.873, (a′) 0.142 / 2.89 / 0.875; B_s's own label-tiling read stands at 0.016 / 87.5 / 0.112. 0.3 on the 928 +1 frames:
+separation p50 0.134 eV (p90 0.225, max 0.347), N_eff p50 2.6, C5 pass 0.20, corr(separation, Pb–Pb) +0.02. Outcome under the plan's §2: neither (a) nor (b) — B_s does not pass
+in the label tiling and B_w passes two of three thresholds — and B_w's binding is the saturated-readout solution the investigation identified, so this arm is RECORDED, NOT ADOPTED;
+the rerun with the s–p half-width and the gap on H0 − W (`dscc_p2cwbw2_s*`) is the arm Step 1 is decided on.
