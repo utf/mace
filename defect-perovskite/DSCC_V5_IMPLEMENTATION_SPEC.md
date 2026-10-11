@@ -6718,3 +6718,8 @@ The thermal 79-atom median equals the 0 K 79-atom value for every model (B_s 8.3
 training cells. Reading: B_s's hole grows with the cell (a band state capped by the cell); the rerun's N_eff rises from 79 to 159 atoms and then stops (6.0 → 6.1; 6.9 → 7.4)
 — a bound state of six to seven atoms with half the charge on the two flanking Pb — which does not reach the registered N_eff ≤ 4 / Σdq ≥ 0.8; the first arm's size-independent
 N_eff 3–4 is the saturated-readout well.
+**Readout (2026-10-11 21:40): the Pb–Pb bridge and the hole's size.** 159-atom +1 frames have a longer, more varied Pb–Pb across the vacancy (median 6.11 Å, p10–p90
+5.21–6.98) than the 79-atom frames (5.83; 5.45–6.13). Within the 17 charged 159-atom frames the rerun B_w's N_eff follows the bridge length with r = +0.94 (s2) / +0.91 (s0);
+at matched bridge length (5.4–6.2 Å) the 159-atom frames read N_eff 5.4–6.2 against 4.0–4.8 at 79 atoms — the tail beyond 8 Å (≈ a quarter of the hole) that the 79-atom cell
+has no lattice for (27 atoms at 8–12 Å and 1 beyond, against 139 / 442 at 639). The first arm's N_eff (2.5–2.9, 85–89 % on the two flanking Pb) does not depend on the bridge
+length or the cell: a readout at its rail cannot respond. Entered in `P2C_REPORT.md` §1.3 for the user's decision on the large-N thresholds.

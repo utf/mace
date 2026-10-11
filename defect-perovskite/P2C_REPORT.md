@@ -184,3 +184,52 @@ recorded, not adopted. Energy gate fails on every seed.
 ### 1.2 Rerun (half-width 0.1 × the element's own s–p splitting: Pb 0.72, Cs 0.16, Cl 1.29 eV; gap term on H0 − W)
 
 (to follow)
+
+### 1.3 What the hole's size depends on: cell size and the Pb–Pb bridge (readouts of 2026-10-11)
+
+These readouts bear directly on how the large-N thresholds should be read. All are from the same instrument (the Hamiltonian the model fills);
+N_eff = 1/Σdq², the number of atoms the hole is spread over.
+
+**The same 0 K core in the perfect label lattice at 79 and 639 atoms, and the 17 charged 159-atom training frames (thermal DFT geometries).**
+The 159-atom data cell (16.0 × 22.5 × 15.7 Å) is not a tiling of the 80-atom label cell, so there is no 0 K point at that size.
+
+| model | N_eff: 79 atoms, 0 K | 79 atoms, thermal frames (median) | 159 atoms, training frames (median of 17) | 639 atoms, 0 K |
+|---|---|---|---|---|
+| B_s seed 2 | 9.2 | 8.3 | 10.3 (p10–p90 7.3–14.9) | 87.5 |
+| first B_w seed 2 | 3.5 | 3.5 | 3.8 | 3.8 |
+| first B_w seed 6 | 2.8 | 2.6 | 2.8 | 2.9 |
+| rerun B_w seed 0 | 4.7 | 4.2 | 6.0 (5.2–8.5) | 6.1 |
+| rerun B_w seed 2 | 5.4 | 5.1 | 6.9 (5.8–9.9) | 7.4 |
+
+Thermal disorder is not what localises the hole in the training cells: the 0 K 79-atom value equals the thermal median for every model. B_s's hole grows
+with the cell (a band state capped by the cell: two thirds of the Pb present at both sizes). The rerun's N_eff rises from 79 to 159 atoms and then stops
+(6.0 → 6.1; 6.9 → 7.4): a bound state of six to seven atoms. The first arm's N_eff is 2.5–2.9 everywhere.
+
+**The hole's charge by shell** (median; the 0–3 Å shell is empty in the 159-atom frames because their flanking Pb sit just beyond 3 Å):
+
+| model, structure | 0–3 Å | 3–5 Å | 5–8 Å | 8–12 Å | > 12 Å | N_eff |
+|---|---|---|---|---|---|---|
+| rerun B_w s2, 79 atoms 0 K | 0.58 | 0.07 | 0.22 | 0.13 | 0.00 | 5.4 |
+| rerun B_w s2, 159-atom frames | 0.00 | 0.45 | 0.17 | 0.25 | 0.01 | 6.9 |
+| rerun B_w s2, 639 atoms 0 K | 0.50 | 0.05 | 0.18 | 0.17 | 0.10 | 7.4 |
+| first B_w s6, 79 atoms 0 K | 0.85 | 0.05 | 0.06 | 0.04 | 0.00 | 2.8 |
+| first B_w s6, 639 atoms 0 K | 0.82 | 0.04 | 0.08 | 0.05 | 0.01 | 2.9 |
+| B_s s2, 79 atoms 0 K | 0.42 | 0.02 | 0.24 | 0.32 | 0.00 | 9.2 |
+| B_s s2, 639 atoms 0 K | 0.11 | 0.00 | 0.06 | 0.23 | 0.60 | 87.5 |
+
+Atoms available per shell (0–3 / 3–5 / 5–8 / 8–12 / > 12 Å): 79-atom cell 2 / 12 / 37 / 27 / 1; 159-atom cell 0 / 14 / 44 / 81 / 21; 639-atom cell 2 / 12 / 44 / 139 / 442.
+The rerun's hole keeps about a quarter of its charge beyond 8 Å; the 79-atom cell has almost no lattice there, so it truncates the tail and reads the hole
+smaller than it is.
+
+**The Pb–Pb bridge across the vacancy.** 79-atom +1 frames: median 5.83 Å (10–90 %: 5.45–6.13). 159-atom +1 frames: median 6.11 Å (5.21–6.98), a longer and
+much more varied bridge. The embedded 0 K cores sit at 5.76–5.91 Å. Within the 17 charged 159-atom frames the rerun's N_eff follows the bridge length almost
+exactly: r = +0.94 (seed 2), +0.91 (seed 0); in the 79-atom frames the correlation is +0.1 because the range is narrow. At matched bridge length (5.4–6.2 Å)
+the 159-atom frames still read N_eff 5.4–6.2 against 4.0–4.8 at 79 atoms, which is the truncated tail. The first arm shows no dependence on the bridge length
+at all (N_eff 2.5–2.9 and 85–89 % of the hole on the two flanking Pb in every cell and frame), as expected of a readout at its rail: it has no gradient left
+and cannot respond to the geometry.
+
+**Where the data can judge, they prefer the rerun's six-atom hole:** the 2–4 Å forces, the most direct probe of the hole's local structure, are 22.3–22.7 meV/Å
+for the rerun against 29.6–29.9 for the first arm and 23.8–24.1 for B_s, and the energy's size consistency from 79 to 159 atoms (C_Q transfer) is 6.5–6.9 meV
+against 13–20 for the first arm. Whether the physical hole is three atoms or six cannot be read from these labels without DFT levels on a larger cell. The
+registered thresholds (N_eff ≤ 4, Σdq(< 5 Å) ≥ 0.8) were written before any of this was known; the first arm meets the compactness part of them only through the
+saturated readout, and the rerun's bound state sits at about twice their extent. The decision on the thresholds is the user's.
