@@ -6776,3 +6776,19 @@ N_eff went 6.0 → 11.3 → 7.5 (the readout table's 5.7 → 6.7 at epoch 30 is 
 second moment of the hopping readout is now large: the optimiser "fixed" it by itself at the force fit's expense. (5) The first arm's run-away (seed 2, epoch 20) and the
 B_0 / B_s gap spikes share the signature; in those the readout bound was the amplifier, here the sp-splitting bound held (Pb shift p95 0.40 → 0.40) and the hopping
 readout carried it instead.
+
+**2026-10-12 00:25 — Spike fix registered (before the third run opens): a tolerance band on the existing Γ-gap term.** `L_gap = w · max(|E_gap,model − 2.40| − b, 0)²`
+with **b = k_B · 300 K = 0.0259 eV** (`TrainConfig.gap_band`, flag `--gap_band`; b = 0 is the previous form exactly, so earlier runs stay reproducible; helper
+`gap_loss` in train.py, test `test_gap_loss_tolerance_band`; full dscc suite run before launch). Rationale: the root is the gap mode sitting at Adam's stability limit
+(entry above), not the crossing; inside the band the term has no gradient, so there is nothing to oscillate, and an excursion δ past the edge is corrected by one kick
+of ≈ (G − 1)δ that lands in the silent zone (δ is the force term's drift per step, 1e-5–1e-4 eV; the band is 0.052 eV wide), so even the post-crossing gain of 4.4 cannot
+carry it to the far edge. The band is the thermal energy at the application temperature (300 K dynamics, the plan's own statement); the gap is held to within k_BT rather
+than to 1e-4 eV. Not a new loss term; no change to the gap target, weight, Δ rule, H0 − W reading, E_far, E_PP, r_c, r_split, ε∞. Rejected: lowering `gap_weight`
+(stabilises too, but is lr-, base- and schedule-dependent); a smoothed band edge (addresses the trigger, leaves the marginal oscillation) — registered as the fallback
+if any bw3 seed still shows a gap spike, not to be combined tonight. **Third run bw3** = `dscc_p2cwbw3_s{0,2,6}` (folds 0 2 2, s_init 0.376/0.411/0.555, the bw2 command
+plus `--gap_band 0.0259 --step_log 1`), b3 GPUs 4/5/7, queue `p2cw3_queue.sh`, finisher `p2cw3_finish.sh` (status `~/runs/dscc/p2c/P2C3_STATUS`).
+**Pass criteria, written now:** (1) no epoch in any seed with loss above 10× that seed's median; (2) on the step record, the period-2 statistic gone: sign-alternation
+fraction of (gap − 2.40) near 0.5 and lag-1 autocorrelation near 0 in every epoch after epoch 3 (replay: 0.80–0.92 and −0.9 to −0.98); (3) the static-cell gap inside
+[2.374, 2.426] eV at every epoch end, resting value reported per seed; (4) forces, energy gate (C_Q transfer ≤ 10 meV, 79-atom energy ≤ 0.6 meV/atom), large-N on the
+seed median (0.15 eV / N_eff ≤ 4 / Σdq(< 5 Å) ≥ 0.8, label tiling) and the Stage-2 saturation check read exactly as for bw2; B_s rows unchanged. Report: `P2C_REPORT.md`
+§1.4 (mechanism and fix), §1.5 (third run, three-way table B_s / bw2 / bw3).

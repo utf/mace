@@ -35,6 +35,13 @@ from mace.modules.dscc.species import state_from_carrier_counts
 from mace.tools import torch_geometric
 
 
+def gap_loss(gap: torch.Tensor, e_gap: float, weight: float, band: float = 0.0) -> torch.Tensor:
+    """The Gamma-gap regulariser `weight * max(|gap - e_gap| - band, 0)^2` summed over graphs. `band = 0`
+    is the plain square. The squared hinge has no gradient inside the band and a continuous gradient
+    at its edge (spike investigation II, 2026-10-12)."""
+    return weight * (torch.clamp((gap - e_gap).abs() - band, min=0.0) ** 2).sum()
+
+
 @dataclass
 class TrainConfig:
     """Registered training numbers (to confirm before Arm-1 results are opened)."""
@@ -49,6 +56,7 @@ class TrainConfig:
     r_cut: float = 10.0
     force_weight: float = 1.0
     gap_weight: float = 1.0           # L_gap = gap_weight (E_gap_model - E_gap)^2, eV^-2
+    gap_band: float = 0.0             # tolerance band b (eV): L_gap = gap_weight max(|E_gap_model - E_gap| - b, 0)^2; 0 = the plain square
     # v5 amendment A1: the weak L2 on the tanh outputs that replaces the pristine centre as
     # the thing keeping corrections near the element default. `L_l2 = l2_weight * sum_terms
     # mean(tanh^2)`, the same weight on every term. Registered 1.8e-6 = 0.05 * L_conv / 0.25,
@@ -557,7 +565,11 @@ class Trainer:
                                device=self.device)
         l_force = force_loss(out, batch, weights)
         gap = self.model.pristine_gap(self.static_batch, getattr(self, "static_features", None))
-        l_gap = self.cfg.gap_weight * ((gap - self.cfg.e_gap) ** 2).sum()
+        # Spike investigation II (2026-10-12): the plain square holds the gap to 1e-4 eV and sits at Adam's
+        # stability limit (a period-2 oscillation from epoch 3 on); a level crossing at the band edge tips it.
+        # Inside the band of half-width gap_band the term has no gradient, so there is nothing to oscillate;
+        # the squared hinge keeps the gradient continuous at the edge. gap_band = 0 is the previous form.
+        l_gap = gap_loss(gap, self.cfg.e_gap, self.cfg.gap_weight, self.cfg.gap_band)
         bz_read: Dict[str, float] = {}
         if getattr(self, "bz_batches", None) and getattr(self.cfg, "bz_gap", False):
             l_bz, bz_read = self.model.bz_penalty(self.bz_batches, self.bz_features, self.bz_kpts)

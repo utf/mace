@@ -206,3 +206,26 @@ def test_on_site_half_width_rules():
     assert torch.allclose(m.h0.sk.delta, (0.1 * (e[:, 0] - e[:, 1]).abs()).unsqueeze(-1).expand_as(e))
     m0 = _pol._model()
     assert torch.allclose(m0.h0.sk.delta, delta_from_baselines(m0.h0.sk.eps0, 0.4))      # the default is unchanged
+
+
+def test_gap_loss_tolerance_band():
+    """Spike investigation II: band 0 is the plain square; no gradient inside the band; the gradient is
+    continuous at the edge and matches a central difference outside it."""
+    from mace.modules.dscc.train import gap_loss
+    e_gap, w, b = 2.40, 1.0, 0.0259
+    for d in (-0.1, -0.01, 0.0, 0.004, 0.3):
+        g = torch.tensor([e_gap + d], dtype=torch.float64)
+        assert torch.allclose(gap_loss(g, e_gap, w, 0.0), w * torch.tensor([d * d], dtype=torch.float64))
+    for d in (-0.02, -0.001, 0.0, 0.01, 0.0258):
+        g = torch.tensor([e_gap + d], dtype=torch.float64, requires_grad=True)
+        gap_loss(g, e_gap, w, b).backward()
+        assert float(gap_loss(g, e_gap, w, b)) == 0.0 and float(g.grad.abs()) == 0.0
+    # continuity at the edge: the gradient just outside is O(epsilon)
+    g = torch.tensor([e_gap + b + 1e-6], dtype=torch.float64, requires_grad=True); gap_loss(g, e_gap, w, b).backward()
+    assert float(g.grad) == pytest.approx(2 * w * 1e-6, rel=1e-6)
+    # outside: analytic 2 w (|d| - b) sign(d) against a central difference
+    for d in (1.5 * b, -1.5 * b, 0.3):
+        g = torch.tensor([e_gap + d], dtype=torch.float64, requires_grad=True); gap_loss(g, e_gap, w, b).backward()
+        h = 1e-6; num = (float(gap_loss(torch.tensor([e_gap + d + h]), e_gap, w, b)) - float(gap_loss(torch.tensor([e_gap + d - h]), e_gap, w, b))) / (2 * h)
+        assert float(g.grad) == pytest.approx(2 * w * (abs(d) - b) * math.copysign(1, d), rel=1e-9)
+        assert float(g.grad) == pytest.approx(num, rel=1e-5)
