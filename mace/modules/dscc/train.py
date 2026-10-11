@@ -600,6 +600,8 @@ class Trainer:
                 if "s_near_raw" in n: return "s_near"
                 if ".sk.site" in n: return "on_site_readout"
                 if ".sk.hop" in n: return "hopping_readout"
+                if ".sk.eps0" in n: return "eps0"
+                if ".sk.v0_raw" in n or ".sk.decay_u" in n: return "sk_scalars"
                 if n.startswith("h0."): return "h0_other"
                 return "scales_other"
             for n, p in named:
