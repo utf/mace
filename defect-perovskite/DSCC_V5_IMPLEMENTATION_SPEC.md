@@ -6568,3 +6568,15 @@ localisation, a state-pinned fill, new Γ-gap cells, a fourth arm, changes to E_
 Expectations written before Step 0 is read: the relaxed cell (tilt 156°) is 0.25 Å rms from the label cell (167°) and outside the training distribution, so a band-edge shift
 between the two tilings of order 0.1 eV is plausible; the 79-atom separation (0.126 eV for w01 B_s s2 at the training geometry) bounds what the label tiling can show unless
 the core relaxation deepens it; 0.4 is expected to show cancelling positive and negative dq (N_eff counts |dq| weight, Σdq(< 5 Å) the signed sum).
+Step 0 specifics registered before any number is read (2026-10-11). (i) Decisive checkpoint for Decision 0: B_s (w01) seed 2, averaged weights; the base-v7 B_s seed 1 is
+corroboration. (ii) One diagnostic row added to 0.2 and its reason: in (a) the core was relaxed by the base-v2 head (`w6_s1_pol_r45.pt`, all 639 atoms, then truncated at
+R_core) while (b) is relaxed by the checkpoint under test with the far field fixed, so two things change at once; row (a′) = the relaxed tiling with the core re-relaxed by the
+same checkpoint under the same far-field-fixed protocol isolates the tiling. Decision 0 is read on the plan's rows (a) against (b); (a′) is reported beside them. (iii) The
+(b) start: the core displacements mapped onto the label tiling by atom index (both tilings are `repeat` of 80-atom cells with one ordering), not by position key; then BFGS
+(maxstep 0.1, fmax 0.002 as for `core.json`, ≤ 400 steps) on the atoms within 8 Å of the ideal vacancy site, the rest fixed. (iv) Instruments as the gate's: separation and
+N_eff from the reference-fill precondition on the neutral-labelled structure; Σdq(< 5 Å) and participation from the +1 forward; the +1 participation reported beside N_eff.
+(v) 0.1 anchor: the 80-atom label cell must give the registered 2.400 eV gap before the tilings are read; absolute VBM/CBM are reported and the criterion applied to the
+absolute CBM as written; whether H0 carries an absolute energy reference between geometries is recorded, not corrected. (vi) 0.4 expectation: the +1 forward's dq carries a
+compensation cloud of opposite sign to the hole, so its participation (8.2 on this frame in the earlier read) and the reference-fill hole's N_eff (1.4) describe different
+objects; if confirmed, the large-N gate's N_eff ≤ 4 and Σdq(< 5 Å) ≥ 0.8 measure different distributions, to be flagged before Step 1's gate is read. Script
+`defect-perovskite/p2c_step0.py` (stages 0.1–0.4, JSON per stage, status file), b3 GPU 7, CPU fallback for the relaxations on out-of-memory.
