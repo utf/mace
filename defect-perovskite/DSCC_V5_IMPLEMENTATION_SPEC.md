@@ -6607,3 +6607,10 @@ the rest of the +1 relaxation is. The large-N failure follows: the embedded core
 0.4 (first +1 79-atom frame, Pb–Pb from the flank pair): the reference-fill hole and the +1 forward's dq are the same distribution (sum 1.000, no negative part; N_eff
 8.25): within 3 Å 0.455, 3–5 Å 0.018, 5–8 Å 0.305, 8–12 Å 0.222. The plan's "N_eff 1.4 with Σdq(< 5 Å) 0.47" came from two frames (neutral-vacancy vs +1); on one
 frame the two instruments agree.
+**Step 0 corroboration on base v7, B_s seed 1 (`dscc_p2bs_s1/model_avg.pt` state dict; 2026-10-11 12:34; `~/runs/dscc/p2c/v7_bs_s1/step0.json`).**
+0.1: label cell VBM −10.046, CBM −7.646, gap 2.400 at 1×1×1 / 2×2×2 / 3×3×3; relaxed cell VBM −10.308, CBM −7.633, gap 2.675. Relaxed CBM 0.01 eV above the label's →
+criterion NOT met. 0.2 (639 atoms; separation / N_eff / Σdq(< 5 Å) / Pb–Pb): (a) 0.022 eV / 21.7 / 0.221 / 5.76 Å; (b) label tiling, core re-relaxed (114 steps) 0.009 eV /
+51.2 / 0.178 / 5.84 Å; (a′) 0.020 eV / 36.3 / 0.226 / 5.89 Å. Label-tiling separation is 0.4× the relaxed tiling's → criterion NOT met. 0.3 (928 +1 frames): separation
+p50 0.029 eV, N_eff p50 7.2, pass 0.00 in every Pb–Pb bin, corr(separation, Pb–Pb) −0.20. 0.4: hole = +1 forward dq (sum 1.000, no negative part), N_eff 6.0; within 3 Å
+0.536, 5–8 Å 0.273, 8–12 Å 0.165. Both checkpoints give the same Decision 0: **candidate (1) not confirmed; candidate (2) stands alone; Step 1 (arm B_w) proceeds and
+blocks Phase 3.** The §0 tables are in `defect-perovskite/P2C_REPORT.md`.
