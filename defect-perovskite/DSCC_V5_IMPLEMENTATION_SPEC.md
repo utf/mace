@@ -6641,3 +6641,16 @@ N_eff ≤ 4, Σdq(< 5 Å) ≥ 0.8; B_s's own label-tiling read (0.016 / 87.5 / 0
 9.2 on the 928 +1 frames, 0.016 / 87.5 on structure (b)), +0.411 and −0.411 (B_s's s and its negative): separation and N_eff on the same two sets. Expectation: UNDETERMINED — the
 sign of W on the hole's sites decides, and it has not been computed. Purpose: whether the host potential at B_s's scale moves the +1-geometry level at all, before 60 epochs × 3 seeds.
 (viii) Expectation for the arm: undetermined. After 0.3 the quantity that decides Phase 3 is the +1-geometry separation; the neutral-vacancy C5 remains reported.
+**Step 1 (vii) pre-training readout RESULT (2026-10-11 12:57; `~/runs/dscc/p2c/bw_readout_w01_s2.json`; B_s w01 seed 2's trained H0, near field moved into H0 at fixed
+s_near, nothing trained; instrument `filled_hamiltonians`).** On the 928 79-atom +1 frames (separation p50 / p90 / max eV; N_eff p50; C5 pass) and on structure (b)
+(separation / N_eff / Σdq(< 5 Å)): s_near = 0: 0.026 / 0.052 / 0.122; 9.15; 0.000 — (b) 0.016 / 87.5 / 0.112 (reproduces the B_s instrument exactly). s_near = +0.411
+(B_s's s): 0.038 / 0.069 / 0.136; **3.53**; 0.000 — (b) 0.031 / **3.3** / **0.814**. s_near = −0.411: 0.035 / 0.070 / 0.127; 16.2; 0.000 — (b) 0.033 / 135.5 / 0.010.
+W at s_near = 1 on (b): flanking Pb +0.32 / +0.27 eV, first-shell Cl +1.05 to +1.12 eV, range −0.90 to +1.14 eV, p95 |W| 0.80 eV. Reading: at B_s's own scale the host
+potential in H0 compacts the hole (N_eff 9 → 3.5 on the +1 frames; 87 → 3.3 and Σdq(< 5 Å) 0.11 → 0.81 at 639 atoms — two of the three large-N thresholds met with no
+training) while the separation moves from 0.016–0.026 to 0.03–0.04 eV (threshold 0.15 not met); the negative sign spreads the hole. Positive s_near is the direction;
+the training decides s_near and the forces. Not a gate; recorded before the arm is read.
+**Step 1 smoke (`dscc_p2cx_bw_smoke`, seed 2, one epoch, 2026-10-11 12:54).** Epoch 142 s against B_s w01's 127–132 s (the second eigendecomposition and the attached q0);
+the level readout 22 s per epoch (256 held-out 79-atom +1 frames and the 639-atom structure, which fits beside training: peak 14.7 GB on a 24 GB card, no fallback).
+After one epoch at lr 2e-3: s_near 0.411 → 0.131, +1 frames separation p50 0.068 eV / N_eff 7.7 / pass 0.07, structure (b) 0.010 / 105 / 0.07 (an untrained head; recorded as the
+cost measurement only). Cost accepted; the three seeds are queued on b3 GPUs 5 and 7 (by UUID GPU-ab7dd6b6 / GPU-66ce2688 — the index table re-verified after b3's 2026-10-05
+reboot; the Step 0 and large-N reads of 2026-09-30 / 10-11 had run on GPU 1 under a wrong UUID note, corrected in memory and reported to the user).
