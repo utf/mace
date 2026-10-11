@@ -99,6 +99,19 @@ ELEM_DIM_ENV = 8
 SATURATED = 0.95            # |tanh| above this counts as saturated in the A1 report
 
 
+def delta_from_sp_splitting(eps0: torch.Tensor, frac: float) -> torch.Tensor:
+    """Phase 2c (2026-10-11): the on-site half-width as a fraction of EACH ELEMENT'S OWN s-p
+    level splitting `|eps_s(Z) - eps_p(Z)|` from the Harrison table, the same for both shells.
+    Element-intrinsic (no dependence on which other species are present) with a physical
+    reading -- how far a level may move before the atom's valence character changes --
+    where `delta_from_baselines` gives one width for every element from the spread across
+    the species present (3.08 eV on CsPbCl3, which let a readout turn a Pb atom into a
+    different atom). Returned `[n_el, 2]`."""
+    e = eps0.detach()
+    split = (e[:, 0] - e[:, 1]).abs()
+    return (float(frac) * split).unsqueeze(-1).expand_as(e).clone()
+
+
 def delta_from_baselines(eps0: torch.Tensor, frac: float) -> torch.Tensor:
     """A1's `Delta_Z`: a registered fraction of the spread of the species onsite baselines,
     shared across shells. Host-free -- it reads the Harrison table through `eps0`, which is
@@ -350,7 +363,7 @@ class H0(nn.Module):
                  a_max: float = A_MAX_DEFAULT, b_max: float = B_MAX_DEFAULT,
                  on_site_range: float = ON_SITE_RANGE_DEFAULT, hidden: int = 64,
                  eta: float = ETA_DEFAULT, beta_b: float = 0.0, beta_a: float = 0.0,
-                 delta_frac: float = DELTA_FRACTION_DEFAULT,
+                 delta_frac: float = DELTA_FRACTION_DEFAULT, delta_rule: str = "baseline_spread",
                  readout_hidden: int = READOUT_HIDDEN_DEFAULT,
                  decoupled: bool = False, n_radial: int = N_RADIAL_DEFAULT,
                  readout_init_scale: Optional[float] = None,
@@ -414,6 +427,9 @@ class H0(nn.Module):
         self.a_max, self.b_max = float(a_max), float(b_max)
         self.eta, self.beta_b, self.beta_a = float(eta), float(beta_b), float(beta_a)
         self.delta_frac = float(delta_frac)
+        self.delta_rule = str(delta_rule)
+        if self.delta_rule not in ("baseline_spread", "sp_splitting"):
+            raise ValueError(f"delta_rule must be 'baseline_spread' or 'sp_splitting'; got {delta_rule!r}")
         self.screened, self.r_s3 = bool(screened), float(r_s3)
         self.sk = SlaterKosterH(num_elements, feature_dim, atomic_numbers=self.atomic_numbers,
                                 r_cut=self.r_cut, envelope="exp", hop_form="log",
@@ -426,7 +442,8 @@ class H0(nn.Module):
         # A1: the on-site half-width, AFTER the Harrison baselines are in place (the rule
         # reads them). Registered fraction times their spread.
         with torch.no_grad():
-            self.sk.delta.copy_(delta_from_baselines(self.sk.eps0, self.delta_frac))
+            self.sk.delta.copy_(delta_from_sp_splitting(self.sk.eps0, self.delta_frac) if self.delta_rule == "sp_splitting"
+                                else delta_from_baselines(self.sk.eps0, self.delta_frac))
         # Directional block: a per-species combination of the l = 1 channels and the two
         # bounded coefficients. Zero-initialised: the block starts absent and is learned.
         self.vector_mix = nn.Parameter(torch.zeros(num_elements, n_vectors))

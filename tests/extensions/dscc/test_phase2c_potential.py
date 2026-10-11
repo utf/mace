@@ -173,3 +173,36 @@ def test_filled_hamiltonian_is_the_instrument(arm_b):
     rec_w = bound_state_precondition(mw, [dict(_batch([VAC0]))], PreconditionConfig())["records"][0]
     rec_s = bound_state_precondition(ms, [dict(_batch([VAC0]))], PreconditionConfig())["records"][0]
     assert rec_w["separation"] != rec_s["separation"]
+
+
+def test_gap_regulariser_reads_the_filled_hamiltonian(arm_b):
+    """The Γ-gap term acts on H0 - diag(W) for B_w (the Route B / L3 rule), on H0 for B_s; both equal
+    the gap of `filled_hamiltonians` on the same cell."""
+    from tests.extensions.dscc.test_model import PRISTINE
+    from mace.modules.dscc.species import S_REF, neutral_count
+    b = _batch([PRISTINE])
+    for near in ("mulliken", "potential"):
+        m = _arm(arm_b, near)
+        gap = float(m.pristine_gap(dict(b)))
+        (H, numbers), = m.filled_hamiltonians(dict(b))
+        n_up, _ = S_REF.counts(neutral_count(numbers)); eps = torch.linalg.eigvalsh(H)
+        assert abs(gap - float(eps[n_up] - eps[n_up - 1])) < 1e-9, near
+    g_s = float(_arm(arm_b, "mulliken").pristine_gap(dict(b))); g_w = float(_arm(arm_b, "potential").pristine_gap(dict(b)))
+    assert abs(g_s - g_w) > 1e-6, "W changes the filled gap; the term must see it"
+    g_w0 = float(_arm(arm_b, "potential", s=0.0).pristine_gap(dict(b)))
+    assert abs(g_w0 - g_s) < 1e-9
+
+
+def test_on_site_half_width_rules():
+    from mace.modules.dscc.hamiltonian import delta_from_baselines, delta_from_sp_splitting
+    eps0 = torch.tensor([[-24.616, -11.747], [-3.404, -1.796], [-15.199, -8.029]])
+    d_old = delta_from_baselines(eps0, 0.4); d_new = delta_from_sp_splitting(eps0, 0.1)
+    assert torch.allclose(d_old, torch.full((3, 2), float(0.4 * eps0.reshape(-1).std(unbiased=False))))
+    assert torch.allclose(d_new[:, 0], torch.tensor([1.2869, 0.1608, 0.7170]), atol=1e-3) and torch.equal(d_new[:, 0], d_new[:, 1])
+    m = _pol.MACEDSCC(_pol._base(), r_cut=_pol.R_CUT, directional=True, hidden=16, coupling=False, route_b=True, scf_free=True,
+                      kernel=_pol.KernelConfig(regime="B", r_g=1.0, r_s=5.0), host_coupling="polarisation",
+                      field_provider=_pol._provider(), delta_rule="sp_splitting", delta_frac=0.1)
+    e = m.h0.sk.eps0.detach()
+    assert torch.allclose(m.h0.sk.delta, (0.1 * (e[:, 0] - e[:, 1]).abs()).unsqueeze(-1).expand_as(e))
+    m0 = _pol._model()
+    assert torch.allclose(m0.h0.sk.delta, delta_from_baselines(m0.h0.sk.eps0, 0.4))      # the default is unchanged

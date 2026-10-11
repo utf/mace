@@ -6688,3 +6688,15 @@ vacancy then depends on the on-site levels of those two atoms, the bounded reado
 the regime because its hole is spread over ~9 atoms. Candidate remedies, none implemented, for the user: (1) initialise B_w from the trained B_s head (`--init_state`, the
 registered L2 → L3 precedent) so W is tested on a converged small-correction head; (2) the on-site bound Δ at the scale the record justifies (B_s/W6 use ≤ 0.3 eV of 2.97; A1.1
 expected "several hundred meV"), an existing registered parameter, not a loss; (3) the Γ-gap on H0 − W. Seed 6 runs on under the registered settings; the finisher reads as registered.
+**Phase 2c Step 1 RERUN REGISTRATION — arm B_w with two changes (user's decision 2026-10-11; written 18:05, before launch).** (1) The on-site half-width Δ_Z: rule
+`sp_splitting`, Δ_Z = 0.1 × |ε_s(Z) − ε_p(Z)| of the element's own Harrison baselines, the same for both shells (`delta_from_sp_splitting`; `--delta_rule sp_splitting
+--delta_frac 0.1`): Cl 1.287, Cs 0.161, Pb 0.717 eV, against the A1 rule's 3.079 eV for every species (0.4 × the spread of all baselines present). Element-intrinsic and
+host-independent; the barrier knee (pre-activation 2.0) and weight are unchanged. Registered watch: Cs's width (0.16 eV) is at the scale of B_s's Cs shifts (p95 0.12–0.21 eV),
+so Cs may sit near its rail; the per-species saturation fractions per epoch are the reading, and a Cs rail is recorded, not a stop. (2) The Γ-gap term reads H0 − diag(W) for
+`near_field = "potential"` (the Route B / L3 rule); test added (gap = the filled Hamiltonian's gap for B_s and B_w; s_near = 0 reproduces B_s's). Everything else as the Step 1
+registration: seeds 0, 2, 6 → folds 0, 2, 2; s_init 0.376 / 0.411 / 0.555; W6 schedule; w01 base; the same per-epoch readouts; the same gates (forces paired against B_s s0 /
+s2 / s6 at +τ, n = 3; large-N in the label tiling on the seed-median checkpoint; energy gate). Run names `dscc_p2cwbw2_s{0,2,6}`; the first B_w runs stay on record as
+`dscc_p2cwbw_s*` and the finisher reads them as registered. Hardware: GPUs 4, 5, 7 of b3 by index (UUIDs GPU-90ae76fe / GPU-ab7dd6b6 / GPU-66ce2688; the user allowed three
+cards), one run per card (a run holds 14.6 GB of 24 GB; two per card do not fit at the registered batch size 4). Expectation written now: the saturated ±3 eV flanking-Pb solution
+is no longer representable (Pb width 0.72 eV); whether B_w then keeps W's compaction (s_near staying away from zero) with forces within τ of B_s is undetermined; the
+instability's return at epochs 17–25 under the new width would say the mechanism is not the readout bound alone.

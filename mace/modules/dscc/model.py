@@ -123,7 +123,7 @@ class MACEDSCC(nn.Module):
                  q_cut: float = Q_CUT_DEFAULT, a_max: float = A_MAX_DEFAULT,
                  b_max: float = B_MAX_DEFAULT, hidden: int = 64,
                  eta: float = ETA_DEFAULT, beta_b: float = 0.0, beta_a: float = 0.0,
-                 delta_frac: float = DELTA_FRACTION_DEFAULT,
+                 delta_frac: float = DELTA_FRACTION_DEFAULT, delta_rule: str = "baseline_spread",
                  scf: Optional[ScfOptions] = None,
                  les_cross: bool = False, les_sign: float = 1.0, les_well: bool = False,
                  host_coupling: str = "mulliken", field_provider: Optional[nn.Module] = None,
@@ -177,7 +177,7 @@ class MACEDSCC(nn.Module):
         self.h0 = H0(self.atomic_numbers, feature_dim=n_s, n_vectors=n_v, r_cut=self.r_cut,
                      q_cut=q_cut, directional=directional, a_max=a_max, b_max=b_max,
                      hidden=hidden, eta=eta, beta_b=beta_b, beta_a=beta_a,
-                     delta_frac=delta_frac, decoupled=self.decoupled, n_radial=n_radial,
+                     delta_frac=delta_frac, delta_rule=delta_rule, decoupled=self.decoupled, n_radial=n_radial,
                      readout_init_scale=readout_init_scale,
                      screened=self.screened, r_s3=self.r_s3,
                      correlation2=self.correlation2,
@@ -1177,6 +1177,14 @@ class MACEDSCC(nn.Module):
                 H = self.well_terms(H.unsqueeze(0), g_lr, q_les_all[nodes].unsqueeze(0))[0][0]
             sp_g = species[nodes]
             numbers = [self.atomic_numbers[int(s_)] for s_ in sp_g.tolist()]
+            if getattr(self, "near_field", "off") == "potential":
+                # Phase 2c arm B_w: the Hamiltonian actually filled is H0 - diag(W) (the rule
+                # Route B and L3 follow); the first B_w runs read H0 here, a recorded defect.
+                n0 = torch.tensor([[float(N0[z]) for z in numbers]], dtype=H.dtype, device=H.device)
+                r_up, r_dn = State(0, 0, 0).counts(neutral_count(numbers))
+                one = lambda v: torch.tensor([float(v)], dtype=H.dtype, device=H.device)  # noqa: E731
+                H = self.near_field_terms(H.unsqueeze(0), n0, (one(r_up), one(r_dn)),
+                                          [(data["edge_index"][:, e_mask] - lo, edge_vector[e_mask])])[0][0]
             if self.route_b and not getattr(self, "scf_free", False):
                 # v4.2: the gap regulariser acts on H0 - W with W from the pristine q0.
                 # NOT in W6: there the host term is an ENERGY, never a potential -- the

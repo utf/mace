@@ -80,6 +80,7 @@ def main() -> None:
     ap.add_argument("--beta_b", type=float, default=0.0,
                     help="rank-2 environment bound; 0 in W3 (species b_Z), moved by the W4 factorial")
     ap.add_argument("--beta_a", type=float, default=0.0, help="rank-1 environment bound; 0 in W3")
+    ap.add_argument("--delta_rule", default="baseline_spread", help="on-site half-width rule: baseline_spread (A1: frac x spread of all baselines) | sp_splitting (Phase 2c: frac x the element's own s-p splitting)")
     ap.add_argument("--delta_frac", type=float, default=DELTA_FRACTION_DEFAULT,
                     help="Delta_Z as a fraction of the spread of the species onsite baselines")
     ap.add_argument("--l2_weight", type=float, default=1.8e-6,
@@ -228,8 +229,10 @@ def main() -> None:
                      readout_init_scale=cfg.readout_init_scale,
                      kernel=kernel_cfg,
                      eta=args.eta, beta_b=args.beta_b, beta_a=args.beta_a,
-                     delta_frac=args.delta_frac,
+                     delta_frac=args.delta_frac, delta_rule=args.delta_rule,
                      scf=ScfOptions(n_max=args.n_max)).to(args.device)
+    logging.info("on-site half-width rule %s (frac %.3f): Delta per species %s eV", args.delta_rule, args.delta_frac,
+                 {int(z): round(float(model.h0.sk.delta[i, 0]), 3) for i, z in enumerate(model.atomic_numbers)})
     logging.info("A1.1: standardisation %s, readout final scale %.3f",
                  "ON" if model.standardise_inputs else "OFF", float(model.h0.sk.readout_init_scale))
     if model.les_cross:
