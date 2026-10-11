@@ -345,24 +345,24 @@ replay drifts from the original after epoch 26, but the spike reproduced at epoc
 5. The same gap-term signature with an on-site jump in the same epoch is in the B_0 and B_s spikes and in the first B_w arm's run-away (seed 2, epoch 20). In those
    the unbounded or wide on-site readout was the amplifier; with the sp-splitting bound in place the hopping readout took the role.
 
-**The fix (registered 00:25, before the third run opened): a tolerance band on the existing Γ-gap term.**
+**The fix.** Two candidates were registered from the replay: a tolerance band on the gap term (no gradient within ±k_BT of the target) and a smooth definition
+of the band edges. The band was tried first (third run, bw3) and withdrawn after nine epochs: inside the band it behaved as designed (gap term silent, no
+oscillation), but when the force term carried the gap to the band's edge the first restoring step was a 0.13 eV kick for a 0.02 eV excursion, followed by a ±0.1 eV
+oscillation across the band and a doubled force error for 25 steps (seeds 6 and 2, epochs 5 and 8; step records kept). The kick and the original spike are one
+mechanism: a gap gradient arriving in a direction whose Adam second moment is empty is amplified — the crossing emptied it for the new eigenvector, the band for
+the whole gap direction. The fix of record is therefore the smooth band edge: each edge is the Boltzmann-weighted mean of the levels nearest it at σ = k_B · 300 K
+= 0.0259 eV, so the gap and its gradient are continuous when edge levels cross or are degenerate, and the gradient is always present so Adam's statistics stay
+informed. The plain square is kept; σ = 0 is the hard gap exactly; nothing else changes (target, weight, Δ rule, the H0 − W reading, E_far, E_PP, r_c, r_split, ε∞);
+no new loss term. The regulariser now holds the smoothed gap at 2.40 and the hard gap rests a few meV below; both are reported. Flag `--gap_sigma`, helper
+`smooth_gap`, test `test_smooth_gap_continuous_across_a_crossing`. The marginal period-2 state of the plain square (amplitude ~1e-4 eV) is expected to remain; the
+test of the fix is that no crossing tips it.
 
-    L_gap = w · max(|E_gap,model − 2.40| − b, 0)²,   b = k_B · 300 K = 0.0259 eV
+**Pass criteria written before the results:** no epoch in any seed with loss above 10× that seed's median (epochs ≥ 2); after epoch 2 no step with a gap-term
+loss above 1e-3 and a maximum per-step |gap − 2.40| below 0.01 eV (replay: 24 steps and 0.52 eV; band runs: 9 and 6 steps and 0.11 eV); the hard gap at every
+epoch end within 2.40 ± 0.01; forces, energy gate, large-N and saturation read exactly as for the rerun.
 
-Inside the band the term has no gradient, so there is nothing to oscillate. An excursion δ beyond the edge is corrected by one step of about (G − 1)δ, which lands
-inside the silent zone; δ is set by the force term's drift per step (1e-5 to 1e-4 eV) and the band is 0.052 eV wide, so even the post-crossing gain of 4.4 cannot
-carry the gap across it. The band is the thermal energy at the application temperature: the gap is held to within k_BT rather than to 1e-4 eV. It is not a new loss
-term, b = 0 is the previous form exactly, and nothing else changes (target, weight, Δ rule, the H0 − W reading, E_far, E_PP, r_c, r_split, ε∞). Flag `--gap_band`,
-helper `gap_loss`, test `test_gap_loss_tolerance_band`; the full dscc suite (386 tests) passed before launch. Rejected alternatives: lowering the gap weight
-(stabilises too, but depends on learning rate, base and schedule); a smoothed band edge (removes the trigger but leaves the marginal oscillation), kept as the
-registered fallback should a bw3 seed still spike.
+### 1.5 Fourth run (the rerun's settings plus the smooth band edges)
 
-**Pass criteria written before the results:** no epoch in any seed with loss above 10× that seed's median; alternation fraction near 0.5 and lag-1 autocorrelation
-near 0 in every epoch after epoch 3 (the direct test of the mechanism); the static-cell gap inside [2.374, 2.426] eV at every epoch end; forces, energy gate, large-N
-and saturation read exactly as for the rerun.
-
-### 1.5 Third run (the rerun's settings plus the gap tolerance band)
-
-(to follow: three-way per-seed table B_s / rerun / third run, the period-2 statistic per seed, the gap's resting value, energy gate, large-N on the seed median,
+(to follow: three-way per-seed table B_s / rerun / fourth run, the stability table per seed, the gap's resting values, energy gate, large-N on the seed median,
 saturation, N_eff)
 
