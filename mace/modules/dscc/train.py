@@ -42,6 +42,26 @@ def gap_loss(gap: torch.Tensor, e_gap: float, weight: float, band: float = 0.0) 
     return weight * (torch.clamp((gap - e_gap).abs() - band, min=0.0) ** 2).sum()
 
 
+def apply_plain_step(params, grads, lr: float, cap: float = 0.0) -> float:
+    """`theta -= lr * grad` for each (param, grad) pair, with the step's global norm capped at `cap`
+    (0 = no cap). Returns the norm of the step applied. Used for the Gamma-gap term when `gap_lr > 0`:
+    the constraint's gain is then `lr * 2w * |dgap/dtheta|^2`, deterministic and independent of Adam's
+    second-moment statistics (spike investigation II, 2026-10-12)."""
+    if lr <= 0.0:
+        return 0.0
+    with torch.no_grad():
+        gn = float(sum(float((g.detach() ** 2).sum()) for g in grads if g is not None) ** 0.5)
+        if gn == 0.0:
+            return 0.0
+        scale = lr
+        if cap > 0.0 and lr * gn > cap:
+            scale = cap / gn
+        for p, g in zip(params, grads):
+            if g is not None:
+                p.add_(g, alpha=-scale)
+        return scale * gn
+
+
 @dataclass
 class TrainConfig:
     """Registered training numbers (to confirm before Arm-1 results are opened)."""
@@ -56,6 +76,8 @@ class TrainConfig:
     r_cut: float = 10.0
     force_weight: float = 1.0
     gap_weight: float = 1.0           # L_gap = gap_weight (E_gap_model - E_gap)^2, eV^-2
+    gap_lr: float = 0.0               # > 0: the gap term's gradient is applied as a plain step theta -= gap_lr * grad OUTSIDE Adam (second lever, 2026-10-12); 0 = through Adam as before
+    gap_step_cap: float = 0.01        # cap on the norm of that plain step (parameter units)
     gap_sigma: float = 0.0            # smooth band edges of the Gamma-gap term (eV; Boltzmann-weighted edge levels); 0 = hard gap
     gap_band: float = 0.0             # tolerance band b (eV): L_gap = gap_weight max(|E_gap_model - E_gap| - b, 0)^2; 0 = the plain square
     # v5 amendment A1: the weak L2 on the tanh outputs that replaces the pristine centre as
@@ -605,10 +627,17 @@ class Trainer:
         l_l2 = self.cfg.l2_weight * sum(reg.values()) if reg else l_force.new_zeros(())
         bar = self.model.h0.sk.barrier()
         l_sat = self.cfg.sat_weight * sum(bar.values()) if bar else l_force.new_zeros(())
-        loss = self.cfg.force_weight * l_force + l_gap + l_l2 + l_sat + l_energy
-        loss.backward()
         named = [(n, p) for n, p in self.model.named_parameters() if p.requires_grad]
         params = [p for _, p in named]
+        gap_grads = None
+        if getattr(self.cfg, "gap_lr", 0.0) > 0.0:
+            # Second lever: the gap term's gradient is taken separately and applied as a plain step after
+            # Adam's, so Adam's moments never see it and its gain does not depend on the force gradient's scale.
+            gap_grads = torch.autograd.grad(l_gap, params, allow_unused=True, retain_graph=True)
+            loss = self.cfg.force_weight * l_force + l_l2 + l_sat + l_energy
+        else:
+            loss = self.cfg.force_weight * l_force + l_gap + l_l2 + l_sat + l_energy
+        loss.backward()
         groups: Dict[str, float] = {}
         if getattr(self.cfg, "step_log", False):
             def group_of(n):
@@ -625,6 +654,7 @@ class Trainer:
             groups = {k: v ** 0.5 for k, v in groups.items()}
         total_norm = torch.nn.utils.clip_grad_norm_(params, self.cfg.grad_clip)
         optimizer.step()
+        gap_step_norm = apply_plain_step(params, gap_grads, self.cfg.gap_lr, self.cfg.gap_step_cap) if gap_grads is not None else 0.0
         diag = out.get("diagnostics", {})
         conv = diag.get("converged", [])
         per_graph_err = None
@@ -635,7 +665,7 @@ class Trainer:
             cnt = torch.bincount(batch["batch"], minlength=ng).to(d2.dtype)
             per_graph_err = (1000.0 * torch.sqrt(sums / cnt / 3.0)).cpu().tolist()     # per-component meV/A
         return {"loss": float(loss), "force": float(l_force), "gap": float(gap[0]), **bz_read,
-                "l_gap": float(l_gap), "grad_norm": float(total_norm), "grad_groups": groups,
+                "l_gap": float(l_gap), "grad_norm": float(total_norm), "grad_groups": groups, "gap_step_norm": gap_step_norm,
                 "gap_edges": getattr(self.model, "_gap_edges", None), "frames": list(frame_indices), "force_err_per_graph": per_graph_err,
                 "l2": float(l_l2), "sat": float(l_sat), "energy": float(l_energy),
                 "unconverged": int(sum(1 for c in conv if c is False)),

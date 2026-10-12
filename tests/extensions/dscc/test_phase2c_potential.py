@@ -256,3 +256,34 @@ def test_smooth_gap_continuous_across_a_crossing():
     # an isolated edge far from other levels: smooth equals hard to exp(-d/sigma)
     far = torch.tensor([-10.0, -9.9, -9.0, -6.0, -5.0, -4.0], dtype=torch.float64)
     assert float(smooth_gap(far, 3, sigma)) == pytest.approx(3.0, abs=1e-9)
+
+
+def test_plain_step_outside_adam_is_proportional_and_capped():
+    """Second lever (spike investigation II): the plain step's response to a stiff scalar constraint is
+    proportional with gain lr * 2w * |dgap/dtheta|^2, independent of Adam's state; lr = 0 is a no-op; the
+    cap bounds the step's norm."""
+    from mace.modules.dscc.train import apply_plain_step, gap_loss
+    torch.manual_seed(0)
+    a = torch.randn(1000, dtype=torch.float64) * 0.3                      # dgap/dtheta, |a|^2 ~ 90: a stiff mode
+    theta = torch.zeros(1000, dtype=torch.float64, requires_grad=True)
+    w, target = 1.0, 2.40
+    def gap(th): return 2.0 + (a * th).sum()
+    # lr = 0: nothing moves
+    g0 = torch.autograd.grad(gap_loss(gap(theta).unsqueeze(0), target, w), [theta])
+    assert apply_plain_step([theta], g0, 0.0, 0.01) == 0.0 and float(theta.abs().max()) == 0.0
+    # proportional response: one plain step changes the gap by -gain * (gap - target), gain = lr * 2w * |a|^2
+    lr = 0.5 / (2 * w * float((a * a).sum()))                               # gain 0.5
+    e0 = float(gap(theta)) - target
+    apply_plain_step([theta], g0, lr, 0.0)
+    e1 = float(gap(theta)) - target
+    assert e1 == pytest.approx(0.5 * e0, rel=1e-9)
+    # ten steps converge monotonically, no sign change (gain < 1)
+    errs = [e1]
+    for _ in range(10):
+        g = torch.autograd.grad(gap_loss(gap(theta).unsqueeze(0), target, w), [theta]); apply_plain_step([theta], g, lr, 0.0); errs.append(float(gap(theta)) - target)
+    assert all(abs(errs[i + 1]) < abs(errs[i]) for i in range(len(errs) - 1)) and all(e * errs[0] > 0 for e in errs)
+    # the cap bounds the step's norm
+    theta2 = torch.zeros(1000, dtype=torch.float64, requires_grad=True)
+    g = torch.autograd.grad(gap_loss(gap(theta2).unsqueeze(0), target, w), [theta2])
+    n = apply_plain_step([theta2], g, 1.0, 0.01)
+    assert n == pytest.approx(0.01) and float(theta2.norm()) == pytest.approx(0.01)
