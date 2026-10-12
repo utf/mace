@@ -6989,3 +6989,5 @@ unit-charge 0.67 / 0.76 / 0.84 / 0.85; cosines 0.94–0.99. The 639-atom Born fo
 §2.4 frozen ladder dE = 8.1579 / 8.1674 / 8.1936 / 8.1971 eV at 639 / 959 / 2159 / 2879; Σdq(<12 Å) 0.911 / 0.863 / 0.869 / 0.861, N_eff 5.08 / 4.99 / 4.90 / 4.78.
 Over 959–2879 the range is 29.6 meV (not flat to 5 meV); E∞ + c/L³ fits those three points to < 1 meV (E∞ 8.213, c −1597 eV Å³) with the held-out 639 missing by +13 meV.
 If bw5 stands, the §0 compactness gate fails at 2159 (0.869 < 0.9) and the §2.4 flatness criterion fails; the registered consequence is §2.6 "stop and report". Read formally when the checkpoint is fixed.
+§2.1 provisional at 2879 atoms (bw5 s0, CPU 175 s; E_far switched −29.08 meV = head e_host): actual-dq ratio 0.90 / 0.94 / 0.97 / 0.98 at 12–14 / 14–17 / 17–20 / 20–24 Å
+(cosines 0.99; species within 0.03 of each other), unit-charge 0.72 / 0.79 / 0.87 / 0.91. Σdq(<3/5/8/12) 0.35 / 0.69 / 0.76 / 0.86, N_eff 4.78.
