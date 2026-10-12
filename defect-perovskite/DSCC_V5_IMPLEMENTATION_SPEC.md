@@ -6970,3 +6970,8 @@ the first arm's pathology is back at a smaller scale. Not launched. GPUs 4/5/7 o
   flank |tanh| > 0.9 on ≥ 2 seeds → bw5 stands. Model of record meanwhile: bw5 seed 0 `model_avg.pt`.
 - Not permitted: retraining beyond bw6; changes to r_split, r_c, ε∞, E_PP or the switch; reading the ladder against ε₀_LST as pass/fail; reusing base-v2 tilings; new arms.
 Run directory `~/runs/dscc/p3a/`; report `P3A_REPORT.md`.
+Phase 3a, further registrations before launch (2026-10-12 ~10:00): (i) §1's Σdq(< 12 Å) ≥ 0.9 criterion is read on the label tiling (b) with the core re-relaxed by the
+checkpoint (the finisher's existing row), not on the base-v2 relaxed tiling (reuse forbidden); the §0 gate proper is read later on the new base-v8-relaxed tiling.
+(ii) bw6's paired force read uses bw5 as the comparator (`--bs` = the bw5 runs), so the "B_s" rows of `step1_bw6.md` are bw5. (iii) The local card is a 16 GB
+A4000, not the plan's 24 GB; items that do not fit go to the CPU as the plan allows. (iv) Per-epoch flank |tanh| p50 added to the level readout
+(`flank_tanh_p` in train.py; readout only).
