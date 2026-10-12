@@ -6951,3 +6951,10 @@ Addendum (09:15): the same check on bw4 (w = 1, σ; `sat_bw4_s{0,2,6}.json`): fl
 "two bounds doing each other's work" sentence of 08:55 is an inference, not established, and is relabelled as the reading. bw5 asks for a flank well 1.6× deeper than
 B_s puts there and 4.4× shallower than the first arm's run-away; the fraction 0.1 behind the 0.72 eV bound was my choice, not a derived value. The
 pinned-versus-bound discriminator of §1.3 (N_eff across cell size and against the Pb–Pb bridge in the 159-atom frames) is being run on bw5 s0 and bw4 s2.
+Addendum (09:30) — **the pinned-versus-bound discriminator says bw5's readout is not pinned.** `p2c_ladder0k.py` (`ladder0k_bw45.json`) and the 159-atom bridge
+read: bw5 s0 N_eff 3.9 (79 atoms, 0 K) → 4.5 (159-atom frames, median; range 3.8–8.0) → 4.3 (639 atoms, 0 K), Σdq5 0.76 / 0.71 / 0.72; in the 17 charged 159-atom
+frames N_eff follows the Pb–Pb bridge with r = +0.92 (rerun s0 +0.91, bw4 s2 +0.87; the first arm, pinned, had N_eff 2.5–2.9 everywhere and no dependence). So the
+flank readout at 0.67 of 0.72 eV still carries gradient and responds to geometry; the fifth run is a model at a bound I set at frac 0.1, not the first arm's run-away.
+The Stage-2 rule as written still applies (a bound binding on the sites); whether to loosen the bound is the user's decision, and the discriminating run is one at a
+larger fraction (0.2 → Δ_Pb 1.43 eV): a finite settling with |tanh| well below 1 says frac 0.1 was too tight and bw5's physics stands; running to the new bound says
+the first arm's pathology is back at a smaller scale. Not launched. GPUs 4/5/7 on b3 are idle; all monitors stopped.

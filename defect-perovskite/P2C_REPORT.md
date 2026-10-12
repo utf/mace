@@ -527,3 +527,9 @@ than the first arm's run-away; the fraction 0.1 behind the 0.72 eV bound was my 
 not an optimum; whether a 0.67 eV well at a bound set at 0.72 is that pathology or a bound set too tight is decided by the discriminator §1.3 established (N_eff
 across cell size and against the bridge length), reported below, and by one run at a larger fraction, not launched.
 
+**The discriminator.** The fifth run's hole is not the first arm's pinned one: N_eff moves with cell size (3.9 at 79 atoms, 4.5 in the 159-atom frames, 4.3 at
+639) and follows the Pb–Pb bridge in the 159-atom frames with r = +0.92 (rerun +0.91; the first arm was flat at 2.5–2.9 with no dependence). The readout at
+0.67 of its 0.72 eV bound still carries gradient and responds to geometry. What remains open is whether the bound itself is too tight, and the test is one run at
+a larger fraction (0.2 → Δ_Pb 1.43 eV): a finite settling with |tanh| well below 1 says the fifth run's physics stands; running to the new bound says the first arm's
+pathology is back at a smaller scale. Not launched.
+
