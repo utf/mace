@@ -6869,3 +6869,9 @@ within 2.40 ± 0.005; (4) the discriminating test, readable by epoch 5: sign-alt
 bw5 still shows 0.8–0.9, w = 0.1 did not take the mode below the limit and the second lever is needed; (5) gates as bw2. **Second lever, prepared and not run:** the
 gap term's gradient applied as a plain step outside Adam (gain η · 2w · ‖S‖², deterministic, independent of the force gradient's scale; ‖S‖² ran 272 → 61 over
 training, so η · w ≈ 0.003 holds it under 1 throughout), with a cap on the per-step correction; to be coded and tested if time allows, registered as available.
+Addendum (04:30): the second lever is coded and tested, default off, not run on the seeds: `TrainConfig.gap_lr` / `--gap_lr` (the gap term's gradient taken by
+`autograd.grad`, excluded from Adam's loss, applied after `optimizer.step()` as `θ −= gap_lr · ∇L_gap`, global step norm capped by `gap_step_cap`, default 0.01;
+`apply_plain_step` in train.py; `gap_step_norm` in the step record); test `test_plain_step_outside_adam_is_proportional_and_capped` (gain lr · 2w · ‖S‖², monotone
+convergence, cap). Suggested setting if chosen: gap_lr · gap_weight ≈ 0.003 (gain 0.2–0.8 over the measured ‖S‖² range 61–272 at w = 1). A one-epoch smoke of the
+code path (`dscc_p2cx_gaplr_smoke`, local GPU 0, seed 6 fold 2, `--gap_lr 0.003 --gap_sigma 0.0259 --stop_after_epoch 0`) is running; its result is noted below.
+Commit 5ab1f7b. Not synced to b3 (the running bw4 and the queued bw5 use the b3 copy with σ and the band flag only).
