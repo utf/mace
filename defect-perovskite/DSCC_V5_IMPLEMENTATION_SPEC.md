@@ -7010,3 +7010,9 @@ Phase 3a §2.5 ladder read (2026-10-12 18:10, bw5 s0): ΔE_relax = −0.4525 / �
 56–70 BFGS steps; 2879 took 2.6 h on the CPU). Fit ΔE_∞ + (Q²C/2)(1/ε∞ − 1/ε₀)·α/L: ΔE_∞ = −0.574 eV, slope 1.274 eV Å, **ε₀_ladder = 13.7** (leave-one-out 13.4–14.1),
 residuals < 0.5 meV. Against the §0 rule: above 2ε∞ (pass) but ABOVE the registered band 7.5–11.7 from the base's own ε_L(2π/L) (W6 4.33 and the frozen-provider variant
 3.74 are the previous values). The linear-response check decides whether the extra screening is the model relaxing beyond its own harmonic response or the ε_L(2π/L) mapping being too coarse.
+Phase 3a §2.5 linear response and §2.6 verdict (2026-10-12 18:40): u_pred = (K_base + K_PP)⁻¹F on the 2823 far atoms of the 2879 structure vs the relaxed displacements:
+ratio 1.08 / 1.10 / 1.10 / 1.19 / 1.33 / 1.43, cosine 0.98 / 0.96 / 0.94 / 0.89 / 0.78 / 0.71 at 8–10 … 20–24 Å (K_base alone 1.19–1.94): the criterion holds to 14 Å and fails
+beyond. Harmonic far-field energy −0.1615 eV vs actual −0.1536 (95 %); fmax 0.002 resolves ~1 mÅ per atom against the diagonal stiffness 2.0 eV/Å², the far shells sit at 3–6 mÅ
+(convergence caveat recorded; a tighter fmax was not registered and is not run). Far-field profile exponents Cs −2.54, Pb −2.67, Cl −2.95.
+**§2.6 verdict: stop and report** (§2.4's 1/L term above 5 meV; §0 compactness fails at 2159; ε₀_ladder 13.7 above the §2.2 band; linear response fails beyond 14 Å).
+§2.1 and §2.3 pass. Report `P3A_REPORT.md` complete; figures in ~/runs/dscc/p3a/. Decisions on the chain tail and the far-field tolerance are the user's.

@@ -88,6 +88,11 @@ b = next(iter(tg.dataloader.DataLoader(dd.atomic_data([a], z3, model.r_cut), bat
 F = model(b, compute_force=True)["forces"].detach().cpu().numpy(); Ff = F[fidx].reshape(-1)
 print(f"forces at the frozen geometry: rms far {np.sqrt((F[far]**2).sum(1).mean())*1e3:.2f} meV/A, {time.time()-t0:.0f}s", flush=True)
 res = {"tiling": list(tt), "N": NB, "n_far": nf, "r_core": args.r_core, "pair_lookups_missing": n_missing, "variants": {}}
+lad = Path(args.relaxed).expanduser().parent / "ladder.json"
+if lad.exists():
+    for rw in json.load(open(lad)):
+        if rw["n_atoms"] == NB:
+            res["E_relaxed_minus_embedded_eV"] = rw["E_relaxed"] - rw["E_embedded"]; print(f"actual far-field relaxation energy E_relaxed - E_embedded = {res['E_relaxed_minus_embedded_eV']:.4f} eV", flush=True)
 edges = [(8, 10), (10, 12), (12, 14), (14, 17), (17, 20), (20, 24)]; syms = np.array(frozen.get_chemical_symbols())
 for name, use_pp in (("K_base_plus_EPP", True), ("K_base_only", False)):
     it = [0]
@@ -107,8 +112,13 @@ for name, use_pp in (("K_base_plus_EPP", True), ("K_base_only", False)):
         rows.append({"r_lo": lo, "r_hi": hi, "n": int(m.sum()), "rms_u_pred_mA": 1e3 * rms_p, "rms_u_relaxed_mA": 1e3 * rms_r, "ratio": rms_p / max(rms_r, 1e-12), "cos": cos, "ratio_by_species": per})
         print(f"  {name} {lo:>2d}-{hi:<3d} n={m.sum():4d} u_pred {1e3*rms_p:6.1f} u_rel {1e3*rms_r:6.1f} mA ratio {rms_p/max(rms_r,1e-12):5.2f} cos {cos:5.2f} " + " / ".join(f"{v:.2f}" if v is not None else "-" for v in per.values()), flush=True)
     beyond = [x for x in rows if x["r_lo"] >= 10]
+    # harmonic relaxation energy of the far field, -1/2 F.u_pred, against the actual E_relaxed - E_embedded; and the
+    # displacement the registered fmax can resolve, |u| ~ fmax / k with k the diagonal stiffness
+    e_lin = -0.5 * float(Ff @ u.reshape(-1)); k_diag = float(np.median(K_base.diagonal()))
     res["variants"][name] = {"cg_info": int(info), "matvecs": it[0], "seconds": time.time() - t1, "shells": rows,
-                             "pass": bool(all(abs(x["ratio"] - 1) <= 0.15 and x["cos"] >= 0.9 for x in beyond))}
+                             "pass": bool(all(abs(x["ratio"] - 1) <= 0.15 and x["cos"] >= 0.9 for x in beyond)),
+                             "E_lin_far_eV": e_lin, "k_diag_median_eV_A2": k_diag, "u_resolution_mA_at_fmax_0.002": 1e3 * 0.002 / k_diag}
+    print(f"  harmonic far-field relaxation energy -1/2 F.u_pred = {e_lin:.4f} eV; median diagonal stiffness {k_diag:.2f} eV/A^2 -> fmax 0.002 resolves |u| ~ {1e3*0.002/k_diag:.1f} mA", flush=True)
     print(f"{name}: cg info {info}, {it[0]} matvecs, pass {res['variants'][name]['pass']}", flush=True)
 res["seconds"] = time.time() - t0
 json.dump(res, open(Path(args.out).expanduser(), "w"), indent=1); print("saved", args.out)
