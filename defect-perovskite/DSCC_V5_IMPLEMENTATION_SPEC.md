@@ -6980,3 +6980,6 @@ Pristine cell relaxed with base v8 + E_PP (`~/runs/dscc/p3a/pristine_relaxed_v8.
 Z* Cl/Cs/Pb −1.54/1.23/3.40, own ε∞ 3.658, ε_ion 19.2, ε₀_LST 23.2 at ε∞ 4.0 (22.9 at the base's own). §2.2b set (480 CPU calls) and §2.2c/§2.3 running.
 Analysis conventions for §2.2b registered in `p3a_epsq.py`'s docstring (D(q) and Z*(q) from the same displacement set; ε_ion(q) from the longitudinal projection of the
 bare D(q); the 3×3×3 commensurate points n = 1, 2 are exact and serve as the check of the interpolation).
+Phase 3a §2.2c and §2.3 read (2026-10-12 13:50): form factor of base v8 w01's dipoles along the polar axis 0.952 / 0.833 / 0.694 at λ 48 / 24 / 16 Å (w_eff 3.13 Å;
+base v2 3.47 Å). LO–TO at q = 2π/(3b): E_PP alone 0.4774 vs smoothed NAC × g f² 0.4768 (ratio 1.001; vs NAC × g 0.907) → §2.3 PASSES (within 10 %).
+Provisional: the 639-atom +1 core is being relaxed with bw5 s0 (the standing checkpoint) so the §2.1/§2.4/§2.5 lane can start when §1 is decided; redone if bw6 replaces bw5.

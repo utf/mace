@@ -48,10 +48,39 @@ The tilt pattern is the same as the base-v2 relaxation's (same bond length and a
 Top modes by ε contribution (meV: ε): 10.1: 2.99, 10.5: 2.31, 6.8: 1.72, 9.4: 1.69, 8.7: 1.53, 7.1: 1.41. The base's own ε∞ on this cell is 3.658
 (the P1 value 3.667 was read on the base-v2 cell). The registered ε∞ of E_PP stays 4.0.
 
-*(b) ε(q), (c) form factor, (d) dispersion: pending the 3×3×3 finite-displacement set (480 base calls, CPU) and the analysis.*
+*(b) ε(q) and (d) dispersion: pending the 3×3×3 finite-displacement set (480 base calls, CPU) and the analysis.*
 
-### 2.3 LO–TO in the 3×3×3 cell
-*pending*
+**(c) Form factor of the base's dipoles** (P0 A1 procedure with the base as its own provider: the strongest IR mode, 10.13 meV, Z̃ = (0, -1.889, 0) e/√amu, y-polarised; modulated cos(q·R) in the 3×3×3 cell, amplitude 0.05; wall clock 4 min, CPU). The longitudinal line is q ∥ y:
+
+| n | λ (Å) | q (Å⁻¹) | f, base v8 w01 | f, base v2 (P0) |
+|---|---|---|---|---|
+| 1 | 48.2 | 0.130 | 0.952 | 0.939 |
+| 2 | 24.1 | 0.261 | 0.833 | 0.787 |
+| 3 | 16.1 | 0.391 | 0.694 | 0.607 |
+
+Gaussian width from −4 ln f = w²q² along y: **3.13 Å** (base v2: 3.47 Å); below the registered r_split 4.5 Å, as for base v2. The transverse lines (q ∥ x with the y-polarised pattern: f 0.956 / 0.848 / 0.018; q ∥ z: 0.862 / 0.626 / 2.85 at λ = 34.2 / 17.1 / 11.4 Å, the last being the unit-cell period and not a plane wave) are recorded in `p3a_formfactor.json` and not used.
+
+
+### 2.3 LO–TO in the 3×3×3 cell (base v8 w01 + E_PP from its own dipoles)
+
+P0's reference computation (`p0_loto.py`) with the base as its own provider: the strongest IR mode (10.13 meV, Z̃ = (0, -1.889, 0) e/√amu) modulated cos(q·R) at q = 2π/L along y (LO, longitudinal) and along z (TO, transverse), amplitude 0.05; curvatures k = (E(+A) + E(−A) − 2E(0))/A² for the base alone, the full neutral model (base + E_PP through the bw5 checkpoint at zero carriers; r_split 4.5, ε∞ 4.0), and E_PP alone. Expectation: the smoothed nonanalytic term 2·(4πC/Ωε∞)|S_q|² · g(q) · f², g = exp(−w²q²/4), w = 2 r_split (as P0), f the measured form factor at q. Wall clock 5 min (CPU).
+
+| branch | k_base | k_full | k_E_PP | NAC raw | NAC × g | NAC × g f² | g | f |
+|---|---|---|---|---|---|---|---|---|
+| LO (q ∥ y, 0.130 Å⁻¹) | 0.5650 | 1.0343 | 0.4693 | 0.7419 | 0.5261 | 0.4768 | 0.709 | 0.952 |
+| TO (q ∥ z, 0.184 Å⁻¹) | 0.3345 | 0.3263 | -0.0081 | 0 | 0 | 0 | 0.505 | 0.862 |
+
+(k in eV per unit pattern amplitude squared, A in Å·√amu units as P0.)
+
+| LO − TO | base v8 w01 + E_PP | base v2 + E_PP (P0, r_split 9.645) |
+|---|---|---|
+| full model | 0.7080 | 0.3858 |
+| base alone | 0.2306 | 0.2500 |
+| E_PP alone | **0.4774** | 0.1358 |
+| NAC × g | 0.5261 | 0.1538 |
+| NAC × g f² | **0.4768** | — |
+
+E_PP's LO − TO against the smoothed expectation with the form factor: ratio **1.001**; against the smoothed expectation without it: 0.907. Both within 10 %: **§2.3 passes**. E_PP on this provider delivers the nonanalytic splitting the switched kernel is meant to deliver at this q; the base alone already carries 31 % of the raw NAC splitting at q = 0.13 Å⁻¹ within its 12 Å reach (base v2: 34 %). On the TO branch E_PP changes the curvature by -2.4 %.
 
 ### 2.1, 2.4, 2.5, 2.6
 *start when the checkpoint is fixed (§1)*
@@ -61,3 +90,5 @@ Top modes by ε contribution (meV: ε): 10.1: 2.99, 10.5: 2.31, 6.8: 1.72, 9.4: 
 |---|---|---|
 | pristine relaxation | 16 s | GPU |
 | §2.2a Hessian + Z* | 66 s | GPU |
+| §2.3 LO–TO (12 energies + 4 dipole calls at 2160 atoms) | 5 min | CPU, 40 threads |
+| §2.2c form factor (18 dipole calls at 2160 atoms) | 4 min | CPU, 40 threads |
