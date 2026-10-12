@@ -6898,3 +6898,5 @@ seeds 0 and 6 spiked (epochs 19, 26; 300× and 100× the median), seed 2 a mild 
 (1) fails (two seeds), (2) fails (max per-step |gap − 2.40| 0.38 and 0.30 eV; 15 and 29 steps with l_gap > 1e-3), (3) fails by construction (hard gap 2.37–2.38),
 (4) force gate kept on 4–12 Å only, energy gate 2 of 3. bw2 remains the best B_w result (forces better than B_s on two seeds). Large-N on seed 0 (seed median) and
 the §1.5 tables follow from the finisher/assembler.
+Addendum (05:00): bw4 large-N on seed 0 (seed median), label tiling, core re-relaxed: separation 0.013 eV, N_eff 8.7, Σdq(< 5 Å) 0.51 (relaxed tiling 0.017 / 7.1 /
+0.57) — fails all three thresholds. §1.5 written from `~/runs/dscc/p2c/section_1_5_bw4.md`.

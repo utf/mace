@@ -380,8 +380,67 @@ bw5's reading in front of them.
 2 no step with a gap-term loss above 1e-3 and a maximum per-step |gap − 2.40| below 0.01 eV; the hard gap at every epoch end within 2.40 ± 0.01 (fails by
 construction under σ, see above); forces, energy gate, large-N and saturation as for the rerun.
 
-### 1.5 Fourth run (the rerun's settings plus the smooth band edges)
+### 1.5 Fourth run (the rerun's settings plus the smooth band edges, σ = 0.0259 eV; gap weight 1)
 
-(to follow: three-way per-seed table B_s / rerun / fourth run, the stability table per seed, the gap's resting values, energy gate, large-N on the seed median,
-saturation, N_eff)
+Runs `dscc_p2cwbw4_s{0,2,6}`, b3 GPUs 4/5/7, 2026-10-12 01:57–04:38, with the per-step record. B_s and rerun rows repeated from §1.2 for the three-way comparison.
+
+#### Forces and energies: B_s, rerun (bw2) and fourth run, same seeds (held-out, per-component meV/Å; `model_avg.pt`)
+
+| arm | seed | total | 4–12 Å | 2–4 | 4–8 | 8–10 | 10–12 | 12+ | 79-atom E (meV/atom) | C_Q transfer (meV) | energy gate | s / s_near final |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| B_s | 0 | 13.72 | 12.24 | 23.8 | 13.2 | 10.9 | 9.9 | 8.1 | 0.54 | 7.0 | pass | 0.376 |
+| B_s | 2 | 13.88 | 12.40 | 24.1 | 13.3 | 11.2 | 9.8 | 7.8 | 0.50 | 4.2 | pass | 0.411 |
+| B_s | 6 | 14.37 | 12.94 | 24.8 | 13.8 | 11.9 | 9.9 | 6.5 | 0.46 | 13.4 | FAIL | 0.555 |
+| B_w rerun | 0 | 13.54 | 12.23 | 22.7 | 12.8 | 11.4 | 10.8 | 8.1 | 0.61 | 6.5 | FAIL | 0.263 |
+| B_w rerun | 2 | 13.12 | 11.81 | 22.3 | 12.5 | 10.8 | 10.1 | 7.7 | 0.49 | 6.9 | pass | 0.292 |
+| B_w rerun | 6 | 16.90 | 15.11 | 29.6 | 16.2 | 13.7 | 12.3 | 8.7 | 0.72 | 3.4 | FAIL | 0.417 |
+| B_w fourth | 0 | 16.04 | 14.46 | 27.1 | 15.4 | 13.2 | 12.3 | 10.3 | 0.75 | 1.8 | FAIL | 0.291 |
+| B_w fourth | 2 | 14.69 | 13.13 | 25.4 | 14.0 | 11.8 | 11.3 | 8.4 | 0.51 | 2.2 | pass | 0.305 |
+| B_w fourth | 6 | 16.58 | 14.90 | 28.5 | 16.0 | 13.3 | 12.3 | 8.4 | 0.59 | 9.3 | pass | 0.428 |
+
+Paired mean difference against B_s (n = 3, point estimate; τ = 1.7): fourth run total +1.78 (per seed [2.32, 0.81, 2.2]), 4–12 Å +1.63 (per seed [2.22, 0.73, 1.96]); rerun was +0.53 / +0.52. **B_w kept (within +tau or better on 4-12 A)**
+
+#### Localisation (model_avg): separation / N_eff / pass on the held fold's 79-atom +1 frames; separation / N_eff / Σdq(< 5 Å) on the 639-atom label-tiled structure
+
+| arm | seed | +1 frames sep p50 / N_eff p50 / pass | 639 atoms sep / N_eff / Σdq(<5 Å) |
+|---|---|---|---|
+| B_w rerun | 0 | 0.052 / 4.7 / 0.00 | 0.022 / 6.1 / 0.61 |
+| B_w rerun | 2 | 0.050 / 5.6 / 0.00 | 0.020 / 7.4 / 0.55 |
+| B_w rerun | 6 | 0.048 / 6.8 / 0.00 | 0.024 / 9.7 / 0.47 |
+| B_w fourth | 0 | 0.056 / 5.4 / 0.00 | 0.016 / 8.1 / 0.53 |
+| B_w fourth | 2 | 0.067 / 5.6 / 0.00 | 0.046 / 6.9 / 0.58 |
+| B_w fourth | 6 | 0.066 / 7.3 / 0.00 | 0.037 / 7.5 / 0.56 |
+
+#### Stability: epoch losses, the gap's resting value and the period-2 statistic
+
+| seed | max epoch loss / median (epochs ≥ 2) | epochs above 10× | gap at epoch end: min / max / final (eV) | hard gap, final step | max per-step \|gap − 2.40\|, epochs ≥ 3 (eV) | steps with l_gap > 1e-3, epochs ≥ 3 | alternation fraction, epochs ≥ 3: median | lag-1 autocorrelation: median |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 428.1× | 1 | 2.400 / 2.401 / 2.400 | 2.378 | 0.3993 | 15 | 0.41 | +0.29 |
+| 2 | 16.0× | 1 | 2.399 / 2.413 / 2.400 | 2.371 | 0.0448 | 8 | 0.74 | -0.73 |
+| 6 | 168.6× | 1 | 2.399 / 2.402 / 2.400 | 2.381 | 0.3018 | 12 | 0.62 | -0.51 |
+
+For comparison: the replay of the rerun's seed 6 (hard gap) had 24 steps with l_gap > 1e-3 and a maximum per-step excursion of 0.52 eV (epoch 30 loss 190× the median originally, 440× in the replay), with the period-2 state (alternation 0.80–0.92, autocorrelation −0.9 to −0.98) in every epoch from 3 to 29; the band runs (bw3, stopped) had 9 and 6 such steps and 0.11 eV at the band edge in seeds 6 and 2.
+
+#### Large-N on the seed-median checkpoint (bw4_s0, label tiling, core re-relaxed by that checkpoint)
+
+| structure (639 atoms) | separation (eV) | N_eff | Σdq(< 3 / 5 / 8 / 12 Å) | Pb–Pb (Å) |
+|---|---|---|---|---|
+| a_relaxed_tiling_existing_core | 0.017 | 7.1 | 0.51 / 0.57 / 0.75 / 0.90 | 5.76 |
+| b_label_tiling_core_rerelaxed | 0.013 | 8.7 | 0.46 / 0.51 / 0.70 / 0.88 | 5.84 |
+| a_prime_relaxed_tiling_core_rerelaxed | 0.019 | 8.2 | 0.00 / 0.53 / 0.71 / 0.88 | 5.88 |
+
+79-atom +1 frames (0.3): 928 frames; corr(sep, Pb–Pb) -0.10, corr(N_eff, Pb–Pb) -0.01.
+
+**Reading.** The smooth edge did not stop the spikes: seeds 0 and 6 took one each (epochs 19 and 26, 430× and 170× the median epoch loss, excursions of 0.40 and
+0.30 eV) and seed 2 a mild one at epoch 19. The force totals carry the damage: 16.0 / 14.7 / 16.6 against the rerun's 13.5 / 13.1 / 16.9 and B_s's 13.7 / 13.9 / 14.4;
+the paired difference against B_s is +1.78 on the total (outside τ) and +1.63 on 4–12 Å (kept by 0.07). The energy's size consistency is the best of any arm
+(C_Q transfer 1.8 / 2.2 / 9.3 meV) and the energy gate passes on two seeds. Localisation is the rerun's six-to-eight-atom hole again (N_eff 5.4–7.3 on the +1 frames,
+6.9–8.1 at 639 atoms, separation 0.02–0.05 eV); the large-N gate fails on all three thresholds as before. Of the pass criteria written at 01:50, (1) and (2) fail on
+two seeds, (3) fails by construction (the hard gap rests at 2.37–2.38 under σ), and (4) is kept on 4–12 Å only. The rerun (§1.2) remains the best B_w result. The
+period-2 statistic after the spikes (alternation 0.41–0.74) is the inflated-second-moment state, not stability.
+
+### 1.6 Fifth run (fourth run plus gap weight 0.1; a registered diagnostic)
+
+(to follow: launched 04:35, ends about 11:00; the epoch-5 alternation read is the discriminating test and is reported as soon as it is in)
+
 
