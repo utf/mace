@@ -6900,3 +6900,12 @@ seeds 0 and 6 spiked (epochs 19, 26; 300× and 100× the median), seed 2 a mild 
 the §1.5 tables follow from the finisher/assembler.
 Addendum (05:00): bw4 large-N on seed 0 (seed median), label tiling, core re-relaxed: separation 0.013 eV, N_eff 8.7, Σdq(< 5 Å) 0.51 (relaxed tiling 0.017 / 7.1 /
 0.57) — fails all three thresholds. §1.5 written from `~/runs/dscc/p2c/section_1_5_bw4.md`.
+
+**2026-10-12 05:10 — bw5 early read (gap weight 0.1; epochs 0–5 / 0–4 / 0–3 of seeds 0 / 2 / 6; `~/runs/dscc/p2c/bw5_steps/`).** The discriminating test fails:
+the period-2 state is present at w = 0.1 as at w = 1 — seed 0 alternation 0.80 / 0.81 at epochs 4 / 5 with lag-1 autocorrelation −0.92 / −0.89, amplitude 1–2e-4 eV;
+seeds 2 and 6 at 0.6–0.75 by epochs 2–3 (bw4: 0.8–0.9 by epochs 3–4). The amendment of 03:55 (quiet gain ∝ w, so w = 0.1 sits below the limit) is therefore not
+borne out: the mode self-tunes to the limit at w = 0.1 as well, with the same amplitude, which means the gap gradient's share of the hopping readout's second
+moment is not what the simple gain formula assumed. No flagged epoch so far; the hard gap rests at 2.370–2.387. The run continues to 60 epochs (~11:00) and its
+result is reported as read; a spike-free outcome would carry no margin argument. State of the levers: band withdrawn; smooth edge kept but not sufficient;
+weight does not remove the marginal state; outside-Adam steps not viable as implemented. The mechanism is documented in §1.4; what to do about it is the user's
+decision.

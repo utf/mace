@@ -441,6 +441,19 @@ period-2 statistic after the spikes (alternation 0.41–0.74) is the inflated-se
 
 ### 1.6 Fifth run (fourth run plus gap weight 0.1; a registered diagnostic)
 
-(to follow: launched 04:35, ends about 11:00; the epoch-5 alternation read is the discriminating test and is reported as soon as it is in)
+Runs `dscc_p2cwbw5_s{0,2,6}`, launched 04:35, end about 11:00. The discriminating test written before launch was the sign-alternation fraction of (gap − 2.40)
+by epoch 5: ≤ 0.6 would mean the weight took the gap mode below Adam's stability limit; 0.8–0.9 (the fourth run's value) would mean it did not.
+
+| seed | epochs read | alternation (last epoch read) | lag-1 autocorrelation | \|gap − 2.40\| p50 (eV) | hard gap at epoch end |
+|---|---|---|---|---|---|
+| 0 | 0–5 | 0.81 | −0.89 | 2e-4 | 2.370 |
+| 2 | 0–4 | 0.60 | −0.28 | < 1e-4 | 2.384 |
+| 6 | 0–3 | 0.67 | −0.80 | 2e-4 | 2.387 |
+
+**Reading (provisional).** The test fails on seed 0 and is borderline on the others: the period-2 marginal state is present at w = 0.1 as at w = 1, with the same
+amplitude. The weight does not remove the mechanism; it only rescales what the gap term contributes to the loss. No flagged epoch in the epochs read. The full
+result (forces, gates, stability table, large-N on the seed median) follows when the run ends; a spike-free outcome would be reported as read, without a margin
+argument behind it.
+
 
 
