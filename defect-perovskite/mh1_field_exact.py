@@ -18,11 +18,18 @@ ap.add_argument("--replay", default="/home/alex/.cache/mace/replay_mh1_omat_pbe_
 ap.add_argument("--defect", default=str(HERE / "dataset_pbe" / "train.xyz")); ap.add_argument("--n_defect", type=int, default=600)
 ap.add_argument("--device", default="cuda"); ap.add_argument("--out", required=True); ap.add_argument("--batch", type=int, default=8)
 ap.add_argument("--dtype", default="float32", help="float32 (the plan) or float64 (round-off control: the same comparison at 1e-10)")
+ap.add_argument("--control_plain", type=int, default=0, help="1: compare a plain ScaleShiftMACE re-instantiated from MH-1's config (no field layers) instead of --model: isolates the block re-instantiation from the field port")
+ap.add_argument("--heads", default="", help="comma list of heads to test (default all)")
 args = ap.parse_args()
 DT = torch.float64 if args.dtype == "float64" else torch.float32
 torch.set_default_dtype(DT); dev = args.device; t0 = time.time()
-new = torch.load(args.model, map_location=dev, weights_only=False).to(dev).to(DT).eval()
 ref = torch.load(args.mh1, map_location=dev, weights_only=False).to(dev).to(DT).eval()
+if args.control_plain:
+    from mace.tools.scripts_utils import extract_config_mace_model
+    from mace.modules.models import ScaleShiftMACE
+    new = ScaleShiftMACE(**extract_config_mace_model(ref)); new.load_state_dict(ref.state_dict(), strict=False); new = new.to(dev).to(DT).eval()
+else:
+    new = torch.load(args.model, map_location=dev, weights_only=False).to(dev).to(DT).eval()
 rng = np.random.default_rng(0)
 rp = read(args.replay, ":"); rp = [rp[i] for i in sorted(rng.choice(len(rp), args.n_replay, replace=False))]
 df = read(args.defect, ":"); df = [df[i] for i in sorted(rng.choice(len(df), min(args.n_defect, len(df)), replace=False))]
@@ -30,7 +37,7 @@ frames = rp + df
 zt = tools.AtomicNumberTable([int(z) for z in ref.atomic_numbers]); ks = mace_data.KeySpecification.from_defaults()
 res = {"n_structures": len(frames), "n_replay": len(rp), "n_defect": len(df), "dtype": args.dtype, "heads": {}}
 worst = {}
-for head in list(ref.heads):
+for head in (args.heads.split(",") if args.heads else list(ref.heads)):
     dE = dF = dS = 0.0; resid = 0.0
     for start in range(0, len(frames), args.batch):
         ads = [mace_data.AtomicData.from_config(mace_data.config_from_atoms(a, key_specification=ks, head_name=head), z_table=zt, cutoff=float(ref.r_max), heads=list(ref.heads)) for a in frames[start:start + args.batch]]
@@ -44,6 +51,8 @@ for head in list(ref.heads):
     res["heads"][head] = {"max_dE_meV_per_atom": 1e3 * dE, "max_dF_meV_per_A": 1e3 * dF, "max_dstress_meV_per_A3": 1e3 * dS}
     print(f"{head:18s} max|dE| {1e3*dE:.3e} meV/atom  max|dF| {1e3*dF:.3e} meV/A  max|dsigma| {1e3*dS:.3e} meV/A^3  ({time.time()-t0:.0f}s)", flush=True)
 # the field-coupling residual at E = 0 on one batch: field_linear(field_feats(feats, 0)) == 0 exactly
+if args.control_plain:
+    res["control_plain"] = True; json.dump(res, open(args.out, "w"), indent=1); print("saved", args.out); sys.exit(0)
 ads = [mace_data.AtomicData.from_config(mace_data.config_from_atoms(a, key_specification=ks, head_name=ref.heads[0]), z_table=zt, cutoff=float(ref.r_max), heads=list(ref.heads)) for a in frames[:4]]
 b = next(iter(tg.dataloader.DataLoader(ads, batch_size=4))).to(dev).to_dict()
 feats = torch.randn(b["positions"].shape[0], new.field_feats[0].irreps_in1.dim, device=dev, dtype=DT)
