@@ -373,7 +373,7 @@ two further forms were tested for one epoch each on the local card. None removed
 |---|---|---|
 | tolerance band ±k_BT (no gradient inside) | bw3, stopped at epochs 8–10 | 0.13 eV kick at the band's edge in two seeds: the band empties Adam's second moment for the gap direction |
 | smooth band edges, σ = k_BT | bw4, complete (§1.5) | the crossing trigger is gone; seeds 0 and 6 diverged anyway at epochs 19 and 26 with no trigger; kept as correct but insufficient |
-| gap weight 0.1 (with σ) | bw5, running (§1.6) | the period-2 marginal state is present by epoch 4–5 with the same amplitude as at weight 1 |
+| gap weight 0.1 (with σ) | bw5, complete (§1.6) | the period-2 marginal state is still present (weaker: alternation 0.6–0.7) but no seed spiked in 60 epochs; best forces of the phase; flank readout at its bound |
 | gap gradient applied outside Adam (fixed step; least-norm step) | one-epoch smokes only | neither holds the gap (0.1 eV wander, excursions to a closed gap): Adam's shared second moment was also what damped the force term's steps along the gap direction |
 
 The group-level gain argument used to motivate the weight change was wrong in one respect: Adam's denominator is per parameter, and if the parameters that carry
