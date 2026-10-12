@@ -6975,3 +6975,8 @@ checkpoint (the finisher's existing row), not on the base-v2 relaxed tiling (reu
 (ii) bw6's paired force read uses bw5 as the comparator (`--bs` = the bw5 runs), so the "B_s" rows of `step1_bw6.md` are bw5. (iii) The local card is a 16 GB
 A4000, not the plan's 24 GB; items that do not fit go to the CPU as the plan allows. (iv) Per-epoch flank |tanh| p50 added to the level readout
 (`flank_tanh_p` in train.py; readout only).
+Phase 3a progress (2026-10-12 13:10): bw6 seeds 0/2/6 running on b3 GPUs 4/5/7 since 12:36–12:44 (flank |tanh| p50 recorded per epoch; seed 0 epoch 2: 0.65).
+Pristine cell relaxed with base v8 + E_PP (`~/runs/dscc/p3a/pristine_relaxed_v8.json`): tilt 12.9 → 24.3 deg, the base-v2 pattern. §2.2a read: no imaginary modes,
+Z* Cl/Cs/Pb −1.54/1.23/3.40, own ε∞ 3.658, ε_ion 19.2, ε₀_LST 23.2 at ε∞ 4.0 (22.9 at the base's own). §2.2b set (480 CPU calls) and §2.2c/§2.3 running.
+Analysis conventions for §2.2b registered in `p3a_epsq.py`'s docstring (D(q) and Z*(q) from the same displacement set; ε_ion(q) from the longitudinal projection of the
+bare D(q); the 3×3×3 commensurate points n = 1, 2 are exact and serve as the check of the interpolation).
