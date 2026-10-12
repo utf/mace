@@ -7016,3 +7016,9 @@ beyond. Harmonic far-field energy −0.1615 eV vs actual −0.1536 (95 %); fmax 
 (convergence caveat recorded; a tighter fmax was not registered and is not run). Far-field profile exponents Cs −2.54, Pb −2.67, Cl −2.95.
 **§2.6 verdict: stop and report** (§2.4's 1/L term above 5 meV; §0 compactness fails at 2159; ε₀_ladder 13.7 above the §2.2 band; linear response fails beyond 14 Å).
 §2.1 and §2.3 pass. Report `P3A_REPORT.md` complete; figures in ~/runs/dscc/p3a/. Decisions on the chain tail and the far-field tolerance are the user's.
+Correction (2026-10-12 19:05) to the 18:40 entry after review: the §2.4 deviation is not a 1/L monopole error. The three large cells fit E∞ + c/L³ to < 1 meV; the forced 1/L
+coefficient is undetermined (three points, three parameters; sign flips when 639 is added); Σdq(<12 Å) is cell-independent at 0.86–0.87 over 959–2879 (the 639 value 0.911 is the
+wrapped cell). The fitted c = −1600 eV Å³ has the sign and order of the Makov–Payne second-moment term; the estimated Q₂ (core ionic 31 e Å² + hole 18–72 e Å²) gives −370 to
+−770 eV Å³, a quarter to a half of it. §2.6 therefore reads: none of the three registered branches applies as written ("captured" fails on compactness and §2.4 flatness;
+"base-limited" needs ε₀ below the band and a lin-resp pass; "stop" needs a monopole error that is not shown). Phase 3b does not open under the rules (compactness gate).
+The open object is the hole's chain tail (intrinsic to the head's shallow level); the open tests are the R_core sweep (§2.4) and a tighter far-field fmax (§2.5), neither registered.
