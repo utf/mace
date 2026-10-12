@@ -351,6 +351,26 @@ def force_loss(out: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor],
     return (weights * per_graph / counts).sum()
 
 
+def flank_tanh_p(model, batch: Dict[str, torch.Tensor]) -> List[float]:
+    """Per graph of a 79-atom +1 batch: the mean |tanh| of the on-site readout's p channel at the two Pb
+    flanking the vacancy (vacancy-side rule). Readout only (Phase 3a §1; the Stage-2 saturation instrument)."""
+    sk = model.h0.sk
+    with torch.no_grad():
+        scalars = model.readout_scalars(batch).to(torch.float64); species = batch["node_attrs"].argmax(dim=-1)
+        h = sk.standardise(scalars, species); e = sk.elem(species)
+        t = torch.tanh(sk.site(torch.cat([h, e], dim=-1)))
+    ptr = batch["ptr"]; out = []
+    for g in range(int(ptr.numel()) - 1):
+        lo, hi = int(ptr[g]), int(ptr[g + 1])
+        numbers = np.array([model.atomic_numbers[int(z)] for z in species[lo:hi].tolist()])
+        found = vacancy_centre_full(batch["positions"][lo:hi], batch["cell"].view(-1, 3, 3)[g], numbers)
+        if found is None:
+            continue
+        fl = [int(x) for x in found[1]]
+        out.append(float(t[lo:hi][fl, 1].abs().mean()))
+    return out
+
+
 class Trainer:
     def __init__(self, model: MACEDSCC, cfg: TrainConfig, frames, metas: Sequence[dd.FrameMeta],
                  fold_of: Dict[int, int], run_dir: str) -> None:
@@ -717,18 +737,26 @@ class Trainer:
         cfg_p = PreconditionConfig()
         out: Dict[str, object] = {}
         if self.level_idx:
-            recs = []
+            recs = []; flank_t = []
             loader = torch_geometric.dataloader.DataLoader(self._dataset(self.level_idx), batch_size=self.cfg.batch_size)
             for b in loader:
                 batch = to_device(b, self.device)
                 for H, numbers in self.model.filled_hamiltonians(batch):
                     recs.append(frame_record(H, numbers, cfg_p, self.model.sigma_s))
+                # Phase 3a §1: |tanh| of the on-site readout's p channel at the two Pb flanking the vacancy
+                # (the Stage-2 saturation instrument of p2c_spike_diag part B), per frame, p50 over frames.
+                try:
+                    flank_t.extend(flank_tanh_p(self.model, batch))
+                except Exception as ex:        # readout only; never stops training
+                    logging.warning("level readout: flank |tanh| failed (%s)", str(ex)[:80])
             sep = np.array([r.separation for r in recs]); neff = np.array([r.n_eff for r in recs])
             out["plus1_held79"] = {"n": len(recs), "separation_p10": float(np.percentile(sep, 10)),
                                    "separation_p50": float(np.median(sep)), "separation_p90": float(np.percentile(sep, 90)),
                                    "n_eff_p10": float(np.percentile(neff, 10)), "n_eff_p50": float(np.median(neff)),
                                    "n_eff_p90": float(np.percentile(neff, 90)),
-                                   "pass_fraction": float(np.mean([r.passed for r in recs]))}
+                                   "pass_fraction": float(np.mean([r.passed for r in recs])),
+                                   "flank_tanh_p_p50": (float(np.median(flank_t)) if flank_t else None),
+                                   "flank_tanh_p_frac_above_0.9": (float(np.mean(np.array(flank_t) > 0.9)) if flank_t else None)}
         if self.embed_batch is not None:
             rec = None
             for attempt in range(2):

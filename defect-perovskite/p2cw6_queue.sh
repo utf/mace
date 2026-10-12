@@ -1,5 +1,5 @@
 #!/bin/bash
-# Plan P Phase 2c Step 1 rerun (registered 2026-10-11 18:00): arm B_w with the s-p on-site half-width (0.1) and the gap term on H0 - W; otherwise Phase 3a §1 bw6: bw5 at fraction 0.2, seeds 0 2 6 (folds 0 2 2), s_init = B_s w01's epoch-59 s per seed, W6 schedule on base_v8_w01,
+# Plan P Phase 3a §1 (registered 2026-10-12): bw6 = bw5 at s-p fraction 0.2 (bounds Pb 1.43, Cs 0.32, Cl 2.58 eV), seeds 0 2 6 (folds 0 2 2), s_init = B_s w01 epoch-59 s per seed, W6 schedule on base_v8_w01,
 # per-epoch level readouts (held fold 79-atom +1 frames; the 639-atom label-tiled structure (b)). Queue for b3 GPUs 5/7 via w3_queue.sh.   usage: p2cw_queue.sh BASE
 BASE=$1
 COMMON="--epochs 60 --directional 1 --regime B --base $BASE --coupling 0 --scf_free 1 --route_b 1 --beta_b 0.0 --beta_a 0.0 --energy_weight 0.05 --base_float32 1 --setup_batch_size 4 --base_cache_batch_size 4 --gpu_memory_fraction 0 --bz_gap 0 --bz_readout 1"
