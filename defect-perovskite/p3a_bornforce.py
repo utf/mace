@@ -17,7 +17,7 @@ HERE = Path(__file__).resolve().parent; sys.path.insert(0, str(HERE.parent)); sy
 from mace import tools                                                     # noqa: E402
 from mace.modules.dscc import data as dd                                   # noqa: E402
 from mace.modules.dscc.ewald import COULOMB                                # noqa: E402
-from mace.modules.dscc.polarisation import carrier_field, carrier_dipole_energy   # noqa: E402
+from mace.modules.dscc.polarisation import carrier_field, carrier_dipole_energy, direct_field, pair_width_cp, switch   # noqa: E402
 from mace.tools import torch_geometric as tg                               # noqa: E402
 from dscc_embed_ladder import KEY_TOL, embed, relative, vacancy_site        # noqa: E402
 from p3a_common import BASE_V8, Base, load_cell                            # noqa: E402
@@ -54,17 +54,28 @@ E_act = carrier_field(pos.detach(), cell_t, dq, **kw)                           
 pos_u = torch.cat([pos.detach(), torch.tensor(vac, dtype=torch.float64, device=dev)[None]], 0)    # a unit charge at the vacancy site
 dq_u = torch.zeros(N + 1, dtype=torch.float64, device=dev); dq_u[-1] = 1.0
 E_unit = carrier_field(pos_u, cell_t, dq_u, **kw)[:N]
-(g_born,) = torch.autograd.grad(-(p * E_act).sum(), pos, retain_graph=True); F_born = (-g_born).detach().cpu().numpy()
-e_full = carrier_dipole_energy(pos, cell_t, dq, p, **kw); (g_full,) = torch.autograd.grad(e_full, pos); F_full = (-g_full).detach().cpu().numpy()
-print(f"E_cP recomputed {1e3*float(e_full):.2f} meV (head {1e3*e_cp_head:.2f}); {time.time()-t0:.0f}s", flush=True)
+# the switched kernel (Phase 2b): the far field is the periodic field minus the direct near-field part, (1 - S(r)) E_direct,
+# over the head's edges c -> a (exactly `switched_terms`' e_far_corr); identical to E_c beyond r_c, zero inside r_c - delta
+r_c, delta = float(getattr(model, "r_c", 8.0)), float(getattr(model, "delta", 2.0)); w_cp = pair_width_cp(model.kernel.r_g, model.r_split)
+c_idx, a_idx = b["edge_index"][0], b["edge_index"][1]; ev = (pos.detach()[a_idx] - pos.detach()[c_idx] + shifts.detach())
+oms = 1.0 - switch(ev.norm(dim=-1), r_c, delta); E_dir = direct_field(ev, w_cp, model.kernel.eps_inf)
+near_act = torch.zeros_like(E_act).index_add_(0, a_idx, (dq[c_idx] * oms)[:, None] * E_dir)
+E_far = E_act - near_act
+dv = pos.detach() - torch.tensor(vac, dtype=torch.float64, device=dev)[None]; dv -= torch.round(dv @ torch.linalg.inv(cell_t)) @ cell_t
+E_unit_far = E_unit - (1.0 - switch(dv.norm(dim=-1), r_c, delta))[:, None] * direct_field(dv, w_cp, model.kernel.eps_inf)
+(g_born,) = torch.autograd.grad(-(p * E_far).sum(), pos, retain_graph=True); F_born = (-g_born).detach().cpu().numpy()
+(g_bf,) = torch.autograd.grad(-(p * E_act).sum(), pos, retain_graph=True); F_born_fullkernel = (-g_bf).detach().cpu().numpy()
+e_cp = carrier_dipole_energy(pos, cell_t, dq, p, **kw); e_far = e_cp + (dq[c_idx] * oms * (p[a_idx] * E_dir).sum(-1)).sum()
+(g_full,) = torch.autograd.grad(e_far, pos); F_full = (-g_full).detach().cpu().numpy()
+print(f"E_cP full kernel {1e3*float(e_cp):.2f} meV; E_far (switched) {1e3*float(e_far):.2f} meV (head e_host {1e3*e_cp_head:.2f}); {time.time()-t0:.0f}s", flush=True)
 
 Zu, _ = Base(args.base, dev).response(unit)                                 # the base's own pristine Born tensors
 rep = unit.repeat(tt); Zrep = np.tile(Zu, (int(np.prod(tt)), 1, 1)); sites = [i for i, z in enumerate(rep.get_atomic_numbers()) if int(z) == 17]
 Z = np.delete(Zrep, sites[0], axis=0)
-refs = {"actual_dq": np.einsum("bij,bi->bj", Z, E_act.cpu().numpy()), "unit_charge": np.einsum("bij,bi->bj", Z, E_unit.cpu().numpy())}
-E_np = {"actual_dq": E_act.cpu().numpy(), "unit_charge": E_unit.cpu().numpy()}
+refs = {"actual_dq": np.einsum("bij,bi->bj", Z, E_far.cpu().numpy()), "unit_charge": np.einsum("bij,bi->bj", Z, E_unit_far.cpu().numpy())}
+E_np = {"actual_dq": E_far.cpu().numpy(), "unit_charge": E_unit_far.cpu().numpy()}
 syms = np.array(atoms.get_chemical_symbols())
-res = {"N": N, "tiling": list(tt), "r_core": args.r_core, "core": args.core, "model": args.model, "E_cP_head_meV": 1e3 * e_cp_head, "E_cP_meV": 1e3 * float(e_full),
+res = {"N": N, "tiling": list(tt), "r_core": args.r_core, "core": args.core, "model": args.model, "e_host_head_meV": 1e3 * e_cp_head, "E_cP_fullkernel_meV": 1e3 * float(e_cp), "E_far_switched_meV": 1e3 * float(e_far), "r_c": r_c, "delta": delta,
        "compactness": compact, "shells": []}
 edges = [(4, 6), (6, 8), (8, 10), (10, 12), (12, 14), (14, 17), (17, 20), (20, 24)]
 print(f"{'shell':7s} {'n':>4s} | {'rms Fborn':>9s} | actual dq: {'rms Fref':>8s} {'ratio':>6s} {'cos':>6s} | unit: {'rms Fref':>8s} {'ratio':>6s} {'cos':>6s} | ratio by species (Cs/Pb/Cl, actual)")
@@ -73,7 +84,7 @@ for lo, hi in edges:
     if not m.any():
         continue
     rms = lambda x, mm=m: float(np.sqrt((x[mm] ** 2).sum(1).mean()))
-    row = {"r_lo": lo, "r_hi": hi, "n": int(m.sum()), "rms_F_born_meV_A": 1e3 * rms(F_born), "rms_F_full_meV_A": 1e3 * rms(F_full)}
+    row = {"r_lo": lo, "r_hi": hi, "n": int(m.sum()), "rms_F_born_meV_A": 1e3 * rms(F_born), "rms_F_far_total_meV_A": 1e3 * rms(F_full), "rms_F_born_fullkernel_meV_A": 1e3 * rms(F_born_fullkernel)}
     for key, F_ref in refs.items():
         cos = float(np.mean(np.einsum("ij,ij->i", F_born[m], F_ref[m]) / np.maximum(np.linalg.norm(F_born[m], axis=1) * np.linalg.norm(F_ref[m], axis=1), 1e-12)))
         per = {s: (float(np.sqrt((F_born[m & (syms == s)] ** 2).sum(1).mean()) / max(np.sqrt((F_ref[m & (syms == s)] ** 2).sum(1).mean()), 1e-12)) if (m & (syms == s)).any() else None) for s in ("Cs", "Pb", "Cl")}
