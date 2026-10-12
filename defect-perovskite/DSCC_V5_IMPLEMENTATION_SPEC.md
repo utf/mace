@@ -6849,3 +6849,9 @@ the evidence: take the gap constraint out of Adam's normalisation — apply its 
 ‖∂gap/∂θ‖², deterministic, independent of the force gradient's scale), Adam unchanged for everything else; not a new loss term. Lowering the gap weight is not
 expected to help: the self-tuned state sets the gain to 2 for any weight large enough to reach it, and the damage is done by the parameter excursion, not the gap
 amplitude.
+Addendum (03:40): the gain reading is supported by the per-group record. The force term's gradient on the hopping readout (median over quiet steps, l_gap < 1e-8) fell
+from 7.5–10 × 10⁻⁴ at epochs 13–14 to 2.2–2.9 × 10⁻⁴ at epochs 15–18 in seeds 0 and 2 (a 3× drop; Adam's second moment follows with a time constant of ~5 epochs),
+while the gap sensitivity 2w‖∂gap/∂θ‖ fell only from 18–21 to 16; the gain proxy lr · ‖S‖² / g_hop rose by ~1.7× into the event. Seed 6's hopping gradient stayed at
+4.5–9 × 10⁻⁴ over the same epochs and seed 6 has had no event through epoch 19. Seed 2 had a mild excursion at epoch 19 as well (|gap − 2.40| p50 4e-4, no flagged
+epoch; its alternation fell to 0.4 afterwards, the inflated-second-moment signature). The sensitivity itself (‖S‖ 8–17 eV per unit parameter over ~71k hopping-readout
+parameters) is what makes the mode stiff.
