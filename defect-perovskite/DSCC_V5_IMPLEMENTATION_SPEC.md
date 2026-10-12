@@ -6923,3 +6923,6 @@ at (not run; the user's decision):** let the Γ-gap term act only on the scalar 
 global parameters — by routing its gradient to that subset and excluding the readout weights; the worst-case gap kick per step is then lr · Σ_{carriers}|S_i| ≈
 0.01 eV and bounded, the readout weights never see the gap term, and the force fit cannot be dragged by it. Cost: a coarser hold (of order lr · S ≈ 5e-3 eV) and
 offsets the force fit does feel; a smaller learning rate for the carriers would shrink both. Smoothed edges (σ) remain correct and independent of this.
+Addendum (07:50): bw5 through epochs 50–53 of 60 (`bw5_steps/`): no flagged epoch in any seed (max epoch loss 2.9–6.8× the median against the 10× criterion); no
+step with l_gap > 1e-3; maximum per-step |gap − 2.40| 0.088 / 0.064 / 0.053 eV (criterion 2's 0.01 is exceeded by mild excursions, none of which grew); alternation
+median 0.60–0.67 (range 0.38–0.85), the marginal state intermittently present; hard gap 2.366–2.377. Forces, gates and large-N at ~09:00–09:40.

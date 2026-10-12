@@ -464,10 +464,11 @@ by epoch 5: ≤ 0.6 would mean the weight took the gap mode below Adam's stabili
 | 2 | 0–4 | 0.60 | −0.28 | < 1e-4 | 2.384 |
 | 6 | 0–3 | 0.67 | −0.80 | 2e-4 | 2.387 |
 
-**Reading (provisional).** The test fails on seed 0 and is borderline on the others: the period-2 marginal state is present at w = 0.1 as at w = 1, with the same
-amplitude. The weight does not remove the mechanism; it only rescales what the gap term contributes to the loss. No flagged epoch in the epochs read. The full
-result (forces, gates, stability table, large-N on the seed median) follows when the run ends; a spike-free outcome would be reported as read, without a margin
-argument behind it.
+**Reading (provisional, through epochs 50–53 of 60 at 07:50).** The epoch-5 test fails on seed 0 and is borderline on the others: the period-2 marginal state is
+present at w = 0.1 as at w = 1, intermittently (alternation 0.38–0.85 by epoch, median 0.60–0.67). Through 50 epochs, however, no seed has spiked: the largest
+epoch loss is 2.9–6.8× the median (criterion 10×), no step has a gap-term loss above 1e-3, and the largest single-step excursions are 0.05–0.09 eV (criterion 0.01;
+mild, none grew). The weight does not remove the mechanism, and the record gives no margin argument for why these three seeds stayed clean; it is reported as read.
+Forces, gates, the stability table and large-N on the seed median follow when the run ends (about 09:00–09:40).
 
 
 
