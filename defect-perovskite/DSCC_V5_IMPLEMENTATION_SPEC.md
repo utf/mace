@@ -6875,3 +6875,9 @@ Addendum (04:30): the second lever is coded and tested, default off, not run on 
 convergence, cap). Suggested setting if chosen: gap_lr · gap_weight ≈ 0.003 (gain 0.2–0.8 over the measured ‖S‖² range 61–272 at w = 1). A one-epoch smoke of the
 code path (`dscc_p2cx_gaplr_smoke`, local GPU 0, seed 6 fold 2, `--gap_lr 0.003 --gap_sigma 0.0259 --stop_after_epoch 0`) is running; its result is noted below.
 Commit 5ab1f7b. Not synced to b3 (the running bw4 and the queued bw5 use the b3 copy with σ and the band flag only).
+Addendum (04:55): the fixed-step smoke (`dscc_p2cx_gaplr_smoke`, gap_lr 0.003, cap 0.01) ran to the end of epoch 0 without error but held the gap poorly: after
+the pull-in the gap swung between 2.05 and 2.92 eV in epoch 0 (|gap − 2.40| p50 0.11 eV over the second half; end 2.423). Reading: the fixed step's gain is
+gap_lr · 2w · ‖S‖² and ‖S‖² is largest at the start of training, so the step was above the stability limit early and the cap turned the divergence into a capped
+oscillation of amplitude ≈ ‖S‖ · cap. The form is kept for the record but is not the lever. Replaced by the least-norm constraint step
+`θ −= κ (gap − E_gap) S/‖S‖²` (`--gap_kappa`, `apply_constraint_step`; gain κ per step whatever ‖S‖; test
+`test_constraint_step_gain_is_kappa_whatever_the_sensitivity`), cap on the step norm 0.05; a second one-epoch smoke (`dscc_p2cx_gapkappa_smoke`, κ 0.5) is running.
