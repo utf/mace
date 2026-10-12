@@ -4,6 +4,9 @@ Plan: `PLAN_P_PHASE3A.md` (the user's, 2026-10-12). Model of record bw5 (seed 0 
 Units: forces per-component meV/Å, energies eV unless stated; τ = 1.7 meV/Å. Registrations: tracker entries of 2026-10-12 (§0 of the plan, and the four
 pre-launch registrations: §1's Σdq criterion read on the label tiling; bw6 paired against bw5; the local card is a 16 GB A4000; flank |tanh| per epoch).
 
+
+**Summary.** bw6 runs to the new bound on two seeds (bw5 stands). On bw5: §2.1 and §2.3 pass; the §0 compactness gate fails at 2159 atoms (0.87 inside 12 Å) because the hole carries a chain tail along the vacancy's Pb axis; §2.4 is not flat (30 meV); ε₀_ladder = 13.7 against the base's own ε_L band 7.5–11.7 and ε₀_LST 23.2; the linear-response check holds to 14 Å and fails beyond (far-shell convergence caveat). **§2.6: stop and report.** Figures: `p3a_dispersion.png`, `p3a_ladders.png`, `dq_profile_bw5_2879.png` in `~/runs/dscc/p3a/`.
+
 ## 1. bw6: bw5 at fraction 0.2
 
 Runs `dscc_p2cwbw6_s{0,2,6}` on b3 GPUs 4/5/7, started 12:36–12:44 on 2026-10-12; identical to bw5 except `--delta_frac 0.2` (bounds Pb 1.43, Cs 0.32, Cl 2.58 eV).
@@ -183,11 +186,62 @@ Fits: E∞ + c/L³ on 959–2879: E∞(frozen) = **8.2129 eV**, c = -1597 eV Å�
 
 Reading: **§2.4 fails the flatness criterion.** dE rises by 29.6 meV from 959 to 2879 atoms against the 5 meV allowed. The model's energy without E_M falls by 23 meV from 639 to 2879 while the point-charge term it adds back rises by 62 meV: the charged cell's own image interaction is weaker than that of a point charge in ε∞ = 4, i.e. the size dependence is not the fixed-charge monopole law. The charge is not fixed: Σdq(< 12 Å) goes 0.911 → 0.861 across the sizes as the chain tail (§2.1) finds more room, and the tail's self-interaction and images change with L. Whether the residual is read as a 1/L term (23–59 meV, depending on the fit) or as a large 1/L³ term (c ≈ −1600 eV Å³, which fits 959–2879 to < 1 meV but misses 639 by 13 meV) is not decidable from four points; either way it is above 5 meV and comes from the same cause as the compactness failure.
 
-### 2.5 Relaxation ladder and the linear-response check
-*pending (2879-atom relaxation running; linear-response check queued)*
+### 2.5 Relaxation ladder (route 1, fmax 0.002) and the linear-response check
+
+Tilings with one Cl removed at 639 / 959 / 2159 / 2879 atoms; the §2.1 core embedded within 8 Å; the far field relaxed with the full +1 model, core fixed (BFGS, maxstep 0.1, fmax 0.002). ΔE_relax(L) = E_relaxed − E_frozen. 639 on the GPU, 959 on the CPU (it does not fit the 16 GB card), 2159 and 2879 on the CPU (48 threads).
+
+| atoms | L (Å) | α(h) | α/L (Å⁻¹) | E_frozen (eV) | embed only (eV) | far-field relaxation (eV) | ΔE_relax (eV) | BFGS steps | wall clock |
+|---|---|---|---|---|---|---|---|---|---|
+| 639 | 28.64 | 2.7225 | 0.0951 | -2242.8978 | -0.3299 | -0.1226 | **-0.4525** | 70 | 5 min |
+| 959 | 32.79 | 2.8335 | 0.0864 | -3371.1617 | -0.3341 | -0.1292 | **-0.4633** | 64 | 24 min |
+| 2159 | 42.96 | 2.7225 | 0.0634 | -7602.1697 | -0.3409 | -0.1523 | **-0.4932** | 60 | 99 min |
+| 2879 | 47.29 | 2.8344 | 0.0599 | -10140.7886 | -0.3432 | -0.1536 | **-0.4968** | 56 | 157 min |
+
+Fit ΔE_relax = ΔE_∞ + (Q²C α(h)/2L)(1/ε∞ − 1/ε₀_ladder): ΔE_∞ = **-0.5735 eV**, slope 1.274 eV Å, **ε₀_ladder = 13.7** (leave-one-out 13.4–14.1; residuals -0.1, +0.2, -0.4, +0.3 meV; `p3a_ladders.png`). Previous values on the base-v2 tilings: W6 4.33 (base v2, Mulliken host coupling, no provider), frozen-provider variant 3.74 (base v2 + MACEField).
+
+Read by the §0 rule against §2.2's ε(q): ε₀_ladder ≥ 2ε∞ = 8 (met); between ε_L(2π/L) of the smallest and largest cells, 7.5–11.7 (**not met: above the band**). The composition screens the embedded charge more strongly than the base's own harmonic ε_L at the cells' wavevectors says, and much more strongly than either earlier model.
+
+**Far-field displacement profile** at 2879 atoms (species-signed radial displacement by shell, + outward; `profile_bw5_2879.json`):
+
+| shell (Å) | Cs ⟨u_r⟩ (mÅ) | Cs ⟨u_r⟩r² | Pb ⟨u_r⟩ | Pb ⟨u_r⟩r² | Cl ⟨u_r⟩ | Cl ⟨u_r⟩r² |
+|---|---|---|---|---|---|---|
+| 8–10 | +18.9 | 1.48 | +34.3 | 2.57 | −20.3 | −1.43 |
+| 10–12 | −1.4 | −0.08 | +5.4 | 0.76 | −1.2 | −0.23 |
+| 12–14 | +11.1 | 1.87 | +8.6 | 1.43 | −4.8 | −0.72 |
+| 14–17 | +3.0 | 0.79 | +4.0 | 0.99 | −2.0 | −0.47 |
+| 17–20 | +3.6 | 1.17 | +2.1 | 0.73 | −1.3 | −0.38 |
+| 20–24 | +1.7 | 0.83 | +1.6 | 0.74 | −0.8 | −0.36 |
+
+Exponents over 10–24 Å (majority sign): Cs r^−2.54, Pb r^−2.67, Cl r^−2.95. A polar response (cations out, Cl in), somewhat steeper than the continuum r^−2, as expected for a dispersive ε(q).
+
+**Linear-response check on the 2879-atom structure.** F = the full model's forces on the 2823 far-field atoms at the frozen embedded geometry (rms 24.0 meV/Å); K = the base's real-space force constants from the §2.2b set (pairs within 12.5 Å, 5.7 M entries, no missing pair; ASR on the self block) plus E_PP's dipole–dipole block K_PP v = Z*ᵀ T_LR Z* v / ε∞ (one `dipole_field` call per matvec); u_pred = K⁻¹F by conjugate gradient (139 matvecs, converged); compared with the relaxed displacements by shell. K_base alone is shown for attribution. Wall clock 3 min.
+
+| shell (Å) | n | rms u_pred (mÅ) | rms u_relaxed (mÅ) | ratio | cos | ratio Cs / Pb / Cl | ratio, K_base only | cos, K_base only |
+|---|---|---|---|---|---|---|---|---|
+| 8–10 | 50 | 42.4 | 39.3 | **1.08** | **0.98** | 1.07 / 1.10 / 1.07 | 1.19 | 0.95 |
+| 10–12 | 84 | 23.7 | 21.5 | **1.10** | **0.96** | 1.03 / 1.06 / 1.13 | 1.15 | 0.88 |
+| 12–14 | 120 | 15.0 | 13.6 | **1.10** | **0.94** | 1.06 / 1.07 / 1.14 | 1.34 | 0.91 |
+| 14–17 | 242 | 9.4 | 7.9 | **1.19** | **0.89** | 1.09 / 1.01 / 1.25 | 1.51 | 0.84 |
+| 17–20 | 354 | 7.4 | 5.6 | **1.33** | **0.78** | 1.09 / 1.10 / 1.45 | 1.71 | 0.81 |
+| 20–24 | 666 | 4.5 | 3.1 | **1.43** | **0.71** | 1.14 / 1.08 / 1.60 | 1.94 | 0.82 |
+
+Energies: the harmonic far-field relaxation energy −½ F·u_pred is **-0.1615 eV** against the actual E_relaxed − E_embedded of **-0.1536 eV** (95 %); with K_base alone the harmonic estimate is -0.2316 eV, so E_PP's dipole block is what makes the harmonic response match the model's (it stiffens the polar modes against the far field, which is its job).
+
+Reading: **the criterion (ratio within 15 % and cosine ≥ 0.9 in every shell beyond 10 Å) is met out to 14 Å and fails beyond it** (ratio 1.19 / 1.33 / 1.43, cosine 0.89 / 0.78 / 0.71 at 14–17 / 17–20 / 20–24 Å; Cl is the species that falls short, 1.25–1.60). Two readings are consistent with the data and are not separable here. (a) Incomplete relaxation of the far shells: the relaxed displacements beyond 17 Å are 3–6 mÅ; the registered fmax of 0.002 eV/Å resolves about 1 mÅ per atom against the diagonal stiffness (2.0 eV/Å²) and less against the soft long-wavelength modes that carry the far field; and the actual relaxation recovers 95 % of the harmonic energy, the missing 8 meV sitting in the softest modes BFGS leaves last. On this reading the model relaxes as its own linear response says and the far shells are under-converged; it would also mean the large-cell ladder points are under-relaxed by a few meV, which would make ε₀_ladder slightly higher still. (b) The response beyond 14 Å is genuinely softer than the harmonic composition: the hole redistributes as the far field relaxes (dq is held fixed in F) and the base's anharmonic terms enter. The energy agreement to 5 % favours (a). A tighter fmax (0.0005) on the 2879 structure would decide it; it was not registered and is not run here.
 
 ### 2.6 Decision
-*pending §2.5*
+
+| item | criterion | result | state |
+|---|---|---|---|
+| §2.1 Born force beyond 12 Å, actual dq | ≥ 0.85 every shell, 639 and 2879 | 0.87–1.03 / 0.90–0.98, cosines ≥ 0.94 | **pass** |
+| §2.3 LO–TO | within 10 % | ratio 1.00 (0.91 without f) | **pass** |
+| §0 compactness, Σdq(< 12 Å) | ≥ 0.9 at 639 and 2159 | 0.911 / 0.869 | **fail at 2159** |
+| §0 N_eff(2159)/N_eff(639) | ≤ 1.2 | 0.96 | pass |
+| §2.4 frozen ladder | flat to 5 meV over 959–2879 | 30 meV rise; 1/L term 23–59 meV by fit | **fail** |
+| §2.5 ε₀_ladder | ≥ 2ε∞ and within §2.2's band 7.5–11.7 | 13.7 | ≥ 2ε∞ pass; **above the band** |
+| §2.5 linear response | ratio within 15 %, cos ≥ 0.9 beyond 10 Å | met to 14 Å, fails beyond | **fail** (with the fmax caveat) |
+
+By the registered branches: "far field captured" needs §2.4 flat and the compactness gate, neither holds; "base-limited" needs the linear-response check to pass and ε₀_ladder *below* §2.2's band, neither holds; "stop and report" is triggered by a 1/L term above 5 meV in §2.4. **Verdict: stop and report.** The cause is one object seen three times: the +1 hole's chain tail along the vacancy's Pb axis (§2.1), which puts 13–14 % of the charge beyond 12 Å, changes with the cell, breaks the fixed-charge size law of the frozen ladder (§2.4), and fails the compactness gate. The far-field machinery itself is sound: E_PP delivers the LO–TO splitting on this provider, the far ions feel Z*·E_c, and inside 14 Å the composition relaxes as its own harmonic response plus E_PP says. The ε₀_ladder of 13.7 is the first ladder on this programme to show lattice screening at all (W6 4.3, variant 3.7), and it exceeds the base's own ε_L at the cells' wavevectors; what it falls short of is ε₀_LST (23), and the §2.2b dispersion says a 12 Å base cannot provide more at these cell sizes. Phase 3b does not open on this checkpoint under the plan's rules; the decisions on the chain tail (whether the 12 Å compactness requirement is the right one for a shallow vertical level, or whether E_far should carry a distributed charge) and on the far-field convergence tolerance are the user's.
 
 ## Wall clock
 | item | time | device |
@@ -197,6 +251,8 @@ Reading: **§2.4 fails the flatness criterion.** dE rises by 29.6 meV from 959 t
 | §2.2a Hessian + Z* | 66 s | GPU |
 | §2.1 core relaxation (639, GPU) / Born force 639 (CPU) / 2879 (CPU) | 9.5 min / 47 s / 175 s | GPU / CPU |
 | §2.4 frozen ladder (4 sizes) | 3 min | GPU 639/959, CPU 2159/2879 |
+| §2.5 relaxation ladder 639 / 959 / 2159 / 2879 | 5 / 24 / 98 / 157 min | GPU / CPU / CPU / CPU |
+| §2.5 linear-response check (2879) | 3 min | CPU |
 | §2.2b 3×3×3 finite-displacement set (480 calls at 2160 atoms) + analysis | 2.9 h + 3 min | CPU, 48 threads (shared) |
 | §2.3 LO–TO (12 energies + 4 dipole calls at 2160 atoms) | 5 min | CPU, 40 threads |
 | §2.2c form factor (18 dipole calls at 2160 atoms) | 4 min | CPU, 40 threads |
