@@ -380,6 +380,16 @@ The group-level gain argument used to motivate the weight change was wrong in on
 the gap's sensitivity are ones the defect-frame forces barely use, their second moment is small whatever the group norm is, and scaling the gap term does not change
 the ratio. The same amplitude at weight 0.1 is what that predicts. Where the sensitivity sits is checked in the diagnostic below.
 
+**Where the sensitivity lives (diagnostic on the bw4 seed-0 and bw2 seed-2 checkpoints, `p2c_gap_sensitivity.py`).** Two thirds of the gap's sensitivity
+‖∂gap/∂θ‖² sits in the four per-channel output offsets of the hopping readout, and two or three of those four numbers carry nearly all of it; with the hopping
+decay and scale parameters, eps0 and s_near, about 90 % is in some twenty scalars, and the 71k readout weights carry under 10 % between them. The stiff mode is
+therefore a two-to-three-parameter mode. Under Adam at the training learning rate those offsets can hold a 1e-4 eV gap only through the period-2 cancellation of
+Adam's first moment; when the alternation breaks, they take near-full steps, the gap jumps, and the resulting gradient drives every readout weight, whose second
+moment knows only the small force gradient, in sign steps for tens of steps. That is the force damage. The direction this points at, not run tonight, is to let the
+gap term act only on those scalar carriers (a global constraint on global parameters): the worst-case gap kick per step is then bounded at about 0.01 eV, the
+readout weights never see the gap term, and the force fit cannot be dragged by it; the cost is a coarser hold of order 5 meV, which a smaller learning rate for the
+carriers would shrink. Choosing it, with or without the smoothed edge, is the user's decision.
+
 **Pass criteria written before each run** are in the tracker (entries of 00:25, 01:50 and 03:55); bw4's are: no epoch above 10× the median after epoch 2; after epoch
 2 no step with a gap-term loss above 1e-3 and a maximum per-step |gap − 2.40| below 0.01 eV; the hard gap at every epoch end within 2.40 ± 0.01 (fails by
 construction under σ, see above); forces, energy gate, large-N and saturation as for the rerun.

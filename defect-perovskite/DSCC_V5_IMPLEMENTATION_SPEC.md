@@ -6909,3 +6909,17 @@ moment is not what the simple gain formula assumed. No flagged epoch so far; the
 result is reported as read; a spike-free outcome would carry no margin argument. State of the levers: band withdrawn; smooth edge kept but not sufficient;
 weight does not remove the marginal state; outside-Adam steps not viable as implemented. The mechanism is documented in §1.4; what to do about it is the user's
 decision.
+
+**2026-10-12 05:50 — Where the gap's sensitivity lives (`p2c_gap_sensitivity.py`, `~/runs/dscc/p2c/gap_sensitivity_bw4_s0.json`; bw4 s0 and bw2 s2 `model_avg.pt`,
+static cell, S = ∂gap/∂θ).** ‖S‖ = 5.7–5.8 eV per unit parameter in both. **66–69 % of ‖S‖² sits in `h0.sk.hop.4.bias`, the four per-channel output offsets of the
+hopping readout, and 2–3 of those four numbers carry 99 % of that tensor's share.** The rest: `decay_u` (4 numbers) 8 %, `hop.4.weight` (256) 7–8 %, `v0_raw` 5–6 %
+(7–9 of 36 elements), `s_near` 4–5 %, `eps0` 5 % (3 of 6); the on-site readout 1.5 %, everything else < 1 %. About 90 % of the gap's sensitivity is in ~20 scalar
+parameters; the 71k hopping-readout weights carry < 10 % between them. The force gradient on the carriers is 2.8× the hopping group's per-parameter median
+(15× for the sk scalars) — larger than typical, but tiny against the gap gradient once the gap is off by more than ~1e-4 eV. Reading: the "stiff 71k-dimensional
+mode" is a 2–3-parameter mode (the global hopping offsets) that under Adam at lr 1–2e-3 can only be held by the period-2 cancellation of Adam's first moment (an
+alternating gradient keeps m ≈ 0.05 g); when the alternation breaks, m grows, the offsets take near-full steps, the gap jumps, and the resulting gradient — large
+against every readout weight's force-only second moment — drives all 71k weights in sign steps for tens of steps, which is the force damage. **Direction this points
+at (not run; the user's decision):** let the Γ-gap term act only on the scalar carriers (hop output offsets, decay_u, v0_raw, eps0, s_near) — a global constraint on
+global parameters — by routing its gradient to that subset and excluding the readout weights; the worst-case gap kick per step is then lr · Σ_{carriers}|S_i| ≈
+0.01 eV and bounded, the readout weights never see the gap term, and the force fit cannot be dragged by it. Cost: a coarser hold (of order lr · S ≈ 5e-3 eV) and
+offsets the force fit does feel; a smaller learning rate for the carriers would shrink both. Smoothed edges (σ) remain correct and independent of this.
