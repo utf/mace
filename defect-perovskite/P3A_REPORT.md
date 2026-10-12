@@ -9,7 +9,30 @@ pre-launch registrations: §1's Σdq criterion read on the label tiling; bw6 pai
 Runs `dscc_p2cwbw6_s{0,2,6}` on b3 GPUs 4/5/7, started 12:36–12:44 on 2026-10-12; identical to bw5 except `--delta_frac 0.2` (bounds Pb 1.43, Cs 0.32, Cl 2.58 eV).
 Per-epoch flank p-channel |tanh| p50 on the held-out +1 frames added to the level readout (`flank_tanh_p`, readout only; on bw5 seed 0's final checkpoint it reads 0.95, the value of the saturation diagnostic).
 
-*(per-seed table, replacement decision and the flank |tanh| curves: pending the runs, ~3 h, and the finisher)*
+
+**Result** (finisher 16:54–17:37; `~/runs/dscc/p2c/step1_bw6.md`, `P2C6_GATES.json`, `sat_bw6_s*.json`, `bw6_s2/step0.json`; held-out forces per-component meV/Å on `model_avg.pt`; the comparator is bw5 on the same seeds and folds):
+
+| seed | bw5 total | bw5 4–12 Å | bw6 total | bw6 4–12 Å | Δ total / 4–12 | energy gate (bw6) | flank p shift (eV) of 1.43 | flank \|tanh\| p50 (model_avg) | frames > 0.9 | held N_eff p50 | separation p50 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | 11.79 | 10.62 | 12.08 | 10.95 | +0.29 / +0.33 | pass | -1.36 | 0.95 | 100 % | 3.6 | 0.048 |
+| 2 | 11.85 | 10.72 | 12.41 | 11.16 | +0.56 / +0.44 | pass | -1.31 | 0.92 | 95 % | 4.1 | 0.052 |
+| 6 | 11.59 | 10.43 | 23.37 | 20.84 | +11.78 / +10.41 | FAIL | -0.22 | 0.22 | 0 % | 16.3 | 0.030 |
+
+Paired mean difference bw6 − bw5 (n = 3): total +4.21, 4–12 Å +3.73 (seeds 0 and 2 alone: +0.29 / +0.56 total, +0.33 / +0.43 on 4–12 Å, within +τ). bw5's own flank shift on the same seeds: −0.67 / −0.67 / −0.66 eV of 0.72 (|tanh| 0.93–0.94).
+
+Flank |tanh| p50 on the held-out +1 frames by epoch:
+
+| seed | 0 | 5 | 10 | 15 | 20 | 25 | 30 | 40 | 50 | 59 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | 0.56 | 0.60 | 0.89 | 0.93 | 0.95 | 0.96 | 0.94 | 0.96 | 0.95 | 0.95 |
+| 2 | 0.82 | 0.58 | 0.68 | 0.86 | 0.91 | 0.96 | 0.92 | 0.93 | 0.93 | 0.92 |
+| 6 | 0.42 | 0.52 | 0.68 | 0.89 | 0.75 | 0.99 | 0.50 | 0.29 | 0.19 | 0.22 |
+
+Large-N read on the seed-median bw6 checkpoint (seed 2), 639-atom label tiling with the core re-relaxed by that checkpoint: separation 0.022 eV, N_eff 5.26, Σdq within 5 / 8 / 12 Å 0.66 / 0.80 / **0.923** (criterion ≥ 0.9: met).
+
+**Decision: bw5 stands; the bound question is closed.** Seeds 0 and 2 run to the new bound: the p-channel shift at the flanking Pb reaches −1.36 and −1.31 eV of the 1.43 eV allowed (95 % and 92 %, against bw5's 93 % of 0.72 eV), |tanh| p50 0.95 and 0.92 with 100 % and 95 % of frames above 0.9, saturated from epochs 10 and 20 respectively. The registered rule (|tanh| > 0.9 on ≥ 2 seeds) applies regardless of the other criteria, three of which bw6 would otherwise have met on these two seeds (forces within +τ, energy gate on two seeds, Σdq(< 12 Å) 0.92 on the seed median). Doubling the bound did not give the readout a resting point; the on-site shift is a quantity the fit pushes to whatever rail it is given, which is the Stage-2 reading of §1.6 of the Phase 2c report confirmed at a second bound. Seed 6 is a different failure: between epochs 23 and 29 its near-field scale s_near fell from 0.41 to 0.17, the flank readout touched 0.99 and collapsed to 0.25, and the hole left the flanking Pb altogether (flank dq 0.03, N_eff 16 on the held frames, 88 in the 639-atom cell); the force error doubled to 23.4 and never recovered. It is the seed that spiked in the rerun; its step record is kept (`~/runs/dscc/p2c/bw6_steps/s6.jsonl`) and is not analysed further here, since it does not bear on the decision.
+
+The checkpoint for §2 is therefore bw5 seed 0 `model_avg.pt`. Wall clock: 3 h 50 min per seed on one b3 card (148–157 s per epoch), finisher 45 min.
 
 ## 2. The far-field test
 
@@ -169,6 +192,7 @@ Reading: **§2.4 fails the flatness criterion.** dE rises by 29.6 meV from 959 t
 ## Wall clock
 | item | time | device |
 |---|---|---|
+| §1 bw6, three seeds | 3 h 50 min each + 45 min finisher | b3 GPUs 4/5/7 |
 | pristine relaxation | 16 s | GPU |
 | §2.2a Hessian + Z* | 66 s | GPU |
 | §2.1 core relaxation (639, GPU) / Born force 639 (CPU) / 2879 (CPU) | 9.5 min / 47 s / 175 s | GPU / CPU |
