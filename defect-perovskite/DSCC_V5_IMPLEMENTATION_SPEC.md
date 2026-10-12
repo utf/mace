@@ -6945,3 +6945,9 @@ flank. So the fifth run's compact hole (N_eff 3.9) and part of its force gain co
 rule of record (a bound binding on the sites is not an optimum) applies, and bw5 is **recorded, not adopted**, pending the user's reading. What the record says
 together: at gap weight 1 the gap term held the hopping offsets and, through them, kept the flanking on-site shift off its rail; at weight 0.1 the model runs the
 on-site well to Δ. The two bounds (gap stiffness, Δ) were doing each other's work. The user's decisions stand as listed in the morning message, with this added.
+Addendum (09:15): the same check on bw4 (w = 1, σ; `sat_bw4_s{0,2,6}.json`): flank p shift −0.62 / −0.61 / −0.58 eV, |tanh| 0.87 / 0.85 / 0.81, frames above 0.9:
+22 / 11 / 6 %. In eV at the flank, same frames: first arm −2.97 (bound 3.08); B_s −0.04 to −0.41 (bound 3.08); rerun (w 1, no σ) −0.32 to −0.42 (bound 0.72); bw4 (w 1, σ)
+−0.58 to −0.62; bw5 (w 0.1, σ) −0.67 (bound 0.72). So the move toward the rail came mostly with σ (and/or the spikes) and the weight added the last part; the
+"two bounds doing each other's work" sentence of 08:55 is an inference, not established, and is relabelled as the reading. bw5 asks for a flank well 1.6× deeper than
+B_s puts there and 4.4× shallower than the first arm's run-away; the fraction 0.1 behind the 0.72 eV bound was my choice, not a derived value. The
+pinned-versus-bound discriminator of §1.3 (N_eff across cell size and against the Pb–Pb bridge in the 159-atom frames) is being run on bw5 s0 and bw4 s2.

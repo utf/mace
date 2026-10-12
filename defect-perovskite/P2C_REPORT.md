@@ -520,7 +520,10 @@ factor of six, misses N_eff by 0.5 and Σdq by 0.10; the same reading in the rel
 **Saturation (Stage-2 rule): fails.** On the 1019 +1 frames the on-site readout at the two flanking Pb sits at its rail on every seed: p-channel shift −0.67 eV
 against the bound of 0.72 (p10–p90 −0.69 to −0.64), |tanh| 0.93–0.94, 90–97 % of frames above 0.9. B_s reads −0.04 to −0.41 eV there (|tanh| 0.01–0.14); the rerun
 at weight 1 read |tanh| 0.45–0.59. The fifth run's four-atom hole and part of its force gain therefore come with the readout pinned at its bound, the first arm's
-pattern at a smaller Δ. By the project's rule a bound binding on the sites is not an optimum, and the fifth run is recorded, not adopted, unless the user reads it
-otherwise. The record of the two runs together says the gap term at weight 1 was, through the hopping offsets, also what kept the flanking on-site shift off its rail:
-the two bounds were doing each other's work.
+pattern at a smaller Δ. The same check on the fourth run (weight 1, σ) reads −0.58 to −0.62 eV and |tanh| 0.81–0.87, so most of the move toward the rail came with the smoothed edge
+or the spikes, and the weight added the last part. In eV at the flank, on the same frames: first arm −2.97 (bound 3.08), B_s −0.04 to −0.41 (bound 3.08), rerun
+−0.32 to −0.42, fourth run −0.58 to −0.62, fifth run −0.67 (bound 0.72). The fifth run asks for a flank well 1.6× deeper than B_s puts there and 4.4× shallower
+than the first arm's run-away; the fraction 0.1 behind the 0.72 eV bound was my choice, not a derived value. By the project's rule a bound binding on the sites is
+not an optimum; whether a 0.67 eV well at a bound set at 0.72 is that pathology or a bound set too tight is decided by the discriminator §1.3 established (N_eff
+across cell size and against the bridge length), reported below, and by one run at a larger fraction, not launched.
 
