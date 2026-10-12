@@ -6855,3 +6855,17 @@ while the gap sensitivity 2w‖∂gap/∂θ‖ fell only from 18–21 to 16; the
 4.5–9 × 10⁻⁴ over the same epochs and seed 6 has had no event through epoch 19. Seed 2 had a mild excursion at epoch 19 as well (|gap − 2.40| p50 4e-4, no flagged
 epoch; its alternation fell to 0.4 afterwards, the inflated-second-moment signature). The sensitivity itself (‖S‖ 8–17 eV per unit parameter over ~71k hopping-readout
 parameters) is what makes the mode stiff.
+
+**2026-10-12 03:55 — Amendment to 03:25, and a registered diagnostic run (bw5).** The claim that lowering the gap weight cannot help was wrong in one respect: the
+self-tuned gain of 2 arises only while the oscillation is active and feeds the second moment. The dangerous state is the quiet one, where the second moment is the
+force gradient's and the gain is proportional to w. At w = 1 the quiet gain ran between 1.5 and 4 over training (it damped in bw4 epochs 15–18 and then ran at ratio 3);
+at w = 0.1 the same range is 0.15–0.4, below the limit with margin against the 3× force-gradient dip measured, and the self-tuned oscillation cannot start. The pull-in
+at epoch 0 is unchanged (Adam's step is w-independent while the gap gradient dominates). The cost is the hold: the gap lags the target by drift/gain, ~1e-3 eV at
+rest and up to a few 0.01 eV during the brief fast-drift phases seen in bw3 — the same scale as the smooth-edge offset. **bw5** = bw4's command plus
+`--gap_weight 0.1` (σ = 0.0259 kept; the only change against bw4 is w): `dscc_p2cwbw5_s{0,2,6}`, `p2cw5_queue.sh` / `p2cw5_finish.sh` / `p2cw5_assemble.sh`
+(status `P2C5_STATUS`), queued behind bw4 on b3 GPUs 4/5/7. It is run to put evidence in front of the user; the choice of lever is theirs. **Criteria, written now:**
+(1) no epoch above 10× the median after epoch 2; (2) no step with l_gap > 1e-3 and max per-step |gap − 2.40| < 0.01 eV after epoch 2; (3) smoothed gap at epoch end
+within 2.40 ± 0.005; (4) the discriminating test, readable by epoch 5: sign-alternation fraction ≤ 0.6 with the oscillation damped (bw4: 0.8–0.9 by epochs 3–4); if
+bw5 still shows 0.8–0.9, w = 0.1 did not take the mode below the limit and the second lever is needed; (5) gates as bw2. **Second lever, prepared and not run:** the
+gap term's gradient applied as a plain step outside Adam (gain η · 2w · ‖S‖², deterministic, independent of the force gradient's scale; ‖S‖² ran 272 → 61 over
+training, so η · w ≈ 0.003 holds it under 1 throughout), with a cap on the per-step correction; to be coded and tested if time allows, registered as available.
