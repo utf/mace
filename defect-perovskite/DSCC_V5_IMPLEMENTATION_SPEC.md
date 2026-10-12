@@ -6889,3 +6889,12 @@ therefore not a viable lever as implemented (both forms kept in the code, defaul
 weight (bw5, queued). The smoke runs are not part of any arm's record.
 Addendum (05:45): bw4 seed 6 spiked at epoch 26 (epoch loss 1.4e-3, ~100× median), the same spontaneous form (profile in `bw4_steps/s6.jsonl`; read in the
 §1.5 stability table). Under the smooth edge alone: seeds 0 and 6 major spikes (epochs 19, 26), seed 2 a mild excursion (epoch 19).
+
+**2026-10-12 — bw4 (smooth band edges, w = 1) result of record** (`dscc_p2cwbw4_s{0,2,6}`, `model_avg.pt`; `~/runs/dscc/p2c/step1_bw4.md`, `P2C4_GATES.json`).
+Forces total / 4–12 Å: 16.04/14.46, 14.69/13.13, 16.58/14.90 against B_s 13.72/12.24, 13.88/12.40, 14.37/12.94 and bw2 13.54/12.23, 13.12/11.81, 16.90/15.11.
+Paired B_w − B_s: +1.78 total (fails τ on total), +1.63 on 4–12 Å (kept by 0.07). Energy gate: s0 fail (0.75 meV/atom), s2 pass, s6 pass; C_Q transfer 1.8 / 2.2 / 9.3 meV
+(the best transfer of any arm). s_near 0.291 / 0.305 / 0.428. N_eff +1 frames 5.4 / 5.6 / 7.3; 639 atoms 8.1 / 6.9 / 7.5 (sep 0.016–0.046, Σdq5 0.53–0.58). Stability:
+seeds 0 and 6 spiked (epochs 19, 26; 300× and 100× the median), seed 2 a mild excursion (epoch 19); the force damage shows in the totals. Pass criteria of 01:50:
+(1) fails (two seeds), (2) fails (max per-step |gap − 2.40| 0.38 and 0.30 eV; 15 and 29 steps with l_gap > 1e-3), (3) fails by construction (hard gap 2.37–2.38),
+(4) force gate kept on 4–12 Å only, energy gate 2 of 3. bw2 remains the best B_w result (forces better than B_s on two seeds). Large-N on seed 0 (seed median) and
+the §1.5 tables follow from the finisher/assembler.
