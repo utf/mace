@@ -6887,3 +6887,5 @@ the hopping readout's second moment carries the gap gradient and so also damps t
 removes that damping, the force steps kick the gap by ~0.03 eV per step, and a gain-0.5 correction leaves a residual of that size. The outside-Adam step is
 therefore not a viable lever as implemented (both forms kept in the code, default off, for the record). The tested lever that keeps the gap inside Adam is the gap
 weight (bw5, queued). The smoke runs are not part of any arm's record.
+Addendum (05:45): bw4 seed 6 spiked at epoch 26 (epoch loss 1.4e-3, ~100× median), the same spontaneous form (profile in `bw4_steps/s6.jsonl`; read in the
+§1.5 stability table). Under the smooth edge alone: seeds 0 and 6 major spikes (epochs 19, 26), seed 2 a mild excursion (epoch 19).
