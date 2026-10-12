@@ -6926,3 +6926,12 @@ offsets the force fit does feel; a smaller learning rate for the carriers would 
 Addendum (07:50): bw5 through epochs 50–53 of 60 (`bw5_steps/`): no flagged epoch in any seed (max epoch loss 2.9–6.8× the median against the 10× criterion); no
 step with l_gap > 1e-3; maximum per-step |gap − 2.40| 0.088 / 0.064 / 0.053 eV (criterion 2's 0.01 is exceeded by mild excursions, none of which grew); alternation
 median 0.60–0.67 (range 0.38–0.85), the marginal state intermittently present; hard gap 2.366–2.377. Forces, gates and large-N at ~09:00–09:40.
+
+**2026-10-12 08:30 — bw5 (smooth edges σ = 0.0259, gap weight 0.1) forces and gates** (`dscc_p2cwbw5_s{0,2,6}`, `model_avg.pt`; `step1_bw5.md`, `P2C5_GATES.json`).
+Forces total / 4–12 Å: 11.79/10.62, 11.85/10.72, 11.59/10.43 against B_s 13.72/12.24, 13.88/12.40, 14.37/12.94 and the rerun 13.54/12.23, 13.12/11.81, 16.90/15.11.
+Paired B_w − B_s: **−2.25 total, −1.93 on 4–12 Å** (better than B_s by more than τ on both; per seed −1.92/−2.03/−2.78). Every shell better on every seed (2–4 Å
+19.8–20.0 against 23.8–24.8). Energy gate: s0 pass (0.46, 5.0), s2 pass (0.47, 4.9), s6 FAIL on C_Q transfer 10.4 (energy 0.54). s_near final 0.133 / 0.126 / 0.158.
+Localisation: +1 frames N_eff 3.9 / 3.8 / 4.2 (sep 0.046–0.056); 639 atoms 4.3 / 4.4 / 5.0 with Σdq(< 5 Å) 0.72 / 0.72 / 0.68, separation 0.028 / 0.005 / 0.026.
+No spike in any seed (stability entry of 07:50 holds through epoch 59). Reading, to be checked before it is relied on: the force gain of ~2 meV/Å over B_s and
+~1.5 over the rerun's best seeds on all three seeds is larger than the spike damage accounts for, which says the gap term at weight 1 was constraining the hopping
+offsets at the force fit's expense throughout; the Stage-2 saturation check and the large-N read on seed 0 (seed median) follow before any of this is adopted.
