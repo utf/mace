@@ -6996,3 +6996,8 @@ vacancy's own Pb–Cl–Pb axis at 8.5 / 14.2 / 19.9 / 25.6 Å (shell sums 0.070
 Fill-smearing scan at the same structure: Σdq(<12 Å) 0.888 / 0.882 / 0.861 / 0.767 at σ_s 0.0125 / 0.025 / 0.05 / 0.1 eV; the chain pairs grow slightly as the fill sharpens
 (8–9 Å: 0.089 at 0.0125). Reading: the smearing accounts for ~0.03 of diffuse spread; the chain tail is the head's own defect level (0.028 eV below the next state at this
 geometry) hybridised along the σ chain, i.e. the tight-binding physics of a shallow vertical level, not a fill artefact and not an equivariance fault (on-axis, two sides equal within 10 %).
+Phase 3a §2.2b/d read (2026-10-12 15:55): base v8 w01's longitudinal ε(q) = 4 + ε_ion,L along x / y / z: 23.1 / 22.0 / 24.5 at q = 0; 11.5 / 11.7 / 11.3 at 2π/47.3 Å;
+10.7 / 10.9 / 10.4 at 2π/43.0; 8.6 / 9.0 / 8.3 at 2π/32.8; 7.8 / 8.2 / 7.5 at 2π/28.6; 6.9 / 7.4 / 6.6 at 0.26 Å⁻¹. Along y, ε_ion 18.0 / 7.9 / 3.4 at 0 / 0.13 / 0.26 vs base v2's
+19.4 / 11.4 / 4.8: dispersion as strong as base v2's. Checks: D(0) = Γ Hessian to 0.4 µeV; Λ(0) = autograd Z* to 1e-4 e; Fourier form factor = frozen-pattern form factor at
+the commensurate points (0.956/0.952/0.833/0.862); no soft modes. §2.5 registered expectation (§0 rule): ε₀_ladder between 7.5 and 11.7 and above 8. §2.2d: no digitised PBE
+dispersion of Pnma CsPbCl3 found; gap recorded.

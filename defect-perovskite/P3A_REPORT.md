@@ -48,7 +48,25 @@ The tilt pattern is the same as the base-v2 relaxation's (same bond length and a
 Top modes by ε contribution (meV: ε): 10.1: 2.99, 10.5: 2.31, 6.8: 1.72, 9.4: 1.69, 8.7: 1.53, 7.1: 1.41. The base's own ε∞ on this cell is 3.658
 (the P1 value 3.667 was read on the base-v2 cell). The registered ε∞ of E_PP stays 4.0.
 
-*(b) ε(q) and (d) dispersion: pending the 3×3×3 finite-displacement set (480 base calls, CPU) and the analysis.*
+
+**(b) ε(q) from the 3×3×3 finite-displacement set** (480 base-alone calls at 2160 atoms, each returning forces and node dipoles; h = 0.01 Å; wall clock 2.9 h, CPU 48 threads, shared). D(q) and the q-dependent Born charges Z*_κ(q) come from the same set (conventions in `p3a_epsq.py`); ε_ion,L(q) = q̂·ε_ion(q)·q̂ from the bare D(q); ε_L = 4.0 + ε_ion,L.
+
+Checks: D(q = 0) reproduces the §2.2a Γ Hessian to 0.4 µeV in every mode; Σ_b′ Λ at q = 0 reproduces the autograd Z* to 1e-4 e; force constants beyond 12 Å are below 0.021 eV/Å² (largest element 3.85), so the 3×3×3 box (half-lengths 24.1 / 24.1 / 17.1 Å) holds the base's reach without wrap-around; the Fourier-route form factor at the commensurate points equals the frozen-pattern measurement of §2.2c (x n = 1: 0.956 vs 0.956; y n = 1: 0.952 vs 0.952; y n = 2: 0.833 vs 0.833; z n = 1: 0.862 vs 0.862); no soft modes at any q on the paths.
+
+| q | q (Å⁻¹) | ε_ion,L / ε_L, q ∥ x | q ∥ y | q ∥ z | f(q), strongest mode, x / y / z |
+|---|---|---|---|---|---|
+| 0 (Γ) | 0.000 | 19.1 / **23.1** | 18.0 / **22.0** | 20.5 / **24.5** | 1.000 / 1.000 / 1.000 |
+| 2π/47.3 (2879 atoms) | 0.133 | 7.5 / **11.5** | 7.7 / **11.7** | 7.3 / **11.3** | 0.954 / 0.950 / 0.923 |
+| 2π/43.0 (2159) | 0.146 | 6.7 / **10.7** | 6.9 / **10.9** | 6.4 / **10.4** | 0.945 / 0.940 / 0.909 |
+| 2π/32.8 (959) | 0.192 | 4.6 / **8.6** | 5.0 / **9.0** | 4.3 / **8.3** | 0.910 / 0.902 / 0.852 |
+| 2π/28.6 (639) | 0.220 | 3.7 / **7.7** | 4.2 / **8.2** | 3.4 / **7.4** | 0.886 / 0.875 / 0.814 |
+| 0.26 | 0.260 | 2.9 / **6.9** | 3.4 / **7.4** | 2.6 / **6.6** | 0.849 / 0.833 / 0.758 |
+
+Comparison with base v2 (P0, q ∥ y, frozen phonons of the top 8 y-polarised modes): ε_ion 19.4 / 11.4 / 4.8 at 0 / 0.13 / 0.26 Å⁻¹; base v8 w01 along y: 18.0 / 7.9 / 3.4. **Base v8 w01's polar dispersion is as strong as base v2's, slightly stronger**: the ionic screening falls to 42 % of its q = 0 value by 0.13 Å⁻¹ (base v2: 59 %) and to 19 % by 0.26 Å⁻¹ (base v2: 25 %). The polycrystalline trace falls more slowly (19.2 → 14.3 → 11.0 along x) because the transverse components survive; the longitudinal one is what a point charge sees.
+
+**Registered expectation for §2.5 (the §0 reading rule):** ε₀_ladder should lie between ε_L at the largest and the smallest cells' wavevectors, i.e. between **7.4 and 11.7** (axis range 7.5–8.2 at 2π/28.6 Å, 11.3–11.7 at 2π/47.3 Å), and above 2ε∞ = 8.
+
+**(d) Dispersion along Γ–X/Y/Z** (`p3a_dispersion.png`): 240 branches of the 80-atom cell, bare and with the nonanalytic term at ε∞ 4.0 built from Z*(q). Optical range 2–28 meV, no imaginary modes along any path; the NA term lifts a handful of branches to 22–27 meV at q → 0 (the LO modes), the rest is unchanged. A published PBE phonon dispersion of Pnma CsPbCl3 with digitised branches was not found in the time available (the closest is the combined experimental/DFT study of CsPbX3 single crystals in Mater. Today Commun. 2025, abstract only); recorded as a gap. Qualitatively the base's 2–28 meV range and the 20–27 meV LO group agree with the published spectra of the Cs–Pb–Cl family (Raman and IR bands up to ~27 meV).
 
 **(c) Form factor of the base's dipoles** (P0 A1 procedure with the base as its own provider: the strongest IR mode, 10.13 meV, Z̃ = (0, -1.889, 0) e/√amu, y-polarised; modulated cos(q·R) in the 3×3×3 cell, amplitude 0.05; wall clock 4 min, CPU). The longitudinal line is q ∥ y:
 
@@ -90,5 +108,6 @@ E_PP's LO − TO against the smoothed expectation with the form factor: ratio **
 |---|---|---|
 | pristine relaxation | 16 s | GPU |
 | §2.2a Hessian + Z* | 66 s | GPU |
+| §2.2b 3×3×3 finite-displacement set (480 calls at 2160 atoms) + analysis | 2.9 h + 3 min | CPU, 48 threads (shared) |
 | §2.3 LO–TO (12 energies + 4 dipole calls at 2160 atoms) | 5 min | CPU, 40 threads |
 | §2.2c form factor (18 dipole calls at 2160 atoms) | 4 min | CPU, 40 threads |
