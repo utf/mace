@@ -6991,3 +6991,8 @@ Over 959–2879 the range is 29.6 meV (not flat to 5 meV); E∞ + c/L³ fits tho
 If bw5 stands, the §0 compactness gate fails at 2159 (0.869 < 0.9) and the §2.4 flatness criterion fails; the registered consequence is §2.6 "stop and report". Read formally when the checkpoint is fixed.
 §2.1 provisional at 2879 atoms (bw5 s0, CPU 175 s; E_far switched −29.08 meV = head e_host): actual-dq ratio 0.90 / 0.94 / 0.97 / 0.98 at 12–14 / 14–17 / 17–20 / 20–24 Å
 (cosines 0.99; species within 0.03 of each other), unit-charge 0.72 / 0.79 / 0.87 / 0.91. Σdq(<3/5/8/12) 0.35 / 0.69 / 0.76 / 0.86, N_eff 4.78.
+Diagnostic (2026-10-12 15:20, not a gate): shell profile of the vertical hole on the 2879-atom embedded +1 structure (bw5 s0). The tail beyond 8 Å sits on paired Pb along the
+vacancy's own Pb–Cl–Pb axis at 8.5 / 14.2 / 19.9 / 25.6 Å (shell sums 0.070 / 0.033 / 0.016 / 0.008; ×0.45 per 5.7 Å), nothing on the atoms between; no negative dq.
+Fill-smearing scan at the same structure: Σdq(<12 Å) 0.888 / 0.882 / 0.861 / 0.767 at σ_s 0.0125 / 0.025 / 0.05 / 0.1 eV; the chain pairs grow slightly as the fill sharpens
+(8–9 Å: 0.089 at 0.0125). Reading: the smearing accounts for ~0.03 of diffuse spread; the chain tail is the head's own defect level (0.028 eV below the next state at this
+geometry) hybridised along the σ chain, i.e. the tight-binding physics of a shallow vertical level, not a fill artefact and not an equivariance fault (on-axis, two sides equal within 10 %).
