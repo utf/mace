@@ -54,7 +54,8 @@ def main() -> None:
     ap.add_argument("--regime", default="B")
     ap.add_argument("--gap_weight", type=float, default=1.0)
     ap.add_argument("--gap_lr", type=float, default=0.0, help="> 0: apply the Gamma-gap term's gradient as a plain step outside Adam with this step size (its gain is gap_lr * 2 gap_weight * |dgap/dtheta|^2); 0 = through Adam")
-    ap.add_argument("--gap_step_cap", type=float, default=0.01, help="cap on the norm of that plain step")
+    ap.add_argument("--gap_kappa", type=float, default=0.0, help="> 0: least-norm constraint step outside Adam, theta -= kappa (gap - E_gap) S/|S|^2 (gain kappa per step, independent of |S|); 0 = off")
+    ap.add_argument("--gap_step_cap", type=float, default=0.01, help="cap on the norm of either plain step")
     ap.add_argument("--gap_sigma", type=float, default=0.0, help="smooth band edges of the Gamma-gap term (eV): Boltzmann-weighted means of the levels nearest each edge; 0 = hard gap")
     ap.add_argument("--gap_band", type=float, default=0.0, help="tolerance half-width b (eV) of the Gamma-gap term: gap_weight * max(|gap - E_gap| - b, 0)^2; 0 = plain square")
     ap.add_argument("--device", default="cuda")
@@ -185,7 +186,7 @@ def main() -> None:
                       les_well=bool(args.les_well),
                       standardise_inputs=(None if args.standardise < 0 else bool(args.standardise)),
                       readout_init_scale=(None if args.readout_init_scale < 0 else args.readout_init_scale),
-                      directional=bool(args.directional), regime=args.regime, gap_weight=args.gap_weight, gap_band=args.gap_band, gap_sigma=args.gap_sigma, gap_lr=args.gap_lr, gap_step_cap=args.gap_step_cap,
+                      directional=bool(args.directional), regime=args.regime, gap_weight=args.gap_weight, gap_band=args.gap_band, gap_sigma=args.gap_sigma, gap_lr=args.gap_lr, gap_kappa=args.gap_kappa, gap_step_cap=args.gap_step_cap,
                       bz_gap=bool(args.bz_gap), bz_readout=bool(args.bz_readout),
                       level_readout=bool(args.level_readout), embed_readout_path=args.embed_readout,
                       step_log=bool(args.step_log), save_epochs=tuple(args.save_epochs), stop_after_epoch=args.stop_after_epoch,
@@ -239,7 +240,7 @@ def main() -> None:
                      eta=args.eta, beta_b=args.beta_b, beta_a=args.beta_a,
                      delta_frac=args.delta_frac, delta_rule=args.delta_rule,
                      scf=ScfOptions(n_max=args.n_max)).to(args.device)
-    logging.info("Gamma-gap term: weight %.3g eV^-2, tolerance band +-%.4f eV (0 = plain square), smooth band edges sigma %.4f eV (0 = hard gap), plain step outside Adam gap_lr %.3g (0 = through Adam; cap %.3g)", args.gap_weight, args.gap_band, args.gap_sigma, args.gap_lr, args.gap_step_cap)
+    logging.info("Gamma-gap term: weight %.3g eV^-2, tolerance band +-%.4f eV (0 = plain square), smooth band edges sigma %.4f eV (0 = hard gap), plain step outside Adam gap_lr %.3g, least-norm step kappa %.3g (0 = through Adam; cap %.3g)", args.gap_weight, args.gap_band, args.gap_sigma, args.gap_lr, args.gap_kappa, args.gap_step_cap)
     logging.info("on-site half-width rule %s (frac %.3f): Delta per species %s eV", args.delta_rule, args.delta_frac,
                  {int(z): round(float(model.h0.sk.delta[i, 0]), 3) for i, z in enumerate(model.atomic_numbers)})
     logging.info("A1.1: standardisation %s, readout final scale %.3f",

@@ -287,3 +287,24 @@ def test_plain_step_outside_adam_is_proportional_and_capped():
     g = torch.autograd.grad(gap_loss(gap(theta2).unsqueeze(0), target, w), [theta2])
     n = apply_plain_step([theta2], g, 1.0, 0.01)
     assert n == pytest.approx(0.01) and float(theta2.norm()) == pytest.approx(0.01)
+
+
+def test_constraint_step_gain_is_kappa_whatever_the_sensitivity():
+    """Least-norm constraint step: the gap moves by -kappa * err per step for sensitivities differing by
+    100x; kappa = 1 is deadbeat; the cap bounds the step's norm; kappa = 0 is a no-op."""
+    from mace.modules.dscc.train import apply_constraint_step
+    torch.manual_seed(1)
+    for scale_s in (0.03, 0.3, 3.0):
+        a = torch.randn(500, dtype=torch.float64) * scale_s
+        theta = torch.zeros(500, dtype=torch.float64, requires_grad=True)
+        def gap(th): return 2.0 + (a * th).sum()
+        for kappa in (0.5, 1.0):
+            theta.data.zero_(); e0 = float(gap(theta)) - 2.40
+            S = torch.autograd.grad(gap(theta), [theta])
+            apply_constraint_step([theta], S, e0, kappa, 0.0)
+            assert float(gap(theta)) - 2.40 == pytest.approx((1 - kappa) * e0, abs=1e-12)
+    a = torch.randn(500, dtype=torch.float64); theta = torch.zeros(500, dtype=torch.float64, requires_grad=True)
+    S = torch.autograd.grad(2.0 + (a * theta).sum(), [theta])
+    assert apply_constraint_step([theta], S, -0.4, 0.0, 0.0) == 0.0 and float(theta.abs().max()) == 0.0
+    n = apply_constraint_step([theta], S, -0.4, 1.0, 1e-3)
+    assert n == pytest.approx(1e-3) and float(theta.norm()) == pytest.approx(1e-3)

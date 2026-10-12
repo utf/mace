@@ -42,6 +42,27 @@ def gap_loss(gap: torch.Tensor, e_gap: float, weight: float, band: float = 0.0) 
     return weight * (torch.clamp((gap - e_gap).abs() - band, min=0.0) ** 2).sum()
 
 
+def apply_constraint_step(params, grads, err: float, kappa: float, cap: float = 0.0) -> float:
+    """The least-norm correction of a scalar constraint `gap(theta) = target` with sensitivity `grads` =
+    dgap/dtheta: `theta -= kappa * err * S / |S|^2`, so the gap moves by `-kappa * err` per step whatever
+    |S| is (gain kappa, deterministic, outside Adam). The step's norm `kappa |err| / |S|` is capped at
+    `cap` (0 = no cap). Returns the norm applied. Second lever, spike investigation II (2026-10-12)."""
+    if kappa <= 0.0:
+        return 0.0
+    with torch.no_grad():
+        s2 = float(sum(float((g.detach() ** 2).sum()) for g in grads if g is not None))
+        if s2 == 0.0:
+            return 0.0
+        scale = kappa * err / s2                       # theta -= scale * S
+        norm = abs(scale) * s2 ** 0.5
+        if cap > 0.0 and norm > cap:
+            scale *= cap / norm; norm = cap
+        for p, g in zip(params, grads):
+            if g is not None:
+                p.add_(g, alpha=-scale)
+        return norm
+
+
 def apply_plain_step(params, grads, lr: float, cap: float = 0.0) -> float:
     """`theta -= lr * grad` for each (param, grad) pair, with the step's global norm capped at `cap`
     (0 = no cap). Returns the norm of the step applied. Used for the Gamma-gap term when `gap_lr > 0`:
@@ -76,8 +97,9 @@ class TrainConfig:
     r_cut: float = 10.0
     force_weight: float = 1.0
     gap_weight: float = 1.0           # L_gap = gap_weight (E_gap_model - E_gap)^2, eV^-2
-    gap_lr: float = 0.0               # > 0: the gap term's gradient is applied as a plain step theta -= gap_lr * grad OUTSIDE Adam (second lever, 2026-10-12); 0 = through Adam as before
-    gap_step_cap: float = 0.01        # cap on the norm of that plain step (parameter units)
+    gap_lr: float = 0.0               # > 0: the gap term's gradient is applied as a plain step theta -= gap_lr * grad OUTSIDE Adam (second lever, 2026-10-12); 0 = off
+    gap_kappa: float = 0.0            # > 0: the least-norm constraint step theta -= kappa (gap - e_gap) S / |S|^2 OUTSIDE Adam (gain kappa per step, independent of |S|); 0 = off
+    gap_step_cap: float = 0.01        # cap on the norm of either plain step (parameter units)
     gap_sigma: float = 0.0            # smooth band edges of the Gamma-gap term (eV; Boltzmann-weighted edge levels); 0 = hard gap
     gap_band: float = 0.0             # tolerance band b (eV): L_gap = gap_weight max(|E_gap_model - E_gap| - b, 0)^2; 0 = the plain square
     # v5 amendment A1: the weak L2 on the tanh outputs that replaces the pristine centre as
@@ -629,10 +651,16 @@ class Trainer:
         l_sat = self.cfg.sat_weight * sum(bar.values()) if bar else l_force.new_zeros(())
         named = [(n, p) for n, p in self.model.named_parameters() if p.requires_grad]
         params = [p for _, p in named]
-        gap_grads = None
-        if getattr(self.cfg, "gap_lr", 0.0) > 0.0:
-            # Second lever: the gap term's gradient is taken separately and applied as a plain step after
-            # Adam's, so Adam's moments never see it and its gain does not depend on the force gradient's scale.
+        gap_grads = None; sens_grads = None
+        if getattr(self.cfg, "gap_kappa", 0.0) > 0.0:
+            # Second lever (least-norm form): the gap's sensitivity S = dgap/dtheta is taken separately and the
+            # correction theta -= kappa (gap - e_gap) S/|S|^2 is applied after Adam's step; Adam's moments never
+            # see the gap term and the gain is kappa per step whatever |S| or the force gradient's scale.
+            sens_grads = torch.autograd.grad(gap.sum(), params, allow_unused=True, retain_graph=True)
+            loss = self.cfg.force_weight * l_force + l_l2 + l_sat + l_energy
+        elif getattr(self.cfg, "gap_lr", 0.0) > 0.0:
+            # Second lever (fixed-step form): gain gap_lr * 2w * |S|^2, which varies with |S| (the smoke of
+            # 2026-10-12 04:30 showed it unstable early in training); kept for the record.
             gap_grads = torch.autograd.grad(l_gap, params, allow_unused=True, retain_graph=True)
             loss = self.cfg.force_weight * l_force + l_l2 + l_sat + l_energy
         else:
@@ -654,7 +682,12 @@ class Trainer:
             groups = {k: v ** 0.5 for k, v in groups.items()}
         total_norm = torch.nn.utils.clip_grad_norm_(params, self.cfg.grad_clip)
         optimizer.step()
-        gap_step_norm = apply_plain_step(params, gap_grads, self.cfg.gap_lr, self.cfg.gap_step_cap) if gap_grads is not None else 0.0
+        if sens_grads is not None:
+            gap_step_norm = apply_constraint_step(params, sens_grads, float(gap[0]) - self.cfg.e_gap, self.cfg.gap_kappa, self.cfg.gap_step_cap)
+        elif gap_grads is not None:
+            gap_step_norm = apply_plain_step(params, gap_grads, self.cfg.gap_lr, self.cfg.gap_step_cap)
+        else:
+            gap_step_norm = 0.0
         diag = out.get("diagnostics", {})
         conv = diag.get("converged", [])
         per_graph_err = None
@@ -969,7 +1002,7 @@ class Trainer:
                 s = self.step(batch, frame_indices, optimizer)
                 if getattr(cfg, "step_log", False):
                     rec_ = {"epoch": epoch, "step": stats["n"], "loss": s["loss"], "force": s["force"], "l_gap": s["l_gap"], "energy": s["energy"], "sat": s["sat"],
-                            "gap": s["gap"], "gap_edges": s["gap_edges"], "grad_norm": s["grad_norm"], "grad_groups": s["grad_groups"],
+                            "gap": s["gap"], "gap_edges": s["gap_edges"], "grad_norm": s["grad_norm"], "grad_groups": s["grad_groups"], "gap_step_norm": s.get("gap_step_norm", 0.0),
                             "frames": s["frames"], "force_err_per_graph": s["force_err_per_graph"],
                             "s_near": (float(self.model.near_scale()) if getattr(self.model, "near_field", "off") == "potential" else None),
                             "lr": float(optimizer.param_groups[0]["lr"])}
