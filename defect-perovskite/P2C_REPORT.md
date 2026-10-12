@@ -345,21 +345,36 @@ replay drifts from the original after epoch 26, but the spike reproduced at epoc
 5. The same gap-term signature with an on-site jump in the same epoch is in the B_0 and B_s spikes and in the first B_w arm's run-away (seed 2, epoch 20). In those
    the unbounded or wide on-site readout was the amplifier; with the sp-splitting bound in place the hopping readout took the role.
 
-**The fix.** Two candidates were registered from the replay: a tolerance band on the gap term (no gradient within ±k_BT of the target) and a smooth definition
-of the band edges. The band was tried first (third run, bw3) and withdrawn after nine epochs: inside the band it behaved as designed (gap term silent, no
-oscillation), but when the force term carried the gap to the band's edge the first restoring step was a 0.13 eV kick for a 0.02 eV excursion, followed by a ±0.1 eV
-oscillation across the band and a doubled force error for 25 steps (seeds 6 and 2, epochs 5 and 8; step records kept). The kick and the original spike are one
-mechanism: a gap gradient arriving in a direction whose Adam second moment is empty is amplified — the crossing emptied it for the new eigenvector, the band for
-the whole gap direction. The fix of record is therefore the smooth band edge: each edge is the Boltzmann-weighted mean of the levels nearest it at σ = k_B · 300 K
-= 0.0259 eV, so the gap and its gradient are continuous when edge levels cross or are degenerate, and the gradient is always present so Adam's statistics stay
-informed. The plain square is kept; σ = 0 is the hard gap exactly; nothing else changes (target, weight, Δ rule, the H0 − W reading, E_far, E_PP, r_c, r_split, ε∞);
-no new loss term. The regulariser now holds the smoothed gap at 2.40 and the hard gap rests a few meV below; both are reported. Flag `--gap_sigma`, helper
-`smooth_gap`, test `test_smooth_gap_continuous_across_a_crossing`. The marginal period-2 state of the plain square (amplitude ~1e-4 eV) is expected to remain; the
-test of the fix is that no crossing tips it.
+**What was tried, in order, and what each showed.**
 
-**Pass criteria written before the results:** no epoch in any seed with loss above 10× that seed's median (epochs ≥ 2); after epoch 2 no step with a gap-term
-loss above 1e-3 and a maximum per-step |gap − 2.40| below 0.01 eV (replay: 24 steps and 0.52 eV; band runs: 9 and 6 steps and 0.11 eV); the hard gap at every
-epoch end within 2.40 ± 0.01; forces, energy gate, large-N and saturation read exactly as for the rerun.
+1. *A tolerance band on the gap term* (third run, bw3; no gradient within ±k_BT of the target). Inside the band it behaved as designed, but when the force term
+   carried the gap to the band's edge the first restoring step was a 0.13 eV kick for a 0.02 eV excursion, then a ±0.1 eV oscillation across the band and a doubled
+   force error for 25 steps (seeds 6 and 2 at epochs 5 and 8). Withdrawn after nine epochs; step records kept.
+2. *Smooth band edges* (fourth run, bw4; each edge the Boltzmann-weighted mean of the levels nearest it at σ = k_B · 300 K = 0.0259 eV, plain square, no band).
+   This removes the crossing trigger: the gap and its gradient are continuous when edge levels cross or are degenerate. It is kept (flag `--gap_sigma`, helper
+   `smooth_gap`, test `test_smooth_gap_continuous_across_a_crossing`; σ = 0 is the hard gap exactly). It was not sufficient: seed 0 diverged at epoch 19 with no
+   crossing and no band (CBM and VBM splits unchanged through the event), the oscillation growing from its resting ±0.0003 eV at a ratio of 3 per step to 0.38 eV
+   in eleven steps, 32 excursion steps, force error 16 → 34 meV/Å, epoch loss 300× the median. Seed 2 had a mild excursion in the same epoch; seed 6 none.
+   A registered consequence: the regulariser holds the smoothed gap at 2.400 and the hard gap rests at 2.37–2.38, because both edges of the static cell have
+   several levels within σ. Which gap carries the 2.40 label is the user's decision.
+
+**The mechanism, as the three records together show it.** The Γ-gap term is a stiff scalar constraint (its sensitivity to the ~71k hopping-readout parameters is
+8–17 eV per unit parameter) applied through Adam, whose step for each parameter is normalised by that parameter's second-moment estimate. The second moment of
+the hopping readout is set by whichever gradient is present. While the gap oscillation is active it feeds the second moment and the loop gain self-tunes to the
+stability limit (the period-2 state at amplitude 1e-4 eV seen from epoch 3 in every run with the plain square). When the oscillation is quiet, the second moment
+is the force gradient's alone, and the gain is then proportional to the gap weight and inversely to the force gradient's scale: in bw4 the force gradient on the
+hopping readout fell 3× over epochs 15–18 of seeds 0 and 2, and seed 0 diverged in epoch 19. A level crossing (the replay) and a band edge (bw3) are two further
+ways of presenting the gap gradient to a second moment that does not reflect it. One mechanism, three routes. The force fit takes the damage every time.
+
+**The two levers, and what is running.** (a) The gap weight: at w = 1 the quiet gain ran between 1.5 and 4; at w = 0.1 it is 0.15–0.4, below the limit with margin
+against the measured dip, and the self-tuned oscillation cannot start; the cost is that the gap lags the target by about 1e-3 eV at rest. A fifth run (bw5 = bw4
+plus `--gap_weight 0.1`) is queued behind bw4 as a registered diagnostic; its discriminating test is the alternation fraction by epoch 5 (≤ 0.6 against bw4's
+0.8–0.9). (b) The gap term's gradient applied as a plain step outside Adam, with its own fixed step size, so its gain is deterministic and independent of the
+force gradient's scale; prepared, not run. Neither is a new loss term. The choice is the user's, with bw5's reading in front of them.
+
+**Pass criteria written before each run** are in the tracker (entries of 00:25, 01:50 and 03:55); bw4's are: no epoch above 10× the median after epoch 2; after epoch
+2 no step with a gap-term loss above 1e-3 and a maximum per-step |gap − 2.40| below 0.01 eV; the hard gap at every epoch end within 2.40 ± 0.01 (fails by
+construction under σ, see above); forces, energy gate, large-N and saturation as for the rerun.
 
 ### 1.5 Fourth run (the rerun's settings plus the smooth band edges)
 
