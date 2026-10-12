@@ -369,8 +369,12 @@ ways of presenting the gap gradient to a second moment that does not reflect it.
 **The two levers, and what is running.** (a) The gap weight: at w = 1 the quiet gain ran between 1.5 and 4; at w = 0.1 it is 0.15–0.4, below the limit with margin
 against the measured dip, and the self-tuned oscillation cannot start; the cost is that the gap lags the target by about 1e-3 eV at rest. A fifth run (bw5 = bw4
 plus `--gap_weight 0.1`) is queued behind bw4 as a registered diagnostic; its discriminating test is the alternation fraction by epoch 5 (≤ 0.6 against bw4's
-0.8–0.9). (b) The gap term's gradient applied as a plain step outside Adam, with its own fixed step size, so its gain is deterministic and independent of the
-force gradient's scale; prepared, not run. Neither is a new loss term. The choice is the user's, with bw5's reading in front of them.
+0.8–0.9). (b) The gap term's gradient applied as a step outside Adam (a fixed step, and a least-norm constraint step with gain κ per step independent of the
+sensitivity): both were coded, tested and smoked for one epoch on the local card, and neither holds the gap — the fixed step is unstable early in training when
+the sensitivity is largest, and the least-norm step at κ = 0.5 leaves a residual of 0.06 eV with excursions to a closed gap, because taking the gap out of Adam also
+removes the damping that Adam's shared second moment applies to the force term's steps along the gap direction. Lever (b) is therefore recorded as not viable as
+implemented (code kept, default off). Neither lever is a new loss term. The tested lever that keeps the gap inside Adam is the weight; the choice is the user's, with
+bw5's reading in front of them.
 
 **Pass criteria written before each run** are in the tracker (entries of 00:25, 01:50 and 03:55); bw4's are: no epoch above 10× the median after epoch 2; after epoch
 2 no step with a gap-term loss above 1e-3 and a maximum per-step |gap − 2.40| below 0.01 eV; the hard gap at every epoch end within 2.40 ± 0.01 (fails by
