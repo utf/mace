@@ -6833,3 +6833,19 @@ construction:** the smoothed gap is held at 2.400 while the hard gap rests at 2.
 both edges of the static cell have several levels within σ (CBM: a single level and a doublet within 0.003–0.04 eV; VBM: two levels within 0.013 eV), so the
 Boltzmann mean sits a full σ-scale inside each edge. The offset drifts (2.3705 → 2.3752 in seed 0) as the edge structure changes. Decision for the user: accept the
 smoothed gap as the regularised quantity (label 2.40 applies to it), or re-target / shrink σ; no change tonight.
+
+**2026-10-12 03:25 — bw4 seed 0 spiked at epoch 19 with no crossing and no band: the mechanism is deeper than the trigger.** Step record
+(`~/runs/dscc/p2c/bw4_steps/s0.jsonl`, epoch 19 steps 119–166): the edge levels did not move (CBM splits 0.034 / 0.021 eV, VBM 0.010 / 0.13 eV throughout), s_near
+steady at 0.325, no unusual batch. The gap oscillation grew from its resting ±0.0003 eV with a ratio of ≈ 3 per step (0.0003 → 0.0009 → 0.0024 → 0.0069 → 0.014 →
+0.023 → 0.07 → 0.38 eV over steps 123–134), gradient norm 0.004 → 12.6 (clipped), the hopping readout 0.93–0.99 of it, 32 excursion steps, per-graph force error 16 →
+34 (26 in epoch 20, 21 in epoch 21), epoch loss 300× the median. In epochs 15–18 the period-2 statistic had fallen to 0.57–0.79 with amplitude 1e-5 eV: the
+oscillation had almost died, and the force-term gradient norms late in training are 2–5× smaller than at epoch 30 of the replay. Reading: under Adam the gap mode's
+loop gain is lr · w · ‖∂gap/∂θ‖² / √v, and v for the hopping readout is set by whichever gradient is present; when the gap oscillation is quiet, v is the force
+gradient's, which keeps shrinking as the force fit converges, so the gain rises on its own until it crosses 2 and the mode diverges, until its own gradient inflates
+v. The level crossing (replay), the band edge (bw3) and this spontaneous event (bw4) are three routes to the same place: a gap-term step normalised by a second
+moment that does not reflect the gap term. The smooth edge removed one route and is kept (it is correct on its own terms); it does not close the other two. Per the
+registered rule, no third fix tonight: bw4 finishes, the spike profile is reported, and the lever is the user's decision. Recommendation to be put to the user with
+the evidence: take the gap constraint out of Adam's normalisation — apply its gradient as a separate plain step with its own fixed step size (gain η · 2w ·
+‖∂gap/∂θ‖², deterministic, independent of the force gradient's scale), Adam unchanged for everything else; not a new loss term. Lowering the gap weight is not
+expected to help: the self-tuned state sets the gain to 2 for any weight large enough to reach it, and the damage is done by the parameter excursion, not the gap
+amplitude.
