@@ -7001,3 +7001,8 @@ Phase 3a §2.2b/d read (2026-10-12 15:55): base v8 w01's longitudinal ε(q) = 4 
 19.4 / 11.4 / 4.8: dispersion as strong as base v2's. Checks: D(0) = Γ Hessian to 0.4 µeV; Λ(0) = autograd Z* to 1e-4 e; Fourier form factor = frozen-pattern form factor at
 the commensurate points (0.956/0.952/0.833/0.862); no soft modes. §2.5 registered expectation (§0 rule): ε₀_ladder between 7.5 and 11.7 and above 8. §2.2d: no digitised PBE
 dispersion of Pnma CsPbCl3 found; gap recorded.
+Phase 3a §1 read (2026-10-12 17:00, finisher REPORT_DONE 16:54): bw6 (frac 0.2) held-out forces 12.08 / 12.41 / 23.37 vs bw5 11.79 / 11.85 / 11.59 (paired +4.21 total,
++3.73 on 4–12 Å; seeds 0 and 2 alone +0.29 / +0.56, within +τ); energy gate pass on seeds 0, 2, fail on 6. Flank |tanh| p50 on model_avg: seeds 0 and 2 at 0.94–0.95 with
+95–100 % of frames above 0.9 (per-epoch readout: at the new bound from epoch ~10 / ~20); seed 6 collapsed between epochs 20 and 30 (s_near 0.38 → 0.17, held N_eff 15 → 17,
+639-atom embed N_eff 31 → 126, Σdq(<5 Å) 0.22 → 0.01) and never recovered. Registered rule "flank |tanh| > 0.9 on ≥ 2 seeds → runs to the bound": **bw5 stands; the bound
+question is closed** (the readout saturates at 1.43 eV as it did at 0.72 eV). The checkpoint is bw5 seed 0 model_avg.pt; the provisional §2.1 / §2.4 / §2.5 reads become the record.
