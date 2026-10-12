@@ -6825,3 +6825,11 @@ that seed's median over epochs ≥ 2; (2) on the step record after epoch 2: no s
 steps, 0.52 eV; band runs: 9 and 6 steps, 0.11 eV); (3) the hard gap at every epoch end within 2.40 ± 0.01, smooth and hard reported per seed; (4) forces, energy
 gate, large-N on the seed median and the saturation check exactly as for bw2. If a bw4 seed still shows a gap-term spike, no third fix tonight: the runs finish and the
 spike profile is reported; the next lever (the gap weight) is the user's decision.
+
+**2026-10-12 02:50 — bw4 early reading (epochs 0–12 / 0–10 / 0–9 of seeds 0 / 2 / 6; `~/runs/dscc/p2c/bw4_steps/`).** No flagged epoch; after epoch 2 no step with
+l_gap > 1e-3 in any seed; maximum per-step |gap − 2.40| so far 0.0089 / 0.0073 / 0.0093 eV (criterion 2's 0.01 is close to the plain square's normal excursion range,
+to be reported as read). The period-2 marginal state is back as expected (alternation 0.8–0.9, lag-1 autocorrelation −0.9). **Criterion 3 as written fails by
+construction:** the smoothed gap is held at 2.400 while the hard gap rests at 2.371–2.380 eV, an offset of 0.02–0.03 eV rather than the few meV predicted, because
+both edges of the static cell have several levels within σ (CBM: a single level and a doublet within 0.003–0.04 eV; VBM: two levels within 0.013 eV), so the
+Boltzmann mean sits a full σ-scale inside each edge. The offset drifts (2.3705 → 2.3752 in seed 0) as the edge structure changes. Decision for the user: accept the
+smoothed gap as the regularised quantity (label 2.40 applies to it), or re-target / shrink σ; no change tonight.
