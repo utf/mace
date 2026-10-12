@@ -7006,3 +7006,7 @@ Phase 3a §1 read (2026-10-12 17:00, finisher REPORT_DONE 16:54): bw6 (frac 0.2)
 95–100 % of frames above 0.9 (per-epoch readout: at the new bound from epoch ~10 / ~20); seed 6 collapsed between epochs 20 and 30 (s_near 0.38 → 0.17, held N_eff 15 → 17,
 639-atom embed N_eff 31 → 126, Σdq(<5 Å) 0.22 → 0.01) and never recovered. Registered rule "flank |tanh| > 0.9 on ≥ 2 seeds → runs to the bound": **bw5 stands; the bound
 question is closed** (the readout saturates at 1.43 eV as it did at 0.72 eV). The checkpoint is bw5 seed 0 model_avg.pt; the provisional §2.1 / §2.4 / §2.5 reads become the record.
+Phase 3a §2.5 ladder read (2026-10-12 18:10, bw5 s0): ΔE_relax = −0.4525 / −0.4633 / −0.4932 / −0.4968 eV at 639 / 959 / 2159 / 2879 (all converged to fmax 0.0015;
+56–70 BFGS steps; 2879 took 2.6 h on the CPU). Fit ΔE_∞ + (Q²C/2)(1/ε∞ − 1/ε₀)·α/L: ΔE_∞ = −0.574 eV, slope 1.274 eV Å, **ε₀_ladder = 13.7** (leave-one-out 13.4–14.1),
+residuals < 0.5 meV. Against the §0 rule: above 2ε∞ (pass) but ABOVE the registered band 7.5–11.7 from the base's own ε_L(2π/L) (W6 4.33 and the frozen-provider variant
+3.74 are the previous values). The linear-response check decides whether the extra screening is the model relaxing beyond its own harmonic response or the ε_L(2π/L) mapping being too coarse.
