@@ -6958,3 +6958,15 @@ flank readout at 0.67 of 0.72 eV still carries gradient and responds to geometry
 The Stage-2 rule as written still applies (a bound binding on the sites); whether to loosen the bound is the user's decision, and the discriminating run is one at a
 larger fraction (0.2 → Δ_Pb 1.43 eV): a finite settling with |tanh| well below 1 says frac 0.1 was too tight and bw5's physics stands; running to the new bound says
 the first arm's pathology is back at a smaller scale. Not launched. GPUs 4/5/7 on b3 are idle; all monitors stopped.
+
+**2026-10-12 — Plan P Phase 3a received (user's plan, `defect-perovskite/PLAN_P_PHASE3A.md`, verbatim). §0 registrations, written before any §2 result is read:**
+- Large-N gate, re-registered on compactness: on the +1 core embedded at 639 and 2159 atoms, Σdq(< 12 Å) ≥ 0.9 at both sizes; N_eff(2159)/N_eff(639) ≤ 1.2;
+  far-field Born-force ratio (§2.1, actual dq) ≥ 0.85 in every shell beyond 12 Å. Separation reported, not gated.
+- C5 is read on the held-out +1 frames from now on; the neutral-vacancy readout kept as a second column.
+- Ladder reading rule: ε₀_ladder is read against the base's own ε(q) at the cells' wavevectors (§2.2), never against ε₀_LST as pass/fail; registered expectation
+  ε₀_ladder ≥ 2ε∞ and between ε(2π/L) of the largest and smallest cells.
+- §1 bw6 = bw5 at frac 0.2 (bounds Pb 1.43, Cs 0.32, Cl 2.58 eV), `dscc_p2cwbw6_s{0,2,6}`; replacement criteria as in the plan (flank |tanh| p50 ≤ 0.8 every seed;
+  paired forces vs bw5 within +τ or better on total and 4–12 Å; energy gate ≥ 2 seeds; Σdq(< 12 Å) at 639 atoms on the seed median ≥ 0.9); "runs to the bound" if
+  flank |tanh| > 0.9 on ≥ 2 seeds → bw5 stands. Model of record meanwhile: bw5 seed 0 `model_avg.pt`.
+- Not permitted: retraining beyond bw6; changes to r_split, r_c, ε∞, E_PP or the switch; reading the ladder against ε₀_LST as pass/fail; reusing base-v2 tilings; new arms.
+Run directory `~/runs/dscc/p3a/`; report `P3A_REPORT.md`.
