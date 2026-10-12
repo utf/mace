@@ -6983,3 +6983,9 @@ bare D(q); the 3×3×3 commensurate points n = 1, 2 are exact and serve as the c
 Phase 3a §2.2c and §2.3 read (2026-10-12 13:50): form factor of base v8 w01's dipoles along the polar axis 0.952 / 0.833 / 0.694 at λ 48 / 24 / 16 Å (w_eff 3.13 Å;
 base v2 3.47 Å). LO–TO at q = 2π/(3b): E_PP alone 0.4774 vs smoothed NAC × g f² 0.4768 (ratio 1.001; vs NAC × g 0.907) → §2.3 PASSES (within 10 %).
 Provisional: the 639-atom +1 core is being relaxed with bw5 s0 (the standing checkpoint) so the §2.1/§2.4/§2.5 lane can start when §1 is decided; redone if bw6 replaces bw5.
+Phase 3a provisional reads with bw5 s0 (2026-10-12 13:35; the checkpoint is not yet fixed, bw6 running; recorded so the numbers are on file before §1 is read):
+§2.1 at 639 atoms, switched kernel (E_far reconstructed = head e_host −23.71 meV): actual-dq ratio 0.87 / 0.93 / 0.99 / 1.03 at 12–14 / 14–17 / 17–20 / 20–24 Å (gate ≥ 0.85 passes),
+unit-charge 0.67 / 0.76 / 0.84 / 0.85; cosines 0.94–0.99. The 639-atom Born force does not fit on the 16 GB card (CPU, 47 s).
+§2.4 frozen ladder dE = 8.1579 / 8.1674 / 8.1936 / 8.1971 eV at 639 / 959 / 2159 / 2879; Σdq(<12 Å) 0.911 / 0.863 / 0.869 / 0.861, N_eff 5.08 / 4.99 / 4.90 / 4.78.
+Over 959–2879 the range is 29.6 meV (not flat to 5 meV); E∞ + c/L³ fits those three points to < 1 meV (E∞ 8.213, c −1597 eV Å³) with the held-out 639 missing by +13 meV.
+If bw5 stands, the §0 compactness gate fails at 2159 (0.869 < 0.9) and the §2.4 flatness criterion fails; the registered consequence is §2.6 "stop and report". Read formally when the checkpoint is fixed.

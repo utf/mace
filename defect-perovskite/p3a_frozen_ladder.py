@@ -79,4 +79,15 @@ if len(pts) >= 2:
         fit["forced_1_over_L"] = {"b_eV_A": float(b1), "span_meV_over_range": 1e3 * float(abs(b1) * (1 / L.min() - 1 / L.max())), "E_inf": float(e1), "c_L3": float(c1),
                                   "pass_below_5meV": bool(1e3 * abs(b1) * (1 / L.min() - 1 / L.max()) < 5.0)}
     fit["flat_to_5meV"] = bool((y.max() - y.min()) * 1e3 <= 5.0); fit["range_meV"] = 1e3 * float(y.max() - y.min())
+    # all sizes (overdetermined): E_inf + c/L^3, and E_inf + b/L + c/L^3
+    La = np.array([r["L"] for r in rows]); ya = np.array([r["dE"] for r in rows])
+    A3a = np.stack([np.ones_like(La), La ** -3], 1); (ea, ca), *_ = np.linalg.lstsq(A3a, ya, rcond=None)
+    fit["all_sizes_L3"] = {"E_inf": float(ea), "c_L3": float(ca), "residual_meV": (1e3 * (ya - A3a @ [ea, ca])).tolist(), "sizes": [int(r["n_atoms"]) for r in rows]}
+    if len(rows) >= 4:
+        A13a = np.stack([np.ones_like(La), 1 / La, La ** -3], 1); (e1a, b1a, c1a), *_ = np.linalg.lstsq(A13a, ya, rcond=None)
+        fit["all_sizes_1L_L3"] = {"E_inf": float(e1a), "b_eV_A": float(b1a), "c_L3": float(c1a), "residual_meV": (1e3 * (ya - A13a @ [e1a, b1a, c1a])).tolist(),
+                                  "span_1L_meV_over_range": 1e3 * float(abs(b1a) * (1 / La.min() - 1 / La.max()))}
+    # the model's energy without E_M and the eps_inf point-charge expectation, for the record
+    fit["dE_raw_without_EM_meV_vs_smallest"] = [1e3 * float(r["dE_raw_without_EM"] - rows[0]["dE_raw_without_EM"]) for r in rows]
+    fit["E_M_meV_vs_smallest"] = [1e3 * float(r["e_madelung"] - rows[0]["e_madelung"]) for r in rows]
 json.dump({"rows": rows, "fit": fit}, open(out, "w"), indent=1); print("fit:", json.dumps(fit)); print("saved", out)
