@@ -6938,3 +6938,10 @@ offsets at the force fit's expense throughout; the Stage-2 saturation check and 
 Addendum (08:45): bw5 large-N on seed 0 (seed median), label tiling, core re-relaxed: separation 0.025 eV, N_eff 4.5, Σdq(< 5 Å) 0.70 (relaxed tiling 0.026 / 4.6 /
 0.70) — fails separation, misses N_eff by 0.5 and Σdq by 0.10. Stability table through epoch 59: no flagged epoch, no step with l_gap > 1e-3, max per-step
 excursion 0.088 / 0.064 / 0.053 eV, alternation median 0.68 / 0.62 / 0.64. §1.6 written from `section_1_6_bw5.md`; saturation check running.
+Addendum (08:55) — **bw5 Stage-2 saturation check fails** (`p2c_spike_diag.py` part B, `~/runs/dscc/p2c/sat_bw5_s{0,2,6}.json`, 1019 +1 frames each): the on-site
+readout at the two flanking Pb sits at its rail on every seed — p-channel shift −0.67 eV (p10–p90 −0.69 to −0.64) against the sp-splitting bound of 0.72 eV,
+|tanh| mean 0.93–0.94, 90–97 % of frames above 0.9; B_s on the same frames −0.04 to −0.41 eV, |tanh| 0.01–0.14. The rerun (weight 1) had |tanh| 0.45–0.59 at the
+flank. So the fifth run's compact hole (N_eff 3.9) and part of its force gain come with the readout pinned at its bound, the first arm's pattern at a smaller Δ: the
+rule of record (a bound binding on the sites is not an optimum) applies, and bw5 is **recorded, not adopted**, pending the user's reading. What the record says
+together: at gap weight 1 the gap term held the hopping offsets and, through them, kept the flanking on-site shift off its rail; at weight 0.1 the model runs the
+on-site well to Δ. The two bounds (gap stiffness, Δ) were doing each other's work. The user's decisions stand as listed in the morning message, with this added.

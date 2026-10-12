@@ -517,3 +517,10 @@ s_near settles at 0.13–0.16, half the rerun's. The hole is the most compact of
 0.68–0.72 of the charge within 5 Å). Large-N on the seed median (seed 0): separation 0.025 eV, N_eff 4.5, Σdq(< 5 Å) 0.70 — fails the separation threshold by a
 factor of six, misses N_eff by 0.5 and Σdq by 0.10; the same reading in the relaxed tiling. The Stage-2 saturation check is below.
 
+**Saturation (Stage-2 rule): fails.** On the 1019 +1 frames the on-site readout at the two flanking Pb sits at its rail on every seed: p-channel shift −0.67 eV
+against the bound of 0.72 (p10–p90 −0.69 to −0.64), |tanh| 0.93–0.94, 90–97 % of frames above 0.9. B_s reads −0.04 to −0.41 eV there (|tanh| 0.01–0.14); the rerun
+at weight 1 read |tanh| 0.45–0.59. The fifth run's four-atom hole and part of its force gain therefore come with the readout pinned at its bound, the first arm's
+pattern at a smaller Δ. By the project's rule a bound binding on the sites is not an optimum, and the fifth run is recorded, not adopted, unless the user reads it
+otherwise. The record of the two runs together says the gap term at weight 1 was, through the hopping offsets, also what kept the flanking on-site shift off its rail:
+the two bounds were doing each other's work.
+
