@@ -6935,3 +6935,6 @@ Localisation: +1 frames N_eff 3.9 / 3.8 / 4.2 (sep 0.046–0.056); 639 atoms 4.3
 No spike in any seed (stability entry of 07:50 holds through epoch 59). Reading, to be checked before it is relied on: the force gain of ~2 meV/Å over B_s and
 ~1.5 over the rerun's best seeds on all three seeds is larger than the spike damage accounts for, which says the gap term at weight 1 was constraining the hopping
 offsets at the force fit's expense throughout; the Stage-2 saturation check and the large-N read on seed 0 (seed median) follow before any of this is adopted.
+Addendum (08:45): bw5 large-N on seed 0 (seed median), label tiling, core re-relaxed: separation 0.025 eV, N_eff 4.5, Σdq(< 5 Å) 0.70 (relaxed tiling 0.026 / 4.6 /
+0.70) — fails separation, misses N_eff by 0.5 and Σdq by 0.10. Stability table through epoch 59: no flagged epoch, no step with l_gap > 1e-3, max per-step
+excursion 0.088 / 0.064 / 0.053 eV, alternation median 0.68 / 0.62 / 0.64. §1.6 written from `section_1_6_bw5.md`; saturation check running.

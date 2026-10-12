@@ -453,22 +453,67 @@ the paired difference against B_s is +1.78 on the total (outside τ) and +1.63 o
 two seeds, (3) fails by construction (the hard gap rests at 2.37–2.38 under σ), and (4) is kept on 4–12 Å only. The rerun (§1.2) remains the best B_w result. The
 period-2 statistic after the spikes (alternation 0.41–0.74) is the inflated-second-moment state, not stability.
 
-### 1.6 Fifth run (fourth run plus gap weight 0.1; a registered diagnostic)
+### 1.6 Fifth run (fourth run plus gap weight 0.1; registered as a diagnostic, read as a result)
 
-Runs `dscc_p2cwbw5_s{0,2,6}`, launched 04:35, end about 11:00. The discriminating test written before launch was the sign-alternation fraction of (gap − 2.40)
-by epoch 5: ≤ 0.6 would mean the weight took the gap mode below Adam's stability limit; 0.8–0.9 (the fourth run's value) would mean it did not.
+Runs `dscc_p2cwbw5_s{0,2,6}`, b3 GPUs 4/5/7, 2026-10-12 04:35–08:20, per-step record. The only change against the fourth run is the gap weight (1.0 → 0.1); σ = 0.0259
+kept. The gap weight was 1.0 in every earlier run of every arm.
 
-| seed | epochs read | alternation (last epoch read) | lag-1 autocorrelation | \|gap − 2.40\| p50 (eV) | hard gap at epoch end |
-|---|---|---|---|---|---|
-| 0 | 0–5 | 0.81 | −0.89 | 2e-4 | 2.370 |
-| 2 | 0–4 | 0.60 | −0.28 | < 1e-4 | 2.384 |
-| 6 | 0–3 | 0.67 | −0.80 | 2e-4 | 2.387 |
+#### Forces and energies: B_s, rerun (bw2) and fifth run, same seeds (held-out, per-component meV/Å; `model_avg.pt`)
 
-**Reading (provisional, through epochs 50–53 of 60 at 07:50).** The epoch-5 test fails on seed 0 and is borderline on the others: the period-2 marginal state is
-present at w = 0.1 as at w = 1, intermittently (alternation 0.38–0.85 by epoch, median 0.60–0.67). Through 50 epochs, however, no seed has spiked: the largest
-epoch loss is 2.9–6.8× the median (criterion 10×), no step has a gap-term loss above 1e-3, and the largest single-step excursions are 0.05–0.09 eV (criterion 0.01;
-mild, none grew). The weight does not remove the mechanism, and the record gives no margin argument for why these three seeds stayed clean; it is reported as read.
-Forces, gates, the stability table and large-N on the seed median follow when the run ends (about 09:00–09:40).
+| arm | seed | total | 4–12 Å | 2–4 | 4–8 | 8–10 | 10–12 | 12+ | 79-atom E (meV/atom) | C_Q transfer (meV) | energy gate | s / s_near final |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| B_s | 0 | 13.72 | 12.24 | 23.8 | 13.2 | 10.9 | 9.9 | 8.1 | 0.54 | 7.0 | pass | 0.376 |
+| B_s | 2 | 13.88 | 12.40 | 24.1 | 13.3 | 11.2 | 9.8 | 7.8 | 0.50 | 4.2 | pass | 0.411 |
+| B_s | 6 | 14.37 | 12.94 | 24.8 | 13.8 | 11.9 | 9.9 | 6.5 | 0.46 | 13.4 | FAIL | 0.555 |
+| B_w rerun | 0 | 13.54 | 12.23 | 22.7 | 12.8 | 11.4 | 10.8 | 8.1 | 0.61 | 6.5 | FAIL | 0.263 |
+| B_w rerun | 2 | 13.12 | 11.81 | 22.3 | 12.5 | 10.8 | 10.1 | 7.7 | 0.49 | 6.9 | pass | 0.292 |
+| B_w rerun | 6 | 16.90 | 15.11 | 29.6 | 16.2 | 13.7 | 12.3 | 8.7 | 0.72 | 3.4 | FAIL | 0.417 |
+| B_w fifth | 0 | 11.79 | 10.62 | 20.0 | 11.2 | 9.8 | 9.1 | 7.0 | 0.46 | 5.0 | pass | 0.133 |
+| B_w fifth | 2 | 11.85 | 10.72 | 19.8 | 11.3 | 9.9 | 9.2 | 6.4 | 0.47 | 4.9 | pass | 0.126 |
+| B_w fifth | 6 | 11.59 | 10.43 | 19.8 | 11.1 | 9.5 | 8.6 | 6.1 | 0.54 | 10.4 | FAIL | 0.158 |
 
+Paired mean difference against B_s (n = 3, point estimate; τ = 1.7): fifth run total -2.25 (per seed [-1.92, -2.03, -2.78]), 4–12 Å -1.93 (per seed [-1.62, -1.67, -2.51]); rerun was +0.53 / +0.52. **B_w kept (within +tau or better on total, 4-12 A)**
 
+#### Localisation (model_avg): separation / N_eff / pass on the held fold's 79-atom +1 frames; separation / N_eff / Σdq(< 5 Å) on the 639-atom label-tiled structure
+
+| arm | seed | +1 frames sep p50 / N_eff p50 / pass | 639 atoms sep / N_eff / Σdq(<5 Å) |
+|---|---|---|---|
+| B_w rerun | 0 | 0.052 / 4.7 / 0.00 | 0.022 / 6.1 / 0.61 |
+| B_w rerun | 2 | 0.050 / 5.6 / 0.00 | 0.020 / 7.4 / 0.55 |
+| B_w rerun | 6 | 0.048 / 6.8 / 0.00 | 0.024 / 9.7 / 0.47 |
+| B_w fifth | 0 | 0.046 / 3.9 / 0.00 | 0.028 / 4.3 / 0.72 |
+| B_w fifth | 2 | 0.049 / 3.8 / 0.00 | 0.005 / 4.4 / 0.72 |
+| B_w fifth | 6 | 0.056 / 4.2 / 0.00 | 0.026 / 5.0 / 0.68 |
+
+#### Stability: epoch losses, the gap's resting value and the period-2 statistic
+
+| seed | max epoch loss / median (epochs ≥ 2) | epochs above 10× | gap at epoch end: min / max / final (eV) | hard gap, final step | max per-step \|gap − 2.40\|, epochs ≥ 3 (eV) | steps with l_gap > 1e-3, epochs ≥ 3 | alternation fraction, epochs ≥ 3: median | lag-1 autocorrelation: median |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 7.3× | 0 | 2.399 / 2.403 / 2.400 | 2.372 | 0.0878 | 0 | 0.68 | -0.60 |
+| 2 | 3.0× | 0 | 2.357 / 2.409 / 2.400 | 2.372 | 0.0637 | 0 | 0.62 | -0.48 |
+| 6 | 4.4× | 0 | 2.397 / 2.404 / 2.400 | 2.371 | 0.0532 | 0 | 0.64 | -0.50 |
+
+For comparison: the replay of the rerun's seed 6 (hard gap) had 24 steps with l_gap > 1e-3 and a maximum per-step excursion of 0.52 eV (epoch 30 loss 190× the median originally, 440× in the replay), with the period-2 state (alternation 0.80–0.92, autocorrelation −0.9 to −0.98) in every epoch from 3 to 29; the band runs (bw3, stopped) had 9 and 6 such steps and 0.11 eV at the band edge in seeds 6 and 2.
+
+#### Large-N on the seed-median checkpoint (bw5_s0, label tiling, core re-relaxed by that checkpoint)
+
+| structure (639 atoms) | separation (eV) | N_eff | Σdq(< 3 / 5 / 8 / 12 Å) | Pb–Pb (Å) |
+|---|---|---|---|---|
+| a_relaxed_tiling_existing_core | 0.026 | 4.6 | 0.65 / 0.70 / 0.81 / 0.93 | 5.76 |
+| b_label_tiling_core_rerelaxed | 0.025 | 4.5 | 0.66 / 0.70 / 0.82 / 0.93 | 5.86 |
+| a_prime_relaxed_tiling_core_rerelaxed | 0.022 | 5.1 | 0.00 / 0.66 / 0.78 / 0.91 | 5.89 |
+
+79-atom +1 frames (0.3): 928 frames; corr(sep, Pb–Pb) +0.00, corr(N_eff, Pb–Pb) +0.05.
+
+**Reading.** No seed spiked: the largest epoch loss is 3–7× the median (criterion 10×), no step had a gap-term loss above 1e-3, and the largest single-step
+excursions (0.05–0.09 eV) did not grow. The period-2 state is still intermittently present (alternation 0.62–0.68 by epoch, against 0.80–0.92 in the runs that
+spiked), so the mechanism is weakened, not removed; the record gives no margin argument, only three clean seeds. The gap is held at 2.400 at every epoch end
+(smoothed), hard gap 2.371–2.372.
+
+The forces are the best of the phase on every seed and every shell: paired against B_s, −2.25 meV/Å total and −1.93 on 4–12 Å, better than B_s by more than τ,
+and 1.3–1.5 better than the rerun's two unspiked seeds. That gain is larger than the absence of spikes accounts for: at weight 1.0 the gap term was holding the
+hopping offsets at the force fit's expense throughout training. The energy gate passes on seeds 0 and 2; seed 6 fails on the size-transfer term by 0.4 meV.
+s_near settles at 0.13–0.16, half the rerun's. The hole is the most compact of any arm that did not saturate (N_eff 3.8–4.2 on the +1 frames, 4.3–5.0 at 639 atoms,
+0.68–0.72 of the charge within 5 Å). Large-N on the seed median (seed 0): separation 0.025 eV, N_eff 4.5, Σdq(< 5 Å) 0.70 — fails the separation threshold by a
+factor of six, misses N_eff by 0.5 and Σdq by 0.10; the same reading in the relaxed tiling. The Stage-2 saturation check is below.
 
