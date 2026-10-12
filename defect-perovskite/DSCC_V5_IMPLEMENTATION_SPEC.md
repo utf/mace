@@ -6881,3 +6881,9 @@ gap_lr · 2w · ‖S‖² and ‖S‖² is largest at the start of training, so 
 oscillation of amplitude ≈ ‖S‖ · cap. The form is kept for the record but is not the lever. Replaced by the least-norm constraint step
 `θ −= κ (gap − E_gap) S/‖S‖²` (`--gap_kappa`, `apply_constraint_step`; gain κ per step whatever ‖S‖; test
 `test_constraint_step_gain_is_kappa_whatever_the_sensitivity`), cap on the step norm 0.05; a second one-epoch smoke (`dscc_p2cx_gapkappa_smoke`, κ 0.5) is running.
+Addendum (05:20): the least-norm smoke (`dscc_p2cx_gapkappa_smoke`, κ 0.5, cap 0.05) ran without error and also holds the gap poorly: over steps 20–197 of epoch 0
+|gap − 2.40| p50 0.06 eV, one excursion to 2.4 eV, no oscillation (alternation 0.05), step norm p50 6e-4 (capped twice). Reading: with the gap term inside Adam,
+the hopping readout's second moment carries the gap gradient and so also damps the force term's steps along the gap direction; taking the gap term out of Adam
+removes that damping, the force steps kick the gap by ~0.03 eV per step, and a gain-0.5 correction leaves a residual of that size. The outside-Adam step is
+therefore not a viable lever as implemented (both forms kept in the code, default off, for the record). The tested lever that keeps the gap inside Adam is the gap
+weight (bw5, queued). The smoke runs are not part of any arm's record.
